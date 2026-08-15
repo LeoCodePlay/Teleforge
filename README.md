@@ -1,0 +1,116 @@
+# SSH 远程 AI 编程工具
+
+一个本地运行的 Web 工具:通过 SSH 连接远程服务器并**保持连接**,选择远程某个目录作为**工作区**,然后就能让 **AI Agent 在远程服务器上真实地读写文件、执行命令、搜索代码**,像在你的服务器上直接写代码一样。
+
+```
+浏览器 (React UI)
+   │  WebSocket(实时事件/流式输出)
+   ▼
+Node 后端 (Express + ws)
+   ├─ ssh-manager   ── ssh2 ──► 远程 SSH 服务器(保活/重连)
+   │                    └─ SFTP(文件) / exec(命令)
+   └─ agent ── tools ──┘
+        └─ llm(OpenAI 兼容 API / mock)
+```
+
+## 核心能力
+
+- **SSH 连接保持**:10s 心跳保活,断线后按指数退避**自动重连**,实时状态展示。支持密码认证与私钥认证(含口令)。
+- **远程工作区**:连接后可浏览远程文件系统,选任意目录作为工作区;提供文件树懒加载浏览,点击即可查看/编辑文件(编辑保存由服务器做越权校验)。
+- **AI Agent 编程**:在对话中下达指令,Agent 通过工具在远程真实操作:
+  - `list_directory` 列目录、`read_file` 读文件(分片/二进制识别)
+  - `write_file` 写文件、`edit_file` 精确文本替换
+  - `run_command` 执行命令(流式输出、超时、输出截断)
+  - `create_directory` / `delete_path`(仅限工作区,严禁删除根目录)
+  - `get_workspace_info` 环境感知、`search_code` 代码搜索(rg/grep)
+- **命令台**:手动执行远程命令,观察实时输出与退出码。
+- **多模型接入**:兼容所有 OpenAI 协议 API(DeepSeek / OpenAI / Moonshot / Qwen / 本地 vLLM / Ollama),`model` 填 `mock` 可**离线联调**完整 Agent 流程。
+
+## 快速开始
+
+```bash
+npm install        # 安装依赖
+npm run build      # 构建前端(输出 web/dist)
+npm start          # 启动服务 -> http://127.0.0.1:4000
+```
+
+开发模式(前端热更新):
+
+```bash
+npm run dev        # 同时启动 server(:4000) 与 vite(:5173), 打开 http://127.0.0.1:5173
+```
+
+使用步骤:
+
+1. 打开页面,填 **SSH 连接**(主机/端口/用户 + 密码或私钥),点「连接」
+2. 连接后在「远程工作区」浏览选择目录作为工作区(或直接输入路径)
+3. 在「AI 模型配置」填 Base URL / API Key / 模型名并保存(不填真实 Key 时可用 `mock` 体验)
+4. 到「AI 编程助手」下达指令,如:「梳理一下这个项目的结构,然后修复 src/main.js 里的 bug」
+5. 到「命令台」可手动执行命令验证
+
+## 目录结构
+
+```
+.
+├── package.json
+├── server/                  # Node 后端(NODE 18.17+)
+│   ├── index.js             # HTTP + 静态托管 + 接口入口
+│   ├── config.js            # 端口/超时/上限等常量
+│   ├── ssh-manager.js       # SSH 连接管理:保活/自动重连/SFTP/exec
+│   ├── ws.js                # WebSocket 协议层
+│   └── agent/
+│       ├── agent.js         # Agent 主循环(工具有限循环)
+│       ├── llm.js           # LLM 客户端(OpenAI 兼容流式 + mock)
+│       └── tools.js         # 工具定义与实现
+├── web/                     # 前端(React 18 + Vite)
+│   └── src/
+│       ├── App.jsx          # 布局与状态编排
+│       ├── api.js           # WS 客户端(自动重连 + 请求/应答)
+│       ├── components/      # 连接/工作区/对话/命令台/文件查看
+│       └── styles.css
+└── test/
+    ├── mock-ssh-server.js   # 本地 mock SSH 服务器(基于 ssh2 Server 模式)
+    └── e2e.js               # 全链路自动化测试
+```
+
+## 运行测试
+
+内置一个**本地 mock SSH 服务器**(无需真实服务器、无需 API Key 即可跑完全链路):
+
+```bash
+npm test
+```
+
+覆盖:SSH 连接 → 平台探测 → 列目录 → 读文件 → 选工作区 → 写文件 → 命令执行(cd 前缀) → **Agent 完整工具循环**(列表/读/命令/写/总结)。
+
+## 配置说明
+
+| 项 | 位置 | 说明 |
+|----|------|------|
+| 监听地址/端口 | 环境变量 `HOST` / `PORT` | 默认 `127.0.0.1:4000`,仅本机访问 |
+| 模型服务 | 界面「AI 模型配置」 | Base URL / Key / 模型名,存浏览器 localStorage |
+| 工作区 | 界面「远程工作区」 | 每会话可换,Agent 的写/改/删被限制在该目录内 |
+
+## 安全说明
+
+- 服务**默认只监听 127.0.0.1**,有条件时建议再加反向代理 + HTTPS。
+- **API Key 只存在浏览器 localStorage**,服务端不落盘;请勿用于共享/公网部署。
+- Agent 的写/改/删操作被限制在**工作区目录内**,且禁止删除工作区根;命令执行有超时与输出上限。
+- 建议用**单独的低权限账号 + 密钥登录**远程服务器,并谨慎让 Agent 执行破坏性命令。
+- 本机拿根权限后本工具可读任意文件,属本地工具的正常风险。
+
+## 技术选型
+
+| 模块 | 方案 |
+|------|------|
+| SSH 客户端 | `ssh2`(原生 JS,支持 keepalive / SFTP / exec / Server 模式) |
+| 实时通信 | `ws`(WebSocket):请求/应答 + 事件推送(流式输出) |
+| LLM 推理 | OpenAI 兼容 `chat/completions` 流式 + function calling |
+| 前端 | React 18 + Vite,深色 IDE 风格,自研轻量 Markdown 渲染 |
+
+## 扩展路线
+
+- 内置终端(交互式 shell,经 WebSocket 双工)
+- 多服务器管理、上传/下载文件
+- Agent 多会话/并行、超长任务的自动总结续跑
+- Git 操作、错误自动回滚
