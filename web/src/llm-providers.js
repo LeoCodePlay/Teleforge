@@ -143,18 +143,14 @@ export const PROVIDERS = [
     baseUrl: 'http://localhost:1234/v1',
     models: [],
     note: '需在 LM Studio 中加载模型并开启本地服务'
-  },
-  {
-    id: 'custom',
-    name: '自定义(任意 OpenAI 兼容端点)',
-    baseUrl: '',
-    models: [],
-    note: '可填任意 baseUrl 与模型名,如公司内部网关、代理等'
   }
 ];
 
+// 用户自行添加的提供商存于 localStorage(ConnectPanel 管理):
+// {id, name, baseUrl, models[], apiKey, note}
+
 export function getProvider(id) {
-  return PROVIDERS.find((p) => p.id === id) || PROVIDERS[0];
+  return PROVIDERS.find((p) => p.id === id) || null;
 }
 
 export const DEFAULT_PROVIDER = 'deepseek';

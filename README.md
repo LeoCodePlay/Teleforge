@@ -24,7 +24,7 @@ Node 后端 (Express + ws)
   - `create_directory` / `delete_path`(仅限工作区,严禁删除根目录)
   - `get_workspace_info` 环境感知、`search_code` 代码搜索(rg/grep)
 - **命令台**:手动执行远程命令,观察实时输出与退出码。
-- **多模型接入**:兼容所有 OpenAI 协议 API(DeepSeek / OpenAI / Moonshot / Qwen / 本地 vLLM / Ollama),`model` 填 `mock` 可**离线联调**完整 Agent 流程。
+- **多模型接入**:预置 20+ 主流提供商(DeepSeek / OpenAI / Kimi / 智谱 / 通义 / 豆包 / 千帆 / 混元 / 硅基流动 / 本地 Ollama·vLLM / 等),一键切换提供商与模型;可点「＋」**添加自己的提供商**(名称/Base URL/模型清单/API Key 一并保存,随时切换或删除);`mock` 模式可**离线联调**完整 Agent 流程。
 
 ## 快速开始
 
