@@ -18,6 +18,7 @@ export class LlmClient {
    */
   async chat({ messages, tools, signal, onDelta }) {
     if (this.isMock) return mockChat({ messages, tools, signal, onDelta });
+    validateMessages(messages); // 发送前校验,避免 400 类结构错误
     const url = `${this.baseUrl}/chat/completions`;
     const body = {
       model: this.model,
@@ -40,6 +41,22 @@ export class LlmClient {
       throw new Error(`LLM API ${res.status}: ${text}`);
     }
     return parseSse(res.body, { signal, onDelta });
+  }
+}
+
+// 发送前校验 messages 结构,尽早暴露问题而不是收到 400
+function validateMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw new Error('messages 必须是非空数组');
+  }
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (typeof m !== 'object' || m === null || typeof m.role !== 'string') {
+      throw new Error(`messages[${i}] 格式错误:期望 {role, content} 对象,实际为 ${JSON.stringify(m)?.slice(0, 120)}`);
+    }
+    if (m.role === 'tool' && typeof m.tool_call_id !== 'string') {
+      throw new Error(`messages[${i}] 是 tool 消息但缺少 tool_call_id`);
+    }
   }
 }
 

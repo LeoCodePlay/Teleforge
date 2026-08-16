@@ -35,7 +35,7 @@ export class Agent {
     const signal = (this._signal = new AbortController());
 
     const system = this._systemPrompt();
-    const messages = [system, ...this.history.map((m) => ({ ...m })), { role: 'user', content: userText }];
+    const messages = [{ role: 'system', content: system }, ...this.history.map((m) => ({ ...m })), { role: 'user', content: userText }];
 
     try {
       this.emit('agent', { event: 'start', text: userText });
