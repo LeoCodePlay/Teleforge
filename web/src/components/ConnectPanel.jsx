@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { PROVIDERS, getProvider, DEFAULT_PROVIDER } from '../llm-providers.js';
 
 const LS = (k, v) => localStorage.getItem('sshai.' + k) || v;
 const LSS = (k, v) => localStorage.setItem('sshai.' + k, v);
@@ -15,35 +16,52 @@ export default function ConnectPanel({ status }) {
   const [passphrase, setPassphrase] = useState('');
   const [autoReconnect, setAutoReconnect] = useState(true);
 
-  // LLM 配置
-  const [baseUrl, setBaseUrl] = useState(() => LS('llmBase', 'https://api.deepseek.com'));
-  const [apiKey, setApiKey] = useState(() => LS('llmKey', ''));
-  const [model, setModel] = useState(() => LS('llmModel', 'deepseek-chat'));
-  const [llmSaved, setLlmSaved] = useState(false);
+  // ---- LLM 配置:提供商 + 模型 + 分提供商 Key ----
+  const [providerId, setProviderId] = useState(() => LS('llm.provider', DEFAULT_PROVIDER));
+  const provider = getProvider(providerId);
+  const [model, setModel] = useState(() => LS('llm.model.' + providerId, ''));
+  const [customModel, setCustomModel] = useState(() => LS('llm.customModel', ''));
+  const [customBase, setCustomBase] = useState(() => LS('llm.customBase', ''));
+  // 兼容旧版本单 Key 存储:旧 Key 迁移到 deepseek 名下
+  const [apiKey, setApiKey] = useState(() => LS('llm.key.' + providerId, '') || (providerId === DEFAULT_PROVIDER ? LS('llmKey', '') : ''));
 
   const connected = status.status === 'connected';
   const connecting = status.status === 'connecting' || status.status === 'reconnecting';
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  useEffect(() => {
-    if (llmSaved) {
-      const t = setTimeout(() => setLlmSaved(false), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [llmSaved]);
+  // 生效的配置
+  const isMock = providerId === 'mock';
+  const isCustom = providerId === 'custom';
+  const effModel = isMock ? 'mock'
+    : isCustom ? customModel
+      : provider.models.length === 0 ? model
+        : model === '__custom__' ? customModel
+          : (model || provider.models[0] || '');
+  const effBaseUrl = isCustom ? customBase : provider.baseUrl;
+  const effKey = isMock ? '' : apiKey;
 
-  // 加载后自动回传 LLM 配置,便于重连后恢复
-  useEffect(() => {
-    api.send('llm', { llm: { baseUrl, apiKey, model } });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, apiKey, baseUrl]);
-
-  const saveLlm = () => {
-    LSS('llmBase', baseUrl); LSS('llmKey', apiKey); LSS('llmModel', model);
-    api.send('llm', { llm: { baseUrl, apiKey, model } });
-    setLlmSaved(true);
+  const switchProvider = (pid) => {
+    setProviderId(pid);
+    setApiKey(LS('llm.key.' + pid, ''));
+    const saved = LS('llm.model.' + pid, '');
+    const p = getProvider(pid);
+    setModel(saved || p.models[0] || '');
   };
+
+  // 切换/修改即生效:自动应用 + 持久化(Key 按提供商分别保存)
+  useEffect(() => {
+    api.send('llm', { llm: { baseUrl: effBaseUrl, apiKey: effKey, model: effModel } });
+    LSS('llm.provider', providerId);
+    LSS('llm.customBase', customBase);
+    LSS('llm.customModel', customModel);
+    if (isMock) { localStorage.removeItem('sshai.llm.model.' + providerId); }
+    else {
+      LSS('llm.model.' + providerId, model);
+      LSS('llm.key.' + providerId, apiKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effBaseUrl, effKey, effModel, providerId, apiKey, customBase, customModel, model]);
 
   const doConnect = async () => {
     setErr('');
@@ -135,18 +153,54 @@ export default function ConnectPanel({ status }) {
 
       <hr />
 
-      <div className="panel-title">AI 模型配置(mock 免 Key 联调)</div>
+      <div className="panel-title">AI 模型 · 提供商</div>
       <div className="field">
-        <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="Base URL,如 https://api.deepseek.com" />
+        <select value={providerId} onChange={(e) => switchProvider(e.target.value)}>
+          {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
       </div>
-      <div className="field">
-        <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API Key(仅存本机浏览器)" />
-      </div>
-      <div className="field">
-        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型名,如 deepseek-chat / gpt-4o / mock" />
-      </div>
-      <button className="grow" onClick={saveLlm}>{llmSaved ? '✓ 已保存' : '保存模型配置'}</button>
-      <div className="hint">model 填 <code>mock</code> 可离线跑通完整 Agent 流程</div>
+
+      {isCustom ? (
+        <>
+          <div className="field">
+            <input value={customBase} onChange={(e) => setCustomBase(e.target.value)} placeholder="Base URL,如 https://your-gateway/v1" />
+          </div>
+          <div className="field">
+            <input value={customModel} onChange={(e) => setCustomModel(e.target.value)} placeholder="模型名,如 my-model" />
+          </div>
+        </>
+      ) : provider.models.length > 0 ? (
+        <>
+          <div className="field">
+            <select
+              value={provider.models.includes(effModel) ? effModel : '__custom__'}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              {provider.models.map((m) => <option key={m} value={m}>{m}</option>)}
+              <option value="__custom__">自定义模型…</option>
+            </select>
+          </div>
+          {model === '__custom__' && (
+            <div className="field">
+              <input value={customModel} onChange={(e) => setCustomModel(e.target.value)} placeholder="输入该提供商的自定义模型名" />
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="field">
+          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型名(该提供商需手动输入)" />
+        </div>
+      )}
+
+      {!isMock && (
+        <div className="field">
+          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API Key(仅存本机,按提供商分别保存)" />
+        </div>
+      )}
+
+      {provider.note && <div className="hint">💡 {provider.note}</div>}
+      <div className="hint">当前生效: <code>{isMock ? 'mock' : effModel || '—'}</code> @ <code>{effBaseUrl || '未设置'}</code></div>
+      <div className="hint">切换提供商/模型即时生效,API Key 按提供商分开记忆</div>
     </div>
   );
 }
