@@ -103,6 +103,34 @@ async function main() {
   const rf2 = await ws.request('read_file', { path: '/src/newfile.txt' });
   check('写入并回读成功', rf2.content === 'hello from e2e\n', rf2.content);
 
+  // 6.5 上传文件/文件夹(HTTP multipart -> SFTP 写入工作区)
+  console.log('== 测试上传/下载 ==');
+  {
+    const fd = new FormData();
+    fd.append('files', new Blob(['upload-single'], { type: 'text/plain' }), 'up/hello.txt'); // 单文件带子目录
+    fd.append('files', new Blob(['nested-a'], { type: 'text/plain' }), 'folder/sub/a.txt');  // 文件夹递归结构
+    fd.append('files', new Blob(['nested-b'], { type: 'text/plain' }), 'folder/sub/b.txt');
+    const ur = await fetch(`http://127.0.0.1:${APP_PORT}/api/upload`, { method: 'POST', body: fd });
+    const uj = await ur.json();
+    check('上传接口返回成功', ur.status === 200 && uj.uploaded === 3, JSON.stringify(uj));
+    const upA = await ws.request('read_file', { path: '/src/up/hello.txt' });
+    check('上传的单文件内容正确', upA.content === 'upload-single', upA.content);
+    const upB = await ws.request('read_file', { path: '/src/folder/sub/b.txt' });
+    check('上传的文件夹结构正确(递归目录已建)', upB.content === 'nested-b', upB.content);
+
+    // 下载
+    const dl = await fetch(`http://127.0.0.1:${APP_PORT}/api/download?path=${encodeURIComponent('/src/up/hello.txt')}`);
+    check('下载返回文件内容', dl.status === 200 && (await dl.text()) === 'upload-single', String(dl.status));
+
+    // 越权防护:上传 ../ 应被拒绝
+    const badFd = new FormData();
+    badFd.append('files', new Blob(['evil']), '../../evil.txt');
+    const br = await fetch(`http://127.0.0.1:${APP_PORT}/api/upload`, { method: 'POST', body: badFd });
+    const bj = await br.json();
+    check('越权路径 ../ 被拒绝', bj.uploaded === 0 && bj.failed === 1, JSON.stringify(bj));
+    check('越权文件未写入', !fs.existsSync(path.join(ROOT, 'evil.txt')) && !fs.existsSync(path.join(path.dirname(ROOT), 'evil.txt')));
+  }
+
   // 7. 命令台(exec)
   console.log('== 测试命令执行 ==');
   ws.send('run_command', { command: 'echo hello-e2e' });

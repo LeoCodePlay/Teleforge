@@ -163,6 +163,18 @@ pre code { background: none !important; }
 .exit.ok { color: var(--green); font-size: 12px; }
 .exit.err { color: var(--red); font-size: 12px; }
 
+/* 上传进度 */
+.progress { height: 5px; background: var(--bg-3); border-radius: 4px; margin: 6px 0; overflow: hidden; }
+.progress-bar { height: 100%; background: var(--accent); transition: width .2s; }
+
+/* 下载链接按钮样式 */
+a.btn-link {
+  display: inline-block; padding: 4px 10px; font-size: 12px; color: var(--text);
+  background: var(--bg-3); border: 1px solid var(--border); border-radius: 7px;
+  text-decoration: none; cursor: pointer;
+}
+a.btn-link:hover { border-color: var(--accent); color: var(--accent-2); }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #2c3342; border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4256; background-clip: content-box; }

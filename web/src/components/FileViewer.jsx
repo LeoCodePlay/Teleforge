@@ -45,6 +45,7 @@ export default function FileViewer({ path, name, onClose }) {
         <div className="modal-head">
           <span title={path}>📄 {name} <span className="muted">{meta && `${fmtSize(meta.size)}${meta.truncated ? ' (仅展示前部)' : ''}`}</span></span>
           <div className="row gap">
+            <a className="btn-link" href={`/api/download?path=${encodeURIComponent(path)}`} title="下载到本机">⬇ 下载</a>
             {dirty && <button className="primary sm" disabled={saving} onClick={save}>{saving ? '保存中…' : '保存修改'}</button>}
             {saved && <span className="okline">✓ 已保存</span>}
             <button className="ghost" onClick={onClose}>✕</button>

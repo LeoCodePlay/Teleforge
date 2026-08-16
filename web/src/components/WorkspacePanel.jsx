@@ -59,7 +59,7 @@ function DirBrowser({ initial, home, onClose, onPick }) {
 }
 
 // 工作区文件树(懒加载目录)
-function FileTree({ root, onOpenFile }) {
+function FileTree({ root, onOpenFile, refreshTick }) {
   const [expanded, setExpanded] = useState(new Set());
   const [nodes, setNodes] = useState({}); // path -> {loaded, loading, entries} | null
   const [rootKey, setRootKey] = useState(root);
@@ -85,6 +85,14 @@ function FileTree({ root, onOpenFile }) {
     setRootKey(root);
     setExpanded((s) => new Set(s).add(root));
   }, [root]);
+
+  // 上传/删除等操作后整体刷新
+  useEffect(() => {
+    if (refreshTick === 0) return;
+    setNodes({});
+    setExpanded(new Set([root]));
+    load(root);
+  }, [refreshTick, root, load]);
 
   useEffect(() => {
     if (expanded.has(root) && nodes[root] === undefined) load(root);
@@ -143,12 +151,51 @@ export default function WorkspacePanel({ connected, workspace, home, platform, o
   const [browserOpen, setBrowserOpen] = useState(false);
   const [manualPath, setManualPath] = useState('');
   const [lastSet, setLastSet] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [uploadMsg, setUploadMsg] = useState('');
+  const [treeRefresh, setTreeRefresh] = useState(0);
+  const fileInputRef = useRef(null);
+  const dirInputRef = useRef(null);
 
   const chooseWorkspace = async (p) => {
     try {
       await api.request('set_workspace', { path: p }, 20000);
       onWorkspaceSet(p); setBrowserOpen(false); setLastSet(p);
     } catch (e) { alert(e.message); }
+  };
+
+  // 上传文件/文件夹到工作区根目录(保留相对目录结构)
+  const uploadFiles = (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    if (!workspace) { alert('请先选择远程工作区'); return; }
+    const fd = new FormData();
+    for (const f of files) {
+      const rel = f.webkitRelativePath || f.name;
+      fd.append('files', f, rel);
+    }
+    setUploading(true); setProgress(0); setUploadMsg('');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      setUploading(false);
+      let r = null;
+      try { r = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 200 && r) {
+        const failNote = r.failed > 0 ? `, ${r.failed} 个失败: ${(r.errors || []).slice(0, 3).join('; ')}` : '';
+        setUploadMsg(`⬆ 已上传 ${r.uploaded} 个文件(${fmtSize(r.bytes)})${failNote}`);
+        setTreeRefresh((t) => t + 1); // 刷新文件树
+      } else {
+        setUploadMsg(`✕ 上传失败: ${r?.error || xhr.statusText}`);
+      }
+      setTimeout(() => setUploadMsg(''), 5000);
+    };
+    xhr.onerror = () => { setUploading(false); setUploadMsg('✕ 网络错误,上传失败'); setTimeout(() => setUploadMsg(''), 5000); };
+    xhr.send(fd);
   };
 
   return (
@@ -169,7 +216,23 @@ export default function WorkspacePanel({ connected, workspace, home, platform, o
             <button disabled={!manualPath.trim()} onClick={() => chooseWorkspace(manualPath.trim())}>设为工作区</button>
           </div>
           {workspace && <div className="okline">当前工作区:📂 {workspace}</div>}
-          <FileTree key={lastSet ? 'ws-' + lastSet : 'home'} root={workspace || home || '/'} onOpenFile={onOpenFile} />
+
+          <div className="row gap" style={{ marginTop: 8 }}>
+            <button className="ghost sm" disabled={!workspace || uploading} onClick={() => fileInputRef.current?.click()}>⬆ 上传文件</button>
+            <button className="ghost sm" disabled={!workspace || uploading} onClick={() => dirInputRef.current?.click()}>⬆ 上传文件夹</button>
+            <span className="muted sm" style={{ flex: 1 }}>{uploading ? `上传中 ${progress}%` : uploadMsg}</span>
+          </div>
+          {uploading && (
+            <div className="progress"><div className="progress-bar" style={{ width: progress + '%' }} /></div>
+          )}
+
+          <FileTree key={lastSet ? 'ws-' + lastSet : 'home'} root={workspace || home || '/'} onOpenFile={onOpenFile} refreshTick={treeRefresh} />
+
+          {/* 隐藏的本地文件选择器 */}
+          <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
+            onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
+          <input ref={dirInputRef} type="file" multiple webkitdirectory="" directory="" style={{ display: 'none' }}
+            onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
         </>
       )}
       {browserOpen && (
