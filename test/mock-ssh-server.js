@@ -188,5 +188,6 @@ export function makeFixture(rootDir) {
   fs.writeFileSync(path.join(rootDir, 'README.md'), '# 示例项目\n\n这是一个用于 E2E 测试的远程示例项目。\n');
   fs.writeFileSync(path.join(rootDir, 'package.json'), JSON.stringify({ name: 'sample', version: '1.0.0', scripts: { start: 'node index.js' } }, null, 2));
   fs.mkdirSync(path.join(rootDir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'src', 'README.md'), '# src 模块\n\nsrc 目录的说明文件。\n');
   fs.writeFileSync(path.join(rootDir, 'src', 'main.js'), 'const greeting = "hello";\nconsole.log(greeting);\n');
 }  
