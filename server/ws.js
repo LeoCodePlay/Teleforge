@@ -7,6 +7,7 @@ import { WebSocketServer } from 'ws';
 import { WS_MAX_PAYLOAD } from './config.js';
 import { sshManager as ssh } from './ssh-manager.js';
 import { agent, setAgentHub } from './agent/agent.js';
+import { clearEnvInfo } from './agent/tools.js';
 
 export function setupWs(httpServer) {
   const wss = new WebSocketServer({ server: httpServer, path: '/ws', maxPayload: WS_MAX_PAYLOAD });
@@ -113,6 +114,7 @@ export function setupWs(httpServer) {
             if (!st) throw new Error(`目录不存在: ${msg.path}`);
             if (!st.isDirectory()) throw new Error(`不是目录: ${msg.path}`);
             ssh.workspace = msg.path;
+            clearEnvInfo(); // 工作区变化,旧环境快照失效
             reply({ type: 'workspace', path: msg.path });
             emitStatus();
             break;

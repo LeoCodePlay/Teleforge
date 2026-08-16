@@ -240,10 +240,18 @@ const tools = {
       ]);
       if (disk) info.workspaceDisk = disk;
       info.toolVersions = { node, python3, git, npm };
-      return safeJson(info);
+      const text = safeJson(info);
+      // 缓存环境快照,供下一轮 system prompt 注入,避免重复探测
+      envCache = { workspace: info.workspace, summary: text };
+      return text;
     }
   }
 };
+
+// ---------------- 环境快照缓存(供 system prompt 复用) ----------------
+let envCache = null;
+export function getEnvInfo() { return envCache; }
+export function clearEnvInfo() { envCache = null; }
 
 // ---------------- 引擎探测(带缓存) ----------------
 let engineCache = null;

@@ -126,7 +126,10 @@ async function parseSse(stream, { signal, onDelta }) {
 
 // ---------------- mock 模式:离线联调,按固定脚本走完整的工具循环 ----------------
 async function mockChat({ messages, signal, onDelta }) {
-  const toolMsgs = messages.filter((m) => m.role === 'tool');
+  // 只统计本轮(最后一个 user 之后)的 tool 消息,避免历史里的工具调用干扰脚本进度
+  const lastUserIdx = messages.map((m) => m.role).lastIndexOf('user');
+  const turnMsgs = lastUserIdx >= 0 ? messages.slice(lastUserIdx) : messages;
+  const toolMsgs = turnMsgs.filter((m) => m.role === 'tool');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const ws = extractWorkspace(messages);
   await sleep(80, signal);

@@ -13,7 +13,7 @@
     "dev:web": "vite --config web/vite.config.js",
     "build": "vite build --config web/vite.config.js",
     "start": "node server/index.js",
-    "test": "node test/e2e.js"
+    "test": "node test/agent-history.test.js && node test/e2e.js"
   },
   "dependencies": {
     "express": "^4.21.2",
