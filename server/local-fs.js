@@ -35,7 +35,8 @@ export class LocalFs {
     if (st.isDirectory()) throw new Error(`是目录: ${abs}`);
     const fh = await fsp.open(abs, 'r');
     try {
-      const want = Math.min(maxBytes, Math.max(0, st.size - offset));
+      // maxBytes 0 表示不限制(整文件读取,供批量传输用),否则按上限截取
+      const want = maxBytes > 0 ? Math.min(maxBytes, Math.max(0, st.size - offset)) : Math.max(0, st.size - offset);
       const buf = Buffer.alloc(want);
       const { bytesRead } = await fh.read(buf, 0, want, offset);
       return { buffer: buf.subarray(0, bytesRead), size: st.size, truncated: offset + bytesRead < st.size };

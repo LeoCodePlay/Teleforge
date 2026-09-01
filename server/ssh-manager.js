@@ -305,7 +305,8 @@ export class SshManager extends EventEmitter {
     const handle = await call((cb) => this.sftp.open(p, 'r', cb));
     try {
       const size = st.size;
-      const want = Math.min(maxBytes, Math.max(0, size - offset));
+      // maxBytes 0 表示不限制(整文件读取),否则按上限截取
+      const want = maxBytes > 0 ? Math.min(maxBytes, Math.max(0, size - offset)) : Math.max(0, size - offset);
       const buf = Buffer.alloc(want);
       let got = 0;
       while (got < want) {

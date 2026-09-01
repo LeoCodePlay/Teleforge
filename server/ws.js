@@ -10,6 +10,7 @@ import { WebSocketServer } from 'ws';
 import { WS_MAX_PAYLOAD } from './config.js';
 import { sshManager as ssh } from './ssh-manager.js';
 import { localFs } from './local-fs.js';
+import { localToRemote, remoteToLocal } from './transfer.js';
 import { agent, toolRegistry, setAgentHub } from './agent/agent.js';
 import { clearEnvInfo, refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from './agent/tools.js';
 import { toolSettings } from './agent/tool-settings.js';
@@ -241,6 +242,24 @@ export function setupWs(httpServer) {
             if (!msg.src || !msg.dst) throw new Error('缺少 src 或 dst');
             const r = await localFs.copyPath(msg.src, msg.dst, { overwrite: msg.overwrite });
             reply({ type: 'local_copied', ...r });
+            break;
+          }
+          case 'local_to_remote': {
+            const paths = (Array.isArray(msg.paths) ? msg.paths : [msg.paths]).filter(Boolean);
+            if (!paths.length) throw new Error('缺少本地路径');
+            const r = await localToRemote(paths, msg.dir, {
+              onProgress: (p) => send({ type: 'transfer_progress', reqId, ...p })
+            });
+            reply({ type: 'transfer_done', ...r });
+            break;
+          }
+          case 'remote_to_local': {
+            const paths = (Array.isArray(msg.paths) ? msg.paths : [msg.paths]).filter(Boolean);
+            if (!paths.length) throw new Error('缺少远程路径');
+            const r = await remoteToLocal(paths, msg.dir, {
+              onProgress: (p) => send({ type: 'transfer_progress', reqId, ...p })
+            });
+            reply({ type: 'transfer_done', ...r });
             break;
           }
           case 'set_local_workspace': {
