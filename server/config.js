@@ -17,6 +17,12 @@ export const EXEC = {
   HEAD_OUTPUT_CHARS: 60_000
 };
 
+export const LOCAL_EXEC = {
+  DEFAULT_TIMEOUT_MS: 300_000,
+  MAX_TIMEOUT_MS: 600_000,
+  MAX_OUTPUT_CHARS: 100_000
+};
+
 export const FILE = {
   READ_MAX_BYTES: 100_000,     // UI 查看器单次读取上限
   AGENT_READ_MAX_BYTES: 30_000,// agent 工具默认读取上限
