@@ -74,6 +74,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
   const [progress, setProgress] = useState(0);
   const [deleting, setDeleting] = useState<DeletingInfo | null>(null); // 删除进度
   const [wrState, setWrState] = useState<WriteState | null>(null); // 服务端写入远程进度
+  const [transferring, setTransferring] = useState(false); // 传到本地进行中
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dirInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -218,6 +219,15 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 订阅传输进度事件(传到本地/local_to_remote 共用),复用 wrState 进度条
+  useEffect(() => {
+    const off = api.on('transfer_progress', (m) => {
+      if (m && typeof m.total === 'number') setWrState({ done: m.done || 0, total: m.total });
+    });
+    return () => { off(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---- 选区操作 ----
   const doDelete = async () => {
     if (opCount === 0 || deleting) return;
@@ -266,6 +276,26 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
       window.open(`/api/downloaddir?${qs}`, '_blank');
       flash(`正在打包下载 ${opCount} 项…`);
     }
+  };
+
+  // 传到本地当前目录(remote_to_local):先确认(同名覆盖),再发请求,进度走 transfer_progress
+  const doLocalTransfer = async () => {
+    if (opCount === 0 || !localCwd) return;
+    const ok = await confirm({
+      title: '传到本地',
+      message: `将把 ${opCount} 项传到目标目录「${localCwd}」,同名文件将被覆盖。继续?`,
+      confirmLabel: '传输',
+      danger: true
+    });
+    if (!ok) return;
+    setWrState(null); setError(''); setTransferring(true);
+    try {
+      const r = await api.request('remote_to_local', { paths: opPaths, dir: localCwd }, 600000, 'transfer_done');
+      refresh();
+      if (r.failed > 0) setError(`⬇ 已传 ${r.downloaded} 项,${r.failed} 项失败: ${(r.errors || []).slice(0, 5).join('; ')}`);
+      else flash(`⬇ 已传到本地 ${localCwd}(共 ${r.downloaded} 项)`);
+    } catch (e) { setError((e as Error).message); }
+    finally { setWrState(null); setTransferring(false); }
   };
 
   // 复制到目标目录;目标已存在且未允许覆盖时抛出 ERR_EXISTS
@@ -359,9 +389,10 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     ? `正在删除 ${deleting.index + 1}/${deleting.total}: ${deleting.name}…已删 ${deleting.done} 项`
     : loading ? '加载中…'
       : uploading ? (wrState ? `写入远程 ${wrState.done}/${wrState.total}` : `上传中 ${Math.min(progress, 99)}%`)
-        : msg ? msg
-          : selection.size > 1 ? `已选 ${selection.size} 项`
-            : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
+        : transferring ? (wrState ? `传到本地 ${wrState.done}/${wrState.total}` : '传到本地…')
+          : msg ? msg
+            : selection.size > 1 ? `已选 ${selection.size} 项`
+              : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
 
   return (
     <div className="fm">
@@ -394,12 +425,8 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
         <button className="ghost sm" disabled={uploading} onClick={() => fileInputRef.current?.click()} title="上传文件到当前目录">⬆ 文件</button>
         <button className="ghost sm" disabled={uploading} onClick={() => dirInputRef.current?.click()} title="上传文件夹(保留目录结构)到当前目录">⬆ 文件夹</button>
         <button className="ghost sm" disabled={opCount === 0 || !localCwd}
-          onClick={() => {
-            api.request('remote_to_local', { paths: opPaths, dir: localCwd }, 600000)
-              .then(() => flash('⬇ 已传到本地当前目录'))
-              .catch((e) => setError((e as Error).message));
-          }}
-          title={!localCwd ? '请先在本地面板选择一个目录' : '把选中项传到本地当前目录(传输通道待接入)'}>⬇ 传到本地</button>
+          onClick={doLocalTransfer}
+          title={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`}>⬇ 传到本地</button>
         {clipboard && (
           <button className="ghost sm" onClick={() => pasteHere(path)} title="把已复制的项复制到当前目录">📋 粘贴</button>
         )}
@@ -408,12 +435,14 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
           {statusText}
         </span>
       </div>
-      {(uploading || deleting) && (
+      {(uploading || deleting || transferring) && (
         <div className="progress">
-          <div className={`progress-bar ${deleting && !uploading ? 'indet' : ''}`}
+          <div className={`progress-bar ${deleting && !uploading && !transferring ? 'indet' : ''}`}
             style={{ width: uploading
               ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : Math.min(progress, 99)) + '%'
-              : '100%' }} />
+              : transferring
+                ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : 100) + '%'
+                : '100%' }} />
         </div>
       )}
       {error && <div className="error" onClick={() => setError('')} title="点击关闭">✕ {error}</div>}
@@ -458,7 +487,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
             <button onClick={() => { closeMenu(); doDownload(); }}>⬇ 下载{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button disabled={!localCwd} title={!localCwd ? '请先在本地面板选择一个目录' : '把选中项传到本地当前目录'} onClick={() => { closeMenu(); api.request('remote_to_local', { paths: opPaths, dir: localCwd }, 600000).then(() => flash('⬇ 已传到本地当前目录')).catch((e) => setError((e as Error).message)); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button disabled={!localCwd} title={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`} onClick={() => { closeMenu(); doLocalTransfer(); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
             <button onClick={() => { closeMenu(); doCopy(); }}>📋 复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>

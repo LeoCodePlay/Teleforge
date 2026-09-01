@@ -54,6 +54,10 @@ interface DeletingInfo {
   done: number;
   current: string;
 }
+interface WriteState {
+  done: number;
+  total: number;
+}
 
 // 本地文件管理器:导航式浏览本地目录
 // 选中:单击单选 · Ctrl/Cmd+单击 多选切换 · Shift+单击 连选 · Ctrl+A 全选 · Delete 删除
@@ -73,6 +77,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   const [msg, setMsg] = useState('');
   const [deleting, setDeleting] = useState<DeletingInfo | null>(null);
   const [transferring, setTransferring] = useState(false);
+  const [wrState, setWrState] = useState<WriteState | null>(null); // 传到远程进度
   const listRef = useRef<HTMLDivElement>(null);
   const seqRef = useRef(0);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -219,6 +224,15 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 订阅传输进度事件(传到远程/remote_to_local 共用),复用 wrState 进度条
+  useEffect(() => {
+    const off = api.on('transfer_progress', (m) => {
+      if (m && typeof m.total === 'number') setWrState({ done: m.done || 0, total: m.total });
+    });
+    return () => { off(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---- 选区操作 ----
   const doDelete = async () => {
     if (opCount === 0 || deleting) return;
@@ -297,14 +311,24 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     refresh();
   };
 
-  // 把选中项传到远程当前目录(local_to_remote 在后续任务接入,此处先占位,点击得到「未知消息类型」错误属可接受中间态)
-  const doTransferToRemote = () => {
-    if (opCount === 0) return;
-    setTransferring(true); setError('');
-    api.request('local_to_remote', { paths: opPaths, dir: remoteCwd }, 600000)
-      .then(() => flash(`⬆ 已传到远程 ${remoteCwd || ''}`))
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setTransferring(false));
+  // 把选中项传到远程当前目录(local_to_remote):先确认(同名覆盖),再发请求,进度走 transfer_progress
+  const doTransferToRemote = async () => {
+    if (opCount === 0 || !remoteCwd) return;
+    const ok = await confirm({
+      title: '传到远程',
+      message: `将把 ${opCount} 项传到目标目录「${remoteCwd}」,同名文件将被覆盖。继续?`,
+      confirmLabel: '传输',
+      danger: true
+    });
+    if (!ok) return;
+    setTransferring(true); setWrState(null); setError('');
+    try {
+      const r = await api.request('local_to_remote', { paths: opPaths, dir: remoteCwd }, 600000, 'transfer_done');
+      refresh();
+      if (r.failed > 0) setError(`⬆ 已传 ${r.uploaded} 项,${r.failed} 项失败: ${(r.errors || []).slice(0, 5).join('; ')}`);
+      else flash(`⬆ 已传到远程 ${remoteCwd || ''}(共 ${r.uploaded} 项)`);
+    } catch (e) { setError((e as Error).message); }
+    finally { setTransferring(false); setWrState(null); }
   };
 
   // 逐级向上直到根(无法再取上级的层级即根,如 Windows 盘符 C:\ 或 POSIX /)
@@ -324,7 +348,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   const statusText = deleting
     ? `正在删除 ${deleting.index + 1}/${deleting.total}: ${deleting.name}…已删 ${deleting.done} 项`
     : loading ? '加载中…'
-      : transferring ? '正在传到远程…'
+      : transferring ? (wrState ? `传到远程 ${wrState.done}/${wrState.total}` : '正在传到远程…')
         : msg ? msg
           : selection.size > 1 ? `已选 ${selection.size} 项`
             : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
@@ -356,7 +380,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
       <div className="row gap" style={{ marginTop: 8 }}>
         <button className="ghost sm" disabled={opCount === 0 || !remoteCwd || transferring}
           onClick={doTransferToRemote}
-          title={!remoteCwd ? '请先连接服务器并查看远程目录' : '把选中项传到远程当前目录(传输通道待接入)'}>
+          title={!remoteCwd ? '请先连接服务器并查看远程目录' : `把选中项传到远程当前目录 ${remoteCwd||''}(同名覆盖)`}>
           ⬆ 传到远程
         </button>
         {clipboard && (
@@ -367,9 +391,12 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
           {statusText}
         </span>
       </div>
-      {deleting && (
+      {(deleting || transferring) && (
         <div className="progress">
-          <div className="progress-bar" style={{ width: '100%' }} />
+          <div className={`progress-bar ${deleting && !transferring ? 'indet' : ''}`}
+            style={{ width: transferring
+              ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : 100) + '%'
+              : '100%' }} />
         </div>
       )}
       {error && <div className="error" onClick={() => setError('')} title="点击关闭">✕ {error}</div>}
