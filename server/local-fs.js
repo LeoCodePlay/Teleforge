@@ -38,8 +38,14 @@ export class LocalFs {
       // maxBytes 0 表示不限制(整文件读取,供批量传输用),否则按上限截取
       const want = maxBytes > 0 ? Math.min(maxBytes, Math.max(0, st.size - offset)) : Math.max(0, st.size - offset);
       const buf = Buffer.alloc(want);
-      const { bytesRead } = await fh.read(buf, 0, want, offset);
-      return { buffer: buf.subarray(0, bytesRead), size: st.size, truncated: offset + bytesRead < st.size };
+      // 部分读不保证单次读满,循环直到读完 want 字节(与 ssh-manager.readFileChunk 对齐)
+      let got = 0;
+      while (got < want) {
+        const { bytesRead } = await fh.read(buf, got, want - got, offset + got);
+        if (bytesRead === 0) break;
+        got += bytesRead;
+      }
+      return { buffer: buf.subarray(0, got), size: st.size, truncated: offset + got < st.size };
     } finally { await fh.close(); }
   }
 

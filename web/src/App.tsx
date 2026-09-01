@@ -24,7 +24,7 @@ interface ViewerState {
 }
 
 // 本地面板首次浏览默认起点(浏览器拿不到真实本机家目录,用简便占位;list_local_dir 缺省 path 时服务端回退 localFs.home)
-const localHome = '~';
+const localHome = null;
 
 export default function App() {
   const { confirm } = useFeedback();

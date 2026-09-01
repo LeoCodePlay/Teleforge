@@ -280,7 +280,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
 
   // 传到本地当前目录(remote_to_local):先确认(同名覆盖),再发请求,进度走 transfer_progress
   const doLocalTransfer = async () => {
-    if (opCount === 0 || !localCwd) return;
+    if (transferring || opCount === 0 || !localCwd) return;
     const ok = await confirm({
       title: '传到本地',
       message: `将把 ${opCount} 项传到目标目录「${localCwd}」,同名文件将被覆盖。继续?`,
@@ -424,7 +424,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
       <div className="row gap" style={{ marginTop: 8 }}>
         <button className="ghost sm" disabled={uploading} onClick={() => fileInputRef.current?.click()} title="上传文件到当前目录">⬆ 文件</button>
         <button className="ghost sm" disabled={uploading} onClick={() => dirInputRef.current?.click()} title="上传文件夹(保留目录结构)到当前目录">⬆ 文件夹</button>
-        <button className="ghost sm" disabled={opCount === 0 || !localCwd}
+        <button className="ghost sm" disabled={transferring || opCount === 0 || !localCwd}
           onClick={doLocalTransfer}
           title={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`}>⬇ 传到本地</button>
         {clipboard && (
@@ -487,7 +487,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
             <button onClick={() => { closeMenu(); doDownload(); }}>⬇ 下载{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button disabled={!localCwd} title={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`} onClick={() => { closeMenu(); doLocalTransfer(); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button disabled={transferring || !localCwd} title={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`} onClick={() => { closeMenu(); doLocalTransfer(); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
             <button onClick={() => { closeMenu(); doCopy(); }}>📋 复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>

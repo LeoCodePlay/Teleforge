@@ -62,17 +62,22 @@ export async function remoteToLocal(paths, localDir, { onProgress } = {}) {
   const walkRemote = async (remotePath, rel) => {
     const type = await ssh.atype(remotePath);
     if (!type) { errors.push(`${remotePath}: 不存在`); return; }
-    if (type === 'dir') {
-      const target = path.join(base, rel);
-      await localFs.mkdirp(target);
-      const list = await ssh.listDir(remotePath);
-      for (const e of list) await walkRemote(joinRemote(remotePath, e.name), path.join(rel, e.name));
-    } else {
-      const { buffer } = await ssh.readFileChunk(remotePath, { maxBytes: 0 });
-      const target = path.join(base, rel);
-      await localFs.writeFile(target, buffer, { maxBytes: 0 });
-      downloaded++; bytes += buffer.length;
-      onProgress?.({ done: downloaded, total: 1, current: rel });
+    try {
+      if (type === 'dir') {
+        const target = path.join(base, rel);
+        await localFs.mkdirp(target);
+        const list = await ssh.listDir(remotePath);
+        for (const e of list) await walkRemote(joinRemote(remotePath, e.name), path.join(rel, e.name));
+      } else {
+        const { buffer } = await ssh.readFileChunk(remotePath, { maxBytes: 0 });
+        const target = path.join(base, rel);
+        await localFs.writeFile(target, buffer, { maxBytes: 0 });
+        downloaded++; bytes += buffer.length;
+        onProgress?.({ done: downloaded, total: 1, current: rel });
+      }
+    } catch (err) {
+      // 单个条目失败(如非法 NTFS 文件名)不中断整体传输:记录错误后继续
+      errors.push(`${rel}: ${err.message}`);
     }
   };
   for (const p of paths) {
