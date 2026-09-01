@@ -610,18 +610,14 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
   ];
   const slashAll: SlashItem[] = [...slashCommands, ...slashSkills];
 
-  // 打开菜单:拉取一次技能目录(skills_list 未连接也返回内置+本机技能)
+  // 拉取技能目录填充 slashSkills(未连接也返回内置+本机技能);仅首次(避免每次输入 / 都请求)
   const openSlash = () => {
-    setSlashOpen(true);
-    setSlashQuery('');
-    setSlashActive(0);
-    if (slashSkills.length === 0) {
-      api.request('skills_list', {}, 15000)
-        .then((r) => setSlashSkills((r.skills || [])
-          .filter((s: any) => s && s.name && s.description)
-          .map((s: any) => ({ name: s.name, description: s.description, kind: 'skill' as const }))))
-        .catch(() => {});
-    }
+    if (slashSkills.length > 0) return;
+    api.request('skills_list', {}, 15000)
+      .then((r) => setSlashSkills((r.skills || [])
+        .filter((s: any) => s && s.name && s.description)
+        .map((s: any) => ({ name: s.name, description: s.description, kind: 'skill' as const }))))
+      .catch(() => {});
   };
 
   // 输入 / 唤醒菜单:仅当整行以 / 开头(最多一个空格前)时开启,对齐 harness 的 leadingInput 判定
@@ -632,6 +628,7 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
       setSlashQuery(m![1] || '');
       setSlashOpen(true);
       if (slashActive < 0) setSlashActive(0);
+      openSlash(); // 首次打开时拉取技能列表
     } else {
       setSlashOpen(false);
     }
