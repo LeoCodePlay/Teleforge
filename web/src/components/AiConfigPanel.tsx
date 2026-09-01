@@ -1,0 +1,445 @@
+// AI 模型 · 提供商配置面板(位于设置面板中)
+// 布局:当前提供方(模型/Key) → 我的提供商列表(增删改复制) → 预置提供商快速切换
+// 状态与聊天输入框下方的切换器共享(见 llm-context.tsx)
+import React, { useMemo, useState } from 'react';
+import { useLlm } from '../llm-context';
+import { PROVIDERS } from '../llm-providers';
+import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../types';
+import GlassSelect from './GlassSelect';
+
+export default function AiConfigPanel() {
+  const llm = useLlm();
+  const { userProviders, providerId, provider, isUser, isMock, model, setModel, customModel, setCustomModel,
+    apiKey, setApiKey, effModel, effBaseUrl, maxIters, setMaxIters,
+    switchProvider, addProvider, updateProvider,
+    duplicateProvider, removeProvider } = llm;
+  // 弹窗状态:null=关闭;{provider}=编辑该条目;{}=添加
+  const [modal, setModal] = useState<{ provider?: LlmProvider } | null>(null);
+
+  const handleSave = (data: ProviderDraft) => (modal?.provider ? updateProvider(modal.provider.id, data) : addProvider(data));
+
+  return (
+    <div>
+      {llm.err && <div className="error" onClick={() => llm.setErr('')} title="点击关闭">✕ {llm.err}</div>}
+
+      {/* ---- 当前使用中的提供方:模型与 API Key ---- */}
+      <div className="panel-title">当前提供方</div>
+      <div className="ai-cur">
+        <div className="ai-cur-head">
+          <span className="ai-cur-name">{isUser ? '★ ' : ''}{provider.name}</span>
+          {isMock ? <span className="badge">联调模式</span>
+            : apiKey ? <span className="badge ok">Key 已配置</span> : <span className="badge warn">未配置 Key</span>}
+        </div>
+        {isMock ? (
+          <div className="hint">mock 联调模式,无需 API Key,可跑通完整 Agent 工具流程</div>
+        ) : (
+          <>
+            {provider.models.length > 0 ? (
+              <>
+                <div className="field">
+                  <label>模型</label>
+                  <GlassSelect full value={provider.models.includes(effModel) ? effModel : '__custom__'}
+                    onChange={(v) => setModel(v)}
+                    options={[
+                      ...provider.models.map((m) => ({ value: m, label: m })),
+                      { value: '__custom__', label: '自定义模型…' }
+                    ]} />
+                </div>
+                {model === '__custom__' && (
+                  <div className="field">
+                    <label>自定义模型名</label>
+                    <input value={customModel} onChange={(e) => setCustomModel(e.target.value)}
+                      placeholder="输入该提供商的自定义模型名" />
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="field">
+                <label>模型名</label>
+                <input value={model} onChange={(e) => setModel(e.target.value)}
+                  placeholder="模型名(该提供商需手动输入)" />
+              </div>
+            )}
+            <div className="field">
+              <label>单轮最大工具迭代次数(仅当前模型生效,可选)</label>
+              <input type="number" min={1} step={1} value={maxIters} onChange={(e) => setMaxIters(e.target.value)}
+                placeholder="留空使用默认 300" />
+              <div className="hint">每轮「模型调用 + 执行工具」计 1 次;复杂任务报「已达单轮最大工具迭代次数」时调大</div>
+            </div>
+            <div className="field">
+              <label>API Key(仅存本机,按提供商分别保存)</label>
+              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
+            </div>
+          </>
+        )}
+        <div className="hint">
+          当前生效: <code>{isMock ? 'mock' : effModel || '—'}</code> @ <code>{isMock ? 'mock' : effBaseUrl || '未设置'}</code>
+          {(() => {
+            const cfg = llm.effModelContext;
+            if (!isMock && cfg && (cfg.contextWindow || cfg.maxTokens)) {
+              // 1M / 300k 这类大数字缩写显示(显式配置与全局默认一致展示)
+              const fmtN = (n?: number) => {
+                if (!n) return '默认';
+                return n >= 1000000 ? `${n / 1000000}M` : n >= 1000 ? `${n / 1000}k` : String(n);
+              };
+              return <> · 上下文 <code>{fmtN(cfg.contextWindow)}</code> / 输出 <code>{fmtN(cfg.maxTokens)}</code></>;
+            }
+            return null;
+          })()}
+        </div>
+      </div>
+
+      {/* ---- 我的提供商列表(点击卡片切换为当前使用) ---- */}
+      <div className="panel-title row">
+        <span>我的提供商</span>
+        <span className="muted sm">({userProviders.length})</span>
+        <span className="grow" />
+        <span className="muted sm">点击卡片切换为当前使用</span>
+      </div>
+      <div className="provider-list">
+        {userProviders.length === 0 && (
+          <div className="provider-empty">还没有自定义提供商,点击下方按钮添加</div>
+        )}
+        {userProviders.map((p) => (
+          <ProviderCard key={p.id} p={p} active={p.id === providerId}
+            onUse={() => switchProvider(p.id)}
+            onEdit={() => setModal({ provider: p })}
+            onCopy={() => duplicateProvider(p.id)}
+            onDelete={() => removeProvider(p.id)} />
+        ))}
+        <button className="provider-add" onClick={() => setModal({})} title="添加自定义提供商">
+          <span className="pa-icon">＋</span> 添加提供方
+        </button>
+      </div>
+
+      {/* ---- 预置提供商快速切换 ---- */}
+      <div className="panel-title row">
+        <span>预置提供商</span>
+        <span className="grow" />
+        <span className="muted sm">点击直接切换</span>
+      </div>
+      <div className="provider-chips">
+        {PROVIDERS.map((p) => (
+          <button key={p.id} className={providerId === p.id ? 'on' : ''}
+            title={p.note ? `${p.baseUrl}\n${p.note}` : p.baseUrl}
+            onClick={() => switchProvider(p.id)}>{p.name}</button>
+        ))}
+      </div>
+
+      {/* 添加 / 编辑提供商弹窗 */}
+      {modal && (
+        <ProviderModal
+          editProvider={modal.provider || null}
+          onClose={() => setModal(null)}
+          onSave={handleSave}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---- 提供商卡片:名称/地址/模型数 + 编辑/复制/删除 ----
+interface ProviderCardProps {
+  p: LlmProvider;
+  active: boolean;
+  onUse: () => void;
+  onEdit: () => void;
+  onCopy: () => void;
+  onDelete: () => void;
+}
+
+function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete }: ProviderCardProps) {
+  return (
+    <div className={'provider-card' + (active ? ' active' : '')} onClick={onUse} title="点击切换为当前使用">
+      <div className="pc-head">
+        <span className="pc-name">{p.name}</span>
+        {active && <span className="badge ok">使用中</span>}
+      </div>
+      <div className="pc-url" title={p.baseUrl}>{p.baseUrl}</div>
+      <div className="pc-meta">
+        <span>{p.models.length > 0 ? `${p.models.length} 个模型` : '无模型(手动输入)'}</span>
+        <span>{p.apiKey ? 'Key 已配置' : '未配置 Key'}</span>
+      </div>
+      <div className="pc-actions" onClick={(e) => e.stopPropagation()}>
+        {!active && <button className="sm" onClick={onUse}>使用</button>}
+        <button className="sm" onClick={onEdit}>编辑</button>
+        <button className="sm" onClick={onCopy}>复制</button>
+        <button className="sm danger" onClick={onDelete}>删除</button>
+      </div>
+    </div>
+  );
+}
+
+// ---- 添加 / 编辑提供商弹窗 ----
+// 添加模式:可从预置提供商下拉快速填充;两类模式均可「获取模型列表」勾选模型
+interface ProviderModalProps {
+  editProvider: LlmProvider | null;
+  onClose: () => void;
+  onSave: (data: ProviderDraft) => Promise<boolean>;
+}
+
+function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
+  const isEdit = !!editProvider;
+  const [name, setName] = useState(isEdit ? editProvider.name : '');
+  const [baseUrl, setBaseUrl] = useState(isEdit ? editProvider.baseUrl : '');
+  const [apiKey, setApiKey] = useState(isEdit ? (editProvider.apiKey || '') : '');
+  const [models, setModels] = useState<string[]>(isEdit ? [...(editProvider.models || [])] : []);
+  // 每个模型的上下文能力(输入窗口/输出上限),随条目随保存落盘
+  const [modelConfig, setModelConfig] = useState<Record<string, ModelContextConfig>>(
+    isEdit ? { ...(editProvider.modelConfig || {}) } : {}
+  );
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // 上下文参数编辑表单:当前正配置的模型 + 输入窗口/输出上限
+  const [cfgModel, setCfgModel] = useState('');
+  const [cfgWindow, setCfgWindow] = useState('');
+  const [cfgTokens, setCfgTokens] = useState('');
+
+  // 切换要配置的模型时回填已有配置
+  const selectCfgModel = (m: string) => {
+    setCfgModel(m);
+    const c = modelConfig[m] || {};
+    setCfgWindow(c.contextWindow ? String(c.contextWindow) : '');
+    setCfgTokens(c.maxTokens ? String(c.maxTokens) : '');
+  };
+
+  // 保存/更新当前模型的上下文配置(两者为空则清除该条配置)
+  const saveModelCfg = () => {
+    if (!cfgModel) return;
+    const win = Math.floor(Number(cfgWindow));
+    const tok = Math.floor(Number(cfgTokens));
+    setModelConfig((cur) => {
+      const next = { ...cur };
+      if ((!win || win <= 0) && (!tok || tok <= 0)) delete next[cfgModel];
+      else next[cfgModel] = {
+        ...(win > 0 ? { contextWindow: win } : {}),
+        ...(tok > 0 ? { maxTokens: tok } : {})
+      };
+      return next;
+    });
+  };
+
+  const clearModelCfg = () => {
+    if (!cfgModel) return;
+    setModelConfig((cur) => { const n = { ...cur }; delete n[cfgModel]; return n; });
+    setCfgWindow(''); setCfgTokens('');
+  };
+
+  const cfgSummary = models.filter((m) => modelConfig[m]).map((m) => {
+    const c = modelConfig[m];
+    return `${m}(${c.contextWindow ? '入' + c.contextWindow : ''}${c.contextWindow && c.maxTokens ? '/' : ''}${c.maxTokens ? '出' + c.maxTokens : ''})`;
+  });
+
+  // 预置模板下拉(添加模式):选中后填充名称与 Base URL
+  const [presetId, setPresetId] = useState('');
+  const applyPreset = (id: string) => {
+    setPresetId(id);
+    const p = PROVIDERS.find((x) => x.id === id);
+    if (p) { setName(p.name); setBaseUrl(p.baseUrl); }
+  };
+
+  // 获取模型列表(经服务端代理,避免浏览器 CORS)
+  const [fetching, setFetching] = useState(false);
+  const [remoteModels, setRemoteModels] = useState<string[] | null>(null); // null=尚未获取
+  const [filter, setFilter] = useState('');
+  const [manualModel, setManualModel] = useState('');
+
+  const fetchModelList = async () => {
+    const b = baseUrl.trim();
+    if (!/^https?:\/\//i.test(b)) return setError('请先填写正确的 Base URL 再获取模型列表');
+    setFetching(true);
+    setError('');
+    try {
+      const r = await fetch('/api/providers/fetch-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: b, apiKey: apiKey.trim() })
+      });
+      let j: any;
+      try { j = await r.json(); }
+      catch {
+        // 后端返回了非 JSON(通常是旧进程没有此接口,Express 返回 404 HTML 页面)
+        throw new Error(r.status === 404
+          ? '后端服务未提供该接口,请重启后端服务后再试'
+          : `后端返回了异常响应(HTTP ${r.status}),请重启后端服务后再试`);
+      }
+      if (!r.ok) throw new Error(j.error || '获取失败');
+      setRemoteModels(j.models || []);
+      if (!(j.models || []).length) setError('该端点未返回任何模型,可手动输入模型名');
+    } catch (e) {
+      setError('获取模型列表失败:' + (e as Error).message);
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const toggleModel = (m: string) => setModels((cur) => {
+    if (cur.includes(m)) {
+      // 移除模型时同步清除其上下文配置
+      setModelConfig((mc) => { const n = { ...mc }; delete n[m]; return n; });
+      return cur.filter((x) => x !== m);
+    }
+    return [...cur, m];
+  });
+
+  const addManualModel = () => {
+    const m = manualModel.trim();
+    if (!m) return;
+    if (!models.includes(m)) setModels((cur) => [...cur, m]);
+    setManualModel('');
+  };
+
+  const filteredRemote = useMemo(() => {
+    if (!remoteModels) return [];
+    const kw = filter.trim().toLowerCase();
+    return kw ? remoteModels.filter((m) => m.toLowerCase().includes(kw)) : remoteModels;
+  }, [remoteModels, filter]);
+
+  const submit = async () => {
+    const n = name.trim();
+    const b = baseUrl.trim().replace(/\/+$/, '');
+    if (!n) return setError('请填写提供商名称(如 公司内部网关)');
+    if (!b) return setError('请填写 Base URL');
+    if (!/^https?:\/\//i.test(b)) return setError('Base URL 需以 http:// 或 https:// 开头');
+    setSaving(true);
+    setError('');
+    const ok = await onSave({ name: n, baseUrl: b, models, apiKey: apiKey.trim(), modelConfig });
+    if (ok) onClose();
+    else setSaving(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal provider-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span>{isEdit ? `编辑提供方 · ${editProvider.name}` : '添加提供方'}</span>
+          <button className="ghost" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {!isEdit && (
+            <div className="field">
+              <label>从预置提供商快速填充(可选,选择后自动带入名称与地址)</label>
+              <GlassSelect full value={presetId} onChange={(v) => applyPreset(v)}
+                placeholder="选择预置提供商…"
+                options={PROVIDERS.filter((p) => !p.mock).map((p) => ({ value: p.id, label: p.name }))} />
+            </div>
+          )}
+          <div className="field">
+            <label>名称</label>
+            <input value={name} onChange={(e) => setName(e.target.value)}
+              placeholder="如 公司内部网关 / my-proxy" autoFocus={!isEdit} />
+          </div>
+          <div className="field">
+            <label>Base URL(OpenAI 兼容端点)</label>
+            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://your-gateway/v1" />
+          </div>
+          <div className="field">
+            <label>API Key(可选,仅存本机,随本条目保存)</label>
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
+          </div>
+
+          {/* 模型区:手动输入 + 获取模型列表勾选 */}
+          <div className="model-section">
+            <div className="ms-head">
+              <span className="ms-title">模型列表{models.length > 0 && ` · 已选 ${models.length} 个`}</span>
+              <button className="sm" onClick={fetchModelList} disabled={fetching}>
+                {fetching ? '获取中…' : '⟳ 获取模型列表'}
+              </button>
+            </div>
+            <div className="row">
+              <input className="grow" value={manualModel} onChange={(e) => setManualModel(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addManualModel(); } }}
+                placeholder="手动输入模型名,回车添加" />
+              <button onClick={addManualModel}>添加</button>
+            </div>
+            {models.length > 0 && (
+              <div className="model-chips">
+                {models.map((m) => (
+                  <span key={m} className="model-chip">
+                    {m}
+                    <button title="移除" onClick={() => toggleModel(m)}>✕</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {remoteModels && (
+              <div className="model-picker">
+                {remoteModels.length > 8 && (
+                  <input placeholder={`过滤 ${remoteModels.length} 个模型…`} value={filter}
+                    onChange={(e) => setFilter(e.target.value)} />
+                )}
+                <div className="model-rows">
+                  {filteredRemote.map((m) => (
+                    <label key={m} className="model-row">
+                      <input type="checkbox" checked={models.includes(m)} onChange={() => toggleModel(m)} />
+                      <span>{m}</span>
+                    </label>
+                  ))}
+                  {filteredRemote.length === 0 && <div className="model-empty">无匹配模型</div>}
+                </div>
+                {remoteModels.length > 0 && (
+                  <div className="hint">端点共 {remoteModels.length} 个模型,勾选加入提供方</div>
+                )}
+              </div>
+            )}
+
+            {/* 模型上下文参数:输入窗口/输出上限,超窗自动压缩早期对话 */}
+            <div className="model-section">
+              <div className="ms-head">
+                <span className="ms-title">模型上下文参数(可选)</span>
+              </div>
+              <div className="hint">配置每个模型的输入上下文窗口与单次输出上限;对话接近上限时自动把早期历史压缩成摘要(不配置则不启用自动压缩)。</div>
+              <div className="row gap" style={{ marginTop: 8 }}>
+                <GlassSelect className="tb-model" dir="up" value={cfgModel}
+                  placeholder="选择要配置的模型…"
+                  options={models.map((m) => ({ value: m, label: m }))}
+                  onChange={selectCfgModel} />
+              </div>
+              {cfgModel && (
+                <>
+                  <div className="row gap" style={{ marginTop: 8 }}>
+                    <div className="field grow">
+                      <label>输入上下文窗口(token)</label>
+                      <input type="number" min={0} step={1000} value={cfgWindow}
+                        onChange={(e) => setCfgWindow(e.target.value)} placeholder="如 64000" />
+                    </div>
+                    <div className="field grow">
+                      <label>输出上限·max_tokens</label>
+                      <input type="number" min={0} step={256} value={cfgTokens}
+                        onChange={(e) => setCfgTokens(e.target.value)} placeholder="如 8192" />
+                    </div>
+                  </div>
+                  <div className="row gap" style={{ marginTop: 4 }}>
+                    <button className="sm" onClick={saveModelCfg}>
+                      {modelConfig[cfgModel] ? '更新配置' : '保存配置'}
+                    </button>
+                    {modelConfig[cfgModel] && (
+                      <button className="sm danger" onClick={clearModelCfg}>清空</button>
+                    )}
+                    <span className="hint" style={{ marginTop: 0 }}>该模型: {modelConfig[cfgModel]
+                      ? `输入 ${modelConfig[cfgModel].contextWindow || '默认'} · 输出 ${modelConfig[cfgModel].maxTokens || '默认'}`
+                      : '未配置(不启用自动压缩)'}</span>
+                  </div>
+                </>
+              )}
+              {cfgSummary.length > 0 && (
+                <div className="model-chips" style={{ marginTop: 10 }}>
+                  {cfgSummary.map((s) => <span key={s} className="model-chip">{s}</span>)}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {error && <div className="error">✕ {error}</div>}
+        </div>
+        <div className="modal-foot row gap">
+          <button className="grow" onClick={onClose} disabled={saving}>取消</button>
+          <button className="primary grow" onClick={submit} disabled={saving || fetching}>
+            {saving ? '保存中…' : isEdit ? '保存' : '保存并使用'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

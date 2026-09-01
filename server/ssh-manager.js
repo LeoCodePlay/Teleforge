@@ -44,6 +44,7 @@ export class SshManager extends EventEmitter {
     this.home = null;     // 远程家目录
     this.workspace = null;// 用户选择的工作区
     this.execQueue = Promise.resolve();
+    this.activeRuns = new Map(); // runId -> { stream, done, stopped, killTimer },供 kill/超时终止命令
     this.hostInfo = null; // {host,port,username}
   }
 
@@ -51,6 +52,12 @@ export class SshManager extends EventEmitter {
 
   // ---------- 连接生命周期 ----------
   async connect(opts) {
+    // 用户主动发起新连接:若切换到了不同的服务器(host/port/username 任一不同),重置工作区
+    // (各服务器的工作区相互独立,避免沿用上一台服务器的路径)
+    const prev = this.hostInfo;
+    if (prev && (prev.host !== opts.host || (prev.port || 22) !== (opts.port || 22) || prev.username !== opts.username)) {
+      this.workspace = null;
+    }
     this.desired = true;
     this.opts = opts;
     this.retry = 0;
@@ -167,35 +174,74 @@ export class SshManager extends EventEmitter {
   }
 
   // ---------- 命令执行 ----------
-  // 返回 { code, signal, stdout, stderr } ;onOut/onErr 实时回调;截断已处理
-  exec(cmd, { timeout, onOut, onErr, maxOutput = EXEC.MAX_OUTPUT_CHARS } = {}) {
+  // 返回 { code, signal, stdout, stderr, timedOut, stopped } ;onOut/onErr 实时回调;截断已处理
+  exec(cmd, { runId, timeout, onOut, onErr, maxOutput = EXEC.MAX_OUTPUT_CHARS } = {}) {
     // 串行队列,避免并发通道互相干扰
-    const run = this.execQueue.then(() => this._execRaw(cmd, { timeout, onOut, onErr, maxOutput }));
+    const run = this.execQueue.then(() => this._execRaw(cmd, { runId, timeout, onOut, onErr, maxOutput }));
     this.execQueue = run.catch(() => {});
     return run;
   }
 
-  _execRaw(cmd, { timeout = EXEC.DEFAULT_TIMEOUT_MS, onOut, onErr, maxOutput = EXEC.MAX_OUTPUT_CHARS } = {}) {
+  // 停止运行中的命令:先发 SIGINT(模拟 Ctrl+C),宽限期后仍未结束则 SIGKILL 并关闭通道
+  kill(runId, { graceMs = 2000, signal = 'INT' } = {}) {
+    const run = this.activeRuns.get(runId);
+    if (!run || run.done) return false;
+    run.stopped = true;
+    if (run.stream) {
+      try { run.stream.signal(signal); } catch {}
+    }
+    if (!run.killTimer) {
+      run.killTimer = setTimeout(() => {
+        if (run.done) return;
+        const s = run.stream;
+        try { s?.signal?.('KILL'); } catch {}
+        try { s?.close(); } catch {}
+        try { s?.end(); } catch {}
+      }, graceMs);
+    }
+    return true;
+  }
+
+  _execRaw(cmd, { runId, timeout = EXEC.DEFAULT_TIMEOUT_MS, onOut, onErr, maxOutput = EXEC.MAX_OUTPUT_CHARS } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.connected || !this.client) return reject(new Error('SSH 未连接'));
       const t = Math.min(timeout, EXEC.MAX_TIMEOUT_MS);
       let stdout = '', stderr = '';
       let timedOut = false;
+      // 运行记录:kill/超时通过它拿到 channel;agent 等无 runId 调用用内部 id 登记,统一清理
+      const run = { id: runId || `exec-${(this._runSeq = (this._runSeq || 0) + 1)}`, stream: null, done: false, stopped: false, killTimer: null };
+      this.activeRuns.set(run.id, run);
       const addOut = (s) => { stdout += s; if (stdout.length > maxOutput) stdout = stdout.slice(0, maxOutput); onOut?.(s); };
       const addErr = (s) => { stderr += s; if (stderr.length > maxOutput) stderr = stderr.slice(0, maxOutput); onErr?.(s); };
       let settled = false;
-      const finish = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
+      const finish = (v) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          if (run.killTimer) clearTimeout(run.killTimer);
+          run.done = true;
+          this.activeRuns.delete(run.id);
+          resolve({ ...v, stopped: run.stopped });
+        }
+      };
       const timer = setTimeout(() => {
         timedOut = true;
         onErr?.('\n[超时: 命令超过 ' + (t / 1000) + 's 仍未结束,已终止]\n');
-        try { stream.close(); } catch {}
-        try { stream.end(); } catch {}
+        try { run.stream?.close(); } catch {}
+        try { run.stream?.end(); } catch {}
         // 等待 close 事件再结算
         setTimeout(() => finish({ code: -1, signal: 'TIMEOUT', stdout, stderr, timedOut }), 500);
       }, t);
 
       this.client.exec(cmd, { pty: false }, (err, stream) => {
+        run.stream = stream || null;
         if (err) return finish({ code: -1, signal: null, stdout, stderr, error: err.message });
+        // 通道打开前用户已点停止:立即终止
+        if (run.stopped) {
+          try { stream.signal('KILL'); } catch {}
+          try { stream.close(); } catch {}
+          try { stream.end(); } catch {}
+        }
         stream.on('data', (d) => addOut(d.toString('utf8')));
         stream.stderr.on('data', (d) => addErr(d.toString('utf8')));
         stream.on('close', (code, signal) => {
@@ -206,6 +252,19 @@ export class SshManager extends EventEmitter {
       });
       // 捕获同步抛错
     }).catch((e) => ({ code: -1, signal: null, stdout: '', stderr: `错误: ${e.message}`, error: true }));
+  }
+
+  // ---------- 交互式终端(PTY) ----------
+  // 打开远程交互式 shell(xterm-256color PTY),供命令台真实终端使用。
+  // 返回 ssh2 的双工 stream:data=输出,write=键盘输入,setWindow=尺寸变化,close=结束
+  shell({ cols = 80, rows = 24 } = {}) {
+    return new Promise((resolve, reject) => {
+      if (!this.connected || !this.client) return reject(new Error('SSH 未连接'));
+      this.client.shell({ term: 'xterm-256color', cols, rows }, (err, stream) => {
+        if (err) return reject(err);
+        resolve(stream);
+      });
+    });
   }
 
   // agent/命令台统一入口:按平台给工作区路径加引号后 cd 进去执行
@@ -269,11 +328,16 @@ export class SshManager extends EventEmitter {
     return false;
   }
 
-  async writeRemoteFile(p, content) {
+  // 写入远程文件内容(覆盖写);opts.maxBytes 传 0 表示不限制(批量上传用),
+  // opts.mkdir=false 表示目录已预先建好,跳过逐级探测
+  async writeRemoteFile(p, content, opts = {}) {
     if (!this.sftp) throw new Error('SFTP 未就绪');
     const buf = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
-    if (buf.length > FILE.WRITE_MAX_BYTES) throw new Error(`文件过大(>${Math.round(FILE.WRITE_MAX_BYTES / 1024 / 1024)}MB): ${p}`);
-    await this.mkdirp(remoteDirName(p));
+    const maxBytes = opts.maxBytes ?? FILE.WRITE_MAX_BYTES;
+    if (maxBytes && buf.length > maxBytes) {
+      throw new Error(`文件过大(>${Math.round(maxBytes / 1024 / 1024)}MB): ${p}`);
+    }
+    if (opts.mkdir !== false) await this.mkdirp(remoteDirName(p));
     const handle = await call((cb) => this.sftp.open(p, 'w', cb));
     try {
       const size = buf.length;
@@ -305,17 +369,55 @@ export class SshManager extends EventEmitter {
     }
   }
 
-  async rmdirRecursive(p) {
+  // 用远程 shell 命令删除目录树(posix: rm -rf / win32: rmdir /s /q),一次往返搞定整棵树,
+  // 比 SFTP 逐项删快几个数量级。返回 true 表示已成功删除;失败(权限、命令不可用等)返回 false 交由调用方回退。
+  // 路径按平台正确引用,防 shell 元字符注入。
+  async _shellDeleteTree(p) {
+    if (!this.connected || !this.client) return false;
+    const cmd = this.platform === 'win32'
+      ? `rmdir /s /q "${p.replace(/"/g, '""')}"`
+      : `rm -rf -- '${p.replace(/'/g, `'\\''`)}'`;
+    const r = await this._execRaw(cmd, { timeout: EXEC.MAX_TIMEOUT_MS });
+    if (r && r.code === 0 && !r.timedOut) return true;
+    this.emit('log', 'warn', `shell 删除未生效(code=${r?.code}),回退 SFTP 逐项删除: ${p}${r?.stderr ? ` → ${r.stderr}` : ''}`);
+    return false;
+  }
+
+  // 递归删除文件/目录;onProgress 每删一项回调一次。
+  // 目录优先走远端 shell 命令整树删除(快);失败则回退 SFTP 逐项删。
+  // 回退容错:单个子项失败只记录,继续删其余;最后把删不掉的项汇总成错误抛出。
+  async rmdirRecursive(p, onProgress, allowShell = true) {
+    p = normalizeRemote(p);
+    if (!p || p === '/') throw new Error('拒绝删除根目录');
     const st = await this.atype(p);
+    if (!st) return; // 竞态:路径已被并发删除
+    if (st === 'dir' && allowShell && (await this._shellDeleteTree(p))) {
+      onProgress?.(p);
+      return;
+    }
     if (st === 'file' || st === 'link') {
       await call((cb) => this.sftp.unlink(p, cb));
+      onProgress?.(p);
       return;
     }
     const list = await this.listDir(p);
+    const failures = [];
     for (const e of list) {
-      await this.rmdirRecursive(joinRemote(p, e.name));
+      try {
+        // 已进入回退均不再试 shell,避免逐项删除时对每个子目录重复失败并刷日志
+        await this.rmdirRecursive(joinRemote(p, e.name), onProgress, false);
+      } catch (err) {
+        failures.push(`${e.name}: ${err.message}`);
+      }
     }
-    await call((cb) => this.sftp.rmdir(p, cb));
+    try {
+      await call((cb) => this.sftp.rmdir(p, cb));
+      onProgress?.(p);
+    } catch (err) {
+      if (failures.length) throw new Error(`目录非空,${failures.length} 项未删净(${failures.slice(0, 3).join('; ')})`);
+      throw new Error(`目录删除失败: ${err.message}`);
+    }
+    if (failures.length) throw new Error(`已删除其余内容,但 ${failures.length} 项失败: ${failures.slice(0, 3).join('; ')}`);
   }
 
   async atype(p) {
@@ -326,6 +428,67 @@ export class SshManager extends EventEmitter {
     } catch (e) {
       if (e.code === 2 || e.message?.includes('No such file')) return null;
       throw e;
+    }
+  }
+
+  // ---------- 复制 ----------
+  // 递归复制文件/目录(跨平台);目标已存在且未允许覆盖时抛错;防复制到自身内部
+  async copyPath(src, dst, { overwrite = false } = {}) {
+    src = normalizeRemote(src);
+    dst = normalizeRemote(dst);
+    if (src === '/') throw new Error('不能复制根目录');
+    if (src === dst) throw new Error('源与目标相同');
+    if (dst.startsWith(src + '/')) throw new Error('不能复制到自身内部');
+    const type = await this.atype(src);
+    if (!type) throw new Error(`源不存在: ${src}`);
+    const dstType = await this.atype(dst);
+    if (dstType) {
+      if (!overwrite) throw new Error(`目标已存在: ${dst}`);
+      await this.rmdirRecursive(dst); // 文件/目录/链接均可删
+    }
+    if (type === 'dir') {
+      await this.mkdirp(dst);
+      await this._copyDir(src, dst);
+    } else {
+      await this._copyFile(src, dst); // link 按文件复制(跟随链接读取内容)
+    }
+    return { src, dst };
+  }
+
+  async _copyFile(src, dst) {
+    if (!this.sftp) throw new Error('SFTP 未就绪');
+    await this.mkdirp(remoteDirName(dst));
+    const sh = await call((cb) => this.sftp.open(src, 'r', cb));
+    let dh = null;
+    try {
+      dh = await call((cb) => this.sftp.open(dst, 'w', cb));
+      const buf = Buffer.alloc(128 * 1024);
+      let off = 0;
+      for (;;) {
+        const n = await new Promise((res, rej) =>
+          this.sftp.read(sh, buf, 0, buf.length, off, (e, bytes) => (e ? rej(e) : res(bytes))));
+        if (!n) break;
+        await new Promise((res, rej) =>
+          this.sftp.write(dh, buf, 0, n, off, (e) => (e ? rej(e) : res())));
+        off += n;
+      }
+    } finally {
+      if (dh) { try { await call((cb) => this.sftp.close(dh, cb)); } catch {} }
+      try { await call((cb) => this.sftp.close(sh, cb)); } catch {}
+    }
+  }
+
+  async _copyDir(src, dst) {
+    const list = await this.listDir(src);
+    for (const e of list) {
+      const sp = joinRemote(src, e.name);
+      const dp = joinRemote(dst, e.name);
+      if (e.type === 'dir') {
+        await this.mkdirp(dp);
+        await this._copyDir(sp, dp);
+      } else {
+        await this._copyFile(sp, dp);
+      }
     }
   }
 }

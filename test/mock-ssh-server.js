@@ -106,7 +106,7 @@ function setupSftp(sftp, rootDir) {
     try { fs.rmdirSync(toLocal(rootDir, p)); sftp.status(reqid, 0); }
     catch { sftp.status(reqid, 4); }
   });
-  sftp.on('UNLINK', (reqid, p) => {
+  sftp.on('REMOVE', (reqid, p) => { // 删文件:ssh2 服务端事件名是 REMOVE,不是 UNLINK
     try { fs.unlinkSync(toLocal(rootDir, p)); sftp.status(reqid, 0); }
     catch { sftp.status(reqid, 4); }
   });
@@ -145,19 +145,56 @@ export function startMockSsh({ port = 2222, rootDir }) {
     client.on('ready', () => {
       client.on('session', (accept) => {
         const session = accept();
+        let target = null; // { proc, stream }:当前 exec 通道,供 signal 终止
         session.on('sftp', (saccept, sreject) => {
           setupSftp(saccept(), rootDir);
         });
         session.on('exec', (eaccept, ereject, info) => {
           const stream = eaccept();
-          runCmd(info.command, stream, rootDir);
+          target = { proc: null, stream };
+          const proc = runCmd(info.command, stream, rootDir);
+          if (proc) target.proc = proc;
+        });
+        // 收到远端信号(模拟 Ctrl+C):终止进程树并关闭通道,让客户端看到命令结束
+        session.on('signal', (saccept, sreject, data) => {
+          const t = target;
+          killTree(t && t.proc);
+          try { if (t && t.stream && t.stream.writable) { t.stream.exit(130); t.stream.end(); } } catch {}
+          saccept && saccept();
         });
         session.on('pty', (ptyAccept) => { ptyAccept && ptyAccept(); });
+        // 交互式 shell(供 /ws/term 终端链路测试):管道接 cmd.exe / sh。
+        // 无真实 PTY(不回显、不处理 resize),但足以验证通道的 start/输入/输出/exit 收发。
+        session.on('shell', (saccept, sreject) => {
+          const stream = saccept();
+          const proc = process.platform === 'win32'
+            ? spawn('cmd.exe', [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+            : spawn('/bin/sh', [], { stdio: ['pipe', 'pipe', 'pipe'] });
+          target = { proc, stream };
+          stream.on('data', (d) => { try { proc.stdin.write(d); } catch {} });
+          proc.stdout.on('data', (d) => { try { stream.write(d); } catch {} });
+          proc.stderr.on('data', (d) => { try { stream.stderr.write(d); } catch {} });
+          stream.on('close', () => killTree(proc));
+          proc.on('exit', (code) => { try { stream.exit(code ?? 0); stream.end(); } catch {} });
+          proc.on('error', () => { try { stream.exit(1); stream.end(); } catch {} });
+        });
       });
     });
   });
   server.listen(port, '127.0.0.1');
   return server;
+}
+
+// 终止进程树(Windows 用 taskkill /T,避免杀掉 cmd 后子进程变孤儿)
+function killTree(proc) {
+  if (!proc || !proc.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } else {
+      proc.kill('SIGKILL');
+    }
+  } catch {}
 }
 
 function runCmd(cmd, stream, rootDir) {
@@ -166,6 +203,8 @@ function runCmd(cmd, stream, rootDir) {
   // cmd.exe 在 Windows 上执行;输出写回 stream,stderr 写 stream.stderr
   // windowsVerbatimArguments 避免 cmd /c 对待含空格/引号命令时的解析 bug
   const proc = spawn('cmd.exe', ['/c', translated], { windowsHide: true, windowsVerbatimArguments: true });
+  // 通道关闭(正常结束/断开/服务关闭)时清理仍在运行的进程树,避免孤儿进程
+  stream.on('close', () => killTree(proc));
   proc.stdout.on('data', (d) => stream.write(d));
   proc.stderr.on('data', (d) => { try { stream.stderr.write(d); } catch {} });
   proc.on('close', (code) => {
@@ -176,6 +215,7 @@ function runCmd(cmd, stream, rootDir) {
     try { stream.stderr.write(`\n[spawn错误: ${e.message}]\n`); } catch {}
     try { stream.exit(1); stream.end(); } catch {}
   });
+  return proc;
 
   function translateRemoteCds(c) {
     // 把开头形如 cd "/src" && 的远程路径替换成本机映射路径

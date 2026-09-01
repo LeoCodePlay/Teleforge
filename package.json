@@ -1,5 +1,5 @@
 {
-  "name": "ssh-ai-coding-tool",
+  "name": "teleforge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,13 +10,18 @@
   "scripts": {
     "dev": "concurrently -k -n SRV,WEB -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "node --watch server/index.js",
-    "dev:web": "vite --config web/vite.config.js",
-    "build": "vite build --config web/vite.config.js",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "vite build --config web/vite.config.ts",
+    "typecheck": "tsc --noEmit",
     "start": "node server/index.js",
-    "test": "node test/agent-history.test.js && node test/e2e.js"
+    "test": "node test/agent-history.test.js && node test/compact.test.js && node test/e2e.js"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "dompurify": "^3.4.14",
     "express": "^4.21.2",
+    "marked": "^18.0.11",
     "multer": "^1.4.5-lts.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -24,8 +29,13 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
+    "sass": "^1.83.4",
+    "typescript": "^5.7.2",
     "vite": "^6.0.7"
   }
 }
