@@ -33,5 +33,10 @@ await agent.run('读本地文件再写一个');
 check('本地工具链完成', calls === 3, `calls=${calls}`);
 check('write_local_file 写入了工作区相对路径', existsSync(path.join(root, 'out.txt')));
 
+// Task 8:system prompt 应描述双工作区(远程 + 本地)并给出本地工具使用规则
+const sys = agent._systemPrompt();
+check('system prompt 含本地工作区', sys.includes('本地工作区') && sys.includes(root), sys.slice(0, 200));
+check('system prompt 含本地工具规则', sys.includes('run_local_command') || sys.includes('*_local'), '');
+
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
 process.exit(fail > 0 ? 1 : 0);

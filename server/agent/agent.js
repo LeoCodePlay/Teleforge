@@ -15,7 +15,8 @@ import { LlmClient } from './llm.js';
 import { compactHistory, summarizeWithLlm, messageTokens } from './compact.js';
 import { Session, foldTodos } from './session.js';
 import { ToolRegistry } from './registry.js';
-import { registerTools, getEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.js';
+import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.js';
+import { localFs } from '../local-fs.js';
 import { renderPromptInjectSection } from './prompt-inject.js';
 import { sshManager as ssh } from '../ssh-manager.js';
 import * as sessions from '../session-store.js';
@@ -448,6 +449,7 @@ export class Agent {
     // 当前模型若单独配置了迭代上限则优先使用,否则回退全局默认(AGENT.MAX_ITERS)
     const maxIters = (this.llm && this.llm.maxIters) || AGENT.MAX_ITERS;
     let finalText = '';
+    let reasoningChars = 0; // 本轮累计收到的思考字符(供 turn 结束的"零思考"提示判断)
     let stepsUsed = 0;
     let endReason = { kind: 'completed' };
 
@@ -530,6 +532,9 @@ export class Agent {
           throw e;
         }
 
+        // 累计本轮收到的思考字符
+        reasoningChars += (res.reasoning || '').length;
+
         // 记录本步 assistant 消息(工具调用参数需以 JSON 字符串回传;
         // DeepSeek v4 思考模式下,reasoning_content 必须随历史原样回传,否则 400)
         const assistantMsg = {
@@ -576,6 +581,17 @@ export class Agent {
       }
 
       this.emit('agent', { event: 'done', text: finalText, iters: stepsUsed, sid: runSessionId });
+
+      // 请求了思考但整轮颗粒无收:当前模型经该网关不输出思考流(部分中转如此,
+      // 实测如 deepseek-v4-flash-0731 经 tokenrhythm/cun)。正文与工具调用不受影响;
+      // 明说一次,免得用户误以为前端把思考弄丢了。
+      if (reasoning !== 'off' && reasoningChars === 0 && this.llm && !this.llm.isMock
+        && /^(deepseek-v4|glm-|qwen)/i.test(this.llm.model || '')) {
+        this.emit('agent', {
+          event: 'notice', sid: runSessionId,
+          text: `本轮未收到思考内容:模型 ${this.llm.model} 经当前网关未返回思考流(正文与工具调用不受影响)。如需查看每步思考,请切换到已验证会返回思考的模型(如 deepseek-v4-pro、glm-5.3)。`
+        });
+      }
     } catch (e) {
       if (signal.signal.aborted) {
         endReason = { kind: 'aborted' };
@@ -607,26 +623,30 @@ export class Agent {
 
   _systemPrompt(reasoning = 'default') {
     const ws = ssh.workspace || '(未设置,请提示用户在界面中选择工作区)';
+    const lws = localFs.workspace || '(未设置,请提示用户在界面中选择本地工作区)';
     // 推理等级:off 关闭思考(直答);xhigh/max 深度推理;其余按默认格式输出
     const thinkingRule = reasoning === 'off'
-      ? '7. 输出格式:直接给出结论与操作,不要输出 thinking 代码块,不要展示任何推理过程。'
+      ? '9. 输出格式:直接给出结论与操作,不要输出 thinking 代码块,不要展示任何推理过程。'
       : (reasoning === 'xhigh' || reasoning === 'max')
-        ? '7. 输出格式:先在 ```thinking(...```) 代码块中进行充分、系统的深度推理(允许较长,逐步分析再下结论),再在正文给出结论与操作;复杂任务务必先想清楚再动手。'
-        : '7. 输出格式:任何推理过程请放在 ```thinking(...```) 代码块中(前端会折叠),不要污染正文;正文只给结论与操作。';
+        ? '9. 输出格式:先在 ```thinking(...```) 代码块中进行充分、系统的深度推理(允许较长,逐步分析再下结论),再在正文给出结论与操作;复杂任务务必先想清楚再动手。'
+        : '9. 输出格式:任何推理过程请放在 ```thinking(...```) 代码块中(前端会折叠),不要污染正文;正文只给结论与操作。';
     const lines = [
-      '你是运行在远程服务器上的 AI 编程助手,通过工具在远程 ssh 服务器上真实地读写文件与执行命令。',
+      '你是 AI 编程助手,可同时操作两台"工作区":远程 ssh 服务器与本机(本地)。',
       `远程平台: ${ssh.platform || '未知'}`,
-      `工作区: ${ws}`,
+      `远程工作区: ${ws}`,
+      `本地平台: ${process.platform}`,
+      `本地工作区: ${lws}`,
       '',
       '规则:',
-      '1. 所有文件读写、命令执行都必须通过工具完成,严禁编造文件内容或命令输出;看不到的结果就再查。',
-      '2. 命令默认在工作区目录下执行;若需切换目录,请在命令开头显式写 cd。',
-      '3. 大文件用 read_file 的 offset/maxBytes 分片读取;修改文件优先 edit_file 精确替换。',
-      '4. 写/改/删仅限工作区内;绝不能删除工作区根目录;破坏性命令(rm -rf、drop table 等)必须三思。',
-      '5. 重要:对话历史里已有的环境信息与目录结构(如之前的 get_workspace_info / list_directory 结果)可以直接复用,不要重复探测环境;只有任务涉及变化(新文件、需验证结果)时才重新调用。',
-      '6. 回答使用用户的提问语言(默认中文)。',
+      '1. 所有文件读写、命令执行都必须通过工具完成,严禁编造内容或输出;看不到的结果就再查。',
+      '2. 操作**远程**文件/命令用原工具(read_file/write_file/run_command/...);操作**本机**文件/命令用 `*_local` 工具(read_local_file/write_local_file/run_local_command/...)。不要在本地工具里传远程路径,反之亦然。',
+      '3. 命令默认在对应工作区目录下执行;若需切换目录,请在命令开头显式写 cd。',
+      '4. 大文件用 read_file/read_local_file 的 offset/maxBytes 分片;修改文件优先 edit_file/edit_local_file 精确替换。',
+      '5. 写/改/删仅限对应工作区内;绝不能删除工作区根目录;破坏性命令(rm -rf、drop table 等)必须三思。',
+      '6. 重要:对话历史里已有的环境信息与目录结构可直接复用,不要重复探测;只有任务涉及变化时才重新调用。',
+      '7. 回答使用用户的提问语言(默认中文)。',
+      '8. 任务规划:开始复杂多步任务前先用 todo_write 建计划,每完成一项立即标记 completed;简单单步任务可跳过。',
       thinkingRule,
-      '8. 任务规划:开始复杂的多步任务前,先用 todo_write 建立任务计划(每个具体步骤一项),每完成一项立即标记 completed 并推进下一项;简单单步任务可跳过计划。',
       '',
       '当用户指令不明确、或工作区缺乏必要信息时,主动调用工具检查,而不是猜测。'
     ];
@@ -643,11 +663,17 @@ export class Agent {
         '也不要声称执行了任何操作;请基于已有信息给出文字回答,并提醒用户换支持工具的模型来获得完整能力。'
       );
     }
-    // 注入最近一次环境探测结果,让模型直接复用,避免每轮重复 get_workspace_info
+    // 注入最近一次远程环境探测结果,让模型直接复用,避免每轮重复 get_workspace_info
     const env = getEnvInfo();
     if (env && env.workspace === ssh.workspace) {
       lines.push('', '已知环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_workspace_info):');
       lines.push(env.summary);
+    }
+    // 注入最近一次本地环境探测结果,让模型直接复用,避免每轮重复 get_local_info
+    const lenv = getLocalEnvInfo();
+    if (lenv && lenv.workspace === localFs.workspace) {
+      lines.push('', '已知本地环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_local_info):');
+      lines.push(lenv.summary);
     }
     return lines.join('\n');
   }

@@ -12,7 +12,7 @@ import { sshManager as ssh } from './ssh-manager.js';
 import { localFs } from './local-fs.js';
 import { localToRemote, remoteToLocal } from './transfer.js';
 import { agent, toolRegistry, setAgentHub } from './agent/agent.js';
-import { clearEnvInfo, refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from './agent/tools.js';
+import { clearEnvInfo, clearLocalEnvInfo, refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from './agent/tools.js';
 import { toolSettings } from './agent/tool-settings.js';
 import { getPromptInject, setPromptInject } from './agent/prompt-inject.js';
 
@@ -266,8 +266,8 @@ export function setupWs(httpServer) {
             const st = await localFs.stat(msg.path);
             if (!st) throw new Error(`目录不存在: ${msg.path}`);
             if (!st.isDirectory()) throw new Error(`不是目录: ${msg.path}`);
-            // Task 8 会在此调用 clearLocalEnvInfo();当前轮次不调用,直接改状态并刷新 status
             localFs.workspace = msg.path;
+            clearLocalEnvInfo(); // 本地工作区变化,旧本地环境快照失效
             reply({ type: 'local_workspace', path: msg.path });
             emitStatus();
             break;
