@@ -17,20 +17,25 @@ function fmtTime(ms: number | undefined) {
   if (d.toDateString() === now.toDateString()) return hm;
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
 }
-const norm = (p: string | null | undefined) => { const s = String(p || '').replace(/\/+$/, ''); return s || '/'; };
-const baseName = (p: string) => (p || '').split('/').filter(Boolean).pop() || 'item';
+// 本地路径分隔符可能是 \ (Windows) 或 / (POSIX):规范化/取上级统一按「任一分隔符」处理
+const norm = (p: string | null | undefined) => { const s = String(p || '').replace(/[\\/]+$/, ''); return s || '/'; };
+const baseName = (p: string) => (p || '').split(/[\\/]/).filter(Boolean).pop() || 'item';
+const upDir = (p: string) => {
+  const t = String(p || '').replace(/[\\/]+$/, '');
+  const i = Math.max(t.lastIndexOf('\\'), t.lastIndexOf('/'));
+  return i <= 0 ? t : t.slice(0, i);
+};
+const sepOf = (p: string) => (String(p || '').includes('\\') ? '\\' : '/');
 
-// 复制/粘贴专用错误标记(服务端在目标已存在且未允许覆盖时抛出)
-const ERR_EXISTS = '目标已存在';
-// 删除可能很慢(尤其递归删大目录),放宽请求超时
+// 本地删除可能很慢(尤其递归删大目录),放宽请求超时
 const DELETE_TIMEOUT = 600000;
 
-interface FileManagerProps {
+interface LocalFileManagerProps {
   workspace?: string | null;
   home?: string | null;
-  localCwd?: string;                 // 本地面板当前目录(传到本地的目标)
+  remoteCwd?: string;                // 远程面板当前目录(传到远程的目标)
   onCwdChange?: (p: string) => void; // 当前目录变化时上报
-  onOpenFile: (path: string) => void;
+  onOpenLocalFile: (path: string) => void;
 }
 
 interface CtxMenu {
@@ -49,33 +54,25 @@ interface DeletingInfo {
   done: number;
   current: string;
 }
-interface WriteState {
-  done: number;
-  total: number;
-}
 
-// 文件管理器:导航式浏览远程目录(进入目录即显示其内容)
+// 本地文件管理器:导航式浏览本地目录
 // 选中:单击单选 · Ctrl/Cmd+单击 多选切换 · Shift+单击 连选 · Ctrl+A 全选 · Delete 删除
-// 操作:双击打开/进入 · 右键对选区执行 打开/下载/复制/删除/粘贴
-export default function FileManager({ workspace, home, localCwd, onCwdChange, onOpenFile }: FileManagerProps) {
+// 操作:双击打开/进入 · 右键对选区执行 打开/复制/删除/粘贴 · 「传到远程」把选区发往远程当前目录
+export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChange, onOpenLocalFile }: LocalFileManagerProps) {
   const { confirm } = useFeedback();
   const [path, setPath] = useState(() => norm(workspace || home || '/'));
   const [pathDraft, setPathDraft] = useState(path);
   const [entries, setEntries] = useState<DirEntry[]>([]);
-  const [loading, setLoading] = useState(false); // 全局加载(返回/刷新/切换目录/首次加载)
-  const [navLoading, setNavLoading] = useState<string | null>(null); // 正在进入的子目录完整路径(仅行内加载)
+  const [loading, setLoading] = useState(false);
+  const [navLoading, setNavLoading] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [selection, setSelection] = useState<Set<string>>(new Set()); // 选中的条目 name 集合
-  const [anchor, setAnchor] = useState<string | null>(null); // shift 连选的锚点 name
-  const [menu, setMenu] = useState<CtxMenu | null>(null); // 右键菜单 {x, y, item|null}
-  const [clipboard, setClipboard] = useState<Clipboard | null>(null); // {items: [path], op}
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [menu, setMenu] = useState<CtxMenu | null>(null);
+  const [clipboard, setClipboard] = useState<Clipboard | null>(null);
   const [msg, setMsg] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [deleting, setDeleting] = useState<DeletingInfo | null>(null); // 删除进度
-  const [wrState, setWrState] = useState<WriteState | null>(null); // 服务端写入远程进度
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const dirInputRef = useRef<HTMLInputElement>(null);
+  const [deleting, setDeleting] = useState<DeletingInfo | null>(null);
+  const [transferring, setTransferring] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const seqRef = useRef(0);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -86,7 +83,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     msgTimer.current = setTimeout(() => setMsg(''), 4000);
   };
 
-  // opts.itemPath:进入某子目录,只在该目录行右侧显示加载,不触发全局加载(双击进文件夹)
+  // 进入某子目录,只在该目录行右侧显示加载,不触发全局加载(双击进文件夹)
   const load = useCallback(async (p: string, opts: { itemPath?: string; keepSelected?: boolean } = {}) => {
     const seq = ++seqRef.current;
     const target = norm(p);
@@ -94,7 +91,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     else { setLoading(true); }
     setError('');
     try {
-      const r = await api.request('list_dir', { path: target }, 20000);
+      const r = await api.request('list_local_dir', { path: target }, 20000);
       if (seq !== seqRef.current) return;
       setPath(target); setPathDraft(target);
       setEntries(r.entries || []);
@@ -117,15 +114,20 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace, home]);
 
+  const sep = sepOf(path);
+  const entryPath = (name: string) => {
+    const t = String(path).replace(/[\\/]+$/, '');
+    return t ? t + sep + name : name;
+  };
+  const isRoot = path === upDir(path);
   const refresh = () => load(path, { keepSelected: true });
-  const up = () => { if (path !== '/') load(path.slice(0, path.lastIndexOf('/')) || '/'); };
-  const entryPath = (name: string) => (path === '/' ? '/' + name : path + '/' + name);
+  const up = () => { if (!isRoot) load(upDir(path)); };
 
   const clearSelection = () => { setSelection(new Set()); setAnchor(null); };
 
   const openEntry = (e: DirEntry) => {
     if (e.type === 'dir') load(entryPath(e.name), { itemPath: entryPath(e.name) });
-    else onOpenFile(entryPath(e.name));
+    else onOpenLocalFile(entryPath(e.name));
   };
 
   // ---- 选择交互 ----
@@ -138,7 +140,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
       if (ai >= 0 && ci >= 0) {
         const [lo, hi] = ai < ci ? [ai, ci] : [ci, ai];
         setSelection(new Set(entries.slice(lo, hi + 1).map((x) => x.name)));
-        return; // 锚点保持不变
+        return;
       }
     }
     if (e.ctrlKey || e.metaKey) {
@@ -168,8 +170,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
   // ---- 选区派生 ----
   const selectedEntries = entries.filter((e) => selection.has(e.name));
   const selectedPaths = selectedEntries.map((e) => entryPath(e.name));
-  // 去掉嵌套在其它选中项内部的多余项(父目录被删/复制时已覆盖子项)
-  const opPaths = selectedPaths.filter((p) => !selectedPaths.some((q) => p.startsWith(q + '/')));
+  const opPaths = selectedPaths.filter((p) => !selectedPaths.some((q) => p.startsWith(q + sep)));
   const opCount = opPaths.length;
 
   // ---- 右键菜单 ----
@@ -206,9 +207,9 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     };
   }, [menu]);
 
-  // 订阅服务端删除进度事件(单次删除只有一条在跑,直接合并到当前 deleting)
+  // 订阅服务端本地删除进度事件(单次删除只有一条在跑,直接合并到当前 deleting)
   useEffect(() => {
-    const off = api.on('delete_progress', (m) => {
+    const off = api.on('local_delete_progress', (m) => {
       setDeleting((d) => {
         if (!d) return d;
         return { ...d, done: m.done, current: m.current || '' };
@@ -237,12 +238,12 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     for (let i = 0; i < N; i++) {
       const p = paths[i];
       setDeleting({ index: i, total: N, name: baseName(p), done: 0, current: '' });
-      try { await api.request('delete', { path: p }, DELETE_TIMEOUT, 'deleted'); }
+      try { await api.request('local_delete', { path: p }, DELETE_TIMEOUT, 'local_deleted'); }
       catch (e) { errors.push(`${baseName(p)}: ${(e as Error).message}`); }
     }
     setDeleting(null);
     clearSelection();
-    refresh(); // 先刷新列表(refresh->load 开头会清空 error),再显示错误,避免删除失败报错被静默吞掉
+    refresh();
     if (errors.length) setError(errors.slice(0, 5).join('; '));
     else flash(`已删除 ${opCount} 项`);
   };
@@ -251,25 +252,9 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     setClipboard({ items: opPaths, op: 'copy' });
     flash(`已复制 ${opCount} 项`);
   };
-  const doDownload = () => {
-    if (opCount === 0) return;
-    if (opCount === 1) {
-      const p = opPaths[0];
-      const it = entries.find((e) => entryPath(e.name) === p);
-      const url = (it?.type === 'dir')
-        ? `/api/downloaddir?path=${encodeURIComponent(p)}`
-        : `/api/download?path=${encodeURIComponent(p)}`;
-      window.open(url, '_blank');
-      flash(`正在下载 ${baseName(p)}…`);
-    } else {
-      const qs = opPaths.map((p) => `path=${encodeURIComponent(p)}`).join('&');
-      window.open(`/api/downloaddir?${qs}`, '_blank');
-      flash(`正在打包下载 ${opCount} 项…`);
-    }
-  };
 
-  // 复制到目标目录;目标已存在且未允许覆盖时抛出 ERR_EXISTS
-  const doCopyReq = (src: string, dst: string, overwrite: boolean) => api.request('copy', { src, dst, overwrite }, 120000);
+  // 复制到目标目录;目标已存在且未允许覆盖时服务端抛 ERR_EXISTS
+  const doCopyReq = (src: string, dst: string, overwrite: boolean) => api.request('local_copy', { src, dst, overwrite }, 120000);
 
   const dupName = (base: string) => {
     const dot = base.lastIndexOf('.');
@@ -283,9 +268,9 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     let ok = 0, skipped = 0;
     for (const src of clipboard.items) {
       const base = baseName(src);
-      let dst = (dir === '/' ? '/' : dir) + '/' + base;
-      if (norm(src) === norm(dst)) { // 同目录粘贴 = 复制副本,直接换个名,不覆盖
-        dst = (dir === '/' ? '/' : dir) + '/' + dupName(base);
+      let dst = dir + sep + base;
+      if (norm(src) === norm(dst)) {
+        dst = dir + sep + dupName(base);
         try { await doCopyReq(src, dst, false); ok++; continue; }
         catch { skipped++; continue; }
       }
@@ -293,8 +278,8 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
         await doCopyReq(src, dst, false);
         ok++;
       } catch (e) {
-        const msg = (e as Error).message || '';
-        if (msg.includes(ERR_EXISTS)) {
+        const m = (e as Error).message || '';
+        if (m.includes('目标已存在')) {
           const overwrite = await confirm({
             title: '同名文件已存在',
             message: `目标已存在同名「${base}」,是否覆盖?`,
@@ -305,60 +290,41 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
             try { await doCopyReq(src, dst, true); ok++; }
             catch (e2) { setError((e2 as Error).message); return; }
           } else { skipped++; }
-        } else { setError(msg); return; }
+        } else { setError(m); return; }
       }
     }
     setMsg(`已粘贴 ${ok} 项${skipped ? `,跳过 ${skipped} 项` : ''}`);
     refresh();
   };
 
-  // ---- 上传到当前目录 ----
-  const uploadFiles = (fileList: FileList | null) => {
-    const files = Array.from(fileList || []);
-    if (!files.length) return;
-    const fd = new FormData();
-    for (const f of files) {
-      const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-      fd.append('files', f, rel);
-    }
-    setUploading(true); setProgress(0); setWrState(null); setError('');
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/upload?dir=${encodeURIComponent(path)}`);
-    // 阶段1:浏览器→服务器 的 body 传输(上限 99,避免 body 传完但服务端还没开始写入时虚报 100%)
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100)); };
-    // 阶段2:服务端按文件回传写入进度(NDJSON 流),读到即切到写入阶段,显示真实进度
-    xhr.onprogress = () => {
-      const text = xhr.responseText;
-      if (!text) return;
-      for (const ln of text.split('\n')) {
-        let m; try { m = JSON.parse(ln); } catch { continue; }
-        if (m && m.type === 'progress' && m.total) setWrState({ done: m.done, total: m.total });
-      }
-    };
-    xhr.onload = () => {
-      setUploading(false);
-      let r: any = null;
-      const lastLn = xhr.responseText.split('\n').filter(Boolean).pop();
-      if (lastLn) { try { r = JSON.parse(lastLn); } catch {} }
-      if (xhr.status === 200 && r) {
-        refresh(); // 先刷新列表,避免"上传成功但目录里看不到"的错觉
-        if (r.failed > 0) setError(`⬆ 已上传 ${r.uploaded} 个文件,但 ${r.failed} 个失败: ${(r.errors || []).slice(0, 5).join('; ')}`);
-        else flash(`⬆ 已上传 ${r.uploaded} 个文件(${fmtSize(r.bytes)})`);
-      } else {
-        setError(`✕ 上传失败: ${r?.error || xhr.statusText}`);
-      }
-    };
-    xhr.onerror = () => { setUploading(false); setError('✕ 网络错误,上传失败'); };
-    xhr.send(fd);
+  // 把选中项传到远程当前目录(local_to_remote 在后续任务接入,此处先占位,点击得到「未知消息类型」错误属可接受中间态)
+  const doTransferToRemote = () => {
+    if (opCount === 0) return;
+    setTransferring(true); setError('');
+    api.request('local_to_remote', { paths: opPaths, dir: remoteCwd }, 600000)
+      .then(() => flash(`⬆ 已传到远程 ${remoteCwd || ''}`))
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setTransferring(false));
   };
 
-  // 面包屑
-  const crumbs = path.split('/').filter(Boolean);
+  // 逐级向上直到根(无法再取上级的层级即根,如 Windows 盘符 C:\ 或 POSIX /)
+  const rootPath = () => {
+    let p = path;
+    for (;;) { const up = upDir(p); if (up === p) return p; p = up; }
+  };
+  // 面包屑(按当前分隔符切分,Windows 盘符 C: 作为一级)
+  const parts = path.split(sep).filter(Boolean).filter((s, i, a) => !(s === '' && i > 0 && i === a.length - 1));
+  const crumbAcc: string[] = [];
+  const crumbs = parts.map((c) => {
+    crumbAcc.push(c);
+    const p = crumbAcc.join(sep) + (c.endsWith(':') ? sep : '');
+    return { c, p };
+  });
 
   const statusText = deleting
     ? `正在删除 ${deleting.index + 1}/${deleting.total}: ${deleting.name}…已删 ${deleting.done} 项`
     : loading ? '加载中…'
-      : uploading ? (wrState ? `写入远程 ${wrState.done}/${wrState.total}` : `上传中 ${Math.min(progress, 99)}%`)
+      : transferring ? '正在传到远程…'
         : msg ? msg
           : selection.size > 1 ? `已选 ${selection.size} 项`
             : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
@@ -366,20 +332,17 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
   return (
     <div className="fm">
       <div className="fm-toolbar row gap">
-        <button className="ghost sm" onClick={up} disabled={path === '/'} title="上级目录">⬆ 上级</button>
+        <button className="ghost sm" onClick={up} disabled={isRoot} title="上级目录">⬆ 上级</button>
         <button className="ghost sm" onClick={refresh} title="刷新">↻</button>
         {home && <button className="ghost sm" onClick={() => load(home)} title={`家目录 ${home}`}>🏠</button>}
         <div className="fm-crumbs">
-          <span className={`crumb ${path === '/' ? 'cur' : ''}`} onClick={() => load('/')}>/</span>
-          {crumbs.map((c, i) => {
-            const p = '/' + crumbs.slice(0, i + 1).join('/');
-            return (
-              <span key={p} className="crumb-wrap">
-                <span className="crumb-sep">/</span>
-                <span className={`crumb ${p === path ? 'cur' : ''}`} onClick={() => load(p)}>{c}</span>
-              </span>
-            );
-          })}
+          <span className={`crumb ${isRoot ? 'cur' : ''}`} onClick={() => load(rootPath())}>本机</span>
+          {crumbs.map(({ c, p }) => (
+            <span key={p} className="crumb-wrap">
+              <span className="crumb-sep">{sep}</span>
+              <span className={`crumb ${p === path ? 'cur' : ''}`} onClick={() => load(p)}>{c}</span>
+            </span>
+          ))}
         </div>
       </div>
 
@@ -391,15 +354,11 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
       </div>
 
       <div className="row gap" style={{ marginTop: 8 }}>
-        <button className="ghost sm" disabled={uploading} onClick={() => fileInputRef.current?.click()} title="上传文件到当前目录">⬆ 文件</button>
-        <button className="ghost sm" disabled={uploading} onClick={() => dirInputRef.current?.click()} title="上传文件夹(保留目录结构)到当前目录">⬆ 文件夹</button>
-        <button className="ghost sm" disabled={opCount === 0 || !localCwd}
-          onClick={() => {
-            api.request('remote_to_local', { paths: opPaths, dir: localCwd }, 600000)
-              .then(() => flash('⬇ 已传到本地当前目录'))
-              .catch((e) => setError((e as Error).message));
-          }}
-          title={!localCwd ? '请先在本地面板选择一个目录' : '把选中项传到本地当前目录(传输通道待接入)'}>⬇ 传到本地</button>
+        <button className="ghost sm" disabled={opCount === 0 || !remoteCwd || transferring}
+          onClick={doTransferToRemote}
+          title={!remoteCwd ? '请先连接服务器并查看远程目录' : '把选中项传到远程当前目录(传输通道待接入)'}>
+          ⬆ 传到远程
+        </button>
         {clipboard && (
           <button className="ghost sm" onClick={() => pasteHere(path)} title="把已复制的项复制到当前目录">📋 粘贴</button>
         )}
@@ -408,12 +367,9 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
           {statusText}
         </span>
       </div>
-      {(uploading || deleting) && (
+      {deleting && (
         <div className="progress">
-          <div className={`progress-bar ${deleting && !uploading ? 'indet' : ''}`}
-            style={{ width: uploading
-              ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : Math.min(progress, 99)) + '%'
-              : '100%' }} />
+          <div className="progress-bar" style={{ width: '100%' }} />
         </div>
       )}
       {error && <div className="error" onClick={() => setError('')} title="点击关闭">✕ {error}</div>}
@@ -422,7 +378,6 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
         onClick={(e) => { if (e.target === e.currentTarget) { clearSelection(); e.currentTarget.focus(); } }}
         onKeyDown={handleListKey}
         onContextMenu={(e) => openMenu(e, null)}>
-        {/* 加载中且列表为空:在列表区明显显示加载中(避免状态文字不显眼/被挡住);进入子目录只行内转圈,不影响列表 */}
         {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
         {!loading && entries.length === 0 && <div className="muted fmph">(空目录)</div>}
         {entries.map((e) => {
@@ -444,7 +399,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
         })}
       </div>
 
-      <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · 右键操作 · 上传到当前目录</div>
+      <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · 右键操作 · 传到远程当前目录</div>
 
       {menu && (
         <div className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
@@ -452,13 +407,10 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
             <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}>📂 打开</button>
           )}
           {menu.item && selection.size === 1 && menu.item.type !== 'dir' && (
-            <button onClick={() => { closeMenu(); onOpenFile(entryPath(menu.item!.name)); }}>📄 打开</button>
+            <button onClick={() => { closeMenu(); onOpenLocalFile(entryPath(menu.item!.name)); }}>📄 打开</button>
           )}
           {menu.item && (
-            <button onClick={() => { closeMenu(); doDownload(); }}>⬇ 下载{opCount > 1 ? `(${opCount} 项)` : ''}</button>
-          )}
-          {menu.item && (
-            <button disabled={!localCwd} title={!localCwd ? '请先在本地面板选择一个目录' : '把选中项传到本地当前目录'} onClick={() => { closeMenu(); api.request('remote_to_local', { paths: opPaths, dir: localCwd }, 600000).then(() => flash('⬇ 已传到本地当前目录')).catch((e) => setError((e as Error).message)); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button onClick={() => { closeMenu(); doTransferToRemote(); }}>⬆ 传到远程当前目录{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
             <button onClick={() => { closeMenu(); doCopy(); }}>📋 复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>
@@ -476,12 +428,6 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
           )}
         </div>
       )}
-
-      <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
-        onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
-      <input ref={dirInputRef} type="file" multiple style={{ display: 'none' }}
-        {...({ webkitdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
-        onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
     </div>
   );
 }

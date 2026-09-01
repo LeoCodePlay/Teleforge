@@ -23,14 +23,19 @@ interface ViewerState {
   name: string;
 }
 
+// 本地面板首次浏览默认起点(浏览器拿不到真实本机家目录,用简便占位;list_local_dir 缺省 path 时服务端回退 localFs.home)
+const localHome = '~';
+
 export default function App() {
   const { confirm } = useFeedback();
   const [status, setStatus] = useState<ServerStatus>({
     status: 'disconnected', host: null, port: null, username: null,
-    platform: null, home: null, workspace: null, agentBusy: false, busySessions: [], llmModel: null
+    platform: null, home: null, workspace: null, localWorkspace: null, agentBusy: false, busySessions: [], llmModel: null
   });
   const [activeTab, setActiveTab] = useState('agent');
   const [viewer, setViewer] = useState<ViewerState | null>(null); // {path, name}
+  const [localCwd, setLocalCwd] = useState('');   // 本地面板当前目录
+  const [remoteCwd, setRemoteCwd] = useState(''); // 远程面板当前目录
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sshOpen, setSshOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
@@ -127,6 +132,18 @@ export default function App() {
     setViewer({ path, name });
   };
 
+  // 本地文件用 local: 前缀区分,FileViewer 内按前缀分流读取/保存
+  const handleOpenLocalFile = (path: string) => {
+    const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
+    setViewer({ path: `local:${path}`, name });
+  };
+
+  // 选择本地工作区:通知服务端切换,并在状态里记住
+  const onSetLocalWorkspace = (p: string) =>
+    api.request('set_local_workspace', { path: p }, 20000)
+      .then(() => setStatus((s) => ({ ...s, localWorkspace: p })))
+      .catch(() => {});
+
   // ---- 按服务器保存的工作区历史:key = "host:port",每个服务器记住添加/打开过的工作区 ----
   const WS_KEY = 'sshai.wsByHost';
   const loadWsByHost = (): Record<string, string[]> => {
@@ -197,7 +214,15 @@ export default function App() {
             connected={connected}
             workspace={status.workspace}
             home={status.home}
+            localWorkspace={status.localWorkspace}
+            localHome={localHome}
+            localCwd={localCwd}
+            remoteCwd={remoteCwd}
+            onLocalCwdChange={setLocalCwd}
+            onRemoteCwdChange={setRemoteCwd}
+            onSetLocalWorkspace={onSetLocalWorkspace}
             onOpenFile={handleOpenFile}
+            onOpenLocalFile={handleOpenLocalFile}
           />
         </aside>
 

@@ -31,7 +31,10 @@ export default function FileViewer({ path, name, onClose }: FileViewerProps) {
 
   useEffect(() => {
     setLoading(true); setError(''); setContent(''); setOrig(''); setMeta(null); setSaved(false);
-    api.request('read_file', { path }, 20000)
+    const isLocal = path.startsWith('local:');
+    const realPath = isLocal ? path.slice('local:'.length) : path;
+    (isLocal ? api.request('read_local_file', { path: realPath }, 20000)
+             : api.request('read_file', { path }, 20000))
       .then((r) => {
         setMeta({ size: r.size, truncated: r.truncated, binary: r.binary });
         if (r.binary) { setError('二进制文件,无文本预览'); setContent(''); }
@@ -42,10 +45,13 @@ export default function FileViewer({ path, name, onClose }: FileViewerProps) {
   }, [path]);
 
   const dirty = content !== orig;
+  const isLocal = path.startsWith('local:');
+  const realPath = isLocal ? path.slice('local:'.length) : path;
   const save = async () => {
     setSaving(true); setError('');
     try {
-      await api.request('write_file', { path, content }, 30000);
+      if (isLocal) await api.request('write_local_file', { path: realPath, content }, 30000);
+      else await api.request('write_file', { path, content }, 30000);
       setOrig(content); setSaved(true); setTimeout(() => setSaved(false), 2000);
     } catch (e) { setError((e as Error).message); }
     finally { setSaving(false); }
@@ -57,7 +63,7 @@ export default function FileViewer({ path, name, onClose }: FileViewerProps) {
         <div className="modal-head">
           <span title={path}>📄 {name} <span className="muted">{meta && `${fmtSize(meta.size)}${meta.truncated ? ' (仅展示前部)' : ''}`}</span></span>
           <div className="row gap">
-            <a className="btn-link" href={`/api/download?path=${encodeURIComponent(path)}`} title="下载到本机">⬇ 下载</a>
+            {!isLocal && <a className="btn-link" href={`/api/download?path=${encodeURIComponent(path)}`} title="下载到本机">⬇ 下载</a>}
             {dirty && <button className="primary sm" disabled={saving} onClick={save}>{saving ? '保存中…' : '保存修改'}</button>}
             {saved && <span className="okline">✓ 已保存</span>}
             <button className="ghost" onClick={onClose}>✕</button>

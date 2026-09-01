@@ -9,6 +9,7 @@ export interface ServerStatus {
   platform: string | null;
   home: string | null;
   workspace: string | null;
+  localWorkspace: string | null;
   agentBusy: boolean;
   busySessions: string[];
   llmModel: string | null;

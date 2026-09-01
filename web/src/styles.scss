@@ -177,6 +177,8 @@ body.resizing * { cursor: col-resize !important; }
 .panel { padding: 14px; border-bottom: 1px solid rgba(255, 255, 255, .06); }
 .panel-title { font-weight: 700; margin-bottom: 10px; color: #f0f4fb; font-size: 13px; letter-spacing: .3px; }
 .panel + .panel .panel-title { margin-top: 6px; }
+.fm-tab { border: 1px solid transparent; background: transparent; padding: 2px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--muted, #888); }
+.fm-tab.on { color: var(--fg, #e6e6e6); background: var(--panel2, #26262b); border-color: var(--border, #3a3a40); }
 hr { border: none; border-top: 1px solid rgba(255, 255, 255, .08); margin: 16px 0; }
 
 /* ---- 表单控件:玻璃内嵌暗槽 ---- */
