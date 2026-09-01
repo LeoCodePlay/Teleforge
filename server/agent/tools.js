@@ -749,21 +749,27 @@ async function scanSkillRoot(root, source) {
   return out;
 }
 
-// 技能目录缓存:workspace 变化即失效;TTL 内复用,避免每步重复扫描远程目录
-let skillsCache = { ws: null, at: 0, skills: [] };
+// 技能目录缓存 key:本地根(不变)+ 远程工作区 + 远程家目录 + 本地工作区;
+// 任一变化即失效,TTL 内复用,避免每步重复扫描目录
+function skillContextKey() {
+  return [ssh.workspace || '', ssh.home || '', localFs.workspace || ''].join('::');
+}
+
+let skillsCache = { key: null, at: 0, skills: [] };
 
 /**
  * 全量扫描技能目录并刷新缓存(每轮 turn 开始时按需调用)。
- * 五级来源合并(从低到高):builtin < local-user < user < local-project < project;
+ * 六级来源合并(从低到高):builtin < local-user < user < local-project < project < local-workspace;
  * 同名技能高优先级来源覆盖低优先级。
- * 未连接 SSH 时,内置库 + 本机技能(local-user/local-project)始终可用并返回。
+ * 未连接 SSH 时,内置库 + 本机技能(local-user/local-project/local-workspace)始终可用并返回。
  */
 export async function refreshSkillsCatalog() {
   const ws = ssh.workspace;
-  const [builtin, localUser, localProject] = await Promise.all([
+  const [builtin, localUser, localProject, localWorkspace] = await Promise.all([
     scanBuiltin(),
     scanLocalSkillRoot(LOCAL_USER_SKILLS, 'local-user'),
-    scanLocalSkillRoot(LOCAL_PROJECT_SKILLS, 'local-project')
+    scanLocalSkillRoot(LOCAL_PROJECT_SKILLS, 'local-project'),
+    localFs.workspace ? scanLocalSkillRoot(path.join(localFs.workspace, '.agents', 'skills'), 'local-workspace') : Promise.resolve([])
   ]);
   // 远程两级只有连接后才有:其余情况只返回内置 + 本机技能
   let user = [], project = [];
@@ -775,32 +781,29 @@ export async function refreshSkillsCatalog() {
       ]);
     } catch { /* 远程扫描失败:退回内置 + 本机技能 */ }
   }
-  // 优先级:builtin < local-user < user < local-project < project;同名时后写入者覆盖先写入者
+  // 优先级:builtin < local-user < user < local-project < project < local-workspace;同名时后写入者覆盖先写入者
   const byName = new Map();
-  for (const s of [...builtin, ...localUser, ...user, ...localProject, ...project]) byName.set(s.name, s);
-  skillsCache = { ws, at: Date.now(), skills: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)) };
+  for (const s of [...builtin, ...localUser, ...user, ...localProject, ...localWorkspace, ...project]) byName.set(s.name, s);
+  skillsCache = { key: skillContextKey(), at: Date.now(), skills: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)) };
   return skillsCache.skills;
 }
 
-/** 当前工作区的技能目录(缓存未命中/工作区不符时为空数组) */
+/** 当前上下文的技能目录(缓存未命中/上下文不符时为空数组,调用方应 refresh 后再取) */
 export function getSkillsCatalog() {
-  if (!ssh.workspace || skillsCache.ws !== ssh.workspace) return [];
+  if (skillsCache.key !== skillContextKey()) return [];
   return skillsCache.skills;
 }
 
-/** 缓存是否过期(工作区变化或超过 TTL) */
+/** 缓存是否过期(上下文变化或超过 TTL) */
 export function skillsCatalogStale() {
-  return skillsCache.ws !== ssh.workspace || Date.now() - skillsCache.at > SKILLS_TTL_MS;
+  return skillsCache.key !== skillContextKey() || Date.now() - skillsCache.at > SKILLS_TTL_MS;
 }
 
 /** 按名加载技能完整正文(目录未命中时先重扫一次);返回 {name, content, baseDir} 或 null */
-async function loadSkillContent(name) {
+export async function loadSkillContent(name) {
   let catalog = getSkillsCatalog();
   let hit = catalog.find((s) => s.name === name);
-  if (!hit && ssh.connected) {
-    catalog = await refreshSkillsCatalog();
-    hit = catalog.find((s) => s.name === name);
-  }
+  if (!hit) { catalog = await refreshSkillsCatalog(); hit = catalog.find((s) => s.name === name); }
   if (!hit) return null;
   const r = await readSkillText(hit.file, SKILL_BODY_MAX_BYTES);
   if (!r) return null;
