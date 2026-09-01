@@ -194,6 +194,26 @@ async function main() {
     }
   }
 
+  // 6.65 本地文件浏览/读写/工作区(服务端 fs 直读写,无需 SSH)
+  console.log('== 测试本地文件操作 ==');
+  {
+    const lws = path.join(ROOT, 'localws');
+    // 顶部 fs 已解构 mkdtempSync/writeFileSync/readFileSync/existsSync,但没有 mkdirSync;单独取一次
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(path.join(lws, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(lws, 'hello.txt'), 'local-e2e');
+    await ws.request('set_local_workspace', { path: lws });
+    const ll = await ws.request('list_local_dir', { path: lws });
+    check('本地列目录返回条目', ll.entries && ll.entries.some((e) => e.name === 'hello.txt' && e.type === 'file'), JSON.stringify(ll.entries));
+    const lr = await ws.request('read_local_file', { path: path.join(lws, 'hello.txt') });
+    check('本地读文件内容正确', lr.content === 'local-e2e', lr.content);
+    await ws.request('write_local_file', { path: path.join(lws, 'out.txt'), content: 'from-e2e' });
+    const lr2 = await ws.request('read_local_file', { path: path.join(lws, 'out.txt') });
+    check('本地写后回读成功', lr2.content === 'from-e2e', lr2.content);
+    await ws.request('local_delete', { path: path.join(lws, 'out.txt') });
+    check('本地删除生效', !fs.existsSync(path.join(lws, 'out.txt')));
+  }
+
   // 6.7 删除(文件/文件夹递归 + 进度事件)
   console.log('== 测试删除 ==');
   {

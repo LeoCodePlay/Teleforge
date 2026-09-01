@@ -9,6 +9,7 @@
 import { WebSocketServer } from 'ws';
 import { WS_MAX_PAYLOAD } from './config.js';
 import { sshManager as ssh } from './ssh-manager.js';
+import { localFs } from './local-fs.js';
 import { agent, toolRegistry, setAgentHub } from './agent/agent.js';
 import { clearEnvInfo, refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from './agent/tools.js';
 import { toolSettings } from './agent/tool-settings.js';
@@ -57,6 +58,7 @@ export function setupWs(httpServer) {
     status: ssh.status,
     host: ssh.hostInfo?.host, port: ssh.hostInfo?.port, username: ssh.hostInfo?.username,
     platform: ssh.platform, home: ssh.home, workspace: ssh.workspace,
+    localWorkspace: localFs.workspace,
     agentBusy: agent.busyNow,
     busySessions: agent.busyIds(),
     llmModel: agent.llm ? (agent.llm.isMock ? 'mock' : agent.llm.model) : null
@@ -202,6 +204,55 @@ export function setupWs(httpServer) {
             reply({ type: 'ok' });
             emitStatus();
             break;
+
+          // ---- 本地文件操作(服务端直读写宿主机,无需 SSH)----
+          case 'list_local_dir': {
+            const entries = await localFs.listDir(msg.path || localFs.workspace || localFs.home || '.');
+            reply({ type: 'local_dir_list', path: msg.path || localFs.workspace || localFs.home || '.', entries });
+            break;
+          }
+          case 'read_local_file': {
+            const { buffer, size, truncated } = await localFs.readFileChunk(msg.path, { maxBytes: msg.maxBytes });
+            if (localFs.isProbablyBinary(buffer)) reply({ type: 'local_file_content', path: msg.path, binary: true, size, truncated });
+            else reply({ type: 'local_file_content', path: msg.path, content: buffer.toString('utf8'), size, truncated });
+            break;
+          }
+          case 'write_local_file': {
+            const bytes = await localFs.writeFile(msg.path, msg.content);
+            reply({ type: 'local_file_saved', path: msg.path, size: bytes });
+            break;
+          }
+          case 'create_local_dir': {
+            await localFs.mkdirp(msg.path);
+            reply({ type: 'local_dir_created', path: msg.path });
+            break;
+          }
+          case 'local_delete': {
+            const type = await localFs.atype(msg.path);
+            if (!type) throw new Error(`路径不存在: ${msg.path}`);
+            let done = 0, lastEmit = 0;
+            const onProgress = (p) => { done++; const now = Date.now(); if (now - lastEmit >= 120) { lastEmit = now; send({ type: 'local_delete_progress', reqId, path: msg.path, done, current: p }); } };
+            await localFs.rmdirRecursive(msg.path, onProgress);
+            send({ type: 'local_delete_progress', reqId, path: msg.path, done, final: true, current: msg.path });
+            reply({ type: 'local_deleted', path: msg.path });
+            break;
+          }
+          case 'local_copy': {
+            if (!msg.src || !msg.dst) throw new Error('缺少 src 或 dst');
+            const r = await localFs.copyPath(msg.src, msg.dst, { overwrite: msg.overwrite });
+            reply({ type: 'local_copied', ...r });
+            break;
+          }
+          case 'set_local_workspace': {
+            const st = await localFs.stat(msg.path);
+            if (!st) throw new Error(`目录不存在: ${msg.path}`);
+            if (!st.isDirectory()) throw new Error(`不是目录: ${msg.path}`);
+            // Task 8 会在此调用 clearLocalEnvInfo();当前轮次不调用,直接改状态并刷新 status
+            localFs.workspace = msg.path;
+            reply({ type: 'local_workspace', path: msg.path });
+            emitStatus();
+            break;
+          }
 
           case 'list_dir': {
             const entries = await ssh.listDir(msg.path || '/');
