@@ -17,13 +17,16 @@ function fmtTime(ms: number | undefined) {
   if (d.toDateString() === now.toDateString()) return hm;
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
 }
-// 本地路径分隔符可能是 \ (Windows) 或 / (POSIX):规范化/取上级统一按「任一分隔符」处理
-const norm = (p: string | null | undefined) => { const s = String(p || '').replace(/[\\/]+$/, ''); return s || '/'; };
+// 本地路径分隔符可能是 \ (Windows) 或 / (POSIX);"root:" = 我的电脑根视图(Windows 盘符 / POSIX 根)
+const ROOT = 'root:';
+const norm = (p: string | null | undefined) => { if (!p) return ROOT; const s = String(p).replace(/[\\/]+$/, ''); return s || ROOT; };
 const baseName = (p: string) => (p || '').split(/[\\/]/).filter(Boolean).pop() || 'item';
 const upDir = (p: string) => {
-  const t = String(p || '').replace(/[\\/]+$/, '');
+  if (!p || p === ROOT) return ROOT;
+  const t = String(p).replace(/[\\/]+$/, '');
+  if (/^[A-Za-z]:$/.test(t)) return ROOT;   // Windows 盘符根 C: → 我的电脑
   const i = Math.max(t.lastIndexOf('\\'), t.lastIndexOf('/'));
-  return i <= 0 ? t : t.slice(0, i);
+  return i <= 0 ? ROOT : t.slice(0, i);     // POSIX / → 我的电脑
 };
 const sepOf = (p: string) => (String(p || '').includes('\\') ? '\\' : '/');
 
@@ -64,7 +67,7 @@ interface WriteState {
 // 操作:双击打开/进入 · 右键对选区执行 打开/复制/删除/粘贴 · 「传到远程」把选区发往远程当前目录
 export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChange, onOpenLocalFile }: LocalFileManagerProps) {
   const { confirm } = useFeedback();
-  const [path, setPath] = useState(() => norm(workspace || home || '/'));
+  const [path, setPath] = useState(() => norm(workspace || home || ROOT));
   const [pathDraft, setPathDraft] = useState(path);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -113,7 +116,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
 
   // 工作区/家目录变化时,回到对应目录
   useEffect(() => {
-    const start = norm(workspace || home || '/');
+    const start = norm(workspace || home || ROOT);
     setPath(start); setPathDraft(start); setSelection(new Set()); setAnchor(null);
     load(start, { keepSelected: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,10 +124,11 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
 
   const sep = sepOf(path);
   const entryPath = (name: string) => {
+    if (path === ROOT) return name; // 根视图:盘符/目录名直接是完整路径
     const t = String(path).replace(/[\\/]+$/, '');
     return t ? t + sep + name : name;
   };
-  const isRoot = path === upDir(path);
+  const isRoot = path === ROOT;
   const refresh = () => load(path, { keepSelected: true });
   const up = () => { if (!isRoot) load(upDir(path)); };
 
@@ -336,8 +340,8 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     let p = path;
     for (;;) { const up = upDir(p); if (up === p) return p; p = up; }
   };
-  // 面包屑(按当前分隔符切分,Windows 盘符 C: 作为一级)
-  const parts = path.split(sep).filter(Boolean).filter((s, i, a) => !(s === '' && i > 0 && i === a.length - 1));
+  // 面包屑(按当前分隔符切分,Windows 盘符 C: 作为一级;我的电脑根视图无子级)
+  const parts = path === ROOT ? [] : path.split(sep).filter(Boolean).filter((s, i, a) => !(s === '' && i > 0 && i === a.length - 1));
   const crumbAcc: string[] = [];
   const crumbs = parts.map((c) => {
     crumbAcc.push(c);

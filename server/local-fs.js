@@ -11,6 +11,9 @@ export class LocalFs {
   get home() { return os.homedir(); }
 
   async listDir(p) {
+    // 空串/root: 表示"我的电脑"根视图(Windows 列出盘符,POSIX 列出根)
+    const raw = String(p ?? '');
+    if (raw === '' || raw === 'root:') return listRoots();
     const abs = path.resolve(p || this.workspace || this.home || '.');
     const dirents = await fsp.readdir(abs, { withFileTypes: true });
     const entries = [];
@@ -110,6 +113,19 @@ export class LocalFs {
 }
 
 export const localFs = new LocalFs();
+
+// "我的电脑"根视图:Windows 枚举所有存在的盘符(如 C:\) ,POSIX 返回根 /
+export async function listRoots() {
+  if (process.platform === 'win32') {
+    const drives = [];
+    for (let c = 65; c <= 90; c++) {
+      const d = String.fromCharCode(c) + ':\\';
+      try { if (fs.existsSync(d)) drives.push({ name: d, type: 'dir', size: 0, mtime: 0 }); } catch {}
+    }
+    return drives;
+  }
+  return [{ name: '/', type: 'dir', size: 0, mtime: 0 }];
+}
 
 // 把路径解析到本地工作区内;越界/未设工作区报错(与远程 resolveInWorkspace 对称)
 export function resolveInLocalWorkspace(p, { allowRoot = true } = {}) {

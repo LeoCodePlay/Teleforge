@@ -60,6 +60,7 @@ export function setupWs(httpServer) {
     host: ssh.hostInfo?.host, port: ssh.hostInfo?.port, username: ssh.hostInfo?.username,
     platform: ssh.platform, home: ssh.home, workspace: ssh.workspace,
     localWorkspace: localFs.workspace,
+    localHome: localFs.home,
     agentBusy: agent.busyNow,
     busySessions: agent.busyIds(),
     llmModel: agent.llm ? (agent.llm.isMock ? 'mock' : agent.llm.model) : null
@@ -208,8 +209,11 @@ export function setupWs(httpServer) {
 
           // ---- 本地文件操作(服务端直读写宿主机,无需 SSH)----
           case 'list_local_dir': {
-            const entries = await localFs.listDir(msg.path || localFs.workspace || localFs.home || '.');
-            reply({ type: 'local_dir_list', path: msg.path || localFs.workspace || localFs.home || '.', entries });
+            // 空串/root: = "我的电脑"根视图(Windows 盘符 / POSIX 根);其余为真实路径
+            const raw = String(msg.path || '').trim();
+            const isRoot = raw === '' || raw === 'root:';
+            const entries = await localFs.listDir(isRoot ? '' : raw);
+            reply({ type: 'local_dir_list', path: isRoot ? 'root:' : raw, entries });
             break;
           }
           case 'read_local_file': {

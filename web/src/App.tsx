@@ -23,14 +23,12 @@ interface ViewerState {
   name: string;
 }
 
-// 本地面板首次浏览默认起点(浏览器拿不到真实本机家目录,用简便占位;list_local_dir 缺省 path 时服务端回退 localFs.home)
-const localHome = null;
-
+// 本地面板起点:真实家目录来自服务端 status 事件(localHome = os.homedir())
 export default function App() {
   const { confirm } = useFeedback();
   const [status, setStatus] = useState<ServerStatus>({
     status: 'disconnected', host: null, port: null, username: null,
-    platform: null, home: null, workspace: null, localWorkspace: null, agentBusy: false, busySessions: [], llmModel: null
+    platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null
   });
   const [activeTab, setActiveTab] = useState('agent');
   const [viewer, setViewer] = useState<ViewerState | null>(null); // {path, name}
@@ -215,7 +213,7 @@ export default function App() {
             workspace={status.workspace}
             home={status.home}
             localWorkspace={status.localWorkspace}
-            localHome={localHome}
+            localHome={status.localHome}
             localCwd={localCwd}
             remoteCwd={remoteCwd}
             onLocalCwdChange={setLocalCwd}

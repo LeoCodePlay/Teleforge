@@ -1,7 +1,11 @@
-// 本地目录浏览弹窗:用于选择本地工作区(镜像 DirBrowser,数据源走 list_local_dir)
+// 本地目录浏览弹窗:用于选择本地工作区
+// 数据源走 list_local_dir;支持"我的电脑"根视图(root: → Windows 盘符 / POSIX 根),
+// 可从家目录起步,导航到任意本地目录(此电脑所有盘符/文件夹)
 import React, { useState } from 'react';
 import { api } from '../api';
 import type { DirEntry } from '../types';
+
+const ROOT = 'root:';
 
 interface LocalDirBrowserProps {
   initial?: string;
@@ -11,7 +15,10 @@ interface LocalDirBrowserProps {
 }
 
 export default function LocalDirBrowser({ initial, home, onClose, onPick }: LocalDirBrowserProps) {
-  const [path, setPath] = useState(initial || home || '.');
+  const [path, setPath] = useState(() => {
+    const s = String(initial || home || '').replace(/[\\/]+$/, '');
+    return s || ROOT;
+  });
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -33,12 +40,19 @@ export default function LocalDirBrowser({ initial, home, onClose, onPick }: Loca
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const upDir = (p: string) => {
-    const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
-    return i <= 0 ? p : p.slice(0, i);
+  // 上级目录:盘符根(C:) → 我的电脑;我的电脑无上级;其余取最后一段分隔符之前
+  const upDir = (p: string): string => {
+    if (!p || p === ROOT) return ROOT;
+    const t = String(p).replace(/[\\/]+$/, '');
+    if (/^[A-Za-z]:$/.test(t)) return ROOT;
+    const i = Math.max(t.lastIndexOf('\\'), t.lastIndexOf('/'));
+    return i <= 0 ? ROOT : t.slice(0, i);
   };
-  const up = () => { if (path !== upDir(path) && path !== '') load(upDir(path)); };
-  const dir = (name: string) => (path.endsWith('\\') || path.endsWith('/') || path === '' ? path + name : path + (path.includes('\\') ? '\\' : '/') + name);
+  const isRoot = path === ROOT;
+  const up = () => { if (!isRoot) load(upDir(path)); };
+  // 子项路径:根视图下盘符名(C:\)直接作为完整路径;其余按分隔符拼接
+  const dir = (name: string) =>
+    isRoot ? name : (path.endsWith('\\') || path.endsWith('/')) ? path + name : path + (path.includes('\\') ? '\\' : '/') + name;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -46,12 +60,16 @@ export default function LocalDirBrowser({ initial, home, onClose, onPick }: Loca
         <div className="modal-head"><span>选择本地工作区</span><button className="ghost" onClick={onClose}>✕</button></div>
         <div className="modal-body">
           <div className="row gap">
-            <button className="ghost" onClick={up} disabled={path === upDir(path) || path === ''}>⬆ 上级</button>
+            <button className="ghost" onClick={up} disabled={isRoot}>⬆ 上级</button>
             <input className="grow" value={path} onChange={(e) => setPath(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') load(path); }} />
             <button onClick={() => load(path)} disabled={loadingPath !== null}>{loadingPath === path ? '…' : '跳转'}</button>
           </div>
-          {home && <button className="link" onClick={() => load(home)}>🏠 家目录 {home}</button>}
+          <div className="row gap" style={{ marginTop: 6 }}>
+            <button className="link" onClick={() => load(ROOT)}>💻 我的电脑</button>
+            {home && <button className="link" onClick={() => load(home)}>🏠 家目录 {home}</button>}
+            {isRoot && <span className="muted sm">请选择一个磁盘/文件夹</span>}
+          </div>
           {error && <div className="error">✕ {error}</div>}
           <div className="dirlist">
             {!loadingPath && entries.length === 0 && <div className="muted">(空目录)</div>}
@@ -71,7 +89,9 @@ export default function LocalDirBrowser({ initial, home, onClose, onPick }: Loca
             ))}
           </div>
         </div>
-        <div className="modal-foot"><button className="primary grow" onClick={() => onPick(path)}>以此目录为本地工作区</button></div>
+        <div className="modal-foot">
+          <button className="primary grow" disabled={isRoot} title={isRoot ? '请先进入一个磁盘或文件夹' : ''} onClick={() => onPick(path)}>以此目录为本地工作区</button>
+        </div>
       </div>
     </div>
   );
