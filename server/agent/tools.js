@@ -8,6 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { joinRemote, normalizeRemote, sshManager as ssh } from '../ssh-manager.js';
+import { localFs, resolveInLocalWorkspace } from '../local-fs.js';
+import { execLocal } from '../local-exec.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 内置技能库(随工具分发,本地目录;已从 deepseek-harness / Claude Code 全局收集)
@@ -72,6 +74,24 @@ function treeLines(p, depth) {
   }
   return out;
 }
+
+// 递归格式化本地目录树(与 treeLines 同构,同步 fs 直读;本机环境快照用)
+function localTreeLines(p, depth) {
+  if (depth > DEPTH_LIMIT) return ['…(更深层略去)'];
+  let names;
+  try { names = fs.readdirSync(p, { withFileTypes: true }); } catch { return ['(无法读取)']; }
+  const out = [];
+  for (const d of names) {
+    if (d.isDirectory()) { out.push(`${d.name}/`); if (depth < DEPTH_LIMIT) out.push(...localTreeLines(path.join(p, d.name), depth + 1)); }
+    else if (d.isFile()) out.push(d.name);
+  }
+  return out;
+}
+
+// 本地环境快照缓存(供 system prompt 注入,避免每轮重复 get_local_info 探测)
+let localEnvCache = null;
+export function getLocalEnvInfo() { return localEnvCache; }
+export function clearLocalEnvInfo() { localEnvCache = null; }
 
 // ---------------- 工具定义 ----------------
 // 每个工具:name/description/parameters(模型可见)+ run(执行)+ timeoutMs(可选,注册表超时依据)
@@ -429,6 +449,137 @@ const toolDefs = [
   }
 ];
 
+// ---------------- 本地工具定义 ----------------
+// 与远程工具一一对应的本机工具:走 localFs(SFTP 签名对齐)与 execLocal(child_process)。
+// 读/列自由(本机任意路径可探),写/改/删一律经 resolveInLocalWorkspace 锁在本地工作区内;
+// 不需要 SSH 连接,守卫按工具名区分本地/远程。
+
+const localToolDefs = [
+  {
+    name: 'list_local_dir',
+    description: '列出本机(本地工作区)目录内容,用于探索本机文件系统',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: '本机绝对路径,缺省为本地工作区' } }, required: [] },
+    async run({ path }) {
+      const p = path || localFs.workspace || localFs.home || '.';
+      const entries = await localFs.listDir(p);
+      const lines = entries.map((e) => `${e.type === 'dir' ? '[目录]' : e.type === 'link' ? '[链接]' : '      '} ${e.name}${e.type === 'file' ? ' ' + formatSize(e.size) : ''}`);
+      return `目录 ${p} 共 ${entries.length} 项:\n${lines.join('\n') || '(空)'}`;
+    }
+  },
+  {
+    name: 'read_local_file',
+    description: '读取本机文本文件指定片段(offset/maxBytes),二进制会报错',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: '本机绝对路径' }, offset: { type: 'integer' }, maxBytes: { type: 'integer' } }, required: ['path'] },
+    async run({ path, offset = 0, maxBytes }) {
+      const mb = Math.min(maxBytes || 30000, 100000);
+      const { buffer, size, truncated } = await localFs.readFileChunk(path, { maxBytes: mb, offset });
+      if (localFs.isProbablyBinary(buffer)) return `文件 ${path} 是二进制文件,已拒绝读取`;
+      const snippet = buffer.toString('utf8');
+      return `文件 ${path}(共 ${size} 字节${truncated ? `,本次读到 ${buffer.length} 字节` : ''}):\n${snippet}${truncated ? `\n…[如需继续用 offset=${offset + buffer.length} 读取]…` : ''}`;
+    }
+  },
+  {
+    name: 'write_local_file',
+    description: '在本机本地工作区内创建或覆盖文本文件(自动建父目录)',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: '本机路径(本地工作区内,支持相对路径)' }, content: { type: 'string' } }, required: ['path', 'content'] },
+    async run({ path: p, content }) {
+      const abs = resolveInLocalWorkspace(p);
+      if ((await localFs.atype(abs)) === 'dir') throw new Error('目标路径已存在且是目录');
+      const bytes = await localFs.writeFile(abs, content);
+      return `已写入 ${abs}(${bytes} 字节)`;
+    }
+  },
+  {
+    name: 'edit_local_file',
+    description: '在本机文件里做精确文本替换(old_string -> new_string);默认只替换首次,多次需 replace_all=true',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' } }, required: ['path', 'old_string', 'new_string'] },
+    async run({ path: p, old_string, new_string, replace_all }) {
+      const abs = resolveInLocalWorkspace(p);
+      const { buffer, size } = await localFs.readFileChunk(abs, { maxBytes: 2 * 1024 * 1024 });
+      if (size > buffer.length) throw new Error('文件超过 2MB,建议用 write_local_file 整体重写');
+      const text = buffer.toString('utf8');
+      const count = text.split(old_string).length - 1;
+      if (count === 0) throw new Error(`未找到要替换的原文(在 ${abs} 中)。请用 read_local_file 先确认准确内容`);
+      if (count > 1 && !replace_all) throw new Error(`"${old_string.slice(0, 60)}" 在文件中出现 ${count} 次,请设置 replace_all=true`);
+      const next = replace_all ? text.split(old_string).join(new_string) : text.replace(old_string, new_string);
+      const bytes = await localFs.writeFile(abs, next);
+      return `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`;
+    }
+  },
+  {
+    name: 'create_local_dir',
+    description: '在本机本地工作区内递归创建目录',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    async run({ path: p }) { const abs = resolveInLocalWorkspace(p); await localFs.mkdirp(abs); return `目录已就绪: ${abs}`; }
+  },
+  {
+    name: 'delete_local_path',
+    description: '删除本机本地工作区内的文件或目录(递归)。危险!绝不能删除本地工作区根目录',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } }, required: ['path'] },
+    async run({ path: p, recursive }) {
+      const abs = resolveInLocalWorkspace(p);
+      if (abs === path.resolve(localFs.workspace)) throw new Error('禁止删除本地工作区根目录');
+      const type = await localFs.atype(abs);
+      if (!type) throw new Error(`路径不存在: ${abs}`);
+      if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
+      await localFs.rmdirRecursive(abs);
+      return `已删除: ${abs}`;
+    }
+  },
+  {
+    name: 'search_local_code',
+    description: '在本机目录中搜索文本/正则(优先 ripgrep,回退 findstr/grep)',
+    parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, include: { type: 'string' } }, required: ['pattern'] },
+    async run({ pattern, path: p, include }) {
+      const base = p || localFs.workspace || localFs.home || '.';
+      const isWin = process.platform === 'win32';
+      const probeRg = await execLocal(isWin ? 'where rg' : 'command -v rg', { cwd: localFs.home });
+      let cmd;
+      if (probeRg.code === 0 && probeRg.stdout.trim()) {
+        cmd = `rg -n --no-heading ${include ? `-g "${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
+      } else if (isWin) {
+        cmd = `findstr /s /n /c:"${pattern}" "${base}\\*"`;
+      } else {
+        cmd = `grep -rn ${include ? `--include="${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
+      }
+      const r = await execLocal(cmd, { cwd: localFs.home });
+      if (r.code !== 0 && !r.stdout) return `无匹配(退出码 ${r.code})`;
+      return capText(`匹配结果:\n${r.stdout}`);
+    }
+  },
+  {
+    name: 'run_local_command',
+    description: '在本机执行 shell 命令(默认 cwd=本地工作区),返回 stdout/stderr 与退出码',
+    parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'integer' }, description: { type: 'string' } }, required: ['command', 'description'] },
+    timeoutMs: 660_000,
+    async run({ command, timeout, description }) {
+      if (!command) throw new Error('命令为空');
+      const res = await execLocal(command, { cwd: localFs.workspace || undefined, timeout: (timeout || 300) * 1000 });
+      const parts = [`[退出码 ${res.code}${res.timedOut ? ' 超时' : ''}${res.signal ? `, 信号 ${res.signal}` : ''}]`];
+      if (res.stdout.trim()) parts.push('--- stdout ---\n' + res.stdout);
+      if (res.stderr.trim()) parts.push('--- stderr ---\n' + res.stderr);
+      if (!res.stdout.trim() && !res.stderr.trim()) parts.push('(无输出)');
+      return capText(parts.join('\n'));
+    }
+  },
+  {
+    name: 'get_local_info',
+    description: '获取本地工作区与本机环境信息(平台、磁盘、工具版本),任务开始前建议先调用',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async run() {
+      const info = { workspace: localFs.workspace || null, platform: process.platform, home: localFs.home };
+      const probe = async (cmd) => { try { const r = await execLocal(cmd, { cwd: localFs.home, timeout: 8000 }); return r.code === 0 && r.stdout.trim() ? r.stdout.trim().split('\n')[0] : null; } catch { return null; } };
+      const [node, git] = await Promise.all([probe('node --version'), probe('git --version')]);
+      info.toolVersions = { node, git };
+      if (localFs.workspace) {
+        try { info.tree = localTreeLines(localFs.workspace, 0); } catch {}
+      }
+      localEnvCache = { workspace: info.workspace, summary: safeJson(info) };
+      return safeJson(info);
+    }
+  }
+];
+
 // ---------------- 内置守卫(pre-execute,只能拒绝不能放行) ----------------
 
 // 高危命令拦截:毁灭性命令直接拒绝(工具自身的越界检查之外的最后防线)
@@ -440,7 +591,7 @@ const DANGEROUS_COMMANDS = [
 ];
 
 function dangerGuard(name, args) {
-  if (name !== 'run_command') return undefined;
+  if (name !== 'run_command' && name !== 'run_local_command') return undefined;
   const cmd = String(args?.command || '');
   for (const [re, why] of DANGEROUS_COMMANDS) {
     if (re.test(cmd)) return why;
@@ -453,9 +604,12 @@ function dangerGuard(name, args) {
 /** 把全部内置工具与守卫注册到注册表(由 agent 启动时调用一次) */
 export function registerTools(registry) {
   for (const def of toolDefs) registry.register(def);
-  // 守卫 1:SSH 连接状态(原 runTool 的前置检查挪进管线)
-  registry.guard(() => (ssh.connected ? undefined : 'SSH 连接已断开'));
-  // 守卫 2:高危命令拦截
+  for (const def of localToolDefs) registry.register(def);
+  // 守卫 1:SSH 连接状态 —— 仅远程工具需要连接;本地工具(local_*)无需 SSH,
+  // 连接断开时不得误伤本机工具链
+  const REMOTE_TOOLS = new Set(toolDefs.map((d) => d.name));
+  registry.guard((name) => (REMOTE_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));
+  // 守卫 2:高危命令拦截(远程 run_command 与本机 run_local_command 都拦)
   registry.guard(dangerGuard);
 }
 
