@@ -15,8 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 内置技能库(随工具分发,本地目录;已从 deepseek-harness / Claude Code 全局收集)
 const BUILTIN_SKILLS_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(__dirname, '..', 'builtin-skills');
 // 本机技能根目录(无需 SSH,随本机文件系统管理):
-//   local-project: 工具运行目录(process.cwd())下的 .agents/skills —— 随本机当前项目,优先级高于远程用户级
-//   local-user:    本机用户主目录下的 .agents/skills          —— 跨项目共享,优先级高于内置
+//   local-project:   工具运行目录(process.cwd())下的 .agents/skills   —— 随本机当前项目
+//   local-user:      本机用户主目录下的 .agents/skills                 —— 跨项目共享,优先级高于内置
+//   local-workspace: <本地工作区>/.agents/skills                       —— 随本地工作区,优先级高于本机项目级
 const LOCAL_PROJECT_SKILLS = process.env.LOCAL_PROJECT_SKILLS || path.join(process.cwd(), '.agents', 'skills');
 const LOCAL_USER_SKILLS = process.env.LOCAL_USER_SKILLS || path.join(os.homedir(), '.agents', 'skills');
 const LOCAL_SKILL_PREFIX = 'local://';
@@ -383,12 +384,12 @@ const toolDefs = [
     // 从内置技能库复制一个技能到远程(项目级/用户级),方便用户在远程工作区持久化
     // 内置技能只随工具分发(本地),复制后用户可编辑、可被子级/用户级覆盖
     name: 'skill_copy_builtin',
-    description: 'Copy a builtin skill from the bundled skill library to a skill directory (local project, local user, remote project or remote user), making it editable.',
+    description: 'Copy a builtin skill from the bundled skill library to a skill directory (local project, local user, local workspace, remote project or remote user), making it editable.',
     parameters: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'The builtin skill name to copy.' },
-        target: { type: 'string', enum: ['project', 'user', 'local-project', 'local-user'], description: 'Destination: project (remote workspace), user (remote home), local-project (local tool dir) or local-user (local home).' }
+        target: { type: 'string', enum: ['project', 'user', 'local-project', 'local-user', 'local-workspace'], description: 'Destination: project (remote workspace), user (remote home), local-project (local tool dir), local-user (local home) or local-workspace (local workspace).' }
       },
       required: ['name', 'target']
     },
@@ -396,7 +397,7 @@ const toolDefs = [
     async run({ name, target }) {
       const builtin = (await scanBuiltin()).find((s) => s.name === String(name || '').toLowerCase());
       if (!builtin) throw new Error(`内置技能不存在: ${name}`);
-      const copied = await copyBuiltinToRemote(builtin, target === 'user' ? 'user' : target === 'local-project' || target === 'local-user' ? target : 'project');
+      const copied = await copyBuiltinToRemote(builtin, target === 'user' ? 'user' : target === 'local-project' || target === 'local-user' || target === 'local-workspace' ? target : 'project');
       return `已把内置技能 ${name} 复制到${copied.where}(${copied.file}),现在可编辑并可被保存覆盖`;
     }
   },
@@ -619,12 +620,13 @@ export function getEnvInfo() { return envCache; }
 export function clearEnvInfo() { envCache = null; }
 
 // ---------------- 技能(skills)发现与目录 ----------------
-// 照搬 deepseek-harness 的本地技能发现,扩展为五级来源(高优先级覆盖低优先级):
-//   1. builtin        内置技能库(随工具分发的本地目录,来自 deepseek-harness / Claude Code 收集)
-//   2. local-user     本机 <用户主目录>/.agents/skills            本机用户技能(跨项目共享)
-//   3. user           远程 <家目录>/.agents/skills                 远程用户技能(跨工作区)
-//   4. local-project  本机 <工具运行目录>/.agents/skills           本机项目技能(随本机项目)
-//   5. project        远程 <工作区>/.agents/skills                 远程项目技能(随工作区,最高优先)
+// 照搬 deepseek-harness 的本地技能发现,扩展为六级来源(高优先级覆盖低优先级):
+//   1. builtin          内置技能库(随工具分发的本地目录,来自 deepseek-harness / Claude Code 收集)
+//   2. local-user       本机 <用户主目录>/.agents/skills                 本机用户技能(跨项目共享)
+//   3. user             远程 <家目录>/.agents/skills                    远程用户技能(跨工作区)
+//   4. local-project    本机 <工具运行目录>/.agents/skills               本机项目技能(随本机项目)
+//   5. local-workspace  本机 <本地工作区>/.agents/skills                 工作区级本机技能(随本地工作区)
+//   6. project          远程 <工作区>/.agents/skills                    远程项目技能(随工作区,最高优先)
 // 技能形态(与 harness 一致):
 //   <name>/SKILL.md              目录包(frontmatter: name/description)
 //   <name>.md                    平铺文件(frontmatter 同上)
@@ -759,8 +761,8 @@ let skillsCache = { key: null, at: 0, skills: [] };
 
 /**
  * 全量扫描技能目录并刷新缓存(每轮 turn 开始时按需调用)。
- * 六级来源合并(从低到高):builtin < local-user < user < local-project < project < local-workspace;
- * 同名技能高优先级来源覆盖低优先级。
+ * 六级来源合并(从低到高):builtin < local-user < user < local-project < local-workspace < project;
+ * 同名技能高优先级来源覆盖低优先级(远程项目级最终胜出)。
  * 未连接 SSH 时,内置库 + 本机技能(local-user/local-project/local-workspace)始终可用并返回。
  */
 export async function refreshSkillsCatalog() {
@@ -781,7 +783,7 @@ export async function refreshSkillsCatalog() {
       ]);
     } catch { /* 远程扫描失败:退回内置 + 本机技能 */ }
   }
-  // 优先级:builtin < local-user < user < local-project < project < local-workspace;同名时后写入者覆盖先写入者
+  // 优先级:builtin < local-user < user < local-project < local-workspace < project;同名时后写入者覆盖先写入者
   const byName = new Map();
   for (const s of [...builtin, ...localUser, ...user, ...localProject, ...localWorkspace, ...project]) byName.set(s.name, s);
   skillsCache = { key: skillContextKey(), at: Date.now(), skills: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)) };
@@ -836,19 +838,21 @@ export function renderSkillCatalog(skills) {
 // 管理即文件(照搬 harness 的本地技能形态):新增/编辑 = 写 <root>/<name>.md
 // (带 frontmatter),删除 = 删文件/目录;所有路径都从技能根目录推导并校验,
 // 绝不接受前端传入的任意路径,防止越权删除。
-// 四类技能根目录:
-//   project       远程 <工作区>/.agents/skills       (需 SSH)
-//   user          远程 <家目录>/.agents/skills        (需 SSH)
-//   local-project 本机 <工具运行目录>/.agents/skills  (无需 SSH)
-//   local-user    本机 <用户主目录>/.agents/skills    (无需 SSH)
+// 五类技能根目录:
+//   project          远程 <工作区>/.agents/skills       (需 SSH)
+//   user             远程 <家目录>/.agents/skills        (需 SSH)
+//   local-project    本机 <工具运行目录>/.agents/skills  (无需 SSH)
+//   local-user       本机 <用户主目录>/.agents/skills    (无需 SSH)
+//   local-workspace  本机 <本地工作区>/.agents/skills    (无需 SSH,随本地工作区)
 
-// 四个技能根目录;本地根 resolve 为绝对路径,远程根保留服务器风格路径
+// 技能根目录;本地根 resolve 为绝对路径,远程根保留服务器风格路径
 function skillRoots() {
   const roots = [];
   if (ssh.workspace) roots.push({ root: ssh.workspace.replace(/\/+$/, '') + '/.agents/skills', source: 'project' });
   if (ssh.home) roots.push({ root: ssh.home.replace(/\/+$/, '') + '/.agents/skills', source: 'user' });
   roots.push({ root: path.resolve(LOCAL_PROJECT_SKILLS), source: 'local-project', local: true });
   roots.push({ root: path.resolve(LOCAL_USER_SKILLS), source: 'local-user', local: true });
+  if (localFs.workspace) roots.push({ root: path.resolve(localFs.workspace, '.agents', 'skills'), source: 'local-workspace', local: true });
   return roots;
 }
 
@@ -968,7 +972,7 @@ export async function saveSkill(draft) {
 
   const catalog = getSkillsCatalog().length ? getSkillsCatalog() : await refreshSkillsCatalog();
   const hit = catalog.find((s) => s.name === name);
-  const TARGETS = ['project', 'user', 'local-project', 'local-user'];
+  const TARGETS = ['project', 'user', 'local-project', 'local-user', 'local-workspace'];
   // 目标文件:
   // - 编辑(同名已存在于某级):覆写原文件(目录包写回 SKILL.md,平铺写回原 .md)
   // - builtin(内置库)同名:不可直接覆写内置文件,按 target 写到目标目录作副本覆盖(优先级高于内置)
@@ -984,7 +988,7 @@ export async function saveSkill(draft) {
     const target = TARGETS.includes(draft?.target) ? draft.target : 'project';
     const root = skillRoots().find((r) => r.source === target);
     if (!root) throw new Error(target === 'user' ? '无法确定远程家目录' : target === 'local-user'
-      ? '无法确定本机用户主目录' : target === 'project' ? '请先选择远程工作区' : '无法确定本机运行目录');
+      ? '无法确定本机用户主目录' : target === 'local-workspace' ? '请先选择本地工作区' : target === 'project' ? '请先选择远程工作区' : '无法确定本机运行目录');
     if (!root.local && !ssh.connected) throw new Error('SSH 未连接,无法写入远程技能目录');
     file = root.local ? `${LOCAL_SKILL_PREFIX}${path.join(root.root, `${name}.md`)}` : `${root.root}/${name}.md`;
   }
@@ -1032,11 +1036,11 @@ export async function deleteSkill(name) {
 }
 
 /**
- * 把内置技能复制到目标技能目录(project/user/local-project/local-user)。
+ * 把内置技能复制到目标技能目录(project/user/local-project/local-user/local-workspace)。
  * 内置技能文件是本地目录(<name>/SKILL.md 或 <name>.md),复制时保留原文件名:
  * 目录包 -> <root>/<name>/SKILL.md;平铺文件 -> <root>/<name>.md。
  * @param {{name:string, file:string}} builtin 内置技能条目(file 为 builtin:// 协议路径)
- * @param {'project'|'user'|'local-project'|'local-user'} target 目标级别
+ * @param {'project'|'user'|'local-project'|'local-user'|'local-workspace'} target 目标级别
  * @returns {Promise<{file:string, where:string}>}
  */
 export async function copyBuiltinToRemote(builtin, target = 'project') {
@@ -1044,7 +1048,7 @@ export async function copyBuiltinToRemote(builtin, target = 'project') {
   if (!name) throw new Error('缺少技能名');
   const root = skillRoots().find((r) => r.source === target);
   if (!root) throw new Error(target === 'user' ? '无法确定远程家目录' : target === 'local-user'
-    ? '无法确定本机用户主目录' : target === 'project' ? '请先选择远程工作区' : '无法确定本机运行目录');
+    ? '无法确定本机用户主目录' : target === 'local-workspace' ? '请先选择本地工作区' : target === 'project' ? '请先选择远程工作区' : '无法确定本机运行目录');
   if (!root.local && !ssh.connected) throw new Error('SSH 未连接');
   const rel = String(builtin.file || '').replace('builtin://', '');
   const isDir = rel.endsWith('/SKILL.md');
@@ -1066,6 +1070,7 @@ const LEVEL_LABEL = {
   user: '用户级(远程)',
   'local-project': '项目级(本机)',
   'local-user': '用户级(本机)',
+  'local-workspace': '工作区级(本机)',
   builtin: '内置'
 };
 

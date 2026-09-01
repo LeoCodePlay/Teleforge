@@ -1,10 +1,11 @@
 // 技能管理面板(位于设置面板中)
-// 照搬 deepseek-harness 的技能形态:技能 = Markdown 指令文件,五级来源,高优先级覆盖低优先级:
-//   内置(builtin)      随工具分发的本地技能库(deepseek-harness / Claude Code 收集)
-//   用户级本机(local-user)   <本机主目录>/.agents/skills       跨项目共享,无需 SSH
-//   用户级远程(user)          <远程家目录>/.agents/skills      跨工作区,需 SSH
-//   项目级本机(local-project) <工具运行目录>/.agents/skills    随本机项目,无需 SSH
-//   项目级远程(project)       <工作区>/.agents/skills          随工作区,需 SSH
+// 照搬 deepseek-harness 的技能形态:技能 = Markdown 指令文件,六级来源,高优先级覆盖低优先级:
+//   内置(builtin)            随工具分发的本地技能库(deepseek-harness / Claude Code 收集)
+//   用户级本机(local-user)         <本机主目录>/.agents/skills       跨项目共享,无需 SSH
+//   用户级远程(user)              <远程家目录>/.agents/skills      跨工作区,需 SSH
+//   项目级本机(local-project)     <工具运行目录>/.agents/skills    随本机项目,无需 SSH
+//   工作区级本机(local-workspace) <本地工作区>/.agents/skills      随本地工作区,无需 SSH
+//   项目级远程(project)          <工作区>/.agents/skills          随工作区,需 SSH
 // 文件头 frontmatter(name/description)是目录,正文是给 AI 的完整指令;
 // 模型通过 skill 工具按需加载。内置技能不可编辑,可"复制到"任意级别成为可编辑副本。
 import React, { useEffect, useState } from 'react';
@@ -16,7 +17,7 @@ interface SkillEntry {
   name: string;
   description: string;
   file: string;
-  source: 'builtin' | 'project' | 'user' | 'local-project' | 'local-user';
+  source: 'builtin' | 'project' | 'user' | 'local-project' | 'local-user' | 'local-workspace';
 }
 
 // 覆盖优先级从低到高(前端仅做展示分组,实际覆盖在后端合并时完成)
@@ -25,7 +26,8 @@ const SRC_LABEL: Record<SkillEntry['source'], string> = {
   project: '项目级·远程',
   user: '用户级·远程',
   'local-project': '项目级·本机',
-  'local-user': '用户级·本机'
+  'local-user': '用户级·本机',
+  'local-workspace': '工作区·本机'
 };
 
 // target 是否本机(无需 SSH)
@@ -71,13 +73,13 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
     }
   };
 
-  // 内置技能 → 复制到目标级别(本机/远程的项目级/用户级),之后可编辑
-  const onCopyBuiltin = async (s: SkillEntry, target: 'project' | 'user' | 'local-project' | 'local-user') => {
+  // 内置技能 → 复制到目标级别(本机/远程的项目级/用户级/工作区级),之后可编辑
+  const onCopyBuiltin = async (s: SkillEntry, target: 'project' | 'user' | 'local-project' | 'local-user' | 'local-workspace') => {
     if (s.source !== 'builtin') return;
     if (!isLocal(target) && !connected) { setErr('复制到远程需要先连接 SSH,可改选本机级别'); return; }
     const where = SRC_LABEL[target];
     const loc = isLocal(target)
-      ? (target === 'local-project' ? '<本机工具目录>/.agents/skills/' : '<本机用户主目录>/.agents/skills/')
+      ? (target === 'local-project' ? '<本机工具目录>/.agents/skills/' : target === 'local-workspace' ? '<本地工作区>/.agents/skills/' : '<本机用户主目录>/.agents/skills/')
       : (target === 'project' ? '<远程工作区>/.agents/skills/' : '<远程家目录>/.agents/skills/');
     const ok = await confirm({
       title: '复制内置技能',
@@ -102,12 +104,12 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
   const counts = {
     all: skills.length,
     builtin: skills.filter((s) => s.source === 'builtin').length,
-    local: skills.filter((s) => s.source === 'local-project' || s.source === 'local-user').length,
+    local: skills.filter((s) => s.source === 'local-project' || s.source === 'local-user' || s.source === 'local-workspace').length,
     remote: skills.filter((s) => s.source === 'project' || s.source === 'user').length
   };
   const shown = filter === 'all' ? skills
     : filter === 'builtin' ? skills.filter((s) => s.source === 'builtin')
-    : filter === 'local' ? skills.filter((s) => s.source === 'local-project' || s.source === 'local-user')
+    : filter === 'local' ? skills.filter((s) => s.source === 'local-project' || s.source === 'local-user' || s.source === 'local-workspace')
     : skills.filter((s) => s.source === 'project' || s.source === 'user');
 
   return (
@@ -128,8 +130,10 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
       <div className="hint" style={{ marginBottom: 8 }}>
         技能是可复用的任务指令,AI 会在任务匹配时通过 skill 工具自动加载。来源:内置(deepseek-harness 与 Claude Code)、
         项目级(远程 <code>&lt;工作区&gt;/.agents/skills</code> / 本机 <code>&lt;工具目录&gt;/.agents/skills</code>)、
+        工作区级(本机 <code>&lt;本地工作区&gt;/.agents/skills</code>)、
         用户级(远程 <code>~/.agents/skills</code> / 本机 <code>&lt;主目录&gt;/.agents/skills</code>)。
-        同名时 项目级 &gt; 用户级 &gt; 内置;同级内 本机 &gt; 远程。本机技能无需 SSH 即可创建/编辑,内置技能可复制到任意级别后编辑。
+        同名时 项目级(远程) &gt; 工作区级(本机) &gt; 项目级(本机) &gt; 用户级(远程) &gt; 用户级(本机) &gt; 内置。
+        本机技能无需 SSH 即可创建/编辑,内置技能可复制到任意级别后编辑。
       </div>
       {err && <div className="error" onClick={() => setErr('')} title="点击关闭">✕ {err}</div>}
 
@@ -264,6 +268,7 @@ function SkillModal({ edit, connected, onClose, onSaved }: SkillModalProps) {
                   <GlassSelect full value={target} onChange={(v) => setTarget(v as SkillEntry['source'])} options={[
                     { value: 'local-project', label: '项目级 · 本机 <工具目录>/.agents/skills(随本机项目,无需 SSH)' },
                     { value: 'local-user', label: '用户级 · 本机 <主目录>/.agents/skills(跨项目共享,无需 SSH)' },
+                    { value: 'local-workspace', label: '工作区 · 本机 <本地工作区>/.agents/skills(需先选择本地工作区)' },
                     { value: 'project', label: '项目级 · 远程 <工作区>/.agents/skills(需连接 SSH)' },
                     { value: 'user', label: '用户级 · 远程 ~/.agents/skills(需连接 SSH)' }
                   ]} />

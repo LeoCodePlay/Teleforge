@@ -30,5 +30,13 @@ check('getSkillsCatalog 含本机技能', got.some((s) => s.name === 'my-local-s
 const { loadSkillContent } = await import('../server/agent/tools.js');
 const loaded = await loadSkillContent('my-local-skill');
 check('无 SSH 时 loadSkillContent 加载本机技能正文', loaded && loaded.content.includes('这是本地技能指令'), JSON.stringify(loaded));
+
+// local-workspace 来源:设置本地工作区并在其中写同名技能,验证被扫描且优先级高于 local-user
+localFs.workspace = mkdtempSync(path.join(tmpdir(), 'sshai-lws-'));
+mkdirSync(path.join(localFs.workspace, '.agents', 'skills'), { recursive: true });
+writeFileSync(path.join(localFs.workspace, '.agents', 'skills', 'my-local-skill.md'), '---\nname: my-local-skill\ndescription: 本地工作区技能\n---\n\n# 正文\n工作区级指令。\n');
+const catalog2 = await refreshSkillsCatalog();
+const wsSkill = catalog2.find((s) => s.name === 'my-local-skill');
+check('local-workspace 来源被扫描且优先级覆盖 local-user', wsSkill && wsSkill.source === 'local-workspace', JSON.stringify(wsSkill));
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
 if (fail) process.exit(1);
