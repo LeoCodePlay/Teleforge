@@ -1,7 +1,9 @@
 // 任务计划面板(照搬 deepseek-harness 的 TodoPanel):
 // - 位置:对话输入框上方(composer 停靠区),对齐 harness 的 conversation.input.dock
-// - 数据:todo_write 工具写入的整表快照(经 todo_update 事件 / get_history 载入),
-//   用户开启新一轮对话时清空(harness 的 standing plan 语义)
+// - 数据:todo_write 工具写入的整表快照(经 todo_update 事件 / get_history 载入);
+//   生命周期对齐 harness 的 standing plan 语义:turn/end(对话完成)保留列表
+//   供用户阅读,下一次 turn/start(用户发起新一轮)由 ChatPanel 清空——模型随后
+//   写入新计划则替换,本轮不使用计划则保持隐藏
 // - 交互:默认折叠,点击头部展开/收起;折叠时显示进度摘要;列表为空时整体隐藏
 import React, { useState } from 'react';
 import type { TodoItem } from '../types';
@@ -63,8 +65,8 @@ function progressLabel(todos: TodoItem[]): string {
 export default function TodoPanel({ todos }: { todos: TodoItem[] }) {
   const [collapsed, setCollapsed] = useState(true); // 默认折叠
   if (!todos || todos.length === 0) return null;
-  // 全部已完成时自动隐藏:任务计划已收尾,不再占用输入框上方空间
-  if (todos.every((t) => t.status === 'completed')) return null;
+  // 注意:不在这里因"全部已完成"而隐藏——对话完成(turn/end)后保留已完成清单
+  // 供用户阅读(对齐 harness);展示/清空的时机交由 ChatPanel 的 turn/start 控制。
   return (
     <section className="todo-panel" aria-label="任务计划">
       <button

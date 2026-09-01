@@ -10,6 +10,7 @@ import { PORT, HOST } from './config.js';
 import { setupWs } from './ws.js';
 import { sshManager as ssh, normalizeRemote, joinRemote } from './ssh-manager.js';
 import { aiProviders } from './ai-providers-store.js';
+import { uiState } from './ui-state-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '../web/dist');
@@ -213,7 +214,23 @@ export function startApp({ port = PORT, host = HOST, quiet = false } = {}) {
 
   app.delete('/api/providers/:id', (req, res) => {
     if (!aiProviders.remove(req.params.id)) return res.status(404).json({ error: '提供商不存在' });
+    uiState.remove(req.params.id); // 联动清理该提供方的选择级状态
     res.json({ userProviders: aiProviders.list() });
+  });
+
+  // 「LLM 选择级配置」:当前选中提供方 / 各提供方模型 / Key / 自定义模型名 / 迭代上限
+  // 数据保存在 server/data/ui-state.json(与 ai-providers.json 同级)
+  app.get('/api/ui-state', (req, res) => res.json({ uiState: uiState.get() }));
+  app.patch('/api/ui-state', (req, res) => {
+    const b = req.body || {};
+    uiState.patch({
+      providerId: typeof b.providerId === 'string' ? b.providerId : undefined,
+      customModel: typeof b.customModel === 'string' ? b.customModel : undefined,
+      models: b.models,
+      keys: b.keys,
+      maxIters: b.maxIters
+    });
+    res.json({ uiState: uiState.get() });
   });
 
   // 上传文件/文件夹到远程目录(multipart,字段名 files;文件 originalname 为相对路径)

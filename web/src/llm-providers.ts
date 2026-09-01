@@ -5,9 +5,10 @@ import type { LlmProvider, ModelContextConfig } from './types';
 
 export type { LlmProvider } from './types';
 
-// 预置模型的默认上下文能力:统一 1M 输入上下文 + 300k 输出上限
+// 预置模型的默认上下文能力:统一 1M 输入上下文 + 32k 输出上限
 // (未显式配置的模型——如自定义提供方的模型——在 llm-context 里走同样的全局默认)
-const MEGA_CONTEXT: ModelContextConfig = { contextWindow: 1000000, maxTokens: 300000 };
+// 注意:输出上限不能设太大——部分网关(如 tokenrhythm 的 glm-5.3)硬上限 131072,设 300k 会直接 400
+const MEGA_CONTEXT: ModelContextConfig = { contextWindow: 1000000, maxTokens: 32000 };
 const DEFAULT_CONTEXT: Record<string, ModelContextConfig> = {
   'deepseek-chat': { ...MEGA_CONTEXT },
   'deepseek-reasoner': { ...MEGA_CONTEXT },
