@@ -246,11 +246,7 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-left">
           <button className="ghost edge-toggle" title={leftOpen ? '收起左侧栏' : '展开左侧栏'} onClick={() => setLeftOpen((v) => !v)}>{leftOpen ? '◀' : '▶'}</button>
-          <div className="brand">⟠ Teleforge</div>
-        </div>
-        <div className="topbar-center">
-          <span className="stat">平台 {status.platform || '—'}</span>
-          <span className="stat">模型 {status.llmModel || '未配置'}</span>
+          <div className="brand"><img className="brand-logo" src="/logo-64.png" alt="" /> Teleforge</div>
         </div>
         <div className="topbar-right">
           <button

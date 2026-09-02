@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { useFeedback } from '../feedback';
+import { useHorizontalScroller } from '../useHorizontalScroller';
 import type { DirEntry } from '../types';
 
 function fmtSize(n: number | undefined | null) {
@@ -79,8 +80,10 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dirInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const crumbsRef = useRef<HTMLDivElement>(null);
   const seqRef = useRef(0);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useHorizontalScroller(crumbsRef);
 
   const flash = (text: string) => {
     setMsg(text);
@@ -401,7 +404,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
         <button className="ghost sm" onClick={up} disabled={path === '/'} title="上级目录">⬆ 上级</button>
         <button className="ghost sm" onClick={refresh} title="刷新">↻</button>
         {home && <button className="ghost sm" onClick={() => load(home)} title={`家目录 ${home}`}>🏠</button>}
-        <div className="fm-crumbs">
+        <div className="fm-crumbs" ref={crumbsRef}>
           <span className={`crumb ${path === '/' ? 'cur' : ''}`} onClick={() => load('/')}>/</span>
           {crumbs.map((c, i) => {
             const p = '/' + crumbs.slice(0, i + 1).join('/');

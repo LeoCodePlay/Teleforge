@@ -859,6 +859,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
         <div className="chat" ref={scrollRef} onScroll={() => { updateActiveDot(); hideDotTip(); }}>
           {messages.length === 0 && (
             <div className="empty">
+              <img className="empty-logo" src="/logo-256.png" alt="" />
               <div>{connected ? '连接服务器、选择工作区后,即可让 Agent 在远程服务器上工作' : '未连接服务器 · 选择本地工作区后,即可让 Agent 在本机工作'}</div>
               <div className="muted">例如:「帮我看一下这个项目结构,然后修复 main.js 里的 bug」</div>
             </div>

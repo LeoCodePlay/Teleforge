@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { useFeedback } from '../feedback';
+import { useHorizontalScroller } from '../useHorizontalScroller';
 import type { DirEntry } from '../types';
 
 function fmtSize(n: number | undefined | null) {
@@ -89,8 +90,10 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   const [transferring, setTransferring] = useState(false);
   const [wrState, setWrState] = useState<WriteState | null>(null); // 传到远程进度
   const listRef = useRef<HTMLDivElement>(null);
+  const crumbsRef = useRef<HTMLDivElement>(null);
   const seqRef = useRef(0);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useHorizontalScroller(crumbsRef);
 
   const flash = (text: string) => {
     setMsg(text);
@@ -369,8 +372,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
       <div className="fm-toolbar row gap">
         <button className="ghost sm" onClick={up} disabled={isRoot} title="上级目录">⬆ 上级</button>
         <button className="ghost sm" onClick={refresh} title="刷新">↻</button>
-        {home && <button className="ghost sm" onClick={() => load(home)} title={`家目录 ${home}`}>🏠</button>}
-        <div className="fm-crumbs">
+        <div className="fm-crumbs" ref={crumbsRef}>
           <span className={`crumb ${isRoot ? 'cur' : ''}`} onClick={() => load(rootPath())}>本机</span>
           {crumbs.map(({ c, p }) => (
             <span key={p} className="crumb-wrap">

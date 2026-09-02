@@ -21,26 +21,6 @@ const omitKey = <T extends Record<string, unknown>>(o: T, k: string): T => {
 // 超过会直接 400;32k 是多数中转都接受的安全默认。
 const FALLBACK_CONTEXT: ModelContextConfig = { contextWindow: 1000000, maxTokens: 32000 };
 
-// 按「提供方 + 模型」单独保存的单轮最大工具迭代次数(存 JSON 映射,key 为模型名)
-const LS_ITERS_PREFIX = 'sshai.llm.maxIters.';
-const loadModelIters = (pid: string, model: string): string => {
-  if (!pid || !model) return '';
-  try {
-    const m = JSON.parse(localStorage.getItem(LS_ITERS_PREFIX + pid) || '{}');
-    return m[model] ? String(m[model]) : '';
-  } catch { return ''; }
-};
-const saveModelIters = (pid: string, model: string, val: string) => {
-  if (!pid || !model) return;
-  try {
-    const key = LS_ITERS_PREFIX + pid;
-    const m = JSON.parse(localStorage.getItem(key) || '{}');
-    if (val && Number(val) > 0) m[model] = String(Math.floor(Number(val)));
-    else delete m[model];
-    localStorage.setItem(key, JSON.stringify(m));
-  } catch { /* 存储失败静默 */ }
-};
-
 export interface LlmContextValue {
   userProviders: LlmProvider[];
   allProviders: LlmProvider[];
@@ -59,8 +39,6 @@ export interface LlmContextValue {
   effModelContext: ModelContextConfig;
   effBaseUrl: string;
   effKey: string;
-  maxIters: string;
-  setMaxIters: React.Dispatch<React.SetStateAction<string>>;
   switchProvider: (id: string) => void;
   addProvider: (d: ProviderDraft) => Promise<boolean>;
   updateProvider: (id: string, d: ProviderDraft) => Promise<boolean>;
@@ -90,19 +68,16 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   const [customModel, setCustomModel] = useState<string>(() => LS('llm.customModel', ''));
   const [apiKey, setApiKey] = useState<string>(() => LS('llm.key.' + initialProviderId(), '') || (initialProviderId() === DEFAULT_PROVIDER ? LS('llmKey', '') : ''));
   const [err, setErr] = useState('');
-  // 当前使用模型的单轮最大工具迭代次数('' = 未单独配置,用全局默认 300)
-  const [maxIters, setMaxIters] = useState('');
   // 提供方是否已从服务端加载完成(加载完成前不渲染 UI,避免首帧误显示为 mock 再跳变抖动)
   const [ready, setReady] = useState(false);
-  // 后端持久化的「选择级配置」(权威):当前提供方/自定义模型名/各提供方模型/Key/迭代上限
+  // 后端持久化的「选择级配置」(权威):当前提供方/自定义模型名/各提供方模型/Key
   // 后端 JSON 为唯一权威源,localStorage 仅作离线缓存,两者在持久化时同步写入
   const [uiStateData, setUiStateData] = useState<{
     providerId: string;
     customModel: string;
     models: Record<string, string>;
     keys: Record<string, string>;
-    maxIters: Record<string, Record<string, string>>;
-  }>({ providerId: '', customModel: '', models: {}, keys: {}, maxIters: {} });
+  }>({ providerId: '', customModel: '', models: {}, keys: {} });
   const uiTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 挂载时加载「我的提供商」+「选择级配置」(均存服务端 JSON 文件)
@@ -123,8 +98,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
           customModel: string;
           models: Record<string, string>;
           keys: Record<string, string>;
-          maxIters: Record<string, Record<string, string>>;
-        } = { providerId: '', customModel: '', models: {}, keys: {}, maxIters: {} };
+        } = { providerId: '', customModel: '', models: {}, keys: {} };
         try {
           const ur = await fetch('/api/ui-state', { signal: ctrl.signal });
           if (ur.ok) {
@@ -136,8 +110,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
           providerId: us.providerId || '',
           customModel: us.customModel || '',
           models: us.models || {},
-          keys: us.keys || {},
-          maxIters: us.maxIters || {}
+          keys: us.keys || {}
         });
         // 当前选中提供方:后端优先 → localStorage → 默认;并校验存在性
         const pid = us.providerId && [...list, ...PROVIDERS].some((p) => p.id === us.providerId)
@@ -199,22 +172,14 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     }, 400);
   };
 
-  // 切换提供方/模型时,载入该模型单独配置的最大迭代次数(优先后端,localStorage 兜底)
-  useEffect(() => {
-    if (isMock || !effModel) { setMaxIters(''); return; }
-    const v = uiStateData.maxIters?.[providerId]?.[effModel];
-    setMaxIters(typeof v === 'string' && v !== '' ? v : loadModelIters(providerId, effModel));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId, effModel, isMock]);
-
   // 应用 + 持久化(切换/修改即生效)
   useEffect(() => {
     // 该模型的上下文能力(输入窗口/输出上限):显式配置优先,否则用全局默认 1M/32k
     const cfg = provider.modelConfig?.[effModel] || FALLBACK_CONTEXT;
+    // 单轮最大工具迭代次数固定用全局默认(AGENT.MAX_ITERS=500),不再由前端单独配置
     api.send('llm', {
       llm: {
         baseUrl: effBaseUrl, apiKey: effKey, model: effModel,
-        maxIters: maxIters ? Math.floor(Number(maxIters)) || 0 : 0,
         contextWindow: cfg.contextWindow || 0,
         maxTokens: cfg.maxTokens || 0
       }
@@ -227,9 +192,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       if (isUser) persistUserKey(providerId, apiKey);
       else LSS('llm.key.' + providerId, apiKey);
     }
-    // 该模型的迭代上限单独落盘(留空 = 使用全局默认)
-    if (!isMock && effModel) saveModelIters(providerId, effModel, maxIters);
-    // 选择级配置(当前提供方/模型/Key/自定义模型名/迭代上限)防抖写回后端 JSON(权威存储)
+    // 选择级配置(当前提供方/模型/Key/自定义模型名)防抖写回后端 JSON(权威存储)
     if (uiTimer.current) clearTimeout(uiTimer.current);
     uiTimer.current = setTimeout(async () => {
       try {
@@ -240,8 +203,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
             providerId,
             customModel,
             models: { [providerId]: model },
-            keys: isMock ? {} : { [providerId]: apiKey },
-            maxIters: effModel ? { [providerId]: { [effModel]: maxIters } } : {}
+            keys: isMock ? {} : { [providerId]: apiKey }
           })
         });
         // 同步内存态,避免后续切换/加载读到旧缓存
@@ -250,17 +212,12 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
           providerId,
           customModel,
           models: model ? { ...s.models, [providerId]: model } : omitKey(s.models, providerId),
-          keys: !isMock && apiKey ? { ...s.keys, [providerId]: apiKey } : omitKey(s.keys, providerId),
-          maxIters: effModel
-            ? (maxIters
-              ? { ...s.maxIters, [providerId]: { ...(s.maxIters[providerId] || {}), [effModel]: maxIters } }
-              : { ...s.maxIters, [providerId]: omitKey(s.maxIters[providerId] || {}, effModel) })
-            : s.maxIters
+          keys: !isMock && apiKey ? { ...s.keys, [providerId]: apiKey } : omitKey(s.keys, providerId)
         }));
       } catch { /* 后端写失败不阻塞 UI,下次变更会重试 */ }
     }, 400);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId, apiKey, model, customModel, maxIters, isMock]);
+  }, [effBaseUrl, effKey, effModel, providerId, apiKey, model, customModel, isMock]);
 
   // ---- 添加 / 编辑 / 复制 / 删除「我的提供商」(增删改均写入服务端配置文件) ----
   // 添加成功后自动切换为当前使用;返回 true/false 供弹窗决定是否关闭
@@ -352,8 +309,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       setUiStateData((s) => ({
         ...s,
         models: omitKey(s.models, id),
-        keys: omitKey(s.keys, id),
-        maxIters: omitKey(s.maxIters, id)
+        keys: omitKey(s.keys, id)
       }));
       if (providerId === id) switchProvider(DEFAULT_PROVIDER);
     } catch (e) { setErr('删除提供商失败:' + (e as Error).message); }
@@ -363,7 +319,6 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     userProviders, allProviders, providerId, provider, isUser, isMock,
     model, setModel, customModel, setCustomModel, apiKey, setApiKey,
     effModel, effModelContext, effBaseUrl, effKey,
-    maxIters, setMaxIters,
     switchProvider, addProvider, updateProvider, duplicateProvider, removeProvider,
     err, setErr
   };

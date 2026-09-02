@@ -1,5 +1,5 @@
 // AI 模型 · 提供商配置面板(位于设置面板中)
-// 布局:当前提供方(模型/Key) → 我的提供商列表(增删改复制) → 预置提供商快速切换
+// 布局:我的提供商列表(使用中置顶,增删改复制) → 预置提供商快速切换
 // 状态与聊天输入框下方的切换器共享(见 llm-context.tsx)
 import React, { useMemo, useState } from 'react';
 import { useLlm } from '../llm-context';
@@ -9,87 +9,27 @@ import GlassSelect from './GlassSelect';
 
 export default function AiConfigPanel() {
   const llm = useLlm();
-  const { userProviders, providerId, provider, isUser, isMock, model, setModel, customModel, setCustomModel,
-    apiKey, setApiKey, effModel, effBaseUrl, maxIters, setMaxIters,
-    switchProvider, addProvider, updateProvider,
+  const { userProviders, providerId, switchProvider, addProvider, updateProvider,
     duplicateProvider, removeProvider } = llm;
   // 弹窗状态:null=关闭;{provider}=编辑该条目;{}=添加
   const [modal, setModal] = useState<{ provider?: LlmProvider } | null>(null);
 
   const handleSave = (data: ProviderDraft) => (modal?.provider ? updateProvider(modal.provider.id, data) : addProvider(data));
 
+  // 当前使用中的提供商置顶显示
+  const sortedProviders = useMemo(() => {
+    return [...userProviders].sort((a, b) => {
+      if (a.id === providerId) return -1;
+      if (b.id === providerId) return 1;
+      return 0;
+    });
+  }, [userProviders, providerId]);
+
   return (
     <div>
       {llm.err && <div className="error" onClick={() => llm.setErr('')} title="点击关闭">✕ {llm.err}</div>}
 
-      {/* ---- 当前使用中的提供方:模型与 API Key ---- */}
-      <div className="panel-title">当前提供方</div>
-      <div className="ai-cur">
-        <div className="ai-cur-head">
-          <span className="ai-cur-name">{isUser ? '★ ' : ''}{provider.name}</span>
-          {isMock ? <span className="badge">联调模式</span>
-            : apiKey ? <span className="badge ok">Key 已配置</span> : <span className="badge warn">未配置 Key</span>}
-        </div>
-        {isMock ? (
-          <div className="hint">mock 联调模式,无需 API Key,可跑通完整 Agent 工具流程</div>
-        ) : (
-          <>
-            {provider.models.length > 0 ? (
-              <>
-                <div className="field">
-                  <label>模型</label>
-                  <GlassSelect full value={provider.models.includes(effModel) ? effModel : '__custom__'}
-                    onChange={(v) => setModel(v)}
-                    options={[
-                      ...provider.models.map((m) => ({ value: m, label: m })),
-                      { value: '__custom__', label: '自定义模型…' }
-                    ]} />
-                </div>
-                {model === '__custom__' && (
-                  <div className="field">
-                    <label>自定义模型名</label>
-                    <input value={customModel} onChange={(e) => setCustomModel(e.target.value)}
-                      placeholder="输入该提供商的自定义模型名" />
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="field">
-                <label>模型名</label>
-                <input value={model} onChange={(e) => setModel(e.target.value)}
-                  placeholder="模型名(该提供商需手动输入)" />
-              </div>
-            )}
-            <div className="field">
-              <label>单轮最大工具迭代次数(仅当前模型生效,可选)</label>
-              <input type="number" min={1} step={1} value={maxIters} onChange={(e) => setMaxIters(e.target.value)}
-                placeholder="留空使用默认 300" />
-              <div className="hint">每轮「模型调用 + 执行工具」计 1 次;复杂任务报「已达单轮最大工具迭代次数」时调大</div>
-            </div>
-            <div className="field">
-              <label>API Key(仅存本机,按提供商分别保存)</label>
-              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
-            </div>
-          </>
-        )}
-        <div className="hint">
-          当前生效: <code>{isMock ? 'mock' : effModel || '—'}</code> @ <code>{isMock ? 'mock' : effBaseUrl || '未设置'}</code>
-          {(() => {
-            const cfg = llm.effModelContext;
-            if (!isMock && cfg && (cfg.contextWindow || cfg.maxTokens)) {
-              // 1M / 300k 这类大数字缩写显示(显式配置与全局默认一致展示)
-              const fmtN = (n?: number) => {
-                if (!n) return '默认';
-                return n >= 1000000 ? `${n / 1000000}M` : n >= 1000 ? `${n / 1000}k` : String(n);
-              };
-              return <> · 上下文 <code>{fmtN(cfg.contextWindow)}</code> / 输出 <code>{fmtN(cfg.maxTokens)}</code></>;
-            }
-            return null;
-          })()}
-        </div>
-      </div>
-
-      {/* ---- 我的提供商列表(点击卡片切换为当前使用) ---- */}
+      {/* ---- 我的提供商列表(使用中置顶,点击卡片切换为当前使用) ---- */}
       <div className="panel-title row">
         <span>我的提供商</span>
         <span className="muted sm">({userProviders.length})</span>
@@ -100,7 +40,7 @@ export default function AiConfigPanel() {
         {userProviders.length === 0 && (
           <div className="provider-empty">还没有自定义提供商,点击下方按钮添加</div>
         )}
-        {userProviders.map((p) => (
+        {sortedProviders.map((p) => (
           <ProviderCard key={p.id} p={p} active={p.id === providerId}
             onUse={() => switchProvider(p.id)}
             onEdit={() => setModal({ provider: p })}

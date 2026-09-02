@@ -31,7 +31,7 @@ export const FILE = {
 };
 
 export const AGENT = {
-  MAX_ITERS: 300,              // 单轮对话最大工具迭代次数(默认;前端可对单个模型单独覆盖)
+  MAX_ITERS: 500,              // 单轮对话最大工具迭代次数(全局默认;前端不再单独编辑覆盖)
   TOOL_RESULT_MAX_CHARS: 60_000,
   HISTORY_BUDGET_CHARS: 180_000,
   CONCURRENT_TOOL_CALLS: false, // 串行执行,便于观察

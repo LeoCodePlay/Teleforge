@@ -126,10 +126,12 @@ code, pre, textarea.codeedit { font-family: var(--mono); }
 }
 .brand {
   font-weight: 700; letter-spacing: .5px; font-size: 14px;
+  display: flex; align-items: center; gap: 7px;
   background: linear-gradient(120deg, #eaf2ff 30%, var(--accent-2) 70%, #b48cff);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.topbar-left, .topbar-center, .topbar-right { display: flex; align-items: center; gap: 10px; }
+.brand-logo { width: 20px; height: 20px; display: block; }
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
 .edge-toggle {
   padding: 4px 8px; font-size: 11px; color: var(--muted);
   border-radius: var(--r-sm); background: transparent; border: 1px solid transparent;
@@ -138,7 +140,6 @@ code, pre, textarea.codeedit { font-family: var(--mono); }
   color: var(--text); background: var(--glass-bg-hover);
   border-color: var(--glass-border);
 }
-.stat { color: var(--muted); font-size: 12px; }
 
 /* ---- 胶囊 chips:迷你玻璃珠 ---- */
 .chip {
@@ -355,6 +356,9 @@ button.sm { padding: 4px 11px; font-size: 12px; }
   flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 1px;
   font-size: 12.5px; overflow-x: auto;
 }
+/* 横向溢出时点亮 grab 光标,提示可按住拖拽(useHorizontalScroller.ts 动态切换) */
+.fm-crumbs.dx-grab { cursor: grab; }
+.fm-crumbs.dx-scrolling { cursor: grabbing; user-select: none; }
 .crumb-wrap { flex: none; display: inline-flex; align-items: center; gap: 1px; }
 .crumb { flex: none; cursor: pointer; color: var(--accent-2); padding: 2px 6px; border-radius: 6px; white-space: nowrap; transition: all .15s; }
 .crumb:hover { background: var(--glass-bg-hover); text-shadow: 0 0 10px var(--accent-glow); }
@@ -775,12 +779,13 @@ button.sm { padding: 4px 11px; font-size: 12px; }
 .tab-body { flex: 1; min-height: 0; display: flex; position: relative; }
 
 /* 聊天 */
-/* 会话区限宽居中(960px):内容行不过长,两侧留白区域可承载其它面板 */
-.chatwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; max-width: 960px; width: 100%; margin: 0 auto; }
+/* 会话区限宽居中(780px):消息输出与输入框整体不超过 780px,内容行不过长,两侧留白可承载其它面板 */
+.chatwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; max-width: 780px; width: 100%; margin: 0 auto; }
 .chat-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; color: var(--muted); font-size: 12px; }
 .chat-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 18px 16px; min-width: 0; }
 .empty { text-align: center; color: var(--muted); margin-top: 12vh; font-size: 14px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.empty-logo { width: 72px; height: 72px; opacity: .9; margin-bottom: 6px; user-select: none; -webkit-user-drag: none; }
 .msg { margin-bottom: 14px; display: flex; }
 /* 挂载入场动画只给最新一条消息:历史整表切换/载入时若全部消息同时重放
    msg-in(.25s 淡入+上移),整段会话看起来就从上面"缓缓落下";
@@ -911,7 +916,7 @@ button.sm { padding: 4px 11px; font-size: 12px; }
   transition: background .18s ease;
 }
 .todo-header:hover { background: rgba(255, 255, 255, .06); }
-.todo-header:active { background: rgba(255, 255, 255, .09); }
+.todo-header:active { background: rgba(255, 255, 255, .09); transform: none; }
 .todo-header:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(106, 168, 255, .25); }
 .todo-left { display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; }
 .todo-lead { display: grid; flex: none; place-items: center; width: 16px; height: 16px; color: var(--muted); }
@@ -1399,6 +1404,23 @@ button.dsh-leading { cursor: pointer; }
 /* 模型选择器:不参与剩余空间拉伸(flex:none),宽度随内容自适应,
    避免初始渲染时被拉宽出大片空白、加载完成后再收缩造成的页面抖动 */
 .tb-model { flex: none; min-width: 140px; }
+
+/* ---- 响应式:窄屏下取消限宽、收紧留白,消息与输入框始终贴合屏宽 ----
+   默认:会话区上限 780px 居中;屏宽低于上限后回到全宽,仅保留最小内边距 */
+@media (max-width: 860px) {
+  .chatwrap { max-width: 100%; }
+  .chat { padding: 8px 12px 14px; }
+  .composer { margin: 0 8px 8px; padding: 10px 12px; }
+}
+@media (max-width: 560px) {
+  .chat-head { padding: 6px 10px; }
+  .chat { padding: 6px 8px 12px; }
+  .bubble { max-width: 88%; }
+  .composer { margin: 0 6px 6px; padding: 8px 10px; border-radius: var(--r-md); }
+  .composer-box { padding: 8px 8px 4px 10px; border-radius: var(--r-md); }
+  .composer-toolbar { gap: 6px; }
+  .wsbar-row { gap: 6px; }
+}
 
 /* 工作区(对话输入框下方):远程/本地两个入口并排,点击弹出下拉(切换/浏览选择工作区) */
 .wsbar-row { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
