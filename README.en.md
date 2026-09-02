@@ -1,8 +1,8 @@
-# Teleforge — Remote AI Coding over SSH
+# Teleforge — AI Coding Tool Bridging SSH Remote & Local
 
 **Languages / 语言：[English](README.en.md) · [简体中文](README.md)**
 
-Teleforge is a self-hosted, browser-based AI coding tool for remote servers. Unlike editors that run an agent locally, Teleforge connects to your server over **SSH** (kept alive with auto-reconnect), so the AI agent operates **directly on the remote machine** — reading real files, editing real code, and running real commands in your actual environment.
+Teleforge is a self-hosted, browser-based AI coding tool that spans **remote and local** environments. Connect to a server over **SSH** (kept alive with auto-reconnect) and the AI agent operates **directly on the remote machine** — reading real files, editing real code, and running real commands in your actual environment; disconnect and the same agent works on your **local machine** instead. One UI, one tool loop — whichever side of the connection you are on.
 
 ![Node](https://img.shields.io/badge/Node-%3E%3D22.18-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)
@@ -11,17 +11,70 @@ Teleforge is a self-hosted, browser-based AI coding tool for remote servers. Unl
 
 ---
 
+## Screenshot
+
+<p align="center">
+  <img src="docs/images/homepage.png" alt="Teleforge main interface" width="800" />
+</p>
+
+---
+
 ## Key Features
 
-- **Persistent SSH** — 10s heartbeat keepalive, exponential-backoff auto-reconnect, live status; supports password & private-key auth.
-- **Named connection profiles** — save host/port/user/auth as profiles (stored locally only), switch between servers from a dropdown.
-- **Remote workspace** — browse the remote filesystem, pick any directory as the workspace; navigational file manager with multi-select, delete/download/copy/paste.
-- **AI Agent tool loop** — `list_directory`, `read_file`, `write_file`, `edit_file`, `run_command` (streaming output / timeout / truncation), `create_directory`, `delete_path`, `search_code`, `get_workspace_info` — all confined to the workspace.
-- **Built-in terminal** — a real PTY shell (`/ws/term`) plus a command console with live output & exit code; stop a running command with「⏹」or **Ctrl+C** (SIGINT first, hard-kill fallback).
-- **File transfer** — upload files/folders to the current directory with progress; download files or stream folders as `tar.gz`.
-- **Skills system** — a built-in skill library that the agent loads on demand via a tool (each skill is a directory with a `SKILL.md`); the panel can browse/search/create/edit skills.
-- **Multi-model** — 20+ presets (DeepSeek / OpenAI / Kimi / Zhipu / Qwen / Doubao / Ollama / vLLM …), custom providers, and an offline `mock` mode for full flow testing without an API key.
-- **Multi-session, multi-server** — parallel sessions persist across restarts; switching SSH servers never interrupts an answering session — it keeps running on its original server in the background (its tools still act there), and the session list keeps the "running" entry so you can switch back and see every generated token.
+**Connection & Access**
+
+- **Persistent SSH** — 10s heartbeat keepalive, exponential-backoff auto-reconnect, live status; password & private-key auth (incl. passphrase).
+- **Named profiles** — save host/port/user/auth as profiles stored server-side (`server/data/ssh-profiles.json`); secrets never leave the server. Switch between **multiple servers** from a dropdown.
+- **Multi-server parallelism** — switching servers never interrupts an answering session: it keeps running on its original server in the background (its tools still act there), and the "running" entry stays in the session list so you can switch back and see every generated token.
+
+**Dual Workspaces: Remote ↔ Local**
+
+- **Remote workspace** — browse the remote filesystem and pick any directory as the workspace; the agent's write/edit/delete is confined to it, and **deleting the workspace root is forbidden**.
+- **Local workspace** — with no connection you work on your **local machine** with the same tools and UI (file read/write, search, commands).
+- **Navigational file manager** — per-directory browsing with double-click to open; **multi-select** (Ctrl/Shift, Ctrl+A, Delete), right-click **delete/download/copy/paste**; server-side permission checks on save.
+- **File viewer** — open a file to preview its content, download from the viewer.
+
+**AI Agent Coding**
+
+- Describe the task in conversation; the agent operates **for real** in the target environment (remote or local) via tools:
+  - `list_directory` · `read_file` (chunked reads, binary-aware)
+  - `write_file` · `edit_file` (precise text replacement)
+  - `run_command` (**streaming output**, timeout, 100k-char truncation: head 60k + tail 40k)
+  - `create_directory` / `delete_path` (workspace-confined) · `get_workspace_info` · `search_code` (rg/grep)
+- **Tool-limited loop** — up to 500 iterations per round, serial by default for observability; each tool can be **enabled/disabled persistently** (disabled tools are invisible to the model and rejected by the execution guard).
+- **Auto-compaction** — live context estimation against the model's `contextWindow`; when over budget, **early turns are compressed into a summary** and the run continues seamlessly.
+- **Ask the user** — the model can pause and ask a question in the UI, then continue after your answer.
+- **Context meter** — live estimate of used context split into **system prompt / tool calls / conversation**, with per-provider input/output window settings.
+
+**Terminal & Command Console**
+
+- **Built-in terminal** — a real PTY interactive shell (`/ws/term`, full-duplex).
+- **Command console** — run commands manually with live output & exit code; stop with「⏹」or **Ctrl+C** (SIGINT first, hard-kill fallback).
+
+**File Transfer**
+
+- Upload files/folders to the current directory with progress (auto-refresh on completion); download files or **stream folders as `tar.gz`** from the context menu.
+
+**Models**
+
+- 20+ presets (DeepSeek / OpenAI / Kimi / Zhipu / Qwen / Doubao / Ollama / vLLM …); add **custom providers** (name / Base URL / model list / API key, switch or remove anytime).
+- **Last-used model is remembered** per provider; one-click provider/model switcher under the input box; type `/` to open **slash commands**; `mock` mode for **offline end-to-end testing**.
+
+**Sessions & Memory**
+
+- Create/switch/rename/delete/**fork sessions from any earlier message**; event-sourced logs persist and are **restored on restart**; new sessions are auto-named after the first instruction.
+
+**Skills**
+
+- Built-in skill library; the agent loads `SKILL.md` instructions **on demand** via a skill tool; browse/search/create/edit skills in the panel, and duplicate built-ins into editable copies.
+
+**Global Instruction Injection**
+
+- Maintain a prompt-inject text in settings that is automatically injected into every session as a **high-priority system instruction**.
+
+**Theme & UI**
+
+- Liquid-glass dark IDE-style UI; multiple built-in themes plus **custom themes** (design tokens managed centrally, one-click apply).
 
 ## Quick Start
 
