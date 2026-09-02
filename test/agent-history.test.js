@@ -6,8 +6,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-ah-'));
-const { Agent, isToolUnsupportedError } = await import('../server/agent/agent.js');
-const { sshManager: ssh } = await import('../server/ssh-manager.js');
+const { Agent, isToolUnsupportedError } = await import('../server/agent/agent.ts');
+const { sshManager: ssh } = await import('../server/ssh-manager.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n} ${e}`); } };
@@ -121,7 +121,7 @@ async function main() {
   check('第二轮未清空历史(累计)', agent.history.filter((m) => m.role === 'user').length >= 2);
 
   // 校验消息格式合法(validateMessages 兼容)
-  const { LlmClient } = await import('../server/agent/llm.js');
+  const { LlmClient } = await import('../server/agent/llm.ts');
   const llm = new LlmClient({ baseUrl: 'http://x', apiKey: 'k', model: 'fake' });
   const sys = agent._systemPrompt();
   const messages = [{ role: 'system', content: sys }, ...agent.history.map((m) => ({ ...m })), { role: 'user', content: 'x' }];

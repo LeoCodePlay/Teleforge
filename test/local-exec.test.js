@@ -1,4 +1,4 @@
-import { execLocal } from '../server/local-exec.js';
+import { execLocal } from '../server/local-exec.ts';
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
 

@@ -6,9 +6,9 @@ process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), 'sshai-sk-'));
 // 在 import 前用本机技能根目录指向临时目录(避免污染真实 ~/.agents/skills)
 process.env.LOCAL_USER_SKILLS = mkdtempSync(path.join(tmpdir(), 'sshai-lu-'));
 writeFileSync(path.join(process.env.LOCAL_USER_SKILLS, 'my-local-skill.md'), '---\nname: my-local-skill\ndescription: 测试本地技能\n---\n\n# 正文\n这是本地技能指令。\n');
-const { refreshSkillsCatalog, getSkillsCatalog } = await import('../server/agent/tools.js');
-const { sshManager: ssh } = await import('../server/ssh-manager.js');
-const { localFs } = await import('../server/local-fs.js');
+const { refreshSkillsCatalog, getSkillsCatalog } = await import('../server/agent/tools.ts');
+const { sshManager: ssh } = await import('../server/ssh-manager.ts');
+const { localFs } = await import('../server/local-fs.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -27,7 +27,7 @@ check('getSkillsCatalog 无工作区不再返回空', got.length > 0, `len=${got
 check('getSkillsCatalog 含本机技能', got.some((s) => s.name === 'my-local-skill'));
 
 // 加载正文(无 SSH)
-const { loadSkillContent } = await import('../server/agent/tools.js');
+const { loadSkillContent } = await import('../server/agent/tools.ts');
 const loaded = await loadSkillContent('my-local-skill');
 check('无 SSH 时 loadSkillContent 加载本机技能正文', loaded && loaded.content.includes('这是本地技能指令'), JSON.stringify(loaded));
 

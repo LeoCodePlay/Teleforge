@@ -4,8 +4,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), 'sshai-scope-'));
-const { Agent } = await import('../server/agent/agent.js');
-const sessions = await import('../server/session-store.js');
+const { Agent } = await import('../server/agent/agent.ts');
+const sessions = await import('../server/session-store.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };

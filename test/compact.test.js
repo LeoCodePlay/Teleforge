@@ -2,11 +2,11 @@
 // - estimateTokens / resolveCompactSpec / selectCompactRange 纯函数行为
 // - compactHistory:未配置不压缩、未超阈值不压缩、超限压缩为摘要+保留最近、摘要失败降级裁剪
 // - Session 集成:squash 压缩区间替换后,deriveMessages 投影仍为合法消息序列(以 user 开头、tool 配对完整)
-import { Session, eventsFromTurns } from '../server/agent/session.js';
+import { Session, eventsFromTurns } from '../server/agent/session.ts';
 import {
   estimateTokens, messageTokens, measureMessages, resolveCompactSpec,
   selectCompactRange, compactHistory, compactionInstruction
-} from '../server/agent/compact.js';
+} from '../server/agent/compact.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n} ${e}`); } };

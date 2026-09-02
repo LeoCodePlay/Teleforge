@@ -6,8 +6,8 @@ import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), 'sshai-al-'));
-const { Agent } = await import('../server/agent/agent.js');
-const { localFs } = await import('../server/local-fs.js');
+const { Agent } = await import('../server/agent/agent.ts');
+const { localFs } = await import('../server/local-fs.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n} ${e}`); } };

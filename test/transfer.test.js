@@ -1,9 +1,9 @@
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-const { localFs } = await import('../server/local-fs.js');
-const { sshManager: ssh } = await import('../server/ssh-manager.js');
-const { localToRemote, remoteToLocal } = await import('../server/transfer.js');
+const { localFs } = await import('../server/local-fs.ts');
+const { sshManager: ssh } = await import('../server/ssh-manager.ts');
+const { localToRemote, remoteToLocal } = await import('../server/transfer.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };

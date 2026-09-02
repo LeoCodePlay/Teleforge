@@ -9,7 +9,7 @@ process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), 'sshai-e2e-dd-'));
 const { WebSocket } = await import('ws');
 const fs = { mkdtempSync, writeFileSync, readFileSync, existsSync };
 const { startMockSsh, makeFixture } = await import('./mock-ssh-server.js');
-const { startApp } = await import('../server/index.js');
+const { startApp } = await import('../server/index.ts');
 
 const ROOT = fs.mkdtempSync(path.join(tmpdir(), 'sshai-e2e-'));
 const APP_PORT = 4199;

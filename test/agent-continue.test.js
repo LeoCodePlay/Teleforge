@@ -9,8 +9,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-cnt-'));
-const { Agent } = await import('../server/agent/agent.js');
-const { sshManager: ssh } = await import('../server/ssh-manager.js');
+const { Agent } = await import('../server/agent/agent.ts');
+const { sshManager: ssh } = await import('../server/ssh-manager.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n} ${e}`); } };
@@ -185,7 +185,7 @@ async function main() {
   // ---- 场景 6:concludesTurn——工具显式宣告本轮结束(注册表层透传) ----
   console.log('\n[场景 6] 工具返回 concludesTurn 应透传到执行结果');
   {
-    const { ToolRegistry } = await import('../server/agent/registry.js');
+    const { ToolRegistry } = await import('../server/agent/registry.ts');
     const reg = new ToolRegistry();
     reg.register({
       name: 'finish_now',
