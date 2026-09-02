@@ -1,7 +1,8 @@
 // 本地↔远程传输消息:local_to_remote / remote_to_local
 import { localToRemote, remoteToLocal } from '../../core/transfer.ts';
+import type { RpcModule } from './router.ts';
 
-export function registerTransfer(rpc) {
+export function registerTransfer(rpc: RpcModule) {
   rpc.register('local_to_remote', async (msg, { reply, send }) => {
     // 原 ws.js local_to_remote case(354-362)逐字复制
     const { reqId } = msg;

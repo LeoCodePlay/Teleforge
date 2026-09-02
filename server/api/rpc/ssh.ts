@@ -6,6 +6,7 @@ import { sshProfiles, sanitizeProfile } from '../../store/ssh-profiles-store.ts'
 import type { SshProfile } from '../../store/ssh-profiles-store.ts';
 import { clearSearchEngine, ensureSearchTools, clearEnvInfo } from '../../agent/tools.ts';
 import { agent } from '../../agent/agent.ts';
+import type { RpcModule, RpcHandler } from './router.ts';
 
 // 解析 connect 消息:优先按已保存配置(仅凭 profileId 即可取回密码/密钥),否则用消息内的 ssh 原始参数
 function resolveConnectOpts(msg: any): ConnectOpts {
@@ -29,14 +30,14 @@ function profileAuth(p: SshProfile): ConnectOpts['auth'] {
     let privateKey = p.keyText;
     if (!privateKey && p.keyPath) {
       try { privateKey = fs.readFileSync(p.keyPath, 'utf8'); }
-      catch (e) { throw new Error(`读取私钥失败(${p.keyPath}): ${e.message}`); }
+      catch (e: any) { throw new Error(`读取私钥失败(${p.keyPath}): ${e.message}`); }
     }
     return { type: 'privateKey', privateKey, passphrase: p.passphrase || undefined };
   }
   return { type: 'password', password: p.password };
 }
 
-export function registerSsh(rpc) {
+export function registerSsh(rpc: RpcModule) {
   rpc.register('connect', async (msg, { reply, emitStatus, syncAgentScope }) => {
     // 原 ws.js connect case(154-163)逐字复制
     await ssh.connect(resolveConnectOpts(msg));
@@ -47,7 +48,7 @@ export function registerSsh(rpc) {
     emitStatus();
   });
 
-  const disconnectHandler = async (msg, { reply, emitStatus, syncAgentScope }) => {
+  const disconnectHandler: RpcHandler = async (msg, { reply, emitStatus, syncAgentScope }) => {
     // 原 ws.js disconnect/conn_disconnect 共享 case(164-176)逐字复制
     const conn = (msg.id ? ssh.conns.get(String(msg.id)) : ssh.active) || null;
     await ssh.disconnect(msg.id);

@@ -2,8 +2,9 @@
 import { agent, toolRegistry } from '../../agent/agent.ts';
 import { toolSettings } from '../../agent/tool-settings.ts';
 import { getPromptInject, setPromptInject } from '../../agent/prompt-inject.ts';
+import type { RpcModule } from './router.ts';
 
-export function registerConfig(rpc) {
+export function registerConfig(rpc: RpcModule) {
   rpc.register('llm', async (msg, { reply, emitStatus }) => {
     // 原 ws.js llm case(205-208)逐字复制
     agent.configureLlm(msg.llm);

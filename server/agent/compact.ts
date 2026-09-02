@@ -7,6 +7,7 @@
 // - token 估算为启发式(中文约 1.6 字符/token、英文约 4 字符/token + 每条消息 JSON 结构开销),
 //   不引入 tokenizer 依赖,精确度足以做窗口水位判断。
 import { AGENT } from '../config.ts';
+import type { LlmClient } from './llm.ts';
 
 export const COMPACT = {
   THRESHOLD_RATIO: 0.8,      // 触发压缩的水位:可用上下文(窗口-输出预留)的 80%
@@ -18,22 +19,22 @@ export const COMPACT = {
 };
 
 /** 启发式估算一段文本的 token 数 */
-export function estimateTokens(s) {
+export function estimateTokens(s: unknown): number {
   const str = String(s ?? '');
   if (!str) return 0;
   let cjk = 0;
-  for (const ch of str) if (ch >= '\u4e00' && ch <= '\u9fff') cjk++;
+  for (const ch of str) if (ch >= '一' && ch <= '鿿') cjk++;
   const ascii = str.length - cjk;
   return Math.ceil(cjk / COMPACT.CHARS_PER_CJK_TOKEN + ascii / COMPACT.CHARS_PER_ASCII_TOKEN) + 1;
 }
 
 /** 估算一条 LLM 消息的 token(含 JSON 序列化开销) */
-export function messageTokens(m) {
+export function messageTokens(m: any): number {
   return estimateTokens(m && typeof m === 'object' ? JSON.stringify(m) : String(m ?? '')) + COMPACT.MSG_OVERHEAD;
 }
 
 /** 估算一组消息的总 token */
-export function measureMessages(msgs) {
+export function measureMessages(msgs: any[]): number {
   return (msgs || []).reduce((n, m) => n + messageTokens(m), 0);
 }
 
@@ -42,7 +43,7 @@ export function measureMessages(msgs) {
  * - thresholdTokens:触发压缩的阈值(可用的输入预算×80%)
  * - retainTokens:压缩后希望保留的最近窗口
  */
-export function resolveCompactSpec(contextWindow, maxTokens) {
+export function resolveCompactSpec(contextWindow: unknown, maxTokens: unknown): { enabled: boolean; thresholdTokens: number; retainTokens: number } {
   const win = Number(contextWindow) || 0;
   if (win <= 0) return { enabled: false, thresholdTokens: 0, retainTokens: 0 };
   const out = Math.max(1, Number(maxTokens) || COMPACT.SUMMARY_MAX_TOKENS);
@@ -58,11 +59,11 @@ export function resolveCompactSpec(contextWindow, maxTokens) {
  * 选择可压缩区间:从头部整组丢弃,保留最近的 retainTokens 窗口(至少保留最后一条 user 组)。
  * 组边界保证:压缩掉的区间内部 user/assistant/tool 配对完整,
  * 保留区起点必然是 user 消息,因此压缩后历史始终以 user 开头、消息序列合法。
- * @returns {{ drop: object[], recent: object[] } | null} 无可压缩区间时返回 null
+ * @returns 无可压缩区间时返回 null
  */
-export function selectCompactRange(msgs, retainTokens) {
+export function selectCompactRange(msgs: any[], retainTokens: number): { drop: any[]; recent: any[] } | null {
   if (!Array.isArray(msgs) || msgs.length < 3) return null;
-  const groupStarts = [];
+  const groupStarts: number[] = [];
   msgs.forEach((m, i) => { if (m && m.role === 'user') groupStarts.push(i); });
   if (groupStarts.length < 2) return null; // 只有一组对话,无可压缩的早期历史
 
@@ -85,7 +86,7 @@ export function selectCompactRange(msgs, retainTokens) {
 }
 
 /** 摘要指令:要求把对话历史压缩为紧凑的结构化 checkpoint(参照 harness 的 COMPACTION_INSTRUCTION) */
-export function compactionInstruction() {
+export function compactionInstruction(): string {
   return [
     '请把上面的对话历史压缩成一段紧凑的中文摘要,供后续对话作为上下文回顾。要求:',
     '1. 保留所有用户提出的任务、明确要求与限制条件;',
@@ -100,9 +101,8 @@ export function compactionInstruction() {
  * 对消息历史执行上下文压缩:
  * 未配置 contextWindow 或未超阈值时原样返回;超阈值时选区间 -> 生成摘要(失败降级裁剪)
  * -> 返回 [摘要消息, ...保留区最近消息]。
- * @returns {{ messages: object[], compacted: boolean, dropCount: number }}
  */
-export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens }) {
+export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown }): Promise<{ messages: any[]; compacted: boolean; dropCount: number }> {
   const spec = resolveCompactSpec(contextWindow, maxTokens);
   if (!spec.enabled) return { messages, compacted: false, dropCount: 0 };
   if (measureMessages(messages) <= spec.thresholdTokens) return { messages, compacted: false, dropCount: 0 };
@@ -114,7 +114,7 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
   if (llm && !llm.isMock) {
     try {
       summary = await summarizeWithLlm({ llm, system, dropMsgs: range.drop, signal });
-    } catch (e) {
+    } catch (e: any) {
       console.warn(`[compact] 摘要生成失败,降级为直接裁剪: ${e?.message || e}`);
     }
   }
@@ -129,7 +129,7 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
 }
 
 /** 调用 LLM 生成摘要:沿用原始 system 前缀 + 被压缩的历史 + 摘要指令,不带工具、关闭思考 */
-export async function summarizeWithLlm({ llm, system, dropMsgs, signal }) {
+export async function summarizeWithLlm({ llm, system, dropMsgs, signal }: { llm: LlmClient; system?: string; dropMsgs: any[]; signal?: AbortSignal }): Promise<string> {
   const messages = [
     ...(system ? [{ role: 'system', content: system }] : []),
     ...dropMsgs,

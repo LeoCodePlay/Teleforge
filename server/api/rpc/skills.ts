@@ -1,7 +1,8 @@
 // 技能管理消息:skills_list / skill_get / skill_save / skill_delete / skill_copy_builtin
 import { refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from '../../agent/tools.ts';
+import type { RpcModule } from './router.ts';
 
-export function registerSkills(rpc) {
+export function registerSkills(rpc: RpcModule) {
   rpc.register('skills_list', async (msg, { reply }) => {
     // 原 ws.js skills_list case(257-262)逐字复制
     // 管理界面打开/刷新时强制重扫目录,保证看到最新文件状态;未连接时仅返回内置+本机技能

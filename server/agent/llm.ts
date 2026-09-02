@@ -147,6 +147,7 @@ export class LlmClient {
         continue; // 非 2xx,重试
       }
       try {
+        if (!res.body) throw new Error('LLM API 未返回响应流');
         return await parseSse(res.body, { signal, onDelta });
       } catch (e) {
         if (signal?.aborted) throw e;
@@ -198,7 +199,7 @@ function validateMessages(messages: any[]): void {
       throw new Error(`messages[${i}] 的 tool 消息(id=${m.tool_call_id})缺少前置 assistant tool_calls,严格提供商会拒绝(400)`);
     }
     if (m.role === 'assistant') {
-      pending = new Set((m.tool_calls || []).map((t) => t.id));
+      pending = new Set((m.tool_calls || []).map((t: any) => t.id));
     } else if (m.role === 'user') {
       pending = new Set(); // user 之后工具 id 失效
     }

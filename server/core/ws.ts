@@ -7,6 +7,11 @@
 // 另有 /ws/term 交互式终端通道(真实 PTY shell):文本帧 = JSON 控制消息
 // (start/resize),二进制帧 = 终端原始数据(键盘输入上行 / 屏幕输出下行)
 import { WebSocketServer } from 'ws';
+import type { WebSocket } from 'ws';
+import type { Server, IncomingMessage } from 'node:http';
+import type { Duplex } from 'node:stream';
+import type { ClientChannel } from 'ssh2';
+import type { SshConnection } from './ssh-manager.ts';
 import { WS_MAX_PAYLOAD } from '../config.ts';
 import { createRpcRouter } from '../api/rpc/router.ts';
 import { sshManager as ssh } from './ssh-manager.ts';
@@ -16,14 +21,14 @@ import { clearSearchEngine } from '../agent/tools.ts';
 import { rejectAllAskUser } from '../agent/ask-user.ts';
 import { migrateLegacy } from '../store/session-store.ts';
 
-export function setupWs(httpServer) {
+export function setupWs(httpServer: Server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
   const termWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
 
   // 同一 http server 上有两个 WSS,必须手动路由 upgrade:
   // 若各自自动监听,非匹配路径的 WSS 会对已升级的 socket abortHandshake(400),
   // 把 HTTP 字节写进 WebSocket 流,客户端报 "Invalid WebSocket frame: RSV1 must be clear"
-  httpServer.on('upgrade', (req, socket, head) => {
+  httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const pathname = String(req.url || '').split('?')[0];
     if (pathname === '/ws/term') {
       termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws));
@@ -33,9 +38,9 @@ export function setupWs(httpServer) {
       socket.destroy();
     }
   });
-  let client = null; // 当前唯一前端(本地工具,单客户端)
+  let client: WebSocket | null = null; // 当前唯一前端(本地工具,单客户端)
 
-  const send = (payload) => {
+  const send = (payload: any) => {
     if (client && client.readyState === 1) {
       try { client.send(JSON.stringify(payload)); } catch {}
     }
@@ -43,7 +48,7 @@ export function setupWs(httpServer) {
 
   // Agent 事件 -> 前端(agent 的 'log' 是 3 参调用:event=log, level, message)
   setAgentHub({
-    emit: (event, payload, extra) => {
+    emit: (event: string, payload: any, extra?: any) => {
       if (event === 'log') send({ type: 'log', level: payload, message: extra });
       else {
         send({ type: 'agent', event, ...payload });
@@ -81,7 +86,7 @@ export function setupWs(httpServer) {
   ssh.on('status', emitStatus);
   // 任一连接意外掉线(含后台非活动连接):只停绑定在该连接上的会话(其工具已无法执行),
   // 其他服务器上还在后台运行的会话不受影响,可继续干完。
-  ssh.on('connection-lost', (key) => {
+  ssh.on('connection-lost', (key: string) => {
     clearSearchEngine();
     const lost = key != null ? ssh.conns.get(String(key)) : null;
     if (lost) agent.stopForConn(lost); else agent.stopAll();
@@ -92,7 +97,7 @@ export function setupWs(httpServer) {
 
   // ---- 会话作用域:会话按"当前活动连接"隔离(连接 = username@host:port;无连接 = 本地工作区模式) ----
   const LOCAL_CONN_KEY = 'local';
-  const connKeyOf = (conn) => {
+  const connKeyOf = (conn: SshConnection | null) => {
     const hi = conn?.hostInfo;
     return hi && hi.host ? `${hi.username}@${hi.host}:${hi.port}` : LOCAL_CONN_KEY;
   };
@@ -107,18 +112,18 @@ export function setupWs(httpServer) {
   // 消息分发路由表:49 种 RPC 消息在 server/rpc/ 下按领域注册,ctx 只注入 ws 闭包专有物
   const router = createRpcRouter({ send, emitStatus, syncAgentScope });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws: WebSocket) => {
     client = ws;
     send({ type: 'log', level: 'info', message: '前端已连接' });
     syncAgentScope();
     emitStatus();
 
-    ws.on('message', async (raw) => {
+    ws.on('message', async (raw: any) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return send({ type: 'error', error: '消息不是合法 JSON' }); }
       try {
         await router.handle(msg);
-      } catch (e) {
+      } catch (e: any) {
         send({ type: 'error', error: e.message, reqId: msg.reqId, forType: msg.type });
       }
     });
@@ -135,11 +140,11 @@ export function setupWs(httpServer) {
   // 每个连接对应一个远程 PTY shell;连接关闭即关闭 shell。
   // 文本帧(JSON):start {cols,rows} / resize {cols,rows}
   // 二进制帧:客户端键盘输入 -> shell;shell 输出 -> 客户端屏幕
-  termWss.on('connection', (ws) => {
-    let stream = null; // 当前 shell 通道
+  termWss.on('connection', (ws: WebSocket) => {
+    let stream: ClientChannel | null = null; // 当前 shell 通道
     let closed = false;
 
-    const sendJson = (o) => { try { ws.send(JSON.stringify(o)); } catch {} };
+    const sendJson = (o: any) => { try { ws.send(JSON.stringify(o)); } catch {} };
     const closeStream = () => {
       if (!stream) return;
       const s = stream; stream = null;
@@ -147,7 +152,7 @@ export function setupWs(httpServer) {
       try { s.end?.(); } catch {}
     };
 
-    ws.on('message', (raw, isBinary) => {
+    ws.on('message', (raw: any, isBinary: boolean) => {
       // 二进制帧:键盘输入直接进 shell
       if (isBinary) {
         if (stream && ws.readyState === 1) { try { stream.write(raw); } catch {} }
@@ -161,12 +166,12 @@ export function setupWs(httpServer) {
         if (!ssh.connected) { sendJson({ type: 'error', error: 'SSH 未连接,无法打开终端' }); return; }
         const cols = Math.max(2, Math.min(500, msg.cols | 0 || 80));
         const rows = Math.max(2, Math.min(300, msg.rows | 0 || 24));
-        ssh.shell({ cols, rows }).then((s) => {
+        ssh.shell({ cols, rows }).then((s: ClientChannel) => {
           if (closed || stream) { try { s.close(); } catch {} return; }
           stream = s;
-          s.on('data', (d) => { if (ws.readyState === 1) { try { ws.send(d); } catch {} } });
+          s.on('data', (d: Buffer) => { if (ws.readyState === 1) { try { ws.send(d); } catch {} } });
           // PTY shell 输出走 stdout,stderr 一般为空,保险起见也转发
-          s.stderr?.on('data', (d) => { if (ws.readyState === 1) { try { ws.send(d); } catch {} } });
+          s.stderr?.on('data', (d: Buffer) => { if (ws.readyState === 1) { try { ws.send(d); } catch {} } });
           s.on('close', () => { if (stream === s) stream = null; sendJson({ type: 'exit' }); });
           s.on('error', () => {});
           sendJson({ type: 'ready' });
@@ -177,7 +182,7 @@ export function setupWs(httpServer) {
               : `cd '${ssh.workspace.replace(/'/g, `'\\''`)}'`;
             try { s.write(wsq + '\n'); } catch {}
           }
-        }).catch((e) => sendJson({ type: 'error', error: `打开终端失败: ${e.message}` }));
+        }).catch((e: any) => sendJson({ type: 'error', error: `打开终端失败: ${e.message}` }));
       } else if (msg.type === 'resize') {
         const cols = Math.max(2, Math.min(500, msg.cols | 0 || 80));
         const rows = Math.max(2, Math.min(300, msg.rows | 0 || 24));

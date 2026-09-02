@@ -2,8 +2,9 @@
 import { agent } from '../../agent/agent.ts';
 import { sshManager as ssh } from '../../core/ssh-manager.ts';
 import { localFs } from '../../core/local-fs.ts';
+import type { RpcModule } from './router.ts';
 
-export function registerAgent(rpc) {
+export function registerAgent(rpc: RpcModule) {
   rpc.register('speak', async (msg, { reply, send, emitStatus }) => {
     // 原 ws.js speak case(445-458)逐字复制
     if (!msg.text?.trim()) throw new Error('指令为空');

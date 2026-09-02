@@ -1,7 +1,8 @@
 // 用户提问回传消息:ask_user_answer / ask_user_cancel
 import { answerAskUser, rejectAskUser } from '../../agent/ask-user.ts';
+import type { RpcModule } from './router.ts';
 
-export function registerAskUser(rpc) {
+export function registerAskUser(rpc: RpcModule) {
   rpc.register('ask_user_answer', async (msg, { reply }) => {
     // 原 ws.js ask_user_answer case(468-472)逐字复制
     // 模型调用 ask_user_question 时会广播 agent 事件 ask_user(含 askId+题面),

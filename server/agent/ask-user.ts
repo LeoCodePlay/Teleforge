@@ -73,7 +73,7 @@ export function askUserQuestion({ questions, sid, signal, emit }: { questions: a
     );
     entry.onAbort = onAbort;
     entry.timer = timer;
-    signal.addEventListener('abort', onAbort, { once: true });
+    signal?.addEventListener('abort', onAbort, { once: true });
     pending.set(askId, entry);
     emit?.('agent', { event: 'ask_user', askId, questions: qs, sid });
   });

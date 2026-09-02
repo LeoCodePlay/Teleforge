@@ -6,7 +6,7 @@ import { sshManager as ssh, normalizeRemote, joinRemote } from './ssh-manager.ts
 // 递归枚举本地路径 -> [{rel, abs, type, size}]
 async function collectLocalPaths(roots: string[], baseDir?: string) {
   const out = [];
-  const walk = async (dir, rel) => {
+  const walk = async (dir: string, rel: string) => {
     for (const e of await localFs.listDir(dir)) {
       const relPath = rel ? `${rel}/${e.name}` : e.name;
       const abs = path.join(dir, e.name);
@@ -48,7 +48,7 @@ export async function localToRemote(paths: string[], remoteDir: string, { onProg
       const buf = (await localFs.readFileChunk(e.abs, { maxBytes: 0 })).buffer;
       await ssh.writeRemoteFile(target, buf, { maxBytes: 0, mkdir: false });
       uploaded++; bytes += buf.length;
-    } catch (err) { errors.push(`${e.rel}: ${err.message}`); }
+    } catch (err: any) { errors.push(`${e.rel}: ${err.message}`); }
     onProgress?.({ done: uploaded, total, current: e.rel });
   }
   return { uploaded, failed: errors.length, bytes, errors: errors.slice(0, 20) };
@@ -58,8 +58,8 @@ export async function localToRemote(paths: string[], remoteDir: string, { onProg
 export async function remoteToLocal(paths: string[], localDir: string, { onProgress }: { onProgress?: (p: any) => void } = {}) {
   const base = path.resolve(localDir || localFs.workspace || '.');
   await localFs.mkdirp(base);
-  let downloaded = 0, bytes = 0; const errors = [];
-  const walkRemote = async (remotePath, rel) => {
+  let downloaded = 0, bytes = 0; const errors: string[] = [];
+  const walkRemote = async (remotePath: string, rel: string) => {
     const type = await ssh.atype(remotePath);
     if (!type) { errors.push(`${remotePath}: 不存在`); return; }
     try {
@@ -75,7 +75,7 @@ export async function remoteToLocal(paths: string[], localDir: string, { onProgr
         downloaded++; bytes += buffer.length;
         onProgress?.({ done: downloaded, total: 1, current: rel });
       }
-    } catch (err) {
+    } catch (err: any) {
       // 单个条目失败(如非法 NTFS 文件名)不中断整体传输:记录错误后继续
       errors.push(`${rel}: ${err.message}`);
     }

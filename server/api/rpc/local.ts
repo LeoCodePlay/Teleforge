@@ -2,8 +2,9 @@
 //                  local_delete / local_copy / set_local_workspace
 import { localFs } from '../../core/local-fs.ts';
 import { clearLocalEnvInfo } from '../../agent/tools.ts';
+import type { RpcModule } from './router.ts';
 
-export function registerLocal(rpc) {
+export function registerLocal(rpc: RpcModule) {
   rpc.register('list_local_dir', async (msg, { reply }) => {
     // 原 ws.js list_local_dir case(314-321)逐字复制
     // 空串/root: = "我的电脑"根视图(Windows 盘符 / POSIX 根);其余为真实路径
@@ -38,7 +39,7 @@ export function registerLocal(rpc) {
     const type = await localFs.atype(msg.path);
     if (!type) throw new Error(`路径不存在: ${msg.path}`);
     let done = 0, lastEmit = 0;
-    const onProgress = (p) => { done++; const now = Date.now(); if (now - lastEmit >= 120) { lastEmit = now; send({ type: 'local_delete_progress', reqId, path: msg.path, done, current: p }); } };
+    const onProgress = (p: string) => { done++; const now = Date.now(); if (now - lastEmit >= 120) { lastEmit = now; send({ type: 'local_delete_progress', reqId, path: msg.path, done, current: p }); } };
     await localFs.rmdirRecursive(msg.path, onProgress);
     send({ type: 'local_delete_progress', reqId, path: msg.path, done, final: true, current: msg.path });
     reply({ type: 'local_deleted', path: msg.path });

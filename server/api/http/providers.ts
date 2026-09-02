@@ -23,7 +23,7 @@ export default async function registerProviders(app: FastifyInstance) {
       const raw = Array.isArray(j?.data) ? j.data.map((m: any) => m?.id)
         : Array.isArray(j?.models) ? j.models.map((m: any) => m?.id ?? m)
         : [];
-      const models = [...new Set(raw.map((m) => String(m || '').trim()).filter(Boolean))].sort();
+      const models = [...new Set(raw.map((m: any) => String(m || '').trim()).filter(Boolean))].sort();
       return { models };
     } catch (e: any) {
       return reply.code(502).send({ error: '获取模型列表失败:' + e.message });

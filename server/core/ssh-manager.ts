@@ -314,9 +314,9 @@ export class SshConnection extends EventEmitter {
           try { stream.close(); } catch {}
           try { stream.end(); } catch {}
         }
-        stream.on('data', (d) => addOut(d.toString('utf8')));
+        stream.on('data', (d: Buffer) => addOut(d.toString('utf8')));
         stream.stderr.on('data', (d) => addErr(d.toString('utf8')));
-        stream.on('close', (code, signal) => {
+        stream.on('close', (code: number | null, signal: string | null) => {
           clearTimeout(timer);
           finish({ code, signal, stdout: truncateOutput(stdout, maxOutput).text, stderr: truncateOutput(stderr, maxOutput).text, timedOut });
         });

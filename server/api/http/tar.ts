@@ -1,11 +1,11 @@
 // 远程目录打包 tar.gz(node 内置 zlib,不依赖远程 zip;逐文件流式读取,不整目录进内存)
 import { sshManager as ssh, normalizeRemote } from '../../core/ssh-manager.ts';
 
-function tarOctal(n) {
+function tarOctal(n: number): string {
   const s = Math.floor(n).toString(8);
   return '0000000'.slice(s.length) + s + '\0'; // 7 位八进制 + NUL
 }
-function tarHeader(relPath, { mode, size, mtimeSec, type, linkname = '' }) {
+function tarHeader(relPath: string, { mode, size, mtimeSec, type, linkname = '' }: { mode: number; size: number; mtimeSec: number; type: string; linkname?: string }): Buffer {
   const buf = Buffer.alloc(512);
   let name = relPath, prefix = '';
   if (Buffer.byteLength(relPath, 'utf8') > 100) { // ustar prefix 拆分
@@ -39,9 +39,9 @@ function tarHeader(relPath, { mode, size, mtimeSec, type, linkname = '' }) {
   return buf;
 }
 // 递归收集一组远程路径(文件/目录)为 tar 条目;每个根路径映射到给定相对路径(rel)
-async function collectRemotePaths(roots) {
+async function collectRemotePaths(roots: Array<{ abs: string; rel: string }>) {
   const out = [];
-  const walk = async (dir, rel) => {
+  const walk = async (dir: string, rel: string) => {
     const list = await ssh.listDir(dir);
     for (const e of list) {
       const relPath = rel + '/' + e.name;
@@ -51,8 +51,8 @@ async function collectRemotePaths(roots) {
         out.push({ relPath: relPath + '/', type: 'dir', size: 0, mtimeSec, abs });
         await walk(abs, relPath);
       } else if (e.type === 'link') {
-        let link = null;
-        try { link = await new Promise((res, rej) => ssh.sftp.readlink(abs, (err, t) => (err ? rej(err) : res(t)))); } catch {}
+        let link: string | null = null;
+        try { link = await new Promise<string>((res, rej) => ssh.sftp!.readlink(abs, (err, t) => (err ? rej(err) : res(t)))); } catch {}
         out.push({ relPath, type: 'link', size: 0, mtimeSec, link });
       } else {
         out.push({ relPath, type: 'file', size: e.size || 0, mtimeSec, abs });
@@ -66,8 +66,8 @@ async function collectRemotePaths(roots) {
       out.push({ relPath: rel + '/', type: 'dir', size: 0, mtimeSec, abs });
       await walk(abs, rel);
     } else if (type === 'link') {
-      let link = null;
-      try { link = await new Promise((res, rej) => ssh.sftp.readlink(abs, (err, t) => (err ? rej(err) : res(t)))); } catch {}
+      let link: string | null = null;
+      try { link = await new Promise<string>((res, rej) => ssh.sftp!.readlink(abs, (err, t) => (err ? rej(err) : res(t)))); } catch {}
       out.push({ relPath: rel, type: 'link', size: 0, mtimeSec, link });
     } else {
       const st = await ssh.stat(abs);
@@ -79,13 +79,13 @@ async function collectRemotePaths(roots) {
 // 把一个远程文件分块读入 tar 流(512 对齐填充)
 async function streamRemoteFileToTar(abs: string, size: number, write: (buf: Buffer) => Promise<void>) {
   if (size <= 0) return;
-  const handle = await new Promise((res, rej) => ssh.sftp.open(abs, 'r', (e, h) => (e ? rej(e) : res(h))));
+  const handle = await new Promise<any>((res, rej) => ssh.sftp!.open(abs, 'r', (e, h) => (e ? rej(e) : res(h))));
   try {
     const buf = Buffer.alloc(256 * 1024);
     let off = 0, remaining = size;
     while (remaining > 0) {
       const n = Math.min(buf.length, remaining);
-      const got = await new Promise<number>((res, rej) => ssh.sftp.read(handle, buf, 0, n, off, (e, b) => (e ? rej(e) : res(b))));
+      const got = await new Promise<number>((res, rej) => ssh.sftp!.read(handle, buf, 0, n, off, (e, b) => (e ? rej(e) : res(b))));
       if (got <= 0) break;
       await write(buf.subarray(0, got));
       off += got; remaining -= got;
@@ -93,13 +93,13 @@ async function streamRemoteFileToTar(abs: string, size: number, write: (buf: Buf
     const pad = (512 - (size % 512)) % 512;
     if (pad) await write(Buffer.alloc(pad));
   } finally {
-    try { await new Promise<void>((res) => ssh.sftp.close(handle, () => res())); } catch {}
+    try { await new Promise<void>((res) => ssh.sftp!.close(handle, () => res())); } catch {}
   }
 }
 
 // 把一组 root 条目流式写入 gzip:写 tar 头 + 文件内容 + 1024 结束块,最后 end
 // write 须为 (buf) => Promise<void>(尊重背压的写函数);gzip 为 zlib.Gzip 实例
-export async function streamTarToGzip(gzip, roots, write) {
+export async function streamTarToGzip(gzip: any, roots: Array<{ abs: string; rel: string }>, write: (buf: Buffer) => Promise<void>) {
   const entries = await collectRemotePaths(roots);
   for (const e of entries) {
     if (e.type === 'dir') {
@@ -108,7 +108,7 @@ export async function streamTarToGzip(gzip, roots, write) {
       await write(tarHeader(e.relPath, { mode: 0o777, size: 0, mtimeSec: e.mtimeSec, type: '2', linkname: e.link }));
     } else {
       await write(tarHeader(e.relPath, { mode: 0o644, size: e.size, mtimeSec: e.mtimeSec, type: '0' }));
-      await streamRemoteFileToTar(e.abs, e.size, write);
+      await streamRemoteFileToTar(e.abs!, e.size, write);
     }
   }
   await write(Buffer.alloc(1024)); // tar 结束标记:两个 512 零块
