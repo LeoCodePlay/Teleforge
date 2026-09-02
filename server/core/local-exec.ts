@@ -1,6 +1,6 @@
 // 本地命令执行:child_process.exec,输出截断 + 超时;供 Agent run_local_command 工具使用。
 import { exec as cpExec } from 'node:child_process';
-import { LOCAL_EXEC } from './config.ts';
+import { LOCAL_EXEC } from '../config.ts';
 
 export interface ExecLocalOptions {
   cwd?: string;

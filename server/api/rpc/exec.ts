@@ -1,5 +1,5 @@
 // 命令执行消息:run_command / stop_command
-import { sshManager as ssh } from '../ssh-manager.ts';
+import { sshManager as ssh } from '../../core/ssh-manager.ts';
 
 export function registerExec(rpc) {
   rpc.register('run_command', async (msg, { reply, send }) => {

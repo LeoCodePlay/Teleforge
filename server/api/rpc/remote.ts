@@ -1,6 +1,6 @@
 // 远程文件操作消息:list_dir / read_file / write_file / create_dir / delete / copy / set_workspace
-import { sshManager as ssh } from '../ssh-manager.ts';
-import { clearEnvInfo } from '../agent/tools.ts';
+import { sshManager as ssh } from '../../core/ssh-manager.ts';
+import { clearEnvInfo } from '../../agent/tools.ts';
 
 export function registerRemote(rpc) {
   rpc.register('list_dir', async (msg, { reply }) => {

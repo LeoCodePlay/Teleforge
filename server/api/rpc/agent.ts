@@ -1,7 +1,7 @@
 // 会话与对话消息:speak / stop_agent / get_history / clear_history / compact_now / session_*
-import { agent } from '../agent/agent.ts';
-import { sshManager as ssh } from '../ssh-manager.ts';
-import { localFs } from '../local-fs.ts';
+import { agent } from '../../agent/agent.ts';
+import { sshManager as ssh } from '../../core/ssh-manager.ts';
+import { localFs } from '../../core/local-fs.ts';
 
 export function registerAgent(rpc) {
   rpc.register('speak', async (msg, { reply, send, emitStatus }) => {

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const SSH_PROFILES_FILE = process.env.SSH_PROFILES_FILE || path.join(__dirname, 'data', 'ssh-profiles.json');
+export const SSH_PROFILES_FILE = process.env.SSH_PROFILES_FILE || path.join(__dirname, '..', 'data', 'ssh-profiles.json');
 
 export interface SshProfile {
   id: string;

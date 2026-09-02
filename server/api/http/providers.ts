@@ -1,8 +1,8 @@
 // 「我的 AI 模型提供商」配置文件操作插件(增删改查 + 代理拉取模型列表)
 // 数据保存在 server/data/ai-providers.json(首次启动自动从 openclaw 导入种子)
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { aiProviders } from '../ai-providers-store.ts';
-import { uiState } from '../ui-state-store.ts';
+import { aiProviders } from '../../store/ai-providers-store.ts';
+import { uiState } from '../../store/ui-state-store.ts';
 
 export default async function registerProviders(app: FastifyInstance) {
   app.get('/api/providers', () => ({ userProviders: aiProviders.list() }));

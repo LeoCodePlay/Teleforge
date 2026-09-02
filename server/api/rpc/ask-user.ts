@@ -1,5 +1,5 @@
 // 用户提问回传消息:ask_user_answer / ask_user_cancel
-import { answerAskUser, rejectAskUser } from '../agent/ask-user.ts';
+import { answerAskUser, rejectAskUser } from '../../agent/ask-user.ts';
 
 export function registerAskUser(rpc) {
   rpc.register('ask_user_answer', async (msg, { reply }) => {

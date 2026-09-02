@@ -7,14 +7,14 @@
 // 另有 /ws/term 交互式终端通道(真实 PTY shell):文本帧 = JSON 控制消息
 // (start/resize),二进制帧 = 终端原始数据(键盘输入上行 / 屏幕输出下行)
 import { WebSocketServer } from 'ws';
-import { WS_MAX_PAYLOAD } from './config.ts';
-import { createRpcRouter } from './rpc/router.ts';
+import { WS_MAX_PAYLOAD } from '../config.ts';
+import { createRpcRouter } from '../api/rpc/router.ts';
 import { sshManager as ssh } from './ssh-manager.ts';
 import { localFs } from './local-fs.ts';
-import { agent, setAgentHub } from './agent/agent.ts';
-import { clearSearchEngine } from './agent/tools.ts';
-import { rejectAllAskUser } from './agent/ask-user.ts';
-import { migrateLegacy } from './session-store.ts';
+import { agent, setAgentHub } from '../agent/agent.ts';
+import { clearSearchEngine } from '../agent/tools.ts';
+import { rejectAllAskUser } from '../agent/ask-user.ts';
+import { migrateLegacy } from '../store/session-store.ts';
 
 export function setupWs(httpServer) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });

@@ -17,5 +17,5 @@
     "useDefineForClassFields": true
   },
   "include": ["server"],
-  "exclude": ["server/builtin-skills"]
+  "exclude": ["server/skills"]
 }

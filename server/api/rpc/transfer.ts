@@ -1,5 +1,5 @@
 // 本地↔远程传输消息:local_to_remote / remote_to_local
-import { localToRemote, remoteToLocal } from '../transfer.ts';
+import { localToRemote, remoteToLocal } from '../../core/transfer.ts';
 
 export function registerTransfer(rpc) {
   rpc.register('local_to_remote', async (msg, { reply, send }) => {

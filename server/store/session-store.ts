@@ -7,10 +7,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { eventsFromTurns } from './agent/session.ts';
+import { eventsFromTurns } from '../agent/session.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data'); // 项目根 data/(测试可注入隔离目录)
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', '..', 'data'); // 项目根 data/(测试可注入隔离目录)
 const INDEX_FILE = path.join(DATA_DIR, 'sessions.json');
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 

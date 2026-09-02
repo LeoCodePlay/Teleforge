@@ -1,7 +1,7 @@
 // 基础接口插件:/api/readkey(读本机私钥文件)与 /api/health
 import fs from 'node:fs';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { sshManager as ssh } from '../ssh-manager.ts';
+import { sshManager as ssh } from '../../core/ssh-manager.ts';
 
 export default async function registerBasic(app: FastifyInstance) {
   // 读取本机私钥文件内容(仅供本地前端使用;服务默认只监听 127.0.0.1)

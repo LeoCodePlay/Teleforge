@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { FILE } from './config.ts';
+import { FILE } from '../config.ts';
 
 export interface FsEntry {
   name: string;

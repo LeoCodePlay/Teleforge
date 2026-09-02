@@ -1,7 +1,7 @@
 // 本地文件操作消息:list_local_dir / read_local_file / write_local_file / create_local_dir /
 //                  local_delete / local_copy / set_local_workspace
-import { localFs } from '../local-fs.ts';
-import { clearLocalEnvInfo } from '../agent/tools.ts';
+import { localFs } from '../../core/local-fs.ts';
+import { clearLocalEnvInfo } from '../../agent/tools.ts';
 
 export function registerLocal(rpc) {
   rpc.register('list_local_dir', async (msg, { reply }) => {

@@ -16,10 +16,10 @@ import { compactHistory, summarizeWithLlm, messageTokens } from './compact.ts';
 import { Session, foldTodos } from './session.ts';
 import { ToolRegistry } from './registry.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
-import { localFs } from '../local-fs.ts';
+import { localFs } from '../core/local-fs.ts';
 import { renderPromptInjectSection } from './prompt-inject.ts';
-import { sshManager as ssh } from '../ssh-manager.ts';
-import * as sessions from '../session-store.ts';
+import { sshManager as ssh } from '../core/ssh-manager.ts';
+import * as sessions from '../store/session-store.ts';
 
 // 全局唯一工具注册表:启动时注册全部内置工具与守卫
 const registry = new ToolRegistry();

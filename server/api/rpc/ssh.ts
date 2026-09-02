@@ -1,11 +1,11 @@
 // 服务器连接与配置消息:connect / disconnect / conn_disconnect / conn_switch / ssh_profiles_*
 import fs from 'node:fs';
-import { sshManager as ssh } from '../ssh-manager.ts';
-import type { ConnectOpts } from '../ssh-manager.ts';
-import { sshProfiles, sanitizeProfile } from '../ssh-profiles-store.ts';
-import type { SshProfile } from '../ssh-profiles-store.ts';
-import { clearSearchEngine, ensureSearchTools, clearEnvInfo } from '../agent/tools.ts';
-import { agent } from '../agent/agent.ts';
+import { sshManager as ssh } from '../../core/ssh-manager.ts';
+import type { ConnectOpts } from '../../core/ssh-manager.ts';
+import { sshProfiles, sanitizeProfile } from '../../store/ssh-profiles-store.ts';
+import type { SshProfile } from '../../store/ssh-profiles-store.ts';
+import { clearSearchEngine, ensureSearchTools, clearEnvInfo } from '../../agent/tools.ts';
+import { agent } from '../../agent/agent.ts';
 
 // 解析 connect 消息:优先按已保存配置(仅凭 profileId 即可取回密码/密钥),否则用消息内的 ssh 原始参数
 function resolveConnectOpts(msg: any): ConnectOpts {

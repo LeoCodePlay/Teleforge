@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 默认存 server/data/ (已被 .gitignore 忽略,含 API Key,不做版本入库);可用环境变量覆盖路径
-export const CONFIG_FILE = process.env.AI_PROVIDERS_FILE || path.join(__dirname, 'data', 'ai-providers.json');
+export const CONFIG_FILE = process.env.AI_PROVIDERS_FILE || path.join(__dirname, '..', 'data', 'ai-providers.json');
 
 export interface AiProvider {
   id: string;

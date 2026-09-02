@@ -7,14 +7,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { joinRemote, normalizeRemote, sshManager as ssh } from '../ssh-manager.ts';
-import { localFs, resolveInLocalWorkspace } from '../local-fs.ts';
-import { execLocal } from '../local-exec.ts';
+import { joinRemote, normalizeRemote, sshManager as ssh } from '../core/ssh-manager.ts';
+import { localFs, resolveInLocalWorkspace } from '../core/local-fs.ts';
+import { execLocal } from '../core/local-exec.ts';
 import { askUserQuestion } from './ask-user.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 内置技能库(随工具分发,本地目录;已从 deepseek-harness / Claude Code 全局收集)
-const BUILTIN_SKILLS_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(__dirname, '..', 'builtin-skills');
+const BUILTIN_SKILLS_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(__dirname, '..', 'skills');
 // 本机技能根目录(无需 SSH,随本机文件系统管理):
 //   local-project:   工具运行目录(process.cwd())下的 .agents/skills   —— 随本机当前项目
 //   local-user:      本机用户主目录下的 .agents/skills                 —— 跨项目共享,优先级高于内置

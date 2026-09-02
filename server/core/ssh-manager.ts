@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Client } from 'ssh2';
 import type { SFTPWrapper, Stats, ClientChannel, ConnectConfig } from 'ssh2';
-import { SSH, EXEC, FILE } from './config.ts';
+import { SSH, EXEC, FILE } from '../config.ts';
 import type { FsEntry, ChunkReadResult } from './local-fs.ts';
 
 export type ConnStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';

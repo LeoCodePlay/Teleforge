@@ -1,5 +1,5 @@
 // 远程目录打包 tar.gz(node 内置 zlib,不依赖远程 zip;逐文件流式读取,不整目录进内存)
-import { sshManager as ssh, normalizeRemote } from '../ssh-manager.ts';
+import { sshManager as ssh, normalizeRemote } from '../../core/ssh-manager.ts';
 
 function tarOctal(n) {
   const s = Math.floor(n).toString(8);

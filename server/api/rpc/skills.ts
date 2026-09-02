@@ -1,5 +1,5 @@
 // 技能管理消息:skills_list / skill_get / skill_save / skill_delete / skill_copy_builtin
-import { refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from '../agent/tools.ts';
+import { refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from '../../agent/tools.ts';
 
 export function registerSkills(rpc) {
   rpc.register('skills_list', async (msg, { reply }) => {

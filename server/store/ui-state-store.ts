@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const UI_STATE_FILE = process.env.UI_STATE_FILE || path.join(__dirname, 'data', 'ui-state.json');
+export const UI_STATE_FILE = process.env.UI_STATE_FILE || path.join(__dirname, '..', 'data', 'ui-state.json');
 
 export interface UiState {
   providerId: string;

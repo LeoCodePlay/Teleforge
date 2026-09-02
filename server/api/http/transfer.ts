@@ -2,7 +2,7 @@
 import multer from 'multer';
 import middie from '@fastify/middie';
 import zlib from 'node:zlib';
-import { sshManager as ssh, normalizeRemote, joinRemote } from '../ssh-manager.ts';
+import { sshManager as ssh, normalizeRemote, joinRemote } from '../../core/ssh-manager.ts';
 import { streamTarToGzip } from './tar.ts';
 
 // 上传文件的内存存储(单文件上限 256MB,单次最多 2000 个)

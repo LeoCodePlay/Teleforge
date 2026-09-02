@@ -1,7 +1,7 @@
 // 配置与状态消息:llm / get_status / tools_list / tool_toggle / prompt_inject_*
-import { agent, toolRegistry } from '../agent/agent.ts';
-import { toolSettings } from '../agent/tool-settings.ts';
-import { getPromptInject, setPromptInject } from '../agent/prompt-inject.ts';
+import { agent, toolRegistry } from '../../agent/agent.ts';
+import { toolSettings } from '../../agent/tool-settings.ts';
+import { getPromptInject, setPromptInject } from '../../agent/prompt-inject.ts';
 
 export function registerConfig(rpc) {
   rpc.register('llm', async (msg, { reply, emitStatus }) => {
