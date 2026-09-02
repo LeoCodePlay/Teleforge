@@ -7,7 +7,7 @@
   "author": "liaozhenqiang",
   "license": "GPL-3.0",
   "engines": {
-    "node": ">=18.17"
+    "node": ">=20"
   },
   "scripts": {
     "dev": "concurrently -k -n SRV,WEB -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
@@ -19,10 +19,13 @@
     "test": "node test/agent-history.test.js && node test/agent-continue.test.js && node test/session-scope.test.js && node test/compact.test.js && node test/local-fs.test.js && node test/local-exec.test.js && node test/transfer.test.js && node test/ssh-read-maxbytes.test.js && node test/agent-local.test.js && node test/skills-catalog.test.js && node test/env-tools.test.js && node test/e2e.js && node test/rpc-registry.test.js"
   },
   "dependencies": {
+    "@fastify/middie": "^9.3.3",
+    "@fastify/static": "^10.1.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.4.14",
     "express": "^4.21.2",
+    "fastify": "^5.12.1",
     "marked": "^18.0.11",
     "multer": "^1.4.5-lts.2",
     "react": "^18.3.1",
