@@ -1,31 +1,66 @@
-// @ts-nocheck
 // LLM 客户端:OpenAI 兼容 chat/completions,流式 + function calling
 // 支持 DeepSeek / OpenAI / Moonshot / Qwen / 本地 vLLM / Ollama 等所有兼容端点
 // model 设为 'mock' 时进入本地联调模式(无需 API Key,可跑通完整 Agent 循环)
+import type { LlmMessage } from './session.ts';
+
+export interface ToolCallSpec {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+export interface ChatResult {
+  content: string;
+  toolCalls: ToolCallSpec[];
+  reasoning?: string;
+  finishReason?: string;
+}
+
+export interface LlmOptions {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  maxTokens?: number;
+  contextWindow?: number;
+  maxIters?: number;
+}
+
+export interface ChatOptions {
+  messages: LlmMessage[];
+  tools?: any[];
+  signal?: AbortSignal;
+  onDelta?: (d: { kind: string; text?: string; index?: number }) => void;
+  reasoning?: string;
+}
 
 export class LlmClient {
-  constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters }) {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  maxTokens: number;
+  // 输入上下文窗口(token):>0 时启用对话历史自动压缩(见 compact.js);未配置则沿用字符预算裁剪
+  contextWindow: number;
+  // 该模型单独的单轮最大工具迭代次数;<=0 表示未配置,由 agent 回退到全局默认(AGENT.MAX_ITERS)
+  maxIters: number;
+
+  constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters }: LlmOptions) {
     this.baseUrl = (baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
     this.apiKey = apiKey || '';
     this.model = model || 'deepseek-chat';
     this.maxTokens = maxTokens || 8192;
-    // 输入上下文窗口(token):>0 时启用对话历史自动压缩(见 compact.js);未配置则沿用字符预算裁剪
     this.contextWindow = Number(contextWindow) > 0 ? Math.floor(Number(contextWindow)) : 0;
-    // 该模型单独的单轮最大工具迭代次数;<=0 表示未配置,由 agent 回退到全局默认(AGENT.MAX_ITERS)
     this.maxIters = Number(maxIters) > 0 ? Math.floor(Number(maxIters)) : 0;
   }
 
-  get isMock() { return this.model === 'mock'; }
+  get isMock(): boolean { return this.model === 'mock'; }
 
   /**
    * 流式对话
-   * @param {{messages, tools, signal, onDelta, reasoning}}
-   *   reasoning 推理等级(default|off|low|high|xhigh|max),对应 reasoning_effort 参数
-   * @returns {Promise<{content, toolCalls:[{id,name,arguments}], reasoning, finishReason}>}
-   *   finishReason:SSE 结束的 finish_reason(如 'stop' / 'length'),供 agent 判断
-   *   输出是否因 max_tokens 被截断(length 时不当作"完成")。mock 模式下为 undefined。
+   * reasoning 推理等级(default|off|low|high|xhigh|max),对应 reasoning_effort 参数
+   * finishReason:SSE 结束的 finish_reason(如 'stop' / 'length'),供 agent 判断
+   * 输出是否因 max_tokens 被截断(length 时不当作"完成")。mock 模式下为 undefined。
    */
-  async chat({ messages, tools, signal, onDelta, reasoning = 'default' }) {
+  async chat({ messages, tools, signal, onDelta, reasoning = 'default' }: ChatOptions): Promise<ChatResult> {
     if (this.isMock) return mockChat({ messages, tools, signal, onDelta });
     const deepseekV4 = isDeepSeekV4(this.model);
     // 历史 assistant 消息中的 reasoning_content 处理(对齐 dsh llm-deepseek serialize 的 passback 规则):
@@ -44,7 +79,7 @@ export class LlmClient {
     validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
     const url = `${this.baseUrl}/chat/completions`;
     // 最小兼容请求体:不加 stream_options(部分聚合网关不支持),tools 时显式 tool_choice
-    const body = {
+    const body: Record<string, any> = {
       model: this.model,
       messages: requestMessages,
       stream: true,
@@ -76,19 +111,19 @@ export class LlmClient {
       if (reasoning === 'off') body.enable_thinking = false;
       else if (reasoning !== 'default') body.enable_thinking = true;
     } else if (reasoning !== 'default' && REASONING_EFFORT_RE.test(this.model)) {
-      const map = { off: 'low', low: 'low', high: 'high', xhigh: 'high', max: 'high' };
+      const map: Record<string, string> = { off: 'low', low: 'low', high: 'high', xhigh: 'high', max: 'high' };
       body.reasoning_effort = map[reasoning] || 'high';
     }
     // 失败重试:最多重试 RETRY_TIMES 次,每次间隔 RETRY_DELAY_MS;
     // 用户中止不重试;SSE 流已开始后再失败不重试(避免 onDelta 输出重复)
-    let lastErr;
+    let lastErr: any;
     for (let attempt = 0; attempt <= RETRY_TIMES; attempt++) {
       if (attempt > 0) {
         if (signal?.aborted) throw lastErr;
         console.warn(`[llm] ${this.model} 请求失败(${lastErr?.message || lastErr}),${RETRY_DELAY_MS / 1000}s 后重试 (${attempt}/${RETRY_TIMES})`);
         await sleep(RETRY_DELAY_MS, signal);
       }
-      let res;
+      let res: Response;
       try {
         res = await fetch(url, {
           method: 'POST',
@@ -127,7 +162,7 @@ const RETRY_TIMES = 5;
 const RETRY_DELAY_MS = 2000;
 
 // DeepSeek v4 系列:原生支持思考模式开关 + reasoning_effort(high/max)
-const isDeepSeekV4 = (m) => /^deepseek-v4/i.test(m);
+const isDeepSeekV4 = (m: string) => /^deepseek-v4/i.test(m);
 
 // GLM 系列(智谱):thinking.type 开关;Qwen 系列(通义):enable_thinking 开关
 const GLM_RE = /^glm-/i;
@@ -137,7 +172,7 @@ const QWEN_RE = /^qwen/i;
 const REASONING_EFFORT_RE = /^(o[134](-|$)|gpt-5|grok-3-mini|grok-4)/i;
 
 // 剥离消息里的 reasoning_content 字段(passback 规则见 chat())
-function stripReasoning(m) {
+function stripReasoning(m: any): any {
   if (m && typeof m === 'object' && 'reasoning_content' in m) {
     const { reasoning_content, ...rest } = m;
     return rest;
@@ -146,7 +181,7 @@ function stripReasoning(m) {
 }
 
 // 发送前校验 messages 结构,尽早暴露问题而不是收到 400
-function validateMessages(messages) {
+function validateMessages(messages: any[]): void {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error('messages 必须是非空数组');
   }
@@ -170,7 +205,7 @@ function validateMessages(messages) {
   }
 }
 
-async function parseSse(stream, { signal, onDelta }) {
+async function parseSse(stream: ReadableStream, { signal, onDelta }: { signal?: AbortSignal; onDelta?: (d: { kind: string; text?: string; index?: number }) => void }): Promise<ChatResult> {
   const reader = stream.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -178,9 +213,9 @@ async function parseSse(stream, { signal, onDelta }) {
   let reasoning = ''; // 思考通道输出(DeepSeek/GLM/Qwen 等推理模型);回传规则见 chat() 的 passback
   let finishReason = ''; // 最后一个非空 finish_reason(stop/length/tool_calls 等)
   const toolAcc = new Map(); // index -> {id,name,args}
-  let toolSeq = [];
+  let toolSeq: any[] = [];
 
-  const feedDelta = (delta) => {
+  const feedDelta = (delta: any) => {
     if (delta.content) {
       content += delta.content;
       onDelta?.({ kind: 'text', text: delta.content });
@@ -236,8 +271,8 @@ async function parseSse(stream, { signal, onDelta }) {
     throw e;
   }
 
-  function finish() {
-    const toolCalls = [...toolAcc.entries()]
+  function finish(): ChatResult {
+    const toolCalls: ToolCallSpec[] = [...toolAcc.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([, v]) => ({
         id: v.id || `call_${Math.random().toString(36).slice(2, 10)}`,
@@ -250,7 +285,7 @@ async function parseSse(stream, { signal, onDelta }) {
 }
 
 // ---------------- mock 模式:离线联调,按固定脚本走完整的工具循环 ----------------
-async function mockChat({ messages, signal, onDelta }) {
+async function mockChat({ messages, tools, signal, onDelta }: { messages: any[]; tools?: any[]; signal?: AbortSignal; onDelta?: (d: { kind: string; text?: string; index?: number }) => void }): Promise<ChatResult> {
   // 只统计本轮(最后一个 user 之后)的 tool 消息,避免历史里的工具调用干扰脚本进度
   const lastUserIdx = messages.map((m) => m.role).lastIndexOf('user');
   const turnMsgs = lastUserIdx >= 0 ? messages.slice(lastUserIdx) : messages;
@@ -259,13 +294,13 @@ async function mockChat({ messages, signal, onDelta }) {
   const ws = extractWorkspace(messages);
   await sleep(80, signal);
 
-  const mk = (name, args) => ({
+  const mk = (name: string, args: any) => ({
     id: `mock_${name}_${toolMsgs.length}`,
     name,
     arguments: typeof args === 'string' ? args : JSON.stringify(args)
   });
 
-  let result;
+  let result: any;
   switch (toolMsgs.length) {
     case 0:
       // 第一步:先展示一句思考内容,再调用工具
@@ -293,7 +328,7 @@ async function mockChat({ messages, signal, onDelta }) {
   return result;
 }
 
-function extractWorkspace(messages) {
+function extractWorkspace(messages: any[]): string {
   for (const m of messages) {
     if (m.role === 'system' && m.content?.includes('工作区')) {
       const mm = m.content.match(/工作区: ([^\n]+)/);
@@ -303,7 +338,7 @@ function extractWorkspace(messages) {
   return '';
 }
 
-const sleep = (ms, signal) => new Promise((res, rej) => {
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((res, rej) => {
   const t = setTimeout(res, ms);
   signal?.addEventListener('abort', () => { clearTimeout(t); rej(new Error('已停止')); }, { once: true });
 });
