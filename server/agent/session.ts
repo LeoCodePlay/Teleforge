@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 事件溯源会话日志(设计参照 deepseek-harness 的 session 子系统):
 // - append-only 的 SessionEvent 序列是唯一事实源。LLM 消息历史不单独存储,
 //   由 deriveMessages() 从事件投影得出——"模型可见即可回放":凡是发给模型的内容,
@@ -19,31 +18,75 @@
 //   foldTodos() 折叠出"当前计划"——最新一次 todo/write 的整表,下一次 turn/start 清空
 //   (turn/end 不清,完成的清单保持可见,直到用户开启新一轮)。
 
+export interface ToolCall {
+  id: string;
+  function: { name: string; arguments: string };
+  [k: string]: any;
+}
+
+export interface LlmMessage {
+  role: 'user' | 'assistant' | 'tool' | string;
+  content: string;
+  tool_call_id?: string;
+  tool_calls?: ToolCall[];
+  reasoning_content?: string;
+  [k: string]: any;
+}
+
+export interface SessionEventDataMap {
+  'turn/start': { turn: number };
+  'turn/end': { turn: number; reason: { kind: string; [k: string]: any } };
+  'step/start': { turn: number; step: number };
+  'step/end': { turn: number; step: number };
+  'user/message': { content: string; source: string };
+  'assistant/message': { turn: number; step: number; message: LlmMessage };
+  'tool/call': { turn: number; step: number; callId: string; name: string; arguments: string };
+  'tool/result': { turn: number; step: number; callId: string; name: string; isError: boolean; content: string; ms: number };
+  'todo/write': { todos: Array<{ content: string; status: string }> };
+  'compaction/done': { summary: string };
+}
+
+export type SessionEventType = keyof SessionEventDataMap | string;
+
+export interface SessionEvent {
+  seq: number;
+  time: number;
+  type: SessionEventType;
+  data: any;
+}
+
+export interface TracedMessage {
+  seq: number;
+  msg: LlmMessage;
+}
+
 export class Session {
-  constructor(events = []) {
+  events: SessionEvent[];
+
+  constructor(events: SessionEvent[] = []) {
     // 载入/迁移的事件统一按位置重排 seq;time 缺失时补当前时间
     this.events = (events || [])
-      .filter((ev) => ev && ev.type && ev.data && typeof ev.data === 'object')
-      .map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
+      .filter((ev: any) => ev && ev.type && ev.data && typeof ev.data === 'object')
+      .map((ev: any, i: number) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
     this._heal(); // 给崩溃遗留的未闭合工具调用补结果,保证日志重放出的消息序列永远合法
   }
 
   /** 追加一条事件,seq 单调递增(seq = 日志长度) */
-  append(type, data) {
+  append(type: SessionEventType, data: any): SessionEvent {
     const ev = { seq: this.events.length, time: Date.now(), type, data };
     this.events.push(ev);
     return ev;
   }
 
   /** 回滚到 seq(不含):仅用于"模型不支持工具"这类配置级失败的整轮重开 */
-  truncate(seq) {
+  truncate(seq: number): void {
     if (seq >= 0 && seq <= this.events.length) this.events.length = seq;
   }
 
-  get seq() { return this.events.length; }
+  get seq(): number { return this.events.length; }
 
   /** 下一个 turn 编号(从日志中已出现的最大编号推导) */
-  nextTurn() {
+  nextTurn(): number {
     let n = 0;
     for (const ev of this.events) {
       if ((ev.type === 'turn/start' || ev.type === 'turn/end') && ev.data.turn > n) n = ev.data.turn;
@@ -51,7 +94,7 @@ export class Session {
     return n + 1;
   }
 
-  hasUserMessages() {
+  hasUserMessages(): boolean {
     return this.events.some((ev) => ev.type === 'user/message' && ev.data.source === 'user');
   }
 
@@ -59,7 +102,7 @@ export class Session {
    * 未闭合的工具调用(有 tool/call 无 tool/result)。
    * 中止/异常收尾时由调用方补结果;构造时由 _heal 兜底。
    */
-  pendingToolCalls() {
+  pendingToolCalls(): any[] {
     const pending = new Map();
     for (const ev of this.events) {
       if (ev.type === 'tool/call') pending.set(ev.data.callId, ev.data);
@@ -77,7 +120,7 @@ export class Session {
    * - compaction/done -> user 摘要消息(行内压缩:早期区间已被 squash 移除,摘要保留原位)
    * - 超预算时按"对话组"从头部整组丢弃(裁剪发生在投影层,日志本身保持完整)
    */
-  deriveMessages({ budgetChars = Infinity } = {}) {
+  deriveMessages({ budgetChars = Infinity }: { budgetChars?: number } = {}): LlmMessage[] {
     const trace = this.deriveMessagesWithTrace({ budgetChars });
     return trace.map((t) => t.msg);
   }
@@ -86,8 +129,8 @@ export class Session {
    * 同 deriveMessages,但返回 [{ seq, msg }],方便调用方把压缩/裁剪后的
    * 消息索引映射回日志事件 seq(供 squash 使用)。
    */
-  deriveMessagesWithTrace({ budgetChars = Infinity } = {}) {
-    const traced = [];
+  deriveMessagesWithTrace({ budgetChars = Infinity }: { budgetChars?: number } = {}): TracedMessage[] {
+    const traced: TracedMessage[] = [];
     for (const ev of this.events) {
       const d = ev.data || {};
       switch (ev.type) {
@@ -133,9 +176,9 @@ export class Session {
    * 并在 anchorSeq(保留区第一条事件原 seq)位置插入一条 compaction/done 摘要事件。
    * 被压缩的对话事实已沉淀进摘要,日志保持"模型可见即可回放"。
    */
-  squash(dropSeqs, summary, anchorSeq) {
+  squash(dropSeqs: number[] | string[], summary: string, anchorSeq: number | null): void {
     const drop = new Set(dropSeqs.map(Number).filter((n) => Number.isFinite(n)));
-    const kept = [];
+    const kept: any[] = [];
     let inserted = false;
     for (const ev of this.events) {
       if (drop.has(ev.seq)) continue;
@@ -151,7 +194,7 @@ export class Session {
   }
 
   /** 给构造载入时仍未闭合的工具调用补一条"中止"结果(进程崩溃/被杀的遗留) */
-  _heal() {
+  _heal(): void {
     for (const c of this.pendingToolCalls()) {
       this.append('tool/result', {
         turn: c.turn, step: c.step, callId: c.callId, name: c.name,
@@ -165,11 +208,10 @@ export class Session {
  * 折叠事件日志得到"当前任务计划"(参照 harness 的 todos 投影):
  * 最新一次 todo/write 的整表即当前计划;用户开启新一轮(turn/start)即清空,
  * turn/end 不清空——已完成的清单保持可见,直到下一轮重新规划。
- * @param {Array<{type: string, data?: any}>} events 事件日志
- * @returns {Array<{content: string, status: string}> | null} 当前计划(无则 null)
+ * @returns 当前计划(无则 null)
  */
-export function foldTodos(events) {
-  let todos = null;
+export function foldTodos(events: SessionEvent[]): Array<{ content: string; status: string }> | null {
+  let todos: Array<{ content: string; status: string }> | null = null;
   for (const ev of events || []) {
     if (ev?.type === 'todo/write') todos = Array.isArray(ev.data?.todos) ? ev.data.todos : null;
     else if (ev?.type === 'turn/start') todos = null;
@@ -179,9 +221,9 @@ export function foldTodos(events) {
 
 // 按"对话组"裁剪(作用于带 seq 的 trace):超预算时从头部整组丢弃(一组 = 一条 user
 // 到下一条 user 之前),保证剩余历史仍以 user 开头、assistant/tool_calls 配对完整。
-function trimByBudget(traced, budget) {
+function trimByBudget(traced: TracedMessage[], budget: number): TracedMessage[] {
   if (!Number.isFinite(budget) || budget <= 0) return traced;
-  const mlen = (t) => String(t.msg.content || '').length + String(t.msg.reasoning_content || '').length;
+  const mlen = (t: TracedMessage) => String(t.msg.content || '').length + String(t.msg.reasoning_content || '').length;
   let total = traced.reduce((n, t) => n + mlen(t), 0);
   let start = 0;
   while (total > budget && start < traced.length) {
@@ -199,9 +241,9 @@ function trimByBudget(traced, budget) {
  * 按 id 配对还原为 tool/call + tool/result。孤儿 tool 消息(无前置 tool_calls,
  * 旧版本顺序错乱落盘的损坏数据)直接丢弃,保证迁移结果可安全回放。
  */
-export function eventsFromTurns(turns) {
-  const events = [];
-  const push = (type, data) => events.push({ type, data });
+export function eventsFromTurns(turns: any[]): SessionEvent[] {
+  const events: SessionEvent[] = [];
+  const push = (type: SessionEventType, data: any) => events.push({ type, data } as any);
   const calls = new Map(); // callId -> {name, arguments}
   let turn = 0, step = 0, stepOpen = false, turnOpen = false;
   const closeStep = () => { if (stepOpen) { push('step/end', { turn, step }); stepOpen = false; } };
@@ -221,7 +263,7 @@ export function eventsFromTurns(turns) {
       if (!turnOpen) { turn++; turnOpen = true; push('turn/start', { turn }); }
       closeStep();
       step++; stepOpen = true;
-      const toolCalls = (Array.isArray(m.tool_calls) ? m.tool_calls : []).filter((t) => t && t.id);
+      const toolCalls = (Array.isArray(m.tool_calls) ? m.tool_calls : []).filter((t: any) => t && t.id);
       for (const t of toolCalls) {
         calls.set(t.id, { name: t.function?.name, arguments: t.function?.arguments });
       }
