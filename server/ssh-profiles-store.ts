@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 「SSH 服务器配置」持久化:保存在后端的配置文件里,切换浏览器/刷新页面都能读到同一份配置。
 // 与 ai-providers.json 同级存放在 server/data/(已被 .gitignore 忽略,含密码/私钥,不做版本入库)。
 // 安全约定:完整字段(含密码/私钥)只存服务端;下发前端时用 toPublic() 剥离密码/私钥,
@@ -10,18 +9,46 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const SSH_PROFILES_FILE = process.env.SSH_PROFILES_FILE || path.join(__dirname, 'data', 'ssh-profiles.json');
 
-let profiles = null; // 懒加载缓存
+export interface SshProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  authType: 'key' | 'password';
+  password: string;
+  keyText: string;
+  keyPath: string;
+  passphrase: string;
+  autoReconnect: boolean;
+  updatedAt: number;
+}
+
+export interface PublicProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  authType: string;
+  keyPath: string;
+  autoReconnect: boolean;
+  hasPassword: boolean;
+  hasKey: boolean;
+}
+
+let profiles: SshProfile[] | null = null; // 懒加载缓存
 
 function persist() {
   try {
     fs.mkdirSync(path.dirname(SSH_PROFILES_FILE), { recursive: true });
     fs.writeFileSync(SSH_PROFILES_FILE, JSON.stringify(profiles, null, 2));
-  } catch (e) {
+  } catch (e: any) {
     console.error('保存 SSH 服务器配置失败:', e.message);
   }
 }
 
-function load() {
+function load(): SshProfile[] {
   if (profiles) return profiles;
   if (fs.existsSync(SSH_PROFILES_FILE)) {
     try { profiles = JSON.parse(fs.readFileSync(SSH_PROFILES_FILE, 'utf8')); }
@@ -33,16 +60,16 @@ function load() {
   return profiles;
 }
 
-function newId() {
+function newId(): string {
   return 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
 // 规范化一条配置(trim 字段,补默认值);非法配置返回 null
-export function sanitizeProfile(p = {}) {
+export function sanitizeProfile(p: any = {}): SshProfile | null {
   const host = String(p.host || '').trim();
   const username = String(p.username || p.user || '').trim();
   if (!host || !username) return null;
-  const authType = p.authType === 'key' ? 'key' : 'password';
+  const authType: SshProfile['authType'] = p.authType === 'key' ? 'key' : 'password';
   return {
     id: String(p.id || '').trim() || newId(),
     name: String(p.name || '').trim() || `${username}@${host}`,
@@ -60,7 +87,7 @@ export function sanitizeProfile(p = {}) {
 }
 
 // 下发给前端的公开视图:剥掉密码/私钥内容,只留标记
-export function toPublic(p) {
+export function toPublic(p: SshProfile): PublicProfile {
   return {
     id: p.id,
     name: p.name,
@@ -76,14 +103,14 @@ export function toPublic(p) {
 }
 
 export const sshProfiles = {
-  list() {
+  list(): PublicProfile[] {
     return load().map(toPublic);
   },
   // 服务端内部使用(连接时取完整认证信息)
-  get(id) {
+  get(id: string): SshProfile | null {
     return load().find((x) => x.id === id) || null;
   },
-  upsert(entry) {
+  upsert(entry: SshProfile): SshProfile {
     const list = load();
     const idx = list.findIndex((x) => x.id === entry.id);
     if (idx >= 0) list[idx] = entry;
@@ -91,7 +118,7 @@ export const sshProfiles = {
     persist();
     return entry;
   },
-  remove(id) {
+  remove(id: string): boolean {
     const list = load();
     const idx = list.findIndex((x) => x.id === id);
     if (idx < 0) return false;

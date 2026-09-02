@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 「LLM 选择级配置」持久化:当前选中的提供方、各提供方上次使用的模型、自定义模型名、
 // 各提供方 Key、各模型单轮最大工具迭代次数。与 ai-providers.json(提供方清单)分开存放,
 // 避免把「选择状态」和「提供方实体」混在一个文件里。
@@ -11,22 +10,30 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const UI_STATE_FILE = process.env.UI_STATE_FILE || path.join(__dirname, 'data', 'ui-state.json');
 
-function empty() {
+export interface UiState {
+  providerId: string;
+  customModel: string;
+  models: Record<string, string>;
+  keys: Record<string, string>;
+  maxIters: Record<string, Record<string, string>>;
+}
+
+function empty(): UiState {
   return { providerId: '', customModel: '', models: {}, keys: {}, maxIters: {} };
 }
 
-let state = null; // 懒加载缓存
+let state: UiState | null = null; // 懒加载缓存
 
 function persist() {
   try {
     fs.mkdirSync(path.dirname(UI_STATE_FILE), { recursive: true });
     fs.writeFileSync(UI_STATE_FILE, JSON.stringify(state, null, 2));
-  } catch (e) {
+  } catch (e: any) {
     console.error('保存 UI 状态失败:', e.message);
   }
 }
 
-function load() {
+function load(): UiState {
   if (state) return state;
   try {
     state = JSON.parse(fs.readFileSync(UI_STATE_FILE, 'utf8'));
@@ -44,9 +51,9 @@ function load() {
 }
 
 export const uiState = {
-  get() { return load(); },
+  get(): UiState { return load(); },
   // 深度浅合并:models/keys/maxIters 按提供方 id 逐层覆盖;空字符串值表示删除该键
-  patch(p = {}) {
+  patch(p: Partial<UiState> = {}): UiState {
     const s = load();
     if (typeof p.providerId === 'string') s.providerId = p.providerId;
     if (typeof p.customModel === 'string') s.customModel = p.customModel;
@@ -76,7 +83,7 @@ export const uiState = {
     return s;
   },
   // 删除某个提供方的所有选择状态(供删除提供方时联动清理)
-  remove(pid) {
+  remove(pid: string): void {
     const s = load();
     delete s.models[pid];
     delete s.keys[pid];

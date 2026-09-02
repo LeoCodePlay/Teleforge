@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 对话历史持久化:Agent 跨轮记忆落盘到 server/data/chat-history.json
 // - 零依赖(Node 内置 fs),原子写(临时文件 + rename)防损坏
 // - 数据量受 AGENT.HISTORY_BUDGET_CHARS 约束,量小,整文件覆盖即可
@@ -16,7 +15,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 // 兜底上限:防止磁盘文件被外部改大(如手动编辑),加载时只取尾部
 const MAX_TURNS = 2000;
 
-function read() {
+function read(): any[] {
   let raw;
   try { raw = fs.readFileSync(FILE, 'utf8'); } catch { return []; }
   try {
@@ -26,7 +25,7 @@ function read() {
   } catch { return []; }
 }
 
-function write(turns) {
+function write(turns: any[]) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const body = JSON.stringify({ version: 1, ts: Date.now(), turns });
   const tmp = FILE + '.tmp';
@@ -35,24 +34,24 @@ function write(turns) {
 }
 
 /** 加载历史(失败静默返回空,避免磁盘异常拖垮启动) */
-export function loadHistory() {
+export function loadHistory(): any[] {
   return read();
 }
 
 /** 保存整份历史(agent 每次收尾调用) */
-export function saveHistory(turns) {
+export function saveHistory(turns: any[]): void {
   try {
     write(Array.isArray(turns) ? turns : []);
-  } catch (e) {
+  } catch (e: any) {
     console.error('[history] 保存失败:', e.message);
   }
 }
 
 /** 清空历史 */
-export function clearHistoryStore() {
+export function clearHistoryStore(): void {
   try {
     write([]);
-  } catch (e) {
+  } catch (e: any) {
     console.error('[history] 清空失败:', e.message);
   }
 }

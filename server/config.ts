@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 全局配置与常量
 export const PORT = Number(process.env.PORT || 4000);
 export const HOST = process.env.HOST || '127.0.0.1'; // 默认仅本机访问,避免暴露 ✓
