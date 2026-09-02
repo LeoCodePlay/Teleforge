@@ -6,12 +6,16 @@ import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const distDir = path.resolve(__dirname, '../../web/dist');
+const distDir = path.resolve(__dirname, '../../../web/dist');
 
 export default async function registerStatic(app: FastifyInstance) {
   if (!fs.existsSync(distDir)) return; // 未构建时跳过静态托管(与之前行为一致)
 
   await app.register(fastifyStatic, { root: distDir, index: false });
+
+  // 根路径 `/` 被 @fastify/static 的 `/*` 通配命中,index:false 下按目录返回 403,
+  // 不会落到 notFoundHandler。显式映射到 index.html(与 Express 时代行为一致)
+  app.get('/', (request: FastifyRequest, reply: FastifyReply) => reply.sendFile('index.html'));
 
   // SPA 回退:静态文件未命中且不是 API/WS 路径时,回退到 index.html
   app.setNotFoundHandler((request: FastifyRequest, reply: FastifyReply) => {
