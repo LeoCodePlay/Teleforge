@@ -6,7 +6,7 @@ import React from 'react';
 import type { ToolCallInfo } from '../../types';
 import { ToolRow } from '../ToolRow';
 import { IconSearchOutline16 } from '../icons';
-import { toolRowModel, relativizeToCwd } from '../../toolRowModel';
+import { toolRowModel, relativizeToCwd } from '../../utils/toolRowModel';
 
 interface MatchLine { n: string; text: string; }
 interface MatchFile { path: string; lines: MatchLine[]; }

@@ -6,7 +6,7 @@ import {
   applyTheme, getAllThemes, getTheme, loadThemeState, saveThemeState,
   buildCustomTheme, newThemeId, toDraft,
   type PersistedThemeState, type ThemeDef, type CustomThemeDraft
-} from '../themes';
+} from '../theme/themes';
 
 export default function ThemePanel() {
   const [state, setState] = useState<PersistedThemeState>(() => loadThemeState());

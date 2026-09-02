@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api';
-import { useLlm } from '../llm-context';
+import { useLlm } from '../context/llm-context';
 import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, SkillInjected } from '../types';
 import DirBrowser from './DirBrowser';
 import LocalDirBrowser from './LocalDirBrowser';
@@ -12,11 +12,11 @@ import TodoPanel from './TodoPanel';
 import SlashMenu, { rankSlashItems } from './SlashMenu';
 import type { SlashItem } from './SlashMenu';
 import type { GlassOption } from './GlassSelect';
-import { useFeedback } from '../feedback';
+import { useFeedback } from '../context/feedback';
 import AskPanel from './AskPanel';
 import { ToolCallList } from './ToolCallList';
 import { ReasoningRow } from './ReasoningRow';
-import { refreshOverlayScrollbar } from '../scrollbar-ui';
+import { refreshOverlayScrollbar } from '../utils/scrollbar-ui';
 
 // 完整 Markdown 解析(marked + DOMPurify):
 // gfm 支持表格/任务列表等,breaks 保留单换行即换行的聊天习惯;
@@ -331,6 +331,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   const [errorMsg, setErrorMsg] = useState('');
   // 会话切换加载指示:切换期间保留上一会话内容 + 顶部提示,历史到达后再整体替换,避免空白闪烁
   const [switching, setSwitching] = useState(false);
+  // 抑制入场动画:历史整表载入(挂载/切换会话/后台刷新)时给 .chat 加 no-anim,
+  // 连最新一条消息的 msg-in 淡入也不播——切换瞬间就该是静止的成品画面;
+  // 只有用户实时发送(start/steer 追加新消息)才解除,让新消息保留浮现动效
+  const [suppressIn, setSuppressIn] = useState(true);
   // 会话历史缓存:切回已加载过的会话时秒开(零网络),后台静默刷新保持最新
   const histCache = useRef(new Map<string, { msgs: ChatMessage[]; todos: TodoItem[] }>());
   // 模型提问挂起(ask_user_question):未作答前锁定输入框与停止按钮
@@ -419,6 +423,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
             forkTurnRef.current += 1; lastIterRef.current = 0;
             setAgentState('working'); setIter(0); setErrorMsg('');
             setTodos([]); // 开启新一轮:上一轮的任务计划清空(对齐 harness 的 standing plan 语义)
+            setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
             push((msgs) => [...msgs, { role: 'user', content: m.text, forkTail: forkTurnRef.current - 1 }]);
             push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: forkTurnRef.current - 1 }]);
             break;
@@ -535,6 +540,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
             // 运行中补充的指令:显示为用户消息,并另起一条流式 assistant 气泡接收后续输出
             // (后端会写入一条 steer 的 user/message,计入分支点计数)
             forkTurnRef.current += 1;
+            setSuppressIn(false); // 实时追加:解除入场动画抑制
             push((msgs) => {
               const c = [...msgs];
               const l = c[c.length - 1];
@@ -563,7 +569,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     setAgentState('idle'); setIter(0); setErrorMsg('');
     // 有缓存则立即显示(切回已看过的会话零等待);无缓存时保留旧内容 + 加载指示
     const cached = histCache.current.get(target ?? '');
-    if (cached) { setMessages(cached.msgs); setTodos(cached.todos); setSwitching(false); }
+    if (cached) { setSuppressIn(true); setMessages(cached.msgs); setTodos(cached.todos); setSwitching(false); }
     else setSwitching(true);
     api.request('get_history', {}, 8000)
       .then((r) => {
@@ -577,6 +583,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
           if (last?.role === 'assistant') last.streaming = true;
         }
         histCache.current.set(target ?? '', { msgs, todos: Array.isArray(r.todos) ? r.todos : [] });
+        setSuppressIn(true); // 历史整表替换:抑制最新一条的入场动画,切换画面保持静止
         setMessages(msgs);
         setTodos(Array.isArray(r.todos) ? r.todos : []); // 该会话当前的任务计划
         setSwitching(false);
@@ -856,7 +863,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
         </span>
       </div>
       <div className="chat-scroll">
-        <div className="chat" ref={scrollRef} onScroll={() => { updateActiveDot(); hideDotTip(); }}>
+        <div className={`chat${suppressIn ? ' no-anim' : ''}`} ref={scrollRef} onScroll={() => { updateActiveDot(); hideDotTip(); }}>
           {messages.length === 0 && (
             <div className="empty">
               <img className="empty-logo" src="/logo-256.png" alt="" />

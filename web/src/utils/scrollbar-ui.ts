@@ -71,30 +71,42 @@ function makeThumb(el: HTMLElement, axis: 'v' | 'h'): HTMLDivElement {
 
 /* 重算拇指位置与尺寸
    注意:绝对定位的子元素位于容器内容坐标系中,会随 scrollTop/scrollLeft 一起滚动,
-   因此要把滚动量加回去,拇指才能相对"可见视口"保持不动 */
+   因此要把滚动量加回去,拇指才能相对"可见视口"保持不动。
+   关键:拇指自身会把 scrollHeight/scrollWidth 撑大(自引用)。若用含拇指的
+   scrollHeight 计算,内容整段变短后(如切换会话)旧拇指会把滚动区撑在旧长度上,
+   "滚到底"落在拇指区的空白处,随后「重绘→scrollTop 被钳制→scroll 事件→再重绘」
+   形成每帧缩几像素的反馈循环——表现为切换后白屏 + 内容缓缓下落约 1 秒。
+   因此测量必须在同轴拇指隐藏后进行(隐藏拇指迫使布局重算,scrollTop 也随之
+   钳制到真实底部),保证算出的拇指位置永远落在真实内容边界内。 */
 function paint(el: HTMLElement, s: ObState, cs: CSSStyleDeclaration, ov: { v: boolean; h: boolean }): void {
   if (ov.v) {
     const thumb = s.v ?? (s.v = makeThumb(el, 'v'));
+    thumb.style.display = 'none'; // 隐藏同轴拇指后再读,拿到不含拇指的真实高度
     const ch = el.clientHeight;
-    const maxV = el.scrollHeight - ch;
-    const th = Math.max(MIN_THUMB, Math.round((ch * ch) / el.scrollHeight));
-    thumb.style.height = `${Math.min(Math.max(th, 16), ch - THUMB_GAP * 2)}px`;
-    const track = Math.max(ch - thumb.offsetHeight - THUMB_GAP * 2, 1);
-    const top = THUMB_GAP + (el.scrollTop / maxV) * track;
-    thumb.style.top = `${top + el.scrollTop}px`;
+    const sh = el.scrollHeight;
+    const maxV = Math.max(sh - ch, 1);
+    const th = Math.max(MIN_THUMB, Math.round((ch * ch) / sh));
+    const hPx = Math.min(Math.max(th, 16), ch - THUMB_GAP * 2);
+    const track = Math.max(ch - hPx - THUMB_GAP * 2, 1);
+    const ratio = Math.min(Math.max(el.scrollTop / maxV, 0), 1);
+    thumb.style.height = `${hPx}px`;
+    thumb.style.top = `${THUMB_GAP + ratio * track + el.scrollTop}px`;
     thumb.style.display = 'block';
   } else if (s.v) {
     s.v.style.display = 'none';
   }
   if (ov.h) {
     const thumb = s.h ?? (s.h = makeThumb(el, 'h'));
+    thumb.style.display = 'none'; // 同上:水平拇指会撑大 scrollWidth,隐藏后测真实宽度
     const cw = el.clientWidth;
-    const maxH = el.scrollWidth - cw;
-    const tw = Math.max(MIN_THUMB, Math.round((cw * cw) / el.scrollWidth));
-    thumb.style.width = `${Math.min(Math.max(tw, 16), cw - THUMB_GAP * 2)}px`;
-    const track = Math.max(cw - thumb.offsetWidth - THUMB_GAP * 2, 1);
-    const left = THUMB_GAP + (el.scrollLeft / maxH) * track;
-    thumb.style.left = `${left + el.scrollLeft}px`;
+    const sw = el.scrollWidth;
+    const maxH = Math.max(sw - cw, 1);
+    const tw = Math.max(MIN_THUMB, Math.round((cw * cw) / sw));
+    const wPx = Math.min(Math.max(tw, 16), cw - THUMB_GAP * 2);
+    const track = Math.max(cw - wPx - THUMB_GAP * 2, 1);
+    const ratio = Math.min(Math.max(el.scrollLeft / maxH, 0), 1);
+    thumb.style.width = `${wPx}px`;
+    thumb.style.left = `${THUMB_GAP + ratio * track + el.scrollLeft}px`;
     thumb.style.display = 'block';
   } else if (s.h) {
     s.h.style.display = 'none';

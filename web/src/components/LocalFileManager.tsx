@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
-import { useFeedback } from '../feedback';
-import { useHorizontalScroller } from '../useHorizontalScroller';
+import { useFeedback } from '../context/feedback';
+import { useHorizontalScroller } from '../hooks/useHorizontalScroller';
 import type { DirEntry } from '../types';
 
 function fmtSize(n: number | undefined | null) {

@@ -791,6 +791,10 @@ button.sm { padding: 4px 11px; font-size: 12px; }
    msg-in(.25s 淡入+上移),整段会话看起来就从上面"缓缓落下";
    流式追加的最新回复仍保留入场动效,普通消息保持静止。 */
 .msg:last-child { animation: msg-in .25s ease-out; }
+/* 历史载入(挂载/切换会话/后台刷新)时由 ChatPanel 加 no-anim:
+   连最新一条的入场动画也不播,切换瞬间就是静止的成品画面;
+   用户实时发送消息时移除该类,新消息恢复浮现动效 */
+.chat.no-anim .msg:last-child { animation: none; }
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: none; }

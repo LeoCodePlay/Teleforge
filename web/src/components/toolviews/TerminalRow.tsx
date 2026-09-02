@@ -8,7 +8,7 @@ import type { ToolCallInfo } from '../../types';
 import { ToolRow } from '../ToolRow';
 import { StateDot } from '../StateDot';
 import { IconApiOutline14 } from '../icons';
-import { toolRowModel } from '../../toolRowModel';
+import { toolRowModel } from '../../utils/toolRowModel';
 
 function parseArgs(argsRaw?: string | null): Record<string, unknown> {
   if (!argsRaw) return {};

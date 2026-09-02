@@ -9,7 +9,7 @@ import {
   IconApiOutline14, IconBrowseOutline16, IconChecklistOutline14, IconCodeOutline16,
   IconEditOutline16, IconQuestionOutline14, IconSearchOutline16, IconSparkle16,
 } from '../icons';
-import { toolRowModel, type ToolRowVariant } from '../../toolRowModel';
+import { toolRowModel, type ToolRowVariant } from '../../utils/toolRowModel';
 
 const VARIANT_ICONS: Record<ToolRowVariant, React.ReactNode> = {
   search: <IconSearchOutline16 size={14} />,

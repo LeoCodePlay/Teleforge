@@ -2,7 +2,7 @@
 // 从工具名 + 参数 + 结果派生 variant/标题/单行摘要/展开体/输出/状态。
 // 前端唯一分类依据,无任何后端依赖。
 
-import type { ToolCallInfo } from './types';
+import type { ToolCallInfo } from '../types';
 
 /** 工具行视觉变体(当前工具集 = 远程 + 本地两套) */
 export type ToolRowVariant = 'search' | 'read' | 'bash' | 'write' | 'edit' | 'code' | 'todo' | 'ask' | 'others';

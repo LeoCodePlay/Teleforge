@@ -1,9 +1,9 @@
 // LLM 配置全局状态:右侧连接面板与聊天输入框下方的「提供方/模型」切换器共享同一份状态
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { api } from './api';
-import { PROVIDERS, DEFAULT_PROVIDER } from './llm-providers';
+import { api } from '../api';
+import { PROVIDERS, DEFAULT_PROVIDER } from '../data/llm-providers';
 import { useFeedback } from './feedback';
-import type { LlmProvider, ProviderDraft, ModelContextConfig } from './types';
+import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../types';
 
 const LS = (k: string, v: string) => localStorage.getItem('sshai.' + k) || v;
 const LSS = (k: string, v: string) => localStorage.setItem('sshai.' + k, v);

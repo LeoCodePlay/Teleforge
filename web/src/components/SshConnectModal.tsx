@@ -4,7 +4,7 @@
 // - 添加/编辑服务器表单(可保存也可不保存)
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { useFeedback } from '../feedback';
+import { useFeedback } from '../context/feedback';
 import type { ConnInfo, ServerStatus, SshProfileInfo } from '../types';
 
 const LS = (k: string, v: string) => localStorage.getItem('sshai.' + k) || v;

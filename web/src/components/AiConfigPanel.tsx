@@ -2,8 +2,8 @@
 // 布局:我的提供商列表(使用中置顶,增删改复制) → 预置提供商快速切换
 // 状态与聊天输入框下方的切换器共享(见 llm-context.tsx)
 import React, { useMemo, useState } from 'react';
-import { useLlm } from '../llm-context';
-import { PROVIDERS, getDefaultModelContext } from '../llm-providers';
+import { useLlm } from '../context/llm-context';
+import { PROVIDERS, getDefaultModelContext } from '../data/llm-providers';
 import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../types';
 import GlassSelect from './GlassSelect';
 

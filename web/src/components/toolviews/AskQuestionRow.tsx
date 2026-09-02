@@ -6,7 +6,7 @@ import React from 'react';
 import type { ToolCallInfo } from '../../types';
 import { ToolRow } from '../ToolRow';
 import { IconQuestionOutline14 } from '../icons';
-import { toolRowModel } from '../../toolRowModel';
+import { toolRowModel } from '../../utils/toolRowModel';
 
 function askSummary(call: ToolCallInfo): { summary: string; state: 'running' | 'ok' | 'error' } {
   if (call.ok === undefined) return { summary: '等待回答', state: 'running' };

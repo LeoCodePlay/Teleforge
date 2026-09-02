@@ -6,7 +6,7 @@ import React from 'react';
 import type { ToolCallInfo } from '../../types';
 import { ToolRow } from '../ToolRow';
 import { IconBrowseOutline16 } from '../icons';
-import { toolRowModel, relativizeToCwd } from '../../toolRowModel';
+import { toolRowModel, relativizeToCwd } from '../../utils/toolRowModel';
 
 function parseArgs(argsRaw?: string | null): Record<string, unknown> {
   if (!argsRaw) return {};

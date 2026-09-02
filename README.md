@@ -4,7 +4,8 @@
 
 A local web tool that keeps an SSH connection alive, lets you pick a remote directory as your workspace, and drives an **AI Agent** that genuinely reads/writes files, runs commands, and searches code on your remote server.
 
-![Node](https://img.shields.io/badge/Node-%3E%3D18.17-339933?logo=nodedotjs&logoColor=white)
+![Node](https://img.shields.io/badge/Node-%3E%3D22.18-339933?logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Platform](https://img.shields.io/badge/Platform-Local%20Web-7c8aa0)
 
@@ -45,19 +46,22 @@ npm run dev        # starts server (:4000) + vite (:5173) -> http://127.0.0.1:51
 
 ```
 Browser (React UI)
-   │  WebSocket (real-time events / streaming)
+   │  WebSocket (RPC + real-time events / streaming)
    ▼
-Node backend (Express + ws)
-   ├─ ssh-manager   ── ssh2 ──► remote SSH server (keepalive / reconnect)
-   │                    └─ SFTP (files) / exec (commands)
-   └─ agent ── tools ──┘
-        └─ llm (OpenAI-compatible API / mock)
+Node backend (TypeScript, runs directly on Node 22.18+)
+   ├─ api/      Fastify HTTP routes + WebSocket RPC router
+   ├─ core/     ssh-manager ── ssh2 ──► remote SSH server (keepalive / reconnect)
+   │                 SFTP (files) / exec (commands) / local-fs & local-exec
+   ├─ agent/    tool loop ──► tools act on the active connection
+   │                 └─ llm (OpenAI-compatible streaming / mock)
+   └─ store/    JSON persistence (sessions / SSH profiles / AI providers / UI state)
 ```
 
 ### Tech Stack / 技术选型
 
 | Module | Choice |
 |--------|--------|
+| Backend | Node.js 22.18+ · TypeScript · Fastify (HTTP) + `ws` (WebSocket) |
 | SSH client | `ssh2` (native JS: keepalive / SFTP / exec / Server mode) |
 | Real-time transport | `ws` (WebSocket): request/response + event push (streaming) |
 | LLM inference | OpenAI-compatible `chat/completions` streaming + function calling |
@@ -91,6 +95,8 @@ Licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
 ### 快速开始
 
+> 环境要求：**Node.js ≥ 22.18**。后端为纯 TypeScript，由 Node 直接运行（无需编译步骤）。
+
 ```bash
 npm install        # 安装依赖
 npm run build      # 构建前端(输出 web/dist)
@@ -116,33 +122,59 @@ npm run dev        # 同时启动 server(:4000) 与 vite(:5173), 打开 http://1
 ```
 .
 ├── package.json
-├── server/                  # Node 后端(NODE 18.17+)
-│   ├── index.js             # HTTP + 静态托管 + 接口入口
-│   ├── config.js            # 端口/超时/上限等常量
-│   ├── ssh-manager.js       # SSH 连接管理:保活/自动重连/SFTP/exec
-│   ├── ws.js                # WebSocket 协议层
-│   ├── transfer.js          # 文件上传/下载(流式 tar.gz)
-│   ├── session-store.js     # 会话历史持久化
-│   ├── ai-providers-store.js# AI 提供商配置存储
-│   ├── ssh-profiles-store.js# SSH 连接配置存储
-│   ├── local-fs.js          # 本地文件系统操作
-│   ├── local-exec.js        # 本地命令执行
-│   ├── builtin-skills/      # 内置技能目录(skill 目录)
-│   └── agent/
-│       ├── agent.js         # Agent 主循环(工具有限循环)
-│       ├── llm.js           # LLM 客户端(OpenAI 兼容流式 + mock)
-│       ├── tools.js         # 工具定义与实现
-│       ├── compact.js       # 长会话自动总结续跑
-│       └── registry.js      # 技能/工具注册
-├── web/                     # 前端(React 18 + Vite + TS + SCSS)
+├── tsconfig.json              # 前端 TS 配置
+├── tsconfig.server.json       # 后端 TS 配置
+├── server/                    # Node 后端(TypeScript,由 Node ≥22.18 直接运行)
+│   ├── index.ts               # 入口:Fastify HTTP + WebSocket + 插件装配
+│   ├── config.ts              # 端口 / 超时 / 输出上限等全局常量
+│   ├── api/                   # 对外接口层
+│   │   ├── http/              #   HTTP 路由(基础/提供商/传输/UI 状态/静态托管)
+│   │   └── rpc/               #   WS RPC 消息路由(router.ts 汇总各领域模块)
+│   ├── core/                  # 基础设施
+│   │   ├── ssh-manager.ts     #   SSH 连接池:保活 / 自动重连 / SFTP / exec
+│   │   ├── ws.ts              #   WebSocket 服务层(/ws RPC + /ws/term 真实 PTY)
+│   │   ├── local-fs.ts        #   本地文件系统适配(与 SFTP 对齐签名)
+│   │   ├── local-exec.ts      #   本地命令执行
+│   │   └── transfer.ts        #   本地 ↔ 远程双向传输(逐项进度)
+│   ├── agent/                 # AI Agent 引擎(事件溯源 + 工具有限循环)
+│   │   ├── agent.ts           #   主循环:指令 → 流式 LLM → 工具 → 迭代
+│   │   ├── session.ts         #   append-only 会话事件日志(唯一事实源)
+│   │   ├── llm.ts             #   OpenAI 兼容流式客户端 + mock 离线联调
+│   │   ├── tools.ts           #   工具定义与执行(读写/命令/搜索/提问…)
+│   │   ├── registry.ts        #   工具注册 · schemas 白名单投影 · 守卫管线
+│   │   ├── compact.ts         #   上下文窗口超限自动压缩续推
+│   │   ├── ask-user.ts        #   模型向用户提问接缝
+│   │   ├── prompt-inject.ts   #   全局指令注入(prompt-inject 管理)
+│   │   └── tool-settings.ts   #   工具启用 / 禁用持久化
+│   ├── store/                 # JSON 持久化(零依赖 · 原子写)
+│   │   ├── session-store.ts   #   多会话事件日志 → 项目根 data/
+│   │   ├── history-store.ts   #   跨轮对话记忆 → 项目根 data/
+│   │   ├── ai-providers-store.ts  # AI 提供商配置 → server/data/
+│   │   ├── ssh-profiles-store.ts  # SSH 配置(密码/私钥只存服务端)→ server/data/
+│   │   └── ui-state-store.ts      # LLM 选择级 UI 状态 → server/data/
+│   └── skills/                # 内置技能库(每个技能一个含 SKILL.md 的目录)
+├── web/                       # 前端(React 18 + Vite + TS + SCSS)
+│   ├── index.html
+│   ├── vite.config.ts         # 开发代理 / 构建配置
+│   ├── public/                # 静态资源(logo)
+│   ├── LIQUID_GLASS.md        # 液态玻璃 UI 设计规范
 │   └── src/
-│       ├── App.tsx          # 布局与状态编排
-│       ├── api.ts           # WS 客户端(自动重连 + 请求/应答)
-│       ├── components/      # 连接/工作区/对话/命令台/文件查看
-│       └── styles.scss
-└── test/
-    ├── mock-ssh-server.js   # 本地 mock SSH 服务器(基于 ssh2 Server 模式)
-    └── e2e.js               # 全链路自动化测试
+│       ├── main.tsx           # 入口
+│       ├── App.tsx            # 布局与状态编排
+│       ├── styles.scss        # 全局样式
+│       ├── api/               # WS 客户端(自动重连 + 请求/应答)
+│       ├── components/        # UI 组件(含 toolviews/ 工具调用视图)
+│       ├── context/           # React 全局状态(feedback / llm-config)
+│       ├── hooks/             # 自定义 Hook
+│       ├── types/             # 共享类型
+│       ├── utils/             # 工具函数(滚动条 / token 估算 / 工具行模型)
+│       ├── data/              # 静态数据(预置 LLM 提供商)
+│       └── theme/             # 主题系统(设计 token)
+├── data/                      # 运行期数据:会话历史等(gitignore,不入库)
+└── test/                      # 测试(基于本地 mock SSH 服务器,无需真实服务器 / API Key)
+    ├── mock-ssh-server.js     # mock SSH 服务器(ssh2 Server 模式)
+    ├── e2e.js                 # 全链路自动化测试
+    └── *.test.js              # 会话/压缩/传输/本地执行等单元测试
 ```
 
 ### 运行测试
@@ -161,7 +193,9 @@ npm test
 |----|------|------|
 | 监听地址/端口 | 环境变量 `HOST` / `PORT` | 默认 `127.0.0.1:4000`，仅本机访问 |
 | 模型服务 | 界面「AI 模型配置」 | Base URL / Key / 模型名，自定义提供商存 `server/data/ai-providers.json` |
+| SSH 服务器配置 | 界面「SSH 连接」 | 保存的配置存 `server/data/ssh-profiles.json`（密码/私钥只留服务端，不下发前端） |
 | 工作区 | 界面「远程工作区」 | 每会话可换，Agent 的写/改/删被限制在该目录内 |
+| 会话历史 | 项目根 `data/` | 多会话事件日志与跨轮记忆，重启自动恢复（gitignore，不入库） |
 
 ### 安全说明
 
@@ -173,9 +207,10 @@ npm test
 
 ### 扩展路线 / Roadmap
 
-- 内置终端（交互式 shell，经 WebSocket 双工）
-- 多服务器管理、上传/下载文件
-- Agent 多会话/并行、超长任务的自动总结续跑
+已实现：内置终端（真实 PTY）、多服务器管理、上传/下载、多会话并行、长任务自动总结续推。
+
+尚在规划：
+
 - Git 操作、错误自动回滚
 
 ### 贡献 / Contributing

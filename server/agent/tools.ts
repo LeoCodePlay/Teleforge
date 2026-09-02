@@ -9,8 +9,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { joinRemote, normalizeRemote, sshManager as ssh } from '../core/ssh-manager.ts';
 import { localFs, resolveInLocalWorkspace } from '../core/local-fs.ts';
+import type { FsEntry } from '../core/local-fs.ts';
 import { execLocal } from '../core/local-exec.ts';
 import { askUserQuestion } from './ask-user.ts';
+import type { ToolDef, ToolRegistry } from './registry.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 内置技能库(随工具分发,本地目录;已从 deepseek-harness / Claude Code 全局收集)
@@ -26,7 +28,7 @@ const LOCAL_SKILL_PREFIX = 'local://';
 // ---------------- 安全辅助 ----------------
 
 // 将路径解析为工作区内的绝对远程路径;越界或不存在工作区时报错
-function resolveInWorkspace(p, { allowRoot = true } = {}) {
+function resolveInWorkspace(p: string, { allowRoot = true }: { allowRoot?: boolean } = {}) {
   const ws = normalizeRemote(ssh.workspace || '');
   if (!ws) throw new Error('尚未选择工作区,请先在界面中选择远程目录作为工作区');
   const norm = normalizeRemote(p || '.');
@@ -45,23 +47,23 @@ function resolveInWorkspace(p, { allowRoot = true } = {}) {
 }
 
 const TEXT_TRUNCATION_HINT = '\n[结果过长已截断:中段内容被省略。若需中段/尾部细节,可用 read_file(offset/limit) 或 run_command 缩小范围再取,不要重复相同调用]';
-function capText(s, max = AGENT.TOOL_RESULT_MAX_CHARS) {
+function capText(s: string, max: number = AGENT.TOOL_RESULT_MAX_CHARS): string {
   if (!s) return '';
   if (s.length <= max) return s;
   return s.slice(0, Math.floor(max * 0.6)) + `\n…[结果过长,已截断,剩余 ${s.length - max} 字符]…\n` + s.slice(s.length - Math.floor(max * 0.4)) + TEXT_TRUNCATION_HINT;
 }
 
-function safeJson(v) { return JSON.stringify(v, null, 2).slice(0, 60000); }
+function safeJson(v: any): string { return JSON.stringify(v, null, 2).slice(0, 60000); }
 
-function shQuotePosix(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
-function shQuoteWin(s) { return `"${String(s).replace(/"/g, '\\"')}"`; }
-function shQuote(s) { return ssh.platform === 'win32' ? shQuoteWin(s) : shQuotePosix(s); }
+function shQuotePosix(s: string): string { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
+function shQuoteWin(s: string): string { return `"${String(s).replace(/"/g, '\\"')}"`; }
+function shQuote(s: string): string { return ssh.platform === 'win32' ? shQuoteWin(s) : shQuotePosix(s); }
 
 // 深度可达目录数,避免探测目录结构时失控
 const DEPTH_LIMIT = 4;
 
 // 递归格式化目录树(限制深度,dir 后带 /),用于环境快照的目录骨架
-function treeLines(p, depth) {
+function treeLines(p: string, depth: number): string[] {
   if (depth > DEPTH_LIMIT) return ['…(更深层略去)'];
   let entries;
   try {
@@ -79,7 +81,7 @@ function treeLines(p, depth) {
 }
 
 // 递归格式化本地目录树(与 treeLines 同构,同步 fs 直读;本机环境快照用)
-function localTreeLines(p, depth) {
+function localTreeLines(p: string, depth: number): string[] {
   if (depth > DEPTH_LIMIT) return ['…(更深层略去)'];
   let names;
   try { names = fs.readdirSync(p, { withFileTypes: true }); } catch { return ['(无法读取)']; }
@@ -92,14 +94,14 @@ function localTreeLines(p, depth) {
 }
 
 // 本地环境快照缓存(供 system prompt 注入,避免每轮重复 get_local_info 探测)
-let localEnvCache = null;
+let localEnvCache: any = null;
 export function getLocalEnvInfo() { return localEnvCache; }
 export function clearLocalEnvInfo() { localEnvCache = null; }
 
 // ---------------- 工具定义 ----------------
 // 每个工具:name/description/parameters(模型可见)+ run(执行)+ timeoutMs(可选,注册表超时依据)
 
-const toolDefs = [
+const toolDefs: ToolDef[] = [
   {
     name: 'list_directory',
     description: '列出远程目录内容(文件与子目录),用于探索文件系统',
@@ -111,7 +113,7 @@ const toolDefs = [
     async run({ path }) {
       const p = normalizeRemote(path || ssh.workspace || '/');
       const entries = await ssh.listDir(p);
-      const lines = entries.map((e) => {
+      const lines = entries.map((e: FsEntry) => {
         const icon = e.type === 'dir' ? '[目录]' : e.type === 'link' ? '[链接]' : '      ';
         const size = e.type === 'file' ? ` ${formatSize(e.size)}` : '';
         return `${icon} ${e.name}${size}`;
@@ -329,7 +331,7 @@ const toolDefs = [
     run({ todos: raw }, { session, emit, sid }: any = {}) {
       if (!session) throw new Error('todo_write 需要所属会话(缺少调用上下文)');
       if (!Array.isArray(raw)) throw new Error('todo_write: todos 必须是数组');
-      const items = [];
+      const items: Array<{ content: string; status: string }> = [];
       const seen = new Set();
       let active = 0;
       for (const it of raw) {
@@ -347,7 +349,7 @@ const toolDefs = [
       if (active > 1) throw new Error(`todo_write: 同一时刻最多一项 in_progress(当前 ${active})`);
       session.append('todo/write', { todos: items });
       emit?.('agent', { event: 'todo_update', todos: items, sid });
-      const count = (s) => items.filter((t) => t.status === s).length;
+      const count = (s: string) => items.filter((t) => t.status === s).length;
       return `已更新任务列表:${count('pending')} 待办 · ${count('in_progress')} 进行中 · ${count('completed')} 已完成`;
     }
   },
@@ -419,7 +421,7 @@ const toolDefs = [
         platform: ssh.platform,
         home: ssh.home
       };
-      const probe = async (cmd) => {
+      const probe = async (cmd: string) => {
         try {
           const r = await ssh.exec(cmd, { timeout: 8000 });
           return r.code === 0 && r.stdout.trim() ? r.stdout.trim().split('\n')[0] : null;
@@ -462,7 +464,7 @@ const toolDefs = [
 // 读/列自由(本机任意路径可探),写/改/删一律经 resolveInLocalWorkspace 锁在本地工作区内;
 // 不需要 SSH 连接,守卫按工具名区分本地/远程。
 
-const localToolDefs = [
+const localToolDefs: ToolDef[] = [
   {
     name: 'list_local_dir',
     description: '列出本机(本地工作区)目录内容,用于探索本机文件系统',
@@ -526,7 +528,7 @@ const localToolDefs = [
     parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } }, required: ['path'] },
     async run({ path: p, recursive }) {
       const abs = resolveInLocalWorkspace(p);
-      if (abs === path.resolve(localFs.workspace)) throw new Error('禁止删除本地工作区根目录');
+      if (abs === path.resolve(localFs.workspace!)) throw new Error('禁止删除本地工作区根目录');
       const type = await localFs.atype(abs);
       if (!type) throw new Error(`路径不存在: ${abs}`);
       if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
@@ -579,7 +581,7 @@ const localToolDefs = [
     parameters: { type: 'object', properties: {}, required: [] },
     async run() {
       const info: any = { workspace: localFs.workspace || null, platform: process.platform, home: localFs.home };
-      const probe = async (cmd) => { try { const r = await execLocal(cmd, { cwd: localFs.home, timeout: 8000 }); return r.code === 0 && r.stdout.trim() ? r.stdout.trim().split('\n')[0] : null; } catch { return null; } };
+      const probe = async (cmd: string) => { try { const r = await execLocal(cmd, { cwd: localFs.home, timeout: 8000 }); return r.code === 0 && r.stdout.trim() ? r.stdout.trim().split('\n')[0] : null; } catch { return null; } };
       const [node, git] = await Promise.all([probe('node --version'), probe('git --version')]);
       info.toolVersions = { node, git };
       if (localFs.workspace) {
@@ -595,7 +597,7 @@ const localToolDefs = [
 // 不依赖 SSH 连接(本地/远程模式都能用),也不进 REMOTE_TOOLS 守卫集:
 // 模型需要用户确认、选择或补充关键信息时调用,工具会暂停等待用户在界面上作答。
 
-const interactionToolDefs = [
+const interactionToolDefs: ToolDef[] = [
   {
     name: 'ask_user_question',
     description: '当你需要用户确认、在选项中做选择、或缺少关键信息才能继续时,向用户提出一个或多个问题并等待回答。每题可带候选选项(单选/多选),用户也可填写"其它"自定义答案;在你得到回答前会暂停等待。回答以 JSON 返回:{"answers":[{"id":"问题id","selected":["选中的选项label"],"custom":"自定义文本"}]}。只在确实需要用户决策时使用,不要在没有歧义时滥用。',
@@ -648,7 +650,7 @@ const DANGEROUS_COMMANDS: Array<[RegExp, string]> = [
   [/\bchmod\s+-R\s+777\s+\/(\s|$)/, '对根目录递归 chmod 777']
 ];
 
-function dangerGuard(name, args) {
+function dangerGuard(name: string, args: any) {
   if (name !== 'run_command' && name !== 'run_local_command') return undefined;
   const cmd = String(args?.command || '');
   for (const [re, why] of DANGEROUS_COMMANDS) {
@@ -668,20 +670,20 @@ const SSH_ONLY_TOOLS = new Set([
 ]);
 
 /** 把全部内置工具与守卫注册到注册表(由 agent 启动时调用一次) */
-export function registerTools(registry) {
+export function registerTools(registry: ToolRegistry) {
   // 依赖 SSH 的工具打 remote 标记,供本地模式(未连接)下 schemas() 过滤用
   for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...def, remote: true } : def);
   for (const def of interactionToolDefs) registry.register(def);
   for (const def of localToolDefs) registry.register(def);
   // 守卫 1:SSH 连接状态 —— 仅真正依赖 SSH 的远程工具需要连接;本地工具(local_*)、
   // 交互工具与技能/任务清单等非远程工具不受影响,连接断开时绝不误伤本机工具链
-  registry.guard((name) => (SSH_ONLY_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));
+  registry.guard((name: string) => (SSH_ONLY_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));
   // 守卫 2:高危命令拦截(远程 run_command 与本机 run_local_command 都拦)
   registry.guard(dangerGuard);
 }
 
 // ---------------- 环境快照缓存(供 system prompt 复用) ----------------
-let envCache = null;
+let envCache: any = null;
 export function getEnvInfo() { return envCache; }
 export function clearEnvInfo() { envCache = null; }
 
@@ -709,7 +711,7 @@ const SKILL_DESC_MAX = 500;        // 目录中 description 截断长度(对齐 
 function splitFrontmatter(text: string): { meta: Record<string, any>; body: string } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
   if (!m) return { meta: {}, body: text };
-  const meta = {};
+  const meta: Record<string, any> = {};
   for (const line of m[1].split(/\r?\n/)) {
     const kv = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line.trim());
     if (kv) meta[kv[1].toLowerCase()] = kv[2].trim().replace(/^["']|["']$/g, '');
@@ -718,7 +720,7 @@ function splitFrontmatter(text: string): { meta: Record<string, any>; body: stri
 }
 
 // 读取一个本机技能文件的原始文本(fs 直读,无需 SSH)
-function readLocalFile(file) {
+function readLocalFile(file: string) {
   if (!String(file).startsWith(LOCAL_SKILL_PREFIX)) return null;
   const local = path.resolve(String(file).slice(LOCAL_SKILL_PREFIX.length));
   if (!fs.existsSync(local)) return null;
@@ -728,7 +730,7 @@ function readLocalFile(file) {
 
 // 统一读取技能源文本:
 //   builtin:// → 内置库本地文件;local:// → 本机技能目录文件;其他(远程绝对路径) → SFTP
-async function readSkillText(file, maxBytes) {
+async function readSkillText(file: string, maxBytes: number) {
   if (String(file).startsWith('builtin://')) {
     const local = path.join(BUILTIN_SKILLS_DIR, String(file).slice('builtin://'.length));
     if (!fs.existsSync(local)) return null;
@@ -742,8 +744,16 @@ async function readSkillText(file, maxBytes) {
   } catch { return null; }
 }
 
+export interface SkillEntry {
+  name: string;
+  description: string;
+  file: string;
+  baseDir: string;
+  source: string;
+}
+
 // 读取一个技能文件头部,产出 {name, description, file, baseDir, source};非法/缺失返回 null
-async function readSkillHead(file, baseDir, fallbackName, source) {
+async function readSkillHead(file: string, baseDir: string, fallbackName: string, source: string): Promise<SkillEntry | null> {
   const r = await readSkillText(file, SKILL_HEAD_BYTES);
   if (!r || ssh.isProbablyBinary?.(r.buffer)) return null;
   const text = r.buffer.toString('utf8');
@@ -756,10 +766,10 @@ async function readSkillHead(file, baseDir, fallbackName, source) {
 }
 
 // 扫描内置技能库(本地目录):<name>/SKILL.md 或 <name>.md
-async function scanBuiltin() {
-  let names = [];
+async function scanBuiltin(): Promise<SkillEntry[]> {
+  let names: string[] = [];
   try { names = fs.readdirSync(BUILTIN_SKILLS_DIR); } catch { return []; }
-  const out = [];
+  const out: SkillEntry[] = [];
   for (const n of names) {
     if (n.startsWith('.')) continue;
     const dir = path.join(BUILTIN_SKILLS_DIR, n);
@@ -778,10 +788,10 @@ async function scanBuiltin() {
 }
 
 // 扫描本机技能根目录(fs 直读,无需 SSH):<name>/SKILL.md 或 <name>.md
-async function scanLocalSkillRoot(root, source) {
-  let names = [];
+async function scanLocalSkillRoot(root: string, source: string): Promise<SkillEntry[]> {
+  let names: string[] = [];
   try { names = fs.readdirSync(root); } catch { return []; }
-  const out = [];
+  const out: SkillEntry[] = [];
   for (const n of names) {
     if (n.startsWith('.')) continue;
     const full = path.join(root, n);
@@ -800,10 +810,10 @@ async function scanLocalSkillRoot(root, source) {
 }
 
 // 扫描一个技能根目录:目录包(<name>/SKILL.md)与平铺文件(<name>.md)
-async function scanSkillRoot(root, source) {
-  let entries;
+async function scanSkillRoot(root: string, source: string): Promise<SkillEntry[]> {
+  let entries: FsEntry[] = [];
   try { entries = await ssh.listDir(root); } catch { return []; }
-  const out = [];
+  const out: SkillEntry[] = [];
   for (const e of entries) {
     if (e.name.startsWith('.') && e.name !== '.agents') continue;
     if (e.type === 'dir') {
@@ -823,7 +833,7 @@ function skillContextKey() {
   return [ssh.workspace || '', ssh.home || '', localFs.workspace || ''].join('::');
 }
 
-let skillsCache = { key: null, at: 0, skills: [] };
+let skillsCache: { key: string | null; at: number; skills: SkillEntry[] } = { key: null, at: 0, skills: [] };
 
 /**
  * 全量扫描技能目录并刷新缓存(每轮 turn 开始时按需调用)。
@@ -840,7 +850,7 @@ export async function refreshSkillsCatalog() {
     localFs.workspace ? scanLocalSkillRoot(path.join(localFs.workspace, '.agents', 'skills'), 'local-workspace') : Promise.resolve([])
   ]);
   // 远程两级只有连接后才有:其余情况只返回内置 + 本机技能
-  let user = [], project = [];
+  let user: SkillEntry[] = [], project: SkillEntry[] = [];
   if (ws && ssh.connected && ssh.home) {
     try {
       [project, user] = await Promise.all([
@@ -868,7 +878,7 @@ export function skillsCatalogStale() {
 }
 
 /** 按名加载技能完整正文(目录未命中时先重扫一次);返回 {name, content, baseDir} 或 null */
-export async function loadSkillContent(name) {
+export async function loadSkillContent(name: string) {
   let catalog = getSkillsCatalog();
   let hit = catalog.find((s) => s.name === name);
   if (!hit) { catalog = await refreshSkillsCatalog(); hit = catalog.find((s) => s.name === name); }
@@ -884,7 +894,7 @@ export async function loadSkillContent(name) {
  * 渲染模型可见的技能目录(照搬 harness tool-skill 的 catalog 消息形状):
  * <system-reminder> + <available_skills> 列表,无技能时返回空串。
  */
-export function renderSkillCatalog(skills) {
+export function renderSkillCatalog(skills: SkillEntry[]) {
   if (!skills || skills.length === 0) return '';
   const lines = skills.map((s) => `- \`${s.name}\`: ${s.description}`);
   return [
@@ -923,18 +933,18 @@ function skillRoots() {
 }
 
 // 是否本机技能文件(local:// 协议)
-function isLocalSkillFile(file) {
+function isLocalSkillFile(file: string): boolean {
   return String(file || '').startsWith(LOCAL_SKILL_PREFIX);
 }
 
 // 去掉 local:// 协议前缀得本机绝对路径;远程路径原样返回
-function skillFsPath(file) {
+function skillFsPath(file: string) {
   const f = String(file || '');
   return isLocalSkillFile(f) ? path.resolve(f.slice(LOCAL_SKILL_PREFIX.length)) : f;
 }
 
 // 校验 file 恰好是某个技能根目录下的直接子项(不含更深嵌套)
-function skillRootOf(file) {
+function skillRootOf(file: string) {
   const isLocal = isLocalSkillFile(file);
   const p = skillFsPath(file);
   if (isLocal) {
@@ -951,7 +961,7 @@ function skillRootOf(file) {
 
 // 校验目标 file 在技能根目录内:
 // 平铺文件(父 = 根)与目录包 SKILL.md(祖父 = 根)均合法,不许更深嵌套或越界
-function skillInRoot(file) {
+function skillInRoot(file: string) {
   const isLocal = isLocalSkillFile(file);
   const p = skillFsPath(file);
   const roots = skillRoots();
@@ -977,7 +987,7 @@ function skillInRoot(file) {
 }
 
 // 写技能文本:本机走 fs,远程走 SFTP
-function writeSkillText(file, body) {
+function writeSkillText(file: string, body: string) {
   if (isLocalSkillFile(file)) {
     const abs = skillFsPath(file);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -988,16 +998,16 @@ function writeSkillText(file, body) {
 }
 
 // 删除技能文件:本机走 fs,远程走 SFTP(目录包 handle 由调用方决定)
-function unlinkSkillText(file) {
+function unlinkSkillText(file: string) {
   if (isLocalSkillFile(file)) {
     fs.unlinkSync(skillFsPath(file));
     return;
   }
-  return new Promise<void>((res, rej) => ssh.sftp.unlink(file, (e) => (e ? rej(e) : res())));
+  return new Promise<void>((res, rej) => ssh.sftp!.unlink(file, (e) => (e ? rej(e) : res())));
 }
 
 // 递归删除技能目录:本机走 fs,远程走 SFTP
-async function rmdirSkillText(dir) {
+async function rmdirSkillText(dir: string) {
   if (isLocalSkillFile(dir)) {
     fs.rmSync(skillFsPath(dir), { recursive: true, force: true });
     return;
@@ -1009,7 +1019,7 @@ async function rmdirSkillText(dir) {
  * 读取一个技能的完整定义(编辑表单回填用)。
  * @returns {{name, description, content, file, source}} 或 null
  */
-export async function getSkillFull(name) {
+export async function getSkillFull(name: string) {
   const catalog = getSkillsCatalog().length ? getSkillsCatalog() : await refreshSkillsCatalog();
   const hit = catalog.find((s) => s.name === String(name || '').toLowerCase());
   if (!hit) return null;
@@ -1028,7 +1038,7 @@ export async function getSkillFull(name) {
  * @param {{name: string, description: string, content: string, target?: 'project'|'user'|'local-project'|'local-user'}} draft
  * @returns {Promise<{file: string, skills: Array}>} 写入的文件与刷新后的完整目录
  */
-export async function saveSkill(draft) {
+export async function saveSkill(draft: any) {
   const name = String(draft?.name || '').trim().toLowerCase();
   const description = String(draft?.description || '').replaceAll(/\s+/g, ' ').trim();
   const content = String(draft?.content || '').trim();
@@ -1080,7 +1090,7 @@ export async function saveSkill(draft) {
  * 删除一个技能(仅允许删除技能根目录下的直接子项)。
  * 目录包删整个 <root>/<name> 目录;平铺文件只删 <root>/<name>.md。
  */
-export async function deleteSkill(name) {
+export async function deleteSkill(name: string) {
   const catalog = getSkillsCatalog().length ? getSkillsCatalog() : await refreshSkillsCatalog();
   const hit = catalog.find((s) => s.name === String(name || '').toLowerCase());
   if (!hit) throw new Error(`技能不存在: ${name}`);
@@ -1109,7 +1119,7 @@ export async function deleteSkill(name) {
  * @param {'project'|'user'|'local-project'|'local-user'|'local-workspace'} target 目标级别
  * @returns {Promise<{file:string, where:string}>}
  */
-export async function copyBuiltinToRemote(builtin, target = 'project') {
+export async function copyBuiltinToRemote(builtin: any, target = 'project') {
   const name = String(builtin?.name || '');
   if (!name) throw new Error('缺少技能名');
   const root = skillRoots().find((r) => r.source === target);
@@ -1131,7 +1141,7 @@ export async function copyBuiltinToRemote(builtin, target = 'project') {
 }
 
 // 级别 -> 中文标签(管理接口返回用)
-const LEVEL_LABEL = {
+const LEVEL_LABEL: Record<string, string> = {
   project: '项目级(远程)',
   user: '用户级(远程)',
   'local-project': '项目级(本机)',
@@ -1143,17 +1153,17 @@ const LEVEL_LABEL = {
 // ---------------- 引擎探测(带缓存) ----------------
 // 探测结果:{ kind: 'rg'|'grep'|'findstr'|'python'|'busybox', bin: 实际可执行名 } 或 null(全无)。
 // 缓存用 undefined 作"未探测"哨兵,这样 null(探测过但全无)也能被缓存,避免每次搜索重复探测。
-let engineCache;
-let engineProbe = null;
+let engineCache: any;
+let engineProbe: any = null;
 async function detectSearchEngine() {
   if (engineCache !== undefined) return engineCache;
   if (engineProbe) return engineProbe;
   const probe = (async () => {
     const win = ssh.platform === 'win32';
-    const check = (cmd) => ssh.exec(cmd, { timeout: 8000 })
-      .then((r) => r.code === 0 && r.stdout.trim().length > 0)
+    const check = (cmd: string) => ssh.exec(cmd, { timeout: 8000 })
+      .then((r: any) => r.code === 0 && r.stdout.trim().length > 0)
       .catch(() => false);
-    const which = (bin) => (win ? `where ${bin}` : `command -v ${bin}`);
+    const which = (bin: string) => (win ? `where ${bin}` : `command -v ${bin}`);
     if (await check(which('rg'))) return { kind: 'rg', bin: 'rg' };
     if (!win) {
       if (await check(which('grep'))) return { kind: 'grep', bin: 'grep' };
@@ -1191,17 +1201,17 @@ const INSTALL_TOOLS = [
 
 // 包管理器探测与安装命令;sudo 前缀由调用方按权限决定
 const PACKAGE_MANAGERS = [
-  { name: 'apt',    probe: 'command -v apt-get', install: (sudo, pkg) => `${sudo}apt-get update -qq >/dev/null 2>&1 || true; ${sudo}apt-get install -y ${pkg}` },
-  { name: 'dnf',    probe: 'command -v dnf',     install: (sudo, pkg) => `${sudo}dnf install -y ${pkg}` },
-  { name: 'yum',    probe: 'command -v yum',     install: (sudo, pkg) => `${sudo}yum install -y ${pkg}` },
-  { name: 'apk',    probe: 'command -v apk',     install: (sudo, pkg) => `${sudo}apk add --no-cache ${pkg}` },
-  { name: 'pacman', probe: 'command -v pacman',  install: (sudo, pkg) => `${sudo}pacman -S --noconfirm --needed ${pkg}` },
-  { name: 'zypper', probe: 'command -v zypper',  install: (sudo, pkg) => `${sudo}zypper -n install ${pkg}` }
+  { name: 'apt',    probe: 'command -v apt-get', install: (sudo: string, pkg: string) => `${sudo}apt-get update -qq >/dev/null 2>&1 || true; ${sudo}apt-get install -y ${pkg}` },
+  { name: 'dnf',    probe: 'command -v dnf',     install: (sudo: string, pkg: string) => `${sudo}dnf install -y ${pkg}` },
+  { name: 'yum',    probe: 'command -v yum',     install: (sudo: string, pkg: string) => `${sudo}yum install -y ${pkg}` },
+  { name: 'apk',    probe: 'command -v apk',     install: (sudo: string, pkg: string) => `${sudo}apk add --no-cache ${pkg}` },
+  { name: 'pacman', probe: 'command -v pacman',  install: (sudo: string, pkg: string) => `${sudo}pacman -S --noconfirm --needed ${pkg}` },
+  { name: 'zypper', probe: 'command -v zypper',  install: (sudo: string, pkg: string) => `${sudo}zypper -n install ${pkg}` }
 ];
 
 const ENSURE_TTL_MS = 5 * 60_000; // 同一服务器 5 分钟内不重复安装尝试(避免每轮搜索都重试)
-let ensureToolsPromise = null;    // 在途安装(并发调用合并)
-let ensureCache = null;           // { key, at, result }
+let ensureToolsPromise: any = null;    // 在途安装(并发调用合并)
+let ensureCache: any = null;           // { key, at, result }
 
 function ensureConnKey() {
   const hi: any = ssh.hostInfo || {};
@@ -1230,17 +1240,17 @@ export function ensureSearchTools({ force = false } = {}) {
 async function doEnsureSearchTools() {
   if (!ssh.connected) return { ok: false, reason: 'not-connected' };
   if (ssh.platform === 'win32') return { ok: true, platform: 'win32', installed: [] }; // findstr 原生存在,无需安装
-  const log = (level, message) => { try { ssh.emit('log', level, `[环境自检] ${message}`); } catch {} };
+  const log = (level: string, message: string) => { try { ssh.emit('log', level, `[环境自检] ${message}`); } catch {} };
   const targetKey = ensureConnKey(); // 连接中途被切换时停止安装,避免装到别的服务器上
 
   // 全部走后台队列:探测快、安装可长达 180s,都不能占用 agent 的主命令队列
-  const probe = async (cmd) => {
+  const probe = async (cmd: string) => {
     try {
       const r = await ssh.execBackground(cmd, { timeout: 8000 });
       return r.code === 0 && r.stdout.trim().length > 0;
     } catch { return false; }
   };
-  const which = (bin) => `command -v ${bin}`;
+  const which = (bin: string) => `command -v ${bin}`;
 
   const present: Record<string, boolean> = {};
   for (const bin of ['rg', 'grep', 'python3', 'python', 'busybox']) present[bin] = await probe(which(bin));
@@ -1269,7 +1279,7 @@ async function doEnsureSearchTools() {
     return { ok: false, reason: 'no-package-manager' };
   }
 
-  const installed = [];
+  const installed: string[] = [];
   const failed = [];
   for (const { tool, pkg } of INSTALL_TOOLS) {
     if (ensureConnKey() !== targetKey || !ssh.connected) { log('warn', '连接已切换或断开,取消剩余安装'); break; }
@@ -1328,7 +1338,7 @@ sys.exit(0 if found else 1)
 
 // 依探测到的引擎拼出搜索命令。pattern/path 一律经 shQuote 单引号包裹,
 // 修复原先 rg 分支 pattern/path 未加引号导致 `|`/空格被 shell 当成管道/分词的问题。
-function buildSearchCommand(engine, pattern, p, include) {
+function buildSearchCommand(engine: any, pattern: string, p: string, include?: string) {
   const q = shQuote;
   switch (engine.kind) {
     case 'rg': {
@@ -1352,7 +1362,7 @@ function buildSearchCommand(engine, pattern, p, include) {
   }
 }
 
-function formatSize(n) {
+function formatSize(n: number): string {
   if (n < 1024) return `${n}B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
   return `${(n / 1024 / 1024).toFixed(1)}MB`;

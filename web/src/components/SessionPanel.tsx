@@ -59,7 +59,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
           const running = busyIds.includes(s.id);
           return (
             <div key={s.id} className={`session-item ${s.id === activeId ? 'active' : ''}`}
-              title={running ? '任务进行中,点击切换查看' : s.id === activeId ? '当前会话' : '点击切换到此会话'}>
+              title={running ? '任务进行中,点击切换查看' : s.id === activeId ? '当前会话' : '点击切换到此会话'}
+              onClick={() => onSwitch(s.id)}>
               {editing === s.id ? (
                 <input className="s-edit grow" autoFocus value={editText}
                   onChange={(e) => setEditText(e.target.value)}
@@ -71,7 +72,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
                   {running && <span className="s-run" title="任务进行中">●</span>}
                   {/* 点击始终触发切换请求(含当前会话):重载失败/加载中的会话可再次点击重试,
                       而非被 activeId 守卫挡成 no-op */}
-                  <span className="s-title" onClick={() => onSwitch(s.id)}>
+                  <span className="s-title">
                     {s.title || '新会话'}
                   </span>
                 </>
@@ -90,9 +91,10 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
         <div className="s-foreign">
           <div className="s-foreign-title">其他服务器后台运行中</div>
           {foreign.map((s) => (
-            <div key={s.id} className="session-item foreign" title="该服务器上仍在后台运行,点击切回查看">
+            <div key={s.id} className="session-item foreign" title="该服务器上仍在后台运行,点击切回查看"
+              onClick={() => onSwitchForeign?.(s.id, s.connKey || '')}>
               <span className="s-run" title="任务进行中">●</span>
-              <span className="s-title" onClick={() => onSwitchForeign?.(s.id, s.connKey || '')}>
+              <span className="s-title">
                 {s.title || '新会话'}
                 <span className="s-foreign-badge">📡 {foreignLabel(s)}</span>
               </span>

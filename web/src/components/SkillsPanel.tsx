@@ -10,7 +10,7 @@
 // 模型通过 skill 工具按需加载。内置技能不可编辑,可"复制到"任意级别成为可编辑副本。
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
-import { useFeedback } from '../feedback';
+import { useFeedback } from '../context/feedback';
 import GlassSelect from './GlassSelect';
 
 interface SkillEntry {

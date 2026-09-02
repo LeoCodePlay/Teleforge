@@ -7,7 +7,7 @@ import React from 'react';
 import type { ReactNode } from 'react';
 import { DisclosureRow, useDisclosure } from './DisclosureRow';
 import { StateDot } from './StateDot';
-import type { ToolRowState, ToolRowVariant } from '../toolRowModel';
+import type { ToolRowState, ToolRowVariant } from '../utils/toolRowModel';
 import { IconInspectOutline12 } from './icons';
 
 export interface ToolRowProps {

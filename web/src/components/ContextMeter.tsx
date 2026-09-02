@@ -5,7 +5,7 @@
 //   (系统提示词 / 工具调用 / 对话消息 各自的 token 与占比)
 // contextWindow <= 0(模型未配置)时不渲染。
 import React, { useState } from 'react';
-import { estimateMessages, estimateBreakdown, estimateTokens, SYSTEM_EST, formatTokens } from '../tokens';
+import { estimateMessages, estimateBreakdown, estimateTokens, SYSTEM_EST, formatTokens } from '../utils/tokens';
 import type { ChatMessage } from '../types';
 
 interface Props {

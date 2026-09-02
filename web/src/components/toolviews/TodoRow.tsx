@@ -5,7 +5,7 @@ import React from 'react';
 import type { ToolCallInfo } from '../../types';
 import { ToolRow } from '../ToolRow';
 import { IconChecklistOutline14 } from '../icons';
-import { toolRowModel } from '../../toolRowModel';
+import { toolRowModel } from '../../utils/toolRowModel';
 
 function summarizeTodos(argsRaw?: string | null): { done: number; total: number } {
   if (!argsRaw) return { done: 0, total: 0 };

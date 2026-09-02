@@ -8,8 +8,8 @@ import ChatPanel from './components/ChatPanel';
 import ConsolePanel from './components/ConsolePanel';
 import FileViewer from './components/FileViewer';
 import SettingsPanel from './components/SettingsPanel';
-import { LlmProvider } from './llm-context';
-import { useFeedback } from './feedback';
+import { LlmProvider } from './context/llm-context';
+import { useFeedback } from './context/feedback';
 
 const STATUS_LABEL: Record<string, string> = {
   connected: '已连接',

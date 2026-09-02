@@ -1,9 +1,9 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
-import { FeedbackProvider } from './feedback';
-import { initOverlayScrollbar } from './scrollbar-ui';
-import { applyActiveTheme } from './themes';
+import { FeedbackProvider } from './context/feedback';
+import { initOverlayScrollbar } from './utils/scrollbar-ui';
+import { applyActiveTheme } from './theme/themes';
 import './styles.scss';
 
 // 渲染前应用持久化的激活主题,避免首帧闪回默认色板
