@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Agent 主循环:接收用户指令 -> 流式调用 LLM -> 执行工具 -> 迭代直到完成。
 // 架构参照 deepseek-harness:
 // - 事件溯源:会话是 append-only 的 SessionEvent 日志(见 session.js),LLM 消息
@@ -179,7 +178,15 @@ function cutAtTurn(events, idx) {
 }
 
 export class Agent {
-  constructor({ emit }) {
+  emit: (event: string, payload: any, extra?: any) => void;
+  llm: LlmClient | null = null; // 由 llm 配置设置(全会话共享)
+  llmConfigured = false;
+  sessionId: string | null = null; // 当前活跃(前端正在查看)会话 id
+  _runtimes: Map<string, any> = new Map(); // sessionId -> 运行时;多会话各自独立驱动、可并行
+  _chatOnlyUntil = 0; // 工具降级纯对话的失效时间戳(带 TTL,见 _chatOnly getter)
+  _connKey: string = 'local'; // 会话作用域:连接时 = 服务器键(username@host:port),否则本地工作区模式
+
+  constructor({ emit }: { emit: (event: string, payload: any, extra?: any) => void }) {
     this.emit = emit;            // (event, payload) => void,由 ws 层转发给前端
     this.llm = null;            // LlmClient,由 llm 配置设置(全会话共享)
     this.llmConfigured = false;
@@ -609,7 +616,7 @@ export class Agent {
     let reasoningChars = 0; // 本轮累计收到的思考字符(供 turn 结束的"零思考"提示判断)
     let stepsUsed = 0;
     let continueRounds = 0; // 本轮累计自动续推次数(上限 AGENT.GOAL_ROUND_MAX,防失控)
-    let endReason = { kind: 'completed' };
+    let endReason: { kind: string; error?: any } = { kind: 'completed' };
     let stepPartial = '';         // 当前步已流式收到的正文(中止时抢救落盘,保住"正在回答的部分")
     let stepPartialReasoning = '';
 
