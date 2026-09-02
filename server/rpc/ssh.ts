@@ -1,13 +1,14 @@
-// @ts-nocheck
 // 服务器连接与配置消息:connect / disconnect / conn_disconnect / conn_switch / ssh_profiles_*
 import fs from 'node:fs';
 import { sshManager as ssh } from '../ssh-manager.ts';
+import type { ConnectOpts } from '../ssh-manager.ts';
 import { sshProfiles, sanitizeProfile } from '../ssh-profiles-store.ts';
+import type { SshProfile } from '../ssh-profiles-store.ts';
 import { clearSearchEngine, ensureSearchTools, clearEnvInfo } from '../agent/tools.ts';
 import { agent } from '../agent/agent.ts';
 
 // 解析 connect 消息:优先按已保存配置(仅凭 profileId 即可取回密码/密钥),否则用消息内的 ssh 原始参数
-function resolveConnectOpts(msg) {
+function resolveConnectOpts(msg: any): ConnectOpts {
   if (msg.profileId) {
     const p = sshProfiles.get(String(msg.profileId));
     if (!p) throw new Error('保存的服务器不存在,请刷新列表后重试');
@@ -19,11 +20,11 @@ function resolveConnectOpts(msg) {
   }
   const { host, port, username, auth, autoReconnect } = msg.ssh || {};
   if (!host || !username) throw new Error('缺少 host 或 username');
-  return { host, port: Number(port) || 22, username, autoReconnect: autoReconnect !== false, auth: { type: 'password', ...auth } };
+  return { host, port: Number(port) || 22, username, autoReconnect: autoReconnect !== false, auth: { type: 'password', ...auth } as ConnectOpts['auth'] };
 }
 
 // 从已保存配置构造 ssh2 认证参数;密钥只存 keyPath 时由服务端本地读取(换浏览器/页面刷新也能连接)
-function profileAuth(p) {
+function profileAuth(p: SshProfile): ConnectOpts['auth'] {
   if (p.authType === 'key') {
     let privateKey = p.keyText;
     if (!privateKey && p.keyPath) {

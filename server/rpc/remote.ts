@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 远程文件操作消息:list_dir / read_file / write_file / create_dir / delete / copy / set_workspace
 import { sshManager as ssh } from '../ssh-manager.ts';
 import { clearEnvInfo } from '../agent/tools.ts';
@@ -49,7 +48,7 @@ export function registerRemote(rpc) {
       }
     };
     if (type === 'dir') await ssh.rmdirRecursive(msg.path, onProgress);
-    else { await new Promise((res, rej) => ssh.sftp.unlink(msg.path, (e) => (e ? rej(e) : res()))); onProgress(msg.path); }
+    else { await new Promise<void>((res, rej) => ssh.sftp.unlink(msg.path, (e) => (e ? rej(e) : res()))); onProgress(msg.path); }
     // 收尾一条 final,保证前端一定能看到"删完"(节流可能吞掉最后一条)
     send({ type: 'delete_progress', reqId, path: msg.path, done, final: true, current: msg.path });
     reply({ type: 'deleted', path: msg.path });

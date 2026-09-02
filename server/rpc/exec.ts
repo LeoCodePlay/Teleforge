@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 命令执行消息:run_command / stop_command
 import { sshManager as ssh } from '../ssh-manager.ts';
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 应用入口:Fastify HTTP 服务 + WebSocket + 各领域插件
 import http from 'node:http';
 import path from 'node:path';

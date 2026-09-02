@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 本地文件操作消息:list_local_dir / read_local_file / write_local_file / create_local_dir /
 //                  local_delete / local_copy / set_local_workspace
 import { localFs } from '../local-fs.ts';

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // RPC 路由注册表核心:register/handle/types + 重复注册检测
 import { registerSsh } from './ssh.ts';
 import { registerAgent } from './agent.ts';

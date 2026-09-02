@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 技能管理消息:skills_list / skill_get / skill_save / skill_delete / skill_copy_builtin
 import { refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from '../agent/tools.ts';
 

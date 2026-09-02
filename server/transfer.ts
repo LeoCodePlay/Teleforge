@@ -1,11 +1,10 @@
-// @ts-nocheck
 // 本地↔远程双向传输:复用 local-fs 与 ssh-manager,带逐项进度回调。
 import path from 'node:path';
 import { localFs } from './local-fs.ts';
 import { sshManager as ssh, normalizeRemote, joinRemote } from './ssh-manager.ts';
 
 // 递归枚举本地路径 -> [{rel, abs, type, size}]
-async function collectLocalPaths(roots, baseDir) {
+async function collectLocalPaths(roots: string[], baseDir?: string) {
   const out = [];
   const walk = async (dir, rel) => {
     for (const e of await localFs.listDir(dir)) {
@@ -27,12 +26,12 @@ async function collectLocalPaths(roots, baseDir) {
 }
 
 // 本地 -> 远程
-export async function localToRemote(paths, remoteDir, { onProgress } = {}) {
+export async function localToRemote(paths: string[], remoteDir: string, { onProgress }: { onProgress?: (p: any) => void } = {}) {
   const base = normalizeRemote(remoteDir || ssh.workspace || '');
   if (!base) throw new Error('请先选择远程工作区或指定目标目录');
   const entries = await collectLocalPaths(paths);
   // 为每个文件预建其远程父目录(去重后按深度从小到大排,避免逐文件重复探测)
-  const parentDirs = new Set();
+  const parentDirs = new Set<string>();
   for (const e of entries) {
     if (e.type === 'file') {
       const target = joinRemote(base, e.rel);
@@ -56,7 +55,7 @@ export async function localToRemote(paths, remoteDir, { onProgress } = {}) {
 }
 
 // 远程 -> 本地
-export async function remoteToLocal(paths, localDir, { onProgress } = {}) {
+export async function remoteToLocal(paths: string[], localDir: string, { onProgress }: { onProgress?: (p: any) => void } = {}) {
   const base = path.resolve(localDir || localFs.workspace || '.');
   await localFs.mkdirp(base);
   let downloaded = 0, bytes = 0; const errors = [];

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 远程目录打包 tar.gz(node 内置 zlib,不依赖远程 zip;逐文件流式读取,不整目录进内存)
 import { sshManager as ssh, normalizeRemote } from '../ssh-manager.ts';
 
@@ -78,7 +77,7 @@ async function collectRemotePaths(roots) {
   return out;
 }
 // 把一个远程文件分块读入 tar 流(512 对齐填充)
-async function streamRemoteFileToTar(abs, size, write) {
+async function streamRemoteFileToTar(abs: string, size: number, write: (buf: Buffer) => Promise<void>) {
   if (size <= 0) return;
   const handle = await new Promise((res, rej) => ssh.sftp.open(abs, 'r', (e, h) => (e ? rej(e) : res(h))));
   try {
@@ -86,7 +85,7 @@ async function streamRemoteFileToTar(abs, size, write) {
     let off = 0, remaining = size;
     while (remaining > 0) {
       const n = Math.min(buf.length, remaining);
-      const got = await new Promise((res, rej) => ssh.sftp.read(handle, buf, 0, n, off, (e, b) => (e ? rej(e) : res(b))));
+      const got = await new Promise<number>((res, rej) => ssh.sftp.read(handle, buf, 0, n, off, (e, b) => (e ? rej(e) : res(b))));
       if (got <= 0) break;
       await write(buf.subarray(0, got));
       off += got; remaining -= got;
@@ -94,7 +93,7 @@ async function streamRemoteFileToTar(abs, size, write) {
     const pad = (512 - (size % 512)) % 512;
     if (pad) await write(Buffer.alloc(pad));
   } finally {
-    try { await new Promise((res) => ssh.sftp.close(handle, () => res())); } catch {}
+    try { await new Promise<void>((res) => ssh.sftp.close(handle, () => res())); } catch {}
   }
 }
 

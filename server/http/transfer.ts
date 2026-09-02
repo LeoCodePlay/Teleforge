@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 远程上传/下载插件:/api/upload(NDJSON 流式进度)、/api/download、/api/downloaddir(tar.gz 流式打包)
 import multer from 'multer';
 import middie from '@fastify/middie';
@@ -49,7 +48,7 @@ export default async function registerTransfer(app) {
     if (files.length === 0) return reply.code(400).send({ error: '没有收到文件' });
     // 1) 一次性预建所有目标目录:去重后按深度从小到大排,避免每个文件重复逐级探测父目录
     const lineups = [];
-    const dirs = new Set();
+    const dirs = new Set<string>();
     const errors = [];
     for (const f of files) {
       const rel = normalizeRelPath(f.originalname);
@@ -141,7 +140,7 @@ export default async function registerTransfer(app) {
       reply.header('Content-Type', 'application/gzip');
       reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name + '.tar.gz')}`);
       const gzip = zlib.createGzip();
-      const write = (buf) => new Promise((resolve, reject) => {
+      const write = (buf: Buffer) => new Promise<void>((resolve, reject) => {
         if (gzip.write(buf)) resolve();
         else { gzip.once('drain', resolve); gzip.once('error', reject); }
       });

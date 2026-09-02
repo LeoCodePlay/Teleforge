@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 本地↔远程传输消息:local_to_remote / remote_to_local
 import { localToRemote, remoteToLocal } from '../transfer.ts';
 

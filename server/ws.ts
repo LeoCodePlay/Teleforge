@@ -1,4 +1,3 @@
-// @ts-nocheck
 // WebSocket 服务层:统一协议转发
 // 客户端 -> 服务端: connect/disconnect/conn_switch/conn_disconnect/llm/list_dir/read_file/write_file/create_dir/delete/
 //                    set_workspace/speak/stop_agent/run_command/stop_command/get_status/ssh_profiles_*
