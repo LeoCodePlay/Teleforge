@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Agent 工具集:工具定义(name/description/parameters + run)+ 注册与守卫。
 // 定义参照 deepseek-harness 的 ToolDefinition:模型可见字段(name/description/parameters)
 // 与宿主执行细节(run/timeoutMs)分离,由 registry.schemas() 白名单投影进模型请求;
@@ -66,7 +65,7 @@ function treeLines(p, depth) {
   if (depth > DEPTH_LIMIT) return ['…(更深层略去)'];
   let entries;
   try {
-    entries = ssh.listDirSync ? ssh.listDirSync(p) : null;
+    entries = (ssh as any).listDirSync ? (ssh as any).listDirSync(p) : null;
   } catch { return ['(无法读取)']; }
   if (!entries || entries.length === 0) return [];
   const out = [];
@@ -327,7 +326,7 @@ const toolDefs = [
       required: ['todos']
     },
     // invokeCtx 由 agent 执行时注入:{ sid, session, emit }
-    run({ todos: raw }, { session, emit, sid } = {}) {
+    run({ todos: raw }, { session, emit, sid }: any = {}) {
       if (!session) throw new Error('todo_write 需要所属会话(缺少调用上下文)');
       if (!Array.isArray(raw)) throw new Error('todo_write: todos 必须是数组');
       const items = [];
@@ -415,7 +414,7 @@ const toolDefs = [
     description: '获取工作区与远程环境信息(平台、磁盘、常用工具版本),任务开始前建议先调用',
     parameters: { type: 'object', properties: {}, required: [] },
     async run() {
-      const info = {
+      const info: any = {
         workspace: ssh.workspace || null,
         platform: ssh.platform,
         home: ssh.home
@@ -579,7 +578,7 @@ const localToolDefs = [
     description: '获取本地工作区与本机环境信息(平台、磁盘、工具版本),任务开始前建议先调用',
     parameters: { type: 'object', properties: {}, required: [] },
     async run() {
-      const info = { workspace: localFs.workspace || null, platform: process.platform, home: localFs.home };
+      const info: any = { workspace: localFs.workspace || null, platform: process.platform, home: localFs.home };
       const probe = async (cmd) => { try { const r = await execLocal(cmd, { cwd: localFs.home, timeout: 8000 }); return r.code === 0 && r.stdout.trim() ? r.stdout.trim().split('\n')[0] : null; } catch { return null; } };
       const [node, git] = await Promise.all([probe('node --version'), probe('git --version')]);
       info.toolVersions = { node, git };
@@ -642,7 +641,7 @@ const interactionToolDefs = [
 // ---------------- 内置守卫(pre-execute,只能拒绝不能放行) ----------------
 
 // 高危命令拦截:毁灭性命令直接拒绝(工具自身的越界检查之外的最后防线)
-const DANGEROUS_COMMANDS = [
+const DANGEROUS_COMMANDS: Array<[RegExp, string]> = [
   [/\brm\s+(-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*)\s+(\/|\$HOME|~)(\s|\/|$)/, 'rm 递归删除根目录/家目录'],
   [/\bmkfs(\.\w+)?\b/, '格式化磁盘(mkfs)'],
   [/\bdd\b[^|;&>]*of=\/dev\//, 'dd 直写块设备'],
@@ -707,7 +706,7 @@ const SKILLS_TTL_MS = 60_000;      // 目录缓存 TTL:每轮至多全量扫描�
 const SKILL_DESC_MAX = 500;        // 目录中 description 截断长度(对齐 harness)
 
 // 解析 Markdown 头部 frontmatter(--- 包围的 key: value 行)与正文
-function splitFrontmatter(text) {
+function splitFrontmatter(text: string): { meta: Record<string, any>; body: string } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
   if (!m) return { meta: {}, body: text };
   const meta = {};
@@ -994,7 +993,7 @@ function unlinkSkillText(file) {
     fs.unlinkSync(skillFsPath(file));
     return;
   }
-  return new Promise((res, rej) => ssh.sftp.unlink(file, (e) => (e ? rej(e) : res())));
+  return new Promise<void>((res, rej) => ssh.sftp.unlink(file, (e) => (e ? rej(e) : res())));
 }
 
 // 递归删除技能目录:本机走 fs,远程走 SFTP
@@ -1205,7 +1204,7 @@ let ensureToolsPromise = null;    // 在途安装(并发调用合并)
 let ensureCache = null;           // { key, at, result }
 
 function ensureConnKey() {
-  const hi = ssh.hostInfo || {};
+  const hi: any = ssh.hostInfo || {};
   return hi.host ? `${hi.username}@${hi.host}:${hi.port}` : 'local';
 }
 
@@ -1243,7 +1242,7 @@ async function doEnsureSearchTools() {
   };
   const which = (bin) => `command -v ${bin}`;
 
-  const present = {};
+  const present: Record<string, boolean> = {};
   for (const bin of ['rg', 'grep', 'python3', 'python', 'busybox']) present[bin] = await probe(which(bin));
   log('info', `搜索工具: rg=${present.rg ? '✓' : '—'} grep=${present.grep ? '✓' : '—'} python=${present.python3 || present.python ? '✓' : '—'} busybox=${present.busybox ? '✓' : '—'}`);
   // 已有任一可用搜索工具(rg 最优,其次 grep/python/busybox)即满足搜索链路,无需安装
