@@ -5,9 +5,11 @@ import AiConfigPanel from './AiConfigPanel';
 import SkillsPanel from './SkillsPanel';
 import PluginsPanel from './PluginsPanel';
 import PromptInjectPanel from './PromptInjectPanel';
+import ThemePanel from './ThemePanel';
 
 const MENUS = [
   { id: 'ai', icon: '🤖', label: 'AI 配置' },
+  { id: 'theme', icon: '🎨', label: '主题' },
   { id: 'skills', icon: '🧩', label: '技能' },
   { id: 'plugins', icon: '🔌', label: '工具插件' },
   { id: 'inject', icon: '📌', label: '全局指令' }
@@ -39,6 +41,7 @@ export default function SettingsPanel({ onClose, connected = false }: SettingsPa
           </div>
           <div className="settings-content">
             {active === 'ai' && <AiConfigPanel />}
+            {active === 'theme' && <ThemePanel />}
             {active === 'skills' && <SkillsPanel connected={connected} />}
             {active === 'plugins' && <PluginsPanel />}
             {active === 'inject' && <PromptInjectPanel />}

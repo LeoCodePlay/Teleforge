@@ -1,7 +1,25 @@
+# 依赖
 node_modules/
+
+# 构建产物
 web/dist/
+web/dist-preview/
+
+# 日志与调试
 *.log
+server-trace.log*
+
+# 本地工具目录(不入库)
+.superpowers/
+.playwright-cli/
+docs/superpowers/
+dbg2.mjs
+
+# 编辑器
+.vscode/
+.idea/
 .DS_Store
+
 # 运行时数据(会话历史持久化,含对话工具结果与连接配置缓存,不入库)
 data/
 server/data/

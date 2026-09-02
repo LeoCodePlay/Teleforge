@@ -3,7 +3,7 @@
 // 状态与聊天输入框下方的切换器共享(见 llm-context.tsx)
 import React, { useMemo, useState } from 'react';
 import { useLlm } from '../llm-context';
-import { PROVIDERS } from '../llm-providers';
+import { PROVIDERS, getDefaultModelContext } from '../llm-providers';
 import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../types';
 import GlassSelect from './GlassSelect';
 
@@ -191,45 +191,25 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // 上下文参数编辑表单:当前正配置的模型 + 输入窗口/输出上限
-  const [cfgModel, setCfgModel] = useState('');
-  const [cfgWindow, setCfgWindow] = useState('');
-  const [cfgTokens, setCfgTokens] = useState('');
-
-  // 切换要配置的模型时回填已有配置
-  const selectCfgModel = (m: string) => {
-    setCfgModel(m);
-    const c = modelConfig[m] || {};
-    setCfgWindow(c.contextWindow ? String(c.contextWindow) : '');
-    setCfgTokens(c.maxTokens ? String(c.maxTokens) : '');
-  };
-
-  // 保存/更新当前模型的上下文配置(两者为空则清除该条配置)
-  const saveModelCfg = () => {
-    if (!cfgModel) return;
-    const win = Math.floor(Number(cfgWindow));
-    const tok = Math.floor(Number(cfgTokens));
+  // 直接更新某模型的上下文配置(输入窗口/输出上限);两项都为空时清除该条配置
+  const updateModelCfg = (m: string, field: 'contextWindow' | 'maxTokens', raw: string) => {
+    const n = Math.floor(Number(raw));
     setModelConfig((cur) => {
       const next = { ...cur };
-      if ((!win || win <= 0) && (!tok || tok <= 0)) delete next[cfgModel];
-      else next[cfgModel] = {
-        ...(win > 0 ? { contextWindow: win } : {}),
-        ...(tok > 0 ? { maxTokens: tok } : {})
-      };
+      const prev = next[m] || {};
+      const merged: ModelContextConfig = {};
+      if (field === 'contextWindow') {
+        if (prev.maxTokens) merged.maxTokens = prev.maxTokens;
+        if (n > 0) merged.contextWindow = n;
+      } else {
+        if (prev.contextWindow) merged.contextWindow = prev.contextWindow;
+        if (n > 0) merged.maxTokens = n;
+      }
+      if (merged.contextWindow || merged.maxTokens) next[m] = merged;
+      else delete next[m];
       return next;
     });
   };
-
-  const clearModelCfg = () => {
-    if (!cfgModel) return;
-    setModelConfig((cur) => { const n = { ...cur }; delete n[cfgModel]; return n; });
-    setCfgWindow(''); setCfgTokens('');
-  };
-
-  const cfgSummary = models.filter((m) => modelConfig[m]).map((m) => {
-    const c = modelConfig[m];
-    return `${m}(${c.contextWindow ? '入' + c.contextWindow : ''}${c.contextWindow && c.maxTokens ? '/' : ''}${c.maxTokens ? '出' + c.maxTokens : ''})`;
-  });
 
   // 预置模板下拉(添加模式):选中后填充名称与 Base URL
   const [presetId, setPresetId] = useState('');
@@ -354,13 +334,32 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
               <button onClick={addManualModel}>添加</button>
             </div>
             {models.length > 0 && (
-              <div className="model-chips">
-                {models.map((m) => (
-                  <span key={m} className="model-chip">
-                    {m}
-                    <button title="移除" onClick={() => toggleModel(m)}>✕</button>
-                  </span>
-                ))}
+              <div className="model-config-list">
+                {models.map((m) => {
+                  const cfg = modelConfig[m] || {};
+                  const dflt = getDefaultModelContext(m);
+                  const fmt = (n?: number) => (n ? (n >= 1000000 ? (n / 1000000) + 'M' : n >= 1000 ? (n / 1000) + 'k' : String(n)) : '');
+                  return (
+                    <div key={m} className="model-config-row">
+                      <span className="mc-name" title={m}>{m}</span>
+                      <label className="mc-field">
+                        <span>上下文</span>
+                        <input type="number" min={0} step={1000}
+                          value={cfg.contextWindow ? String(cfg.contextWindow) : ''}
+                          placeholder={dflt.contextWindow ? '默认 ' + fmt(dflt.contextWindow) : '默认'}
+                          onChange={(e) => updateModelCfg(m, 'contextWindow', e.target.value)} />
+                      </label>
+                      <label className="mc-field">
+                        <span>最大输出</span>
+                        <input type="number" min={0} step={256}
+                          value={cfg.maxTokens ? String(cfg.maxTokens) : ''}
+                          placeholder={dflt.maxTokens ? '默认 ' + fmt(dflt.maxTokens) : '默认'}
+                          onChange={(e) => updateModelCfg(m, 'maxTokens', e.target.value)} />
+                      </label>
+                      <button className="mc-remove" title="移除" onClick={() => toggleModel(m)}>✕</button>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {remoteModels && (
@@ -384,51 +383,6 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
               </div>
             )}
 
-            {/* 模型上下文参数:输入窗口/输出上限,超窗自动压缩早期对话 */}
-            <div className="model-section">
-              <div className="ms-head">
-                <span className="ms-title">模型上下文参数(可选)</span>
-              </div>
-              <div className="hint">配置每个模型的输入上下文窗口与单次输出上限;对话接近上限时自动把早期历史压缩成摘要(不配置则不启用自动压缩)。</div>
-              <div className="row gap" style={{ marginTop: 8 }}>
-                <GlassSelect className="tb-model" dir="up" value={cfgModel}
-                  placeholder="选择要配置的模型…"
-                  options={models.map((m) => ({ value: m, label: m }))}
-                  onChange={selectCfgModel} />
-              </div>
-              {cfgModel && (
-                <>
-                  <div className="row gap" style={{ marginTop: 8 }}>
-                    <div className="field grow">
-                      <label>输入上下文窗口(token)</label>
-                      <input type="number" min={0} step={1000} value={cfgWindow}
-                        onChange={(e) => setCfgWindow(e.target.value)} placeholder="如 64000" />
-                    </div>
-                    <div className="field grow">
-                      <label>输出上限·max_tokens</label>
-                      <input type="number" min={0} step={256} value={cfgTokens}
-                        onChange={(e) => setCfgTokens(e.target.value)} placeholder="如 8192" />
-                    </div>
-                  </div>
-                  <div className="row gap" style={{ marginTop: 4 }}>
-                    <button className="sm" onClick={saveModelCfg}>
-                      {modelConfig[cfgModel] ? '更新配置' : '保存配置'}
-                    </button>
-                    {modelConfig[cfgModel] && (
-                      <button className="sm danger" onClick={clearModelCfg}>清空</button>
-                    )}
-                    <span className="hint" style={{ marginTop: 0 }}>该模型: {modelConfig[cfgModel]
-                      ? `输入 ${modelConfig[cfgModel].contextWindow || '默认'} · 输出 ${modelConfig[cfgModel].maxTokens || '默认'}`
-                      : '未配置(不启用自动压缩)'}</span>
-                  </div>
-                </>
-              )}
-              {cfgSummary.length > 0 && (
-                <div className="model-chips" style={{ marginTop: 10 }}>
-                  {cfgSummary.map((s) => <span key={s} className="model-chip">{s}</span>)}
-                </div>
-              )}
-            </div>
           </div>
 
           {error && <div className="error">✕ {error}</div>}

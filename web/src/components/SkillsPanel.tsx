@@ -114,18 +114,24 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
 
   return (
     <div>
-      <div className="panel-title row">
+      {/* 标题行:只放标题与刷新,避免窄窗口下挤压换行 */}
+      <div className="panel-title row skills-head">
         <span>技能</span>
         <span className="muted sm">({counts.all})</span>
         <span className="grow" />
-        <select className="mini-select" value={filter} onChange={(e) => setFilter(e.target.value)}
-          title="按来源筛选">
-          <option value="all">全部 ({counts.all})</option>
-          <option value="local">本机 · 项目/用户级 ({counts.local})</option>
-          <option value="remote">远程 · 项目/用户级 ({counts.remote})</option>
-          <option value="builtin">内置库 ({counts.builtin})</option>
-        </select>
         <button className="sm" onClick={() => load()} disabled={loading}>{loading ? '扫描中…' : '⟳ 重新扫描'}</button>
+      </div>
+      {/* 筛选工具条:改用统一的 GlassSelect 组件;数量放入菜单 hint,选项文字不再挤占标题行 */}
+      <div className="skill-toolbar row">
+        <GlassSelect className="skill-filter" value={filter} onChange={(v) => setFilter(v)} title="按来源筛选"
+          options={[
+            { value: 'all', label: '全部技能', hint: `${counts.all} 个` },
+            { value: 'local', label: '本机 · 项目/用户级', hint: `${counts.local} 个` },
+            { value: 'remote', label: '远程 · 项目/用户级', hint: `${counts.remote} 个` },
+            { value: 'builtin', label: '内置库', hint: `${counts.builtin} 个` }
+          ]} />
+        <span className="grow" />
+        <span className="muted sm skill-count">当前显示 {shown.length} 个</span>
       </div>
       <div className="hint" style={{ marginBottom: 8 }}>
         技能是可复用的任务指令,AI 会在任务匹配时通过 skill 工具自动加载。来源:内置(deepseek-harness 与 Claude Code)、

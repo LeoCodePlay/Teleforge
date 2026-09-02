@@ -275,6 +275,7 @@ async function main() {
     const ds = ws.events.filter((e) => e.type === 'agent' && e.event === 'done');
     return ds.length ? ds[ds.length - 1] : null;
   }, 20000);
+  const sidA = agentEvents.sid; // 服务器 A 上第一个会话(后续用于多服务器切换测试)
   const toolCalls = ws.events.filter((e) => e.type === 'agent' && e.event === 'tool_call');
   const toolResults = ws.events.filter((e) => e.type === 'agent' && e.event === 'tool_result');
   const toolsDone = toolCalls.map((t) => t.tool);
@@ -289,12 +290,88 @@ async function main() {
   const notes = fs.readFileSync(path.join(ROOT, 'src', 'ai-notes.md'), 'utf8');
   check('写入内容正确', notes.includes('AI 生成的笔记'), notes);
 
+  // 8.5 多服务器切换不中断正在回答的会话:运行中切到别的服务器,后台继续跑、可跨服务器看到
+  console.log('== 测试多服务器切换不中断(后台会话绑定原服务器)==');
+  const SSH_PORT_B = 2298;
+  const ROOT_B = fs.mkdtempSync(path.join(tmpdir(), 'sshai-e2e-b-'));
+  makeFixture(ROOT_B);
+  const mockB = startMockSsh({ port: SSH_PORT_B, rootDir: ROOT_B });
+  const KEY_A = `127.0.0.1:${SSH_PORT}:tester`;   // 连接 id(SshManager.keyOf 格式 host:port:user)
+  const KEY_B = `127.0.0.1:${SSH_PORT_B}:tester`;
+  const TAG_A = `tester@127.0.0.1:${SSH_PORT}`;   // 会话作用域键(connKeyOf 格式 user@host:port)
+  {
+    // 连接第二台服务器 B(活动连接切到 B,会话列表切到 B 的作用域)
+    await ws.request('connect', { ssh: { host: '127.0.0.1', port: SSH_PORT_B, username: 'tester', auth: { type: 'password', password: 'pass' }, autoReconnect: true } });
+    await waitFor(() => ws.events.find((e) => e.type === 'status' && e.port === SSH_PORT_B && e.status === 'connected'));
+    // 切回 A,对 A 的会话再次发起一轮(mock LLM 跑完整工具循环需要一两秒,期间做多次切换)
+    await ws.request('conn_switch', { id: KEY_A });
+    await waitFor(() => ws.events.find((e) => e.type === 'status' && e.port === SSH_PORT && e.status === 'connected'));
+    const mark = ws.events.length;
+    ws.send('speak', { text: '切服务器期间继续干' });
+    await new Promise((r) => setTimeout(r, 150)); // 让 agent 真正进入运行态
+    // 运行中来回复切换 A <-> B(不做任何停止动作)
+    await ws.request('conn_switch', { id: KEY_B });
+    await ws.request('conn_switch', { id: KEY_A });
+    await ws.request('conn_switch', { id: KEY_B });
+    // B 视角:会话列表应包含 A 那台服务器上仍在后台运行的会话(带 connKey 标记)
+    let sawForeign = false;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 3000) {
+      const lst = await ws.request('session_list');
+      const entry = lst.sessions.find((s) => s.id === sidA);
+      if (entry && entry.connKey === TAG_A) { sawForeign = true; break; }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    check('切到B后,A 运行中的会话出现在列表(foreign + connKey)', sawForeign, JSON.stringify((await ws.request('session_list')).sessions.map((s) => ({ id: s.id, ck: s.connKey }))));
+    // 后台运行照常完成:done 事件到达,且期间没有 stopped
+    const done2 = await waitFor(() => {
+      const ds = ws.events.slice(mark).filter((e) => e.type === 'agent' && e.event === 'done' && e.sid === sidA);
+      return ds.length ? ds[ds.length - 1] : null;
+    }, 20000);
+    const stoppedA = ws.events.slice(mark).filter((e) => e.type === 'agent' && e.event === 'stopped' && e.sid === sidA).length;
+    check('切换服务器不中断:后台 run 正常 done', Boolean(done2));
+    check('切换过程中没有任何 stopped 事件', stoppedA === 0);
+    // 连接绑定验证:这一轮的工具操作(含 write_file)落在 A 的磁盘,B 未被误写
+    check('运行结果写入原服务器A(绑定正确)', fs.existsSync(path.join(ROOT, 'src', 'ai-notes.md')));
+    check('服务器B未被误写入(工具未串到新活动连接)', !fs.existsSync(path.join(ROOT_B, 'src', 'ai-notes.md')));
+    // 切回 A:会话完整可读,回答内容不丢
+    await ws.request('conn_switch', { id: KEY_A });
+    const lstA = await ws.request('session_list');
+    const sA = lstA.sessions.find((s) => s.id === sidA);
+    check('切回A:会话仍在且历史完整(不丢内容)', Boolean(sA) && (sA.msgCount || 0) > 0, JSON.stringify(sA));
+  }
+
+  // 8.6 断开所属服务器才会中断;已流式生成的部分内容保留在历史里
+  console.log('== 测试断开所属服务器中断(部分内容保留)==');
+  {
+    const mark = ws.events.length;
+    ws.send('speak', { text: '再联调一轮' });
+    // 等首段流式输出出现(此时模型仍在生成中),立刻断开服务器 A
+    const delta = await waitFor(() => ws.events.slice(mark).find((e) => e.type === 'agent' && e.event === 'text_delta' && e.sid === sidA), 8000);
+    check('新一轮已开始流式输出', Boolean(delta), '无 text_delta');
+    const t1 = Date.now();
+    await ws.request('conn_disconnect', { id: KEY_A }, 'ok');
+    const stoppedD = await waitFor(() => ws.events.slice(mark).find((e) => e.type === 'agent' && e.event === 'stopped' && e.sid === sidA), 8000);
+    check(`断开所属服务器后运行被中断(stopped,${Date.now() - t1}ms)`, Boolean(stoppedD));
+    // 重新连回 A,打开该会话:部分生成内容已保留,没有"直接不见"
+    await ws.request('connect', { ssh: { host: '127.0.0.1', port: SSH_PORT, username: 'tester', auth: { type: 'password', password: 'pass' }, autoReconnect: true } });
+    await waitFor(() => ws.events.find((e) => e.type === 'status' && e.port === SSH_PORT && e.status === 'connected'));
+    await ws.request('session_switch', { id: sidA });
+    const hist = await ws.request('get_history');
+    const lastAsst = [...(hist.turns || [])].reverse().find((t) => t.role === 'assistant');
+    check('中断时已生成的部分内容保留在历史(含中断标记)',
+      Boolean(lastAsst) && String(lastAsst.content || '').includes('生成被中断'),
+      JSON.stringify(lastAsst?.content || '').slice(0, 150));
+  }
+
   // 9. 保活/重连:断开 mock SSH 后再监听重连事件(简要验证不崩溃)
   console.log('== 收尾 ==');
-  ws.send('disconnect', {});
+  await ws.request('conn_disconnect', { id: KEY_A }, 'ok').catch(() => {});
+  await ws.request('conn_disconnect', { id: KEY_B }, 'ok').catch(() => {});
   await new Promise((r) => setTimeout(r, 300));
   ws.close();
   mock.close();
+  mockB.close();
   server.close();
 
   console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);

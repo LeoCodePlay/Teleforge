@@ -1,20 +1,53 @@
 // WebSocket 服务层:统一协议转发
-// 客户端 -> 服务端: connect/disconnect/llm/list_dir/read_file/write_file/create_dir/delete/
-//                    set_workspace/speak/stop_agent/run_command/stop_command/get_status
+// 客户端 -> 服务端: connect/disconnect/conn_switch/conn_disconnect/llm/list_dir/read_file/write_file/create_dir/delete/
+//                    set_workspace/speak/stop_agent/run_command/stop_command/get_status/ssh_profiles_*
 // 服务端 -> 客户端: status/dir_list/file_content/file_saved/dir_created/deleted/workspace/
-//                    agent(事件流)/exec(命令输出流)/log/error
+//                    agent(事件流)/exec(命令输出流)/log/error/ssh_profiles
 //
 // 另有 /ws/term 交互式终端通道(真实 PTY shell):文本帧 = JSON 控制消息
 // (start/resize),二进制帧 = 终端原始数据(键盘输入上行 / 屏幕输出下行)
+import fs from 'node:fs';
 import { WebSocketServer } from 'ws';
 import { WS_MAX_PAYLOAD } from './config.js';
 import { sshManager as ssh } from './ssh-manager.js';
 import { localFs } from './local-fs.js';
 import { localToRemote, remoteToLocal } from './transfer.js';
 import { agent, toolRegistry, setAgentHub } from './agent/agent.js';
-import { clearEnvInfo, clearLocalEnvInfo, refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from './agent/tools.js';
+import { clearEnvInfo, clearLocalEnvInfo, clearSearchEngine, ensureSearchTools, refreshSkillsCatalog, getSkillFull, saveSkill, deleteSkill, copyBuiltinToRemote } from './agent/tools.js';
+import { answerAskUser, rejectAskUser, rejectAllAskUser } from './agent/ask-user.js';
 import { toolSettings } from './agent/tool-settings.js';
 import { getPromptInject, setPromptInject } from './agent/prompt-inject.js';
+import { sshProfiles, sanitizeProfile } from './ssh-profiles-store.js';
+import { migrateLegacy } from './session-store.js';
+
+// 解析 connect 消息:优先按已保存配置(仅凭 profileId 即可取回密码/密钥),否则用消息内的 ssh 原始参数
+function resolveConnectOpts(msg) {
+  if (msg.profileId) {
+    const p = sshProfiles.get(String(msg.profileId));
+    if (!p) throw new Error('保存的服务器不存在,请刷新列表后重试');
+    return {
+      profileId: p.id, host: p.host, port: Number(p.port) || 22, username: p.username,
+      autoReconnect: p.autoReconnect !== false,
+      auth: profileAuth(p)
+    };
+  }
+  const { host, port, username, auth, autoReconnect } = msg.ssh || {};
+  if (!host || !username) throw new Error('缺少 host 或 username');
+  return { host, port: Number(port) || 22, username, autoReconnect: autoReconnect !== false, auth: { type: 'password', ...auth } };
+}
+
+// 从已保存配置构造 ssh2 认证参数;密钥只存 keyPath 时由服务端本地读取(换浏览器/页面刷新也能连接)
+function profileAuth(p) {
+  if (p.authType === 'key') {
+    let privateKey = p.keyText;
+    if (!privateKey && p.keyPath) {
+      try { privateKey = fs.readFileSync(p.keyPath, 'utf8'); }
+      catch (e) { throw new Error(`读取私钥失败(${p.keyPath}): ${e.message}`); }
+    }
+    return { type: 'privateKey', privateKey, passphrase: p.passphrase || undefined };
+  }
+  return { type: 'password', password: p.password };
+}
 
 export function setupWs(httpServer) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
@@ -53,25 +86,61 @@ export function setupWs(httpServer) {
     }
   });
 
-  // SSH 状态 -> 前端(busySessions:运行中的会话 id 列表,多会话并行的忙碌集合)
-  const emitStatus = () => send({
-    type: 'status',
-    status: ssh.status,
-    host: ssh.hostInfo?.host, port: ssh.hostInfo?.port, username: ssh.hostInfo?.username,
-    platform: ssh.platform, home: ssh.home, workspace: ssh.workspace,
-    localWorkspace: localFs.workspace,
-    localHome: localFs.home,
-    agentBusy: agent.busyNow,
-    busySessions: agent.busyIds(),
-    llmModel: agent.llm ? (agent.llm.isMock ? 'mock' : agent.llm.model) : null
-  });
+  // SSH 状态 -> 前端(活动连接字段 + 全部连接列表,前端据此做多连接管理与快速切换;
+  // busySessions:运行中的会话 id 列表,多会话并行的忙碌集合)
+  // 注意:这里必须取「真实活动连接」(ssh.activeId/conns),不能用 ssh.active——
+  // agent 会话运行期间 ssh.active 被 AsyncLocalStorage 重定向到会话绑定的连接,
+  // 若按其上报,顶栏会错误显示成后台运行的那台服务器。
+  const emitStatus = () => {
+    const activeId = ssh.activeId;
+    const active = activeId ? ssh.conns.get(activeId) || null : null;
+    send({
+      type: 'status',
+      status: active?.status || 'disconnected',
+      host: active?.hostInfo?.host ?? null,
+      port: active?.hostInfo?.port ?? null,
+      username: active?.hostInfo?.username ?? null,
+      platform: active?.platform ?? null,
+      home: active?.home ?? null,
+      workspace: active?.workspace ?? null,
+      ...ssh.snapshot(), // { activeConn, conns: [...] }
+      localWorkspace: localFs.workspace,
+      localHome: localFs.home,
+      agentBusy: agent.busyNow,
+      busySessions: agent.busyIds(),
+      llmModel: agent.llm ? (agent.llm.isMock ? 'mock' : agent.llm.model) : null
+    });
+  };
   ssh.on('status', emitStatus);
-  ssh.on('connection-lost', () => { agent.stopAll(); emitStatus(); });
+  // 任一连接意外掉线(含后台非活动连接):只停绑定在该连接上的会话(其工具已无法执行),
+  // 其他服务器上还在后台运行的会话不受影响,可继续干完。
+  ssh.on('connection-lost', (key) => {
+    clearSearchEngine();
+    const lost = key != null ? ssh.conns.get(String(key)) : null;
+    if (lost) agent.stopForConn(lost); else agent.stopAll();
+    syncAgentScope();
+    emitStatus();
+  });
   ssh.on('log', (level, message) => send({ type: 'log', level, message }));
+
+  // ---- 会话作用域:会话按"当前活动连接"隔离(连接 = username@host:port;无连接 = 本地工作区模式) ----
+  const LOCAL_CONN_KEY = 'local';
+  const connKeyOf = (conn) => {
+    const hi = conn?.hostInfo;
+    return hi && hi.host ? `${hi.username}@${hi.host}:${hi.port}` : LOCAL_CONN_KEY;
+  };
+  // 连接状态变化后同步 agent 作用域(切服务器/断开都走这里);
+  // 首次连上服务器时把无归属的旧会话一次性迁移到该服务器
+  const syncAgentScope = () => {
+    const key = connKeyOf(ssh.active);
+    if (key !== LOCAL_CONN_KEY) migrateLegacy(key);
+    agent.setConnKey(key);
+  };
 
   wss.on('connection', (ws) => {
     client = ws;
     send({ type: 'log', level: 'info', message: '前端已连接' });
+    syncAgentScope();
     emitStatus();
 
     ws.on('message', async (raw) => {
@@ -83,22 +152,56 @@ export function setupWs(httpServer) {
       try {
         switch (type) {
           case 'connect': {
-            const { host, port, username, auth, autoReconnect } = msg.ssh || {};
-            if (!host || !username) throw new Error('缺少 host 或 username');
-            await ssh.connect({
-              host, port: Number(port) || 22, username,
-              auth: { type: 'password', ...auth },
-              autoReconnect: autoReconnect !== false
-            });
+            // 支持两种入参:msg.profileId(已保存配置)或 msg.ssh(原始连接参数)
+            await ssh.connect(resolveConnectOpts(msg));
+            clearSearchEngine(); // 换服务器后旧探测结果失效,下次搜索重新探测
+            ensureSearchTools({ force: true }).catch(() => {}); // 连接后后台自检,缺失的搜索工具自动安装(不阻塞连接应答)
+            syncAgentScope();    // 连接成功后会话作用域切到该服务器
             reply({ type: 'ok' });
             emitStatus();
             break;
           }
-          case 'disconnect':
-            await ssh.disconnect();
+          case 'disconnect':   // 旧协议:断开活动连接
+          case 'conn_disconnect': { // 新协议:断开指定连接(缺省 = 活动连接)
+            const conn = (msg.id ? ssh.conns.get(String(msg.id)) : ssh.active) || null;
+            await ssh.disconnect(msg.id);
+            clearSearchEngine();
+            // 断开的是该会话所属服务器:其后台运行被中断(部分已生成内容会保留);
+            // 其他服务器上的运行不受影响。
+            agent.stopForConn(conn);
+            syncAgentScope(); // 活动连接变化:回落到其他连接或本地模式
             reply({ type: 'ok' });
             emitStatus();
             break;
+          }
+          case 'conn_switch': {
+            // 快速切换活动连接:不重新连接,只切换操作对象。
+            // 不停止任何会话:正在回答的会话绑定其所属服务器的连接,继续后台运行,
+            // 会话列表里会保留它(标「运行中」),切回该服务器即可查看。
+            const ok = ssh.switchActive(String(msg.id || ''));
+            if (!ok) throw new Error('连接不存在或已被移除');
+            clearEnvInfo(); clearSearchEngine(); // 环境快照按服务器隔离
+            syncAgentScope(); // 会话列表切到新服务器的会话
+            reply({ type: 'ok' });
+            emitStatus();
+            break;
+          }
+          // ---- SSH 服务器配置管理(存后端,换浏览器/刷新共享) ----
+          case 'ssh_profiles_list':
+            reply({ type: 'ssh_profiles', profiles: sshProfiles.list() });
+            break;
+          case 'ssh_profile_save': {
+            const entry = sanitizeProfile(msg.profile);
+            if (!entry) throw new Error('请填写主机与用户名');
+            sshProfiles.upsert(entry);
+            reply({ type: 'ssh_profiles', profiles: sshProfiles.list() });
+            break;
+          }
+          case 'ssh_profile_delete': {
+            if (!sshProfiles.remove(String(msg.id || ''))) throw new Error('配置不存在');
+            reply({ type: 'ssh_profiles', profiles: sshProfiles.list() });
+            break;
+          }
           case 'llm':
             agent.configureLlm(msg.llm);
             reply({ type: 'ok' });
@@ -110,7 +213,7 @@ export function setupWs(httpServer) {
           case 'clear_history':
             agent.clearHistory();
             reply({ type: 'ok' });
-            send({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId });
+            send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
             break;
           // 手动压缩当前会话上下文(/compact 命令:无条件把早期对话压缩成摘要)
           case 'compact_now': {
@@ -120,33 +223,33 @@ export function setupWs(httpServer) {
           }
 
           case 'session_list':
-            reply({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId });
+            reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
             break;
           case 'session_create': {
             // 多会话并行:新建/切换不影响其他会话的运行
             const s = agent.createSession(msg.title);
-            reply({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId, created: s });
+            reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId, created: s });
             break;
           }
           case 'session_switch': {
             agent.switchSession(msg.id);
-            reply({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId });
+            reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
             break;
           }
           case 'session_delete': {
             agent.deleteSession(msg.id);
-            reply({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId });
+            reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
             break;
           }
           case 'session_rename':
             agent.renameSession(msg.id, msg.title);
-            reply({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId });
+            reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
             break;
           case 'session_fork': {
             // 从当前活跃会话创建分支(at 为 turns 索引,截断到该条消息为止;
             // 缺省 -1 从尾部整体克隆)并切换
             const forked = agent.forkSession(typeof msg.at === 'number' && msg.at >= 0 ? msg.at : -1);
-            reply({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId, created: forked });
+            reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId, created: forked });
             break;
           }
 
@@ -341,13 +444,14 @@ export function setupWs(httpServer) {
 
           case 'speak': {
             if (!msg.text?.trim()) throw new Error('指令为空');
-            if (!ssh.workspace) throw new Error('请先选择远程工作区');
+            // 可连服务器对话(操作远程+本地),也可不连服务器仅操作本地工作区
+            if (!ssh.workspace && !localFs.workspace) throw new Error('请先选择远程工作区或本地工作区');
             // 不 await:流式回收,事件经 send 推送;reasoning 为推理等级(default|off|low|high|xhigh|max)
             // 提交到当前活跃会话:该会话空闲时开新轮,运行中自动转为 steer(补充指令注入下一步)
             // 其他会话的运行不受影响(多会话并行)
             Promise.resolve(agent.submit(agent.sessionId, msg.text, { reasoning: msg.reasoning || 'default' }))
               .catch((e) => send({ type: 'agent', event: 'error', message: e.message, sid: agent.sessionId }))
-              .finally(() => { emitStatus(); send({ type: 'sessions', sessions: agent.listSessions(), active: agent.sessionId }); });
+              .finally(() => { emitStatus(); send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId }); });
             emitStatus(); // busy 立即置位,让前端马上显示"停止/暂停"
             reply({ type: 'ok' });
             break;
@@ -357,6 +461,20 @@ export function setupWs(httpServer) {
             emitStatus();
             reply({ type: 'ok' });
             break;
+
+          // ---- 用户提问(ask_user_question):前端作答回传 / 取消 ----
+          // 模型调用 ask_user_question 时会广播 agent 事件 ask_user(含 askId+题面),
+          // 前端作答后回传;挂起的提问由 ask-user.js 管理,超时/中止/断开自动作废。
+          case 'ask_user_answer': {
+            if (!answerAskUser(msg.askId, msg.answers)) throw new Error('提问不存在或已过期');
+            reply({ type: 'ok' });
+            break;
+          }
+          case 'ask_user_cancel': {
+            if (!rejectAskUser(msg.askId, '用户取消了提问')) throw new Error('提问不存在或已过期');
+            reply({ type: 'ok' });
+            break;
+          }
 
           case 'run_command': {
             if (!msg.command?.trim()) throw new Error('命令为空');
@@ -386,7 +504,11 @@ export function setupWs(httpServer) {
       }
     });
 
-    ws.on('close', () => { if (client === ws) client = null; });
+    ws.on('close', () => {
+      if (client === ws) client = null;
+      // 前端断开:正在等待用户回答的提问全部作废,对应工具返回结构化错误而不是挂死
+      rejectAllAskUser('前端连接已断开,提问已取消');
+    });
     ws.on('error', () => {});
   });
 

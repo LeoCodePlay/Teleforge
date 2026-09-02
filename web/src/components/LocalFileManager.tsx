@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { useFeedback } from '../feedback';
 import type { DirEntry } from '../types';
@@ -19,7 +20,13 @@ function fmtTime(ms: number | undefined) {
 }
 // 本地路径分隔符可能是 \ (Windows) 或 / (POSIX);"root:" = 我的电脑根视图(Windows 盘符 / POSIX 根)
 const ROOT = 'root:';
-const norm = (p: string | null | undefined) => { if (!p) return ROOT; const s = String(p).replace(/[\\/]+$/, ''); return s || ROOT; };
+// 归一化:去尾部斜杠;但 Windows 盘符根(F:)保留尾斜杠成"F:\",否则 path.resolve 会解析成该盘"当前目录"而非盘根
+const norm = (p: string | null | undefined) => {
+  if (!p) return ROOT;
+  const s = String(p).replace(/[\\/]+$/, '');
+  if (!s) return ROOT;
+  return /^[A-Za-z]:$/.test(s) ? s + '\\' : s;
+};
 const baseName = (p: string) => (p || '').split(/[\\/]/).filter(Boolean).pop() || 'item';
 const upDir = (p: string) => {
   if (!p || p === ROOT) return ROOT;
@@ -432,7 +439,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
 
       <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · 右键操作 · 传到远程当前目录</div>
 
-      {menu && (
+      {menu && createPortal(
         <div className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
           {menu.item && selection.size === 1 && menu.item.type === 'dir' && (
             <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}>📂 打开</button>
@@ -457,7 +464,8 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
               <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}>🗑 删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
             </>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

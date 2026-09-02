@@ -15,19 +15,24 @@ interface LocalDirBrowserProps {
 }
 
 export default function LocalDirBrowser({ initial, home, onClose, onPick }: LocalDirBrowserProps) {
-  const [path, setPath] = useState(() => {
-    const s = String(initial || home || '').replace(/[\\/]+$/, '');
-    return s || ROOT;
-  });
+  // Windows 盘符根保留尾斜杠(F: → F:\),与 LocalFileManager 的 norm 一致
+  const normDrive = (p: string | null | undefined) => {
+    const s = String(p || '').replace(/[\\/]+$/, '');
+    if (!s) return ROOT;
+    return /^[A-Za-z]:$/.test(s) ? s + '\\' : s;
+  };
+
+  const [path, setPath] = useState<string>(() => normDrive(initial || home || ''));
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
   const [error, setError] = useState('');
 
   const load = async (p: string) => {
+    const target = normDrive(p);
     setLoadingPath(p); setError('');
     try {
-      const r = await api.request('list_local_dir', { path: p }, 20000);
-      setPath(p); setEntries(r.entries || []);
+      const r = await api.request('list_local_dir', { path: target }, 20000);
+      setPath(target); setEntries(r.entries || []);
     } catch (e) { setError((e as Error).message); }
     finally { setLoadingPath(null); }
   };

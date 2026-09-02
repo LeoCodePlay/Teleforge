@@ -48,10 +48,15 @@ export class ToolRegistry {
     }));
   }
 
-  /** 模型可见的 ToolSchema 白名单投影(深拷贝,防调用方篡改定义);被禁用的工具不投影 */
-  schemas() {
+  /**
+   * 模型可见的 ToolSchema 白名单投影(深拷贝,防调用方篡改定义);被禁用的工具不投影。
+   * localOnly=true(未连接 SSH 的本地模式)时,带 remote 标记的工具一并剔除,
+   * 模型只能看到本机工具与技能/任务清单等非远程工具,从源头避免触发"SSH 连接已断开"。
+   */
+  schemas({ localOnly = false } = {}) {
     return [...this.tools.values()]
       .filter((t) => toolSettings.isEnabled(t.name))
+      .filter((t) => !(localOnly && t.remote))
       .map((t) => ({
         type: 'function',
         function: {
@@ -64,7 +69,10 @@ export class ToolRegistry {
 
   /**
    * 执行一次工具调用,永远 resolve 为规范化结果:
-   * { isError: boolean, content: string, ms: number }
+   * { isError: boolean, content: string, ms: number, concludesTurn?: boolean }
+   * concludesTurn:工具 run 返回 {content, concludesTurn:true} 时透传,让工具能显式
+   * 宣告"本轮到此为止"(移植 harness 的 ToolRunContext.concludeTurn),替代纯靠
+   * 模型"不再调工具"的隐式完成。
    * @param {{name: string, args: string|object, signal?: AbortSignal, invokeCtx?: object}} call
    *   invokeCtx:调用方上下文(如 {sid, session, emit}),原样并入工具 run 的第二参数,
    *   供 todo_write 这类需要写会话事件日志的工具使用;普通工具忽略它。
@@ -94,8 +102,19 @@ export class ToolRegistry {
     }
 
     try {
-      const content = await runWithTimeout(tool.run(parsed, { signal, ...(invokeCtx || {}) }), tool.timeoutMs || DEFAULT_TIMEOUT_MS, signal);
-      return { isError: false, content: capResult(String(content ?? '')), ms: Date.now() - started };
+      const rawResult = await runWithTimeout(tool.run(parsed, { signal, ...(invokeCtx || {}) }), tool.timeoutMs || DEFAULT_TIMEOUT_MS, signal);
+      // 工具可返回字符串(普通)、{content, concludesTurn}(显式收尾信号)或
+      // {content, meta}(结构化 UI 数据,如终端卡的 exitCode/cwd,见 tools.js)
+      const content = typeof rawResult === 'string' ? rawResult
+        : rawResult && typeof rawResult === 'object' ? String(rawResult.content ?? '')
+        : String(rawResult ?? '');
+      const concludesTurn = !!(rawResult && typeof rawResult === 'object' && rawResult.concludesTurn === true);
+      const meta = rawResult && typeof rawResult === 'object' ? rawResult.meta : undefined;
+      return {
+        isError: false, content: capResult(content), ms: Date.now() - started,
+        ...(concludesTurn ? { concludesTurn: true } : {}),
+        ...(meta !== undefined ? { meta } : {})
+      };
     } catch (e) {
       return fail(`工具执行错误: ${e.message}`);
     }
@@ -114,11 +133,15 @@ function runWithTimeout(p, ms, signal) {
   });
 }
 
-// 结果截断:保留头尾、折叠中段(与工具内部整形独立的双保险)
+// 结果截断:保留头尾、折叠中段(与工具内部整形独立的双保险);
+// 截断时追加 retrievalHint,提示模型中段/尾部可分段再取(对齐 harness spill 思路),
+// 避免模型拿不到关键信息而反复做同样的探测调用。
+const TRUNCATION_HINT = '\n[结果过长已截断:中段内容被省略。若需中段/尾部细节,可用 read_file(offset/limit) 或 run_command 缩小范围再取,不要重复相同调用]';
 function capResult(s, max = AGENT.TOOL_RESULT_MAX_CHARS) {
   if (!s) return '';
   if (s.length <= max) return s;
   return s.slice(0, Math.floor(max * 0.6))
-    + `\n…[结果过长,已截断,剩余 ${s.length - max} 字符,可缩小范围重试]…\n`
-    + s.slice(s.length - Math.floor(max * 0.4));
+    + `\n…[结果过长,已截断,剩余 ${s.length - max} 字符]…\n`
+    + s.slice(s.length - Math.floor(max * 0.4))
+    + TRUNCATION_HINT;
 }

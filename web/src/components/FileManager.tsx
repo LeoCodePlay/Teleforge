@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { useFeedback } from '../feedback';
 import type { DirEntry } from '../types';
@@ -475,7 +476,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
 
       <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · 右键操作 · 上传到当前目录</div>
 
-      {menu && (
+      {menu && createPortal(
         <div className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
           {menu.item && selection.size === 1 && menu.item.type === 'dir' && (
             <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}>📂 打开</button>
@@ -503,7 +504,8 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
               <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}>🗑 删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
             </>
           )}
-        </div>
+        </div>,
+        document.body
       )}
 
       <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}

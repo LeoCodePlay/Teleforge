@@ -12,9 +12,14 @@ export class LocalFs {
 
   async listDir(p) {
     // 空串/root: 表示"我的电脑"根视图(Windows 列出盘符,POSIX 列出根)
-    const raw = String(p ?? '');
+    let raw = String(p ?? '');
     if (raw === '' || raw === 'root:') return listRoots();
-    const abs = path.resolve(p || this.workspace || this.home || '.');
+    // Windows 盘符根归一:'C:'(无尾斜杠)在 path.resolve 时表示该盘"当前工作目录",
+    // 而不是盘根——比如服务 cwd 在 F:\...\server 时,path.resolve('F:') 会解析成它。
+    // 统一补成 'C:\' 形式,保证盘符双击/输入都落到盘根。
+    const drive = /^([A-Za-z]):[\\/]?$/.exec(raw);
+    if (drive) raw = drive[1] + ':\\';
+    const abs = path.resolve(raw || this.workspace || this.home || '.');
     const dirents = await fsp.readdir(abs, { withFileTypes: true });
     const entries = [];
     for (const d of dirents) {
@@ -27,7 +32,10 @@ export class LocalFs {
   }
 
   async stat(p) {
-    try { return await fsp.stat(path.resolve(p)); }
+    // 与 listDir 一致:Windows 裸盘符 'C:' 归一为 'C:\',避免解析成该盘当前工作目录
+    const dm = /^([A-Za-z]):[\\/]?$/.exec(String(p ?? ''));
+    const resolved = dm ? dm[1] + ':\\' : p;
+    try { return await fsp.stat(path.resolve(resolved)); }
     catch (e) { if (e.code === 'ENOENT') return null; throw e; }
   }
 

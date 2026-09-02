@@ -20,7 +20,9 @@ export class LlmClient {
    * 流式对话
    * @param {{messages, tools, signal, onDelta, reasoning}}
    *   reasoning 推理等级(default|off|low|high|xhigh|max),对应 reasoning_effort 参数
-   * @returns {Promise<{content, toolCalls:[{id,name,arguments}]}>}
+   * @returns {Promise<{content, toolCalls:[{id,name,arguments}], reasoning, finishReason}>}
+   *   finishReason:SSE 结束的 finish_reason(如 'stop' / 'length'),供 agent 判断
+   *   输出是否因 max_tokens 被截断(length 时不当作"完成")。mock 模式下为 undefined。
    */
   async chat({ messages, tools, signal, onDelta, reasoning = 'default' }) {
     if (this.isMock) return mockChat({ messages, tools, signal, onDelta });
@@ -173,6 +175,7 @@ async function parseSse(stream, { signal, onDelta }) {
   let buf = '';
   let content = '';
   let reasoning = ''; // 思考通道输出(DeepSeek/GLM/Qwen 等推理模型);回传规则见 chat() 的 passback
+  let finishReason = ''; // 最后一个非空 finish_reason(stop/length/tool_calls 等)
   const toolAcc = new Map(); // index -> {id,name,args}
   let toolSeq = [];
 
@@ -220,6 +223,10 @@ async function parseSse(stream, { signal, onDelta }) {
           const j = JSON.parse(data);
           const choice = j.choices && j.choices[0];
           if (choice?.delta) feedDelta(choice.delta);
+          // finish_reason 只在流末尾的(可能空 delta)块出现;记录最后一个非空值
+          if (choice && typeof choice.finish_reason === 'string' && choice.finish_reason) {
+            finishReason = choice.finish_reason;
+          }
         } catch { /* 忽略无法解析的行 */ }
       }
     }
@@ -236,7 +243,7 @@ async function parseSse(stream, { signal, onDelta }) {
         name: v.name,
         arguments: v.args
       }));
-    return { content, toolCalls, reasoning };
+    return { content, toolCalls, reasoning, finishReason };
   }
   return finish();
 }

@@ -1,6 +1,36 @@
 // 共享类型定义:前后端 WebSocket 消息为动态结构,这里只描述前端使用到的关键形状
 
-/** SSH 连接状态(服务端 status 事件) */
+/** 一条 SSH 连接(服务端多连接池中的一个) */
+export interface ConnInfo {
+  id: string;
+  profileId: string | null;
+  status: string; // disconnected | connecting | connected | reconnecting
+  host: string | null;
+  port: number | string | null;
+  username: string | null;
+  platform: string | null;
+  home: string | null;
+  workspace: string | null;
+  autoReconnect: boolean;
+  reason?: string | null;
+  retry?: number;
+}
+
+/** 已保存的 SSH 服务器配置(存于后端,切换浏览器共享;密码/密钥不下发) */
+export interface SshProfileInfo {
+  id: string;
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  authType: string;
+  keyPath: string;
+  autoReconnect: boolean;
+  hasPassword: boolean;
+  hasKey: boolean;
+}
+
+/** SSH 连接状态(服务端 status 事件;host/platform 等字段指向「活动连接」) */
 export interface ServerStatus {
   status: string;
   host: string | null;
@@ -14,6 +44,10 @@ export interface ServerStatus {
   agentBusy: boolean;
   busySessions: string[];
   llmModel: string | null;
+  /** 全部连接(多连接池快照) */
+  conns?: ConnInfo[];
+  /** 当前活动连接 id */
+  activeConn?: string | null;
 }
 
 /** 历史会话 */
@@ -22,6 +56,8 @@ export interface Session {
   title?: string;
   msgCount?: number;
   updatedAt?: string | number;
+  /** 所属作用域:服务器键(username@host:port)或 'local';与当前作用域不同 = 其他服务器后台运行的会话 */
+  connKey?: string | null;
 }
 
 /** 单个模型的上下文能力声明(可选):未配置时沿用全局字符预算裁剪,不启用自动压缩 */
@@ -71,6 +107,30 @@ export interface ToolCallInfo {
   ok?: boolean;
   ms?: number | null;
   result?: string | null;
+  /** 结构化 UI 数据(移植自 deepseek-harness 的 card 意图):终端卡 exitCode/cwd 等 */
+  meta?: ToolCallMeta | null;
+}
+
+/**
+ * 工具结果结构化 meta(由后端工具在 tool_result 附加,前端按 card 选择专属视图):
+ * - card='terminal':run_command/run_local_command 的终端卡(命令/工作目录/退出码/信号)
+ * - card='read':read_file 的读文件卡(path/size/offset/truncated)
+ * - card='diff':write/edit 的改动卡(kind=write|edit)
+ * - card='search':search_code 的搜索结果卡(pattern)
+ */
+export interface ToolCallMeta {
+  card?: 'terminal' | 'read' | 'diff' | 'search' | 'todo' | 'ask';
+  command?: string;
+  cwd?: string;
+  exitCode?: number | string | null;
+  signal?: string | null;
+  timedOut?: boolean;
+  path?: string;
+  size?: number;
+  offset?: number;
+  truncated?: boolean;
+  kind?: string;
+  pattern?: string;
 }
 
 /** 聊天消息内的分段:文本 / 思考 / 连续工具组,按实际发生顺序排列(思考可穿插在工具组之间) */
@@ -80,18 +140,58 @@ export interface MsgSegment {
   tools?: ToolCallInfo[];
 }
 
+/** 手动调用技能(/技能名)后注入记录:名称 + 描述 + 指令预览 */
+export interface SkillInjected {
+  name: string;
+  description?: string;
+  preview?: string;
+}
+
 /** 渲染用聊天消息 */
 export interface ChatMessage {
-  role: string; // user | assistant | notice ...
+  role: string; // user | assistant | notice | skilltag ...
   content?: string;
   segments?: MsgSegment[];
   streaming?: boolean;
   /** 分支点:该消息在服务端 turns 数组中的结束索引(>=0 时按此截断克隆,缺省 -1 从尾部) */
   forkTail?: number;
+  /** 手动调用技能(/技能名)注入的技能详情,仅 role=skilltag 使用 */
+  skills?: SkillInjected[];
 }
 
 /** 任务计划项(todo_write 工具维护,状态对齐 deepseek-harness) */
 export interface TodoItem {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
+}
+
+// ---- ask_user_question 工具(模型向用户提问) ----
+
+/** 一道题的候选选项 */
+export interface AskOption {
+  label: string;
+  description?: string;
+}
+
+/** 模型提出的一道题 */
+export interface AskQuestion {
+  id: string;
+  question: string;
+  header?: string;
+  options?: AskOption[];
+  multi_select?: boolean;
+}
+
+/** 一批提问(agent 事件 ask_user 携带) */
+export interface AskRequest {
+  askId: string;
+  questions: AskQuestion[];
+  sid?: string;
+}
+
+/** 一道题的回答(回传服务端 / 模型可读) */
+export interface AskAnswerItem {
+  id: string;
+  selected: string[];
+  custom?: string;
 }

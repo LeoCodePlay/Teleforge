@@ -62,10 +62,32 @@ function writeEventsFile(id, events) {
   fs.renameSync(tmp, fileFor(id));
 }
 
-/** 会话元数据列表(按最近更新倒序) */
-export function list() {
+/**
+ * 会话元数据列表(按最近更新倒序)。
+ * @param {string} [connKey] 作用域键:服务器 = `username@host:port`,本地模式 = 'local'。
+ *   传入时只返回该作用域的会话;缺省返回全部(旧调用兼容)。
+ *   无归属(connKey 缺失)的存量会话不算进任何作用域,待首次连接服务器时由 migrateLegacy 归属。
+ */
+export function list(connKey) {
   const idx = readIndex();
-  return [...idx.sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const rows = connKey == null ? idx.sessions : idx.sessions.filter((s) => s.connKey === connKey);
+  return [...rows].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+/**
+ * 把无归属的存量会话(connKey 缺失,该功能上线前的旧会话)一次性归属到指定服务器键。
+ * 可重复调用:没有无归属会话时是空操作。本地模式(local)不触发迁移。
+ * @returns {number} 本次迁移的会话数
+ */
+export function migrateLegacy(connKey) {
+  if (!connKey || connKey === 'local') return 0;
+  const idx = readIndex();
+  let n = 0;
+  for (const s of idx.sessions) {
+    if (!s.connKey) { s.connKey = connKey; n++; }
+  }
+  if (n) writeIndex(idx);
+  return n;
 }
 
 export function getActive() {
@@ -80,11 +102,11 @@ export function setActive(id) {
   writeIndex(idx);
 }
 
-/** 创建新会话并设为活跃,返回元数据 */
-export function create(title) {
+/** 创建新会话并设为活跃,返回元数据。connKey = 归属作用域(服务器键或 'local') */
+export function create(title, connKey) {
   const id = newId();
   const now = Date.now();
-  const sess = { id, title: title || '新会话', createdAt: now, updatedAt: now, msgCount: 0 };
+  const sess = { id, title: title || '新会话', connKey: connKey || null, createdAt: now, updatedAt: now, msgCount: 0 };
   const idx = readIndex();
   idx.sessions.push(sess);
   idx.active = id;

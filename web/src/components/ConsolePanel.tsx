@@ -22,16 +22,45 @@ const CAMPBELL = {
 const gray = (s: string) => `\x1b[90m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[91m${s}\x1b[0m`;
 
+// 写剪贴板:优先 Clipboard API,非安全上下文降级为隐藏 textarea + execCommand
+const writeClipboard = async (text: string) => {
+  if (!text) return;
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; }
+  } catch {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  } catch {}
+};
+
+// 读剪贴板并注入终端(仅右键/快捷键触发,读取失败静默忽略)
+const readClipboard = (): Promise<string> =>
+  navigator.clipboard?.readText?.() ?? Promise.resolve('');
+
 type TermState = 'idle' | 'starting' | 'running' | 'closed';
+
+interface TermMenuState { x: number; y: number; hasSel: boolean }
+
+// 右键菜单估计尺寸,用于把菜单限制在窗口内
+const MENU_W = 150, MENU_H = 96;
 
 interface ConsolePanelProps {
   connected: boolean;
   visible: boolean;
+  /** 当前活动连接 id;切换服务器时终端自动重开,面向新服务器 */
+  activeConn?: string | null;
 }
 
 // 真实终端:xterm.js 前端 + 服务端 /ws/term PTY shell 通道
 // 文本帧(JSON)= 控制消息,二进制帧 = 终端原始数据(键盘输入上行 / 屏幕输出下行)
-export default function ConsolePanel({ connected, visible }: ConsolePanelProps) {
+export default function ConsolePanel({ connected, visible, activeConn }: ConsolePanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -45,6 +74,9 @@ export default function ConsolePanel({ connected, visible }: ConsolePanelProps) 
   const wsFailNotifiedRef = useRef(false); // 通道连接失败提示只写一次,避免重试刷屏
   const [termState, setTermState] = useState<TermState>('idle');
   const [wsFail, setWsFail] = useState(false); // 终端通道 WebSocket 连接失败(如服务端未重启)
+  const [menu, setMenu] = useState<TermMenuState | null>(null); // 右键菜单
+  const menuRef = useRef<HTMLDivElement>(null);
+  const hasSelRef = useRef(false); // 当前是否有选中文本
 
   connectedRef.current = connected;
 
@@ -60,6 +92,19 @@ export default function ConsolePanel({ connected, visible }: ConsolePanelProps) 
   const sendInput = (data: string) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === 1) { try { ws.send(encoder.encode(data)); } catch {} }
+  };
+
+  // 复制终端选中文本
+  const copySelection = () => {
+    const term = termRef.current;
+    if (!term?.hasSelection()) return;
+    writeClipboard(term.getSelection());
+  };
+
+  // 从剪贴板粘贴到终端
+  const pasteClipboard = () => {
+    if (stateRef.current !== 'running') return;
+    readClipboard().then((t) => { if (t) sendInput(t); }).catch(() => {});
   };
 
   // 打开新 shell 会话
@@ -105,6 +150,20 @@ export default function ConsolePanel({ connected, visible }: ConsolePanelProps) 
     term.onData((data) => {
       if (stateRef.current === 'running') sendInput(data);
       else if (stateRef.current === 'starting') pendingRef.current.push(data);
+    });
+
+    // 跟踪是否选中文本(供复制功能/右键菜单使用)
+    term.onSelectionChange(() => { hasSelRef.current = term.hasSelection(); });
+
+    // 快捷键:Ctrl+Shift+C 复制 / Ctrl+Shift+V、Ctrl+V 粘贴
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true;
+      const mod = ev.ctrlKey || ev.metaKey;
+      if (!mod) return true;
+      const k = ev.key.toLowerCase();
+      if (ev.shiftKey && k === 'c') { copySelection(); return false; }
+      if (k === 'v') { pasteClipboard(); return false; }
+      return true;
     });
 
     // 容器尺寸变化 -> fit -> 通知远端 PTY 改窗口
@@ -199,6 +258,18 @@ export default function ConsolePanel({ connected, visible }: ConsolePanelProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, termState]);
 
+  // 快速切换服务器(活动连接变化):旧 shell 仍在原服务器上,终端需重开面向新服务器
+  const prevConnRef = useRef(activeConn);
+  useEffect(() => {
+    if (prevConnRef.current === activeConn) return;
+    prevConnRef.current = activeConn;
+    if (connected && connectedRef.current) {
+      termRef.current?.write('\r\n' + gray('[已切换服务器,正在重启终端…]') + '\r\n');
+      restart(); // 复用既有 kill->exit->auto-start 流程,避免竞态
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConn, connected]);
+
   // tab 切换回来:重新适配尺寸并聚焦
   useEffect(() => {
     if (visible) {
@@ -217,12 +288,27 @@ export default function ConsolePanel({ connected, visible }: ConsolePanelProps) 
     sendInput(cmd + '\r');
   };
 
-  // 右键粘贴(CMD / Windows Terminal 习惯)
+  // 右键菜单:复制 / 粘贴(取代原"右键直接粘贴")
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    if (stateRef.current !== 'running') return;
-    navigator.clipboard?.readText?.().then((t) => { if (t) sendInput(t); }).catch(() => {});
+    setMenu({
+      x: Math.max(8, Math.min(e.clientX, window.innerWidth - MENU_W - 8)),
+      y: Math.max(8, Math.min(e.clientY, window.innerHeight - MENU_H - 8)),
+      hasSel: hasSelRef.current
+    });
   };
+
+  // 右键菜单:点击菜单外 / Esc 关闭
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [menu]);
 
   const STATE_LABEL: Record<TermState, string> = {
     idle: wsFail ? '通道连接失败,重试中…' : connected ? '正在打开…' : '等待 SSH 连接',
@@ -234,6 +320,21 @@ export default function ConsolePanel({ connected, visible }: ConsolePanelProps) 
   return (
     <div className="consolewrap">
       <div className="xterm-host" ref={hostRef} onContextMenu={onContextMenu} onClick={() => termRef.current?.focus()} />
+      {menu && (
+        <div
+          className="term-menu"
+          ref={menuRef}
+          style={{ left: menu.x, top: menu.y }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button className="term-menu-item" disabled={!menu.hasSel} onClick={() => { copySelection(); setMenu(null); }}>
+            <span>复制</span><span className="term-menu-key">Ctrl+Shift+C</span>
+          </button>
+          <button className="term-menu-item" disabled={termState !== 'running'} onClick={() => { pasteClipboard(); setMenu(null); }}>
+            <span>粘贴</span><span className="term-menu-key">Ctrl+Shift+V</span>
+          </button>
+        </div>
+      )}
       <div className="term-bar">
         <span className={`term-state ${termState === 'running' ? 'ok' : termState === 'closed' ? 'err' : ''}`}>
           ● {STATE_LABEL[termState]}

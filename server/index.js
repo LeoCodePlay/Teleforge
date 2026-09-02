@@ -390,7 +390,7 @@ if (isMain) {
       console.log('\n正在退出…');
       try { wss.close(); } catch {}
       try { termWss.close(); } catch {}
-      ssh.disconnect().finally(() => process.exit(0));
+      ssh.disconnectAll().finally(() => process.exit(0));
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);

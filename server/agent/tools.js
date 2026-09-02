@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { joinRemote, normalizeRemote, sshManager as ssh } from '../ssh-manager.js';
 import { localFs, resolveInLocalWorkspace } from '../local-fs.js';
 import { execLocal } from '../local-exec.js';
+import { askUserQuestion } from './ask-user.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 内置技能库(随工具分发,本地目录;已从 deepseek-harness / Claude Code 全局收集)
@@ -43,10 +44,11 @@ function resolveInWorkspace(p, { allowRoot = true } = {}) {
   throw new Error(`路径超出工作区,被拒绝: ${p}`);
 }
 
+const TEXT_TRUNCATION_HINT = '\n[结果过长已截断:中段内容被省略。若需中段/尾部细节,可用 read_file(offset/limit) 或 run_command 缩小范围再取,不要重复相同调用]';
 function capText(s, max = AGENT.TOOL_RESULT_MAX_CHARS) {
   if (!s) return '';
   if (s.length <= max) return s;
-  return s.slice(0, Math.floor(max * 0.6)) + `\n…[结果过长,已截断,剩余 ${s.length - max} 字符,可缩小范围重试]…\n` + s.slice(s.length - Math.floor(max * 0.4));
+  return s.slice(0, Math.floor(max * 0.6)) + `\n…[结果过长,已截断,剩余 ${s.length - max} 字符]…\n` + s.slice(s.length - Math.floor(max * 0.4)) + TEXT_TRUNCATION_HINT;
 }
 
 function safeJson(v) { return JSON.stringify(v, null, 2).slice(0, 60000); }
@@ -211,7 +213,11 @@ const toolDefs = [
       if (res.stdout.trim()) parts.push('--- stdout ---\n' + res.stdout);
       if (res.stderr.trim()) parts.push('--- stderr ---\n' + res.stderr);
       if (!res.stdout.trim() && !res.stderr.trim()) parts.push('(无输出)');
-      return capText(parts.join('\n'));
+      // meta:结构化终端卡数据(命令/工作目录/退出码/信号/超时),供前端 TerminalRow 忠实呈现
+      return {
+        content: capText(parts.join('\n')),
+        meta: { card: 'terminal', command, cwd: ssh.workspace || '', exitCode: res.code, signal: res.signal || null, timedOut: res.code === -1 }
+      };
     }
   },
 
@@ -256,7 +262,7 @@ const toolDefs = [
 
   {
     name: 'search_code',
-    description: '在远程目录中搜索文本/正则(优先 ripgrep,回退 grep),适合找函数定义、引用等',
+    description: '在远程目录中搜索文本/正则(优先 ripgrep,依次回退 grep/python/busybox),适合找函数定义、引用等',
     parameters: {
       type: 'object',
       properties: {
@@ -268,19 +274,20 @@ const toolDefs = [
     },
     async run({ pattern, path, include }) {
       const p = normalizeRemote(path || ssh.workspace || '.');
-      const engine = await detectSearchEngine();
-      if (!engine) throw new Error('远程无 rg/grep,无法搜索(可先 run_command 安装 ripgrep)');
-      let cmd;
-      if (engine === 'rg') {
-        const opts = ['-n', '--no-heading', '-g', '!.git', '-g', '!node_modules'];
-        if (include) opts.push('-g', include.replace(/^\.?\*/g, '*'));
-        cmd = ['rg', ...opts, '--', pattern, p].join(' ');
-      } else {
-        cmd = `grep -rn ${include ? `--include=${shQuote(include)}` : ''} ${shQuote(pattern)} ${shQuote(p)} --exclude-dir=.git --exclude-dir=node_modules`;
+      let engine = await detectSearchEngine();
+      if (!engine) {
+        // 兜底:先自动安装缺失的搜索工具,再重新探测一次(连接时也做过一轮,这里覆盖"安装未生效"的场景)
+        await ensureSearchTools().catch(() => {});
+        engine = await detectSearchEngine();
       }
+      if (!engine) throw new Error('远程未找到可用搜索工具(rg/grep/python/busybox),自动安装未生效;请 run_command 手动安装 ripgrep 或 grep(需 root 或免密 sudo)');
+      const cmd = buildSearchCommand(engine, pattern, p, include);
       const res = await ssh.exec(cmd, { timeout: 60_000 });
-      if (res.code !== 0 && res.stderr.toLowerCase().includes('no such')) throw new Error(`路径不存在: ${p}`);
-      if (res.code !== 0 && !res.stdout) return `无匹配(退出码 ${res.code})`;
+      const err = (res.stderr || '').trim();
+      if (res.code !== 0 && err.toLowerCase().includes('no such')) throw new Error(`路径不存在: ${p}`);
+      if (res.code !== 0 && !res.stdout) {
+        return err ? `搜索失败(退出码 ${res.code}): ${err}` : `无匹配(退出码 ${res.code})`;
+      }
       return capText(`匹配结果(${res.stdout.split('\n').filter(Boolean).length} 行):\n${res.stdout}`);
     }
   },
@@ -560,7 +567,10 @@ const localToolDefs = [
       if (res.stdout.trim()) parts.push('--- stdout ---\n' + res.stdout);
       if (res.stderr.trim()) parts.push('--- stderr ---\n' + res.stderr);
       if (!res.stdout.trim() && !res.stderr.trim()) parts.push('(无输出)');
-      return capText(parts.join('\n'));
+      return {
+        content: capText(parts.join('\n')),
+        meta: { card: 'terminal', command, cwd: localFs.workspace || '', exitCode: res.code, signal: res.signal || null, timedOut: !!res.timedOut }
+      };
     }
   },
   {
@@ -577,6 +587,53 @@ const localToolDefs = [
       }
       localEnvCache = { workspace: info.workspace, summary: safeJson(info) };
       return safeJson(info);
+    }
+  }
+];
+
+// ---------------- 交互类工具定义 ----------------
+// 不依赖 SSH 连接(本地/远程模式都能用),也不进 REMOTE_TOOLS 守卫集:
+// 模型需要用户确认、选择或补充关键信息时调用,工具会暂停等待用户在界面上作答。
+
+const interactionToolDefs = [
+  {
+    name: 'ask_user_question',
+    description: '当你需要用户确认、在选项中做选择、或缺少关键信息才能继续时,向用户提出一个或多个问题并等待回答。每题可带候选选项(单选/多选),用户也可填写"其它"自定义答案;在你得到回答前会暂停等待。回答以 JSON 返回:{"answers":[{"id":"问题id","selected":["选中的选项label"],"custom":"自定义文本"}]}。只在确实需要用户决策时使用,不要在没有歧义时滥用。',
+    parameters: {
+      type: 'object',
+      properties: {
+        questions: {
+          type: 'array',
+          description: '要向用户提出的问题列表(可一次问多道,界面支持逐道作答)',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: '问题稳定 id,会在回答中回显' },
+              question: { type: 'string', description: '要问用户的具体问题' },
+              header: { type: 'string', description: '可选的短标题,例如"确认"或"选择模式"' },
+              options: {
+                type: 'array',
+                description: '可选的候选答案;若你推荐某项,把它放第一位并在 label 末尾追加"(推荐)"',
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string', description: '用户可见的选项文本' },
+                    description: { type: 'string', description: '用一句话说明该选项的取舍或影响' }
+                  },
+                  required: ['label']
+                }
+              },
+              multi_select: { type: 'boolean', description: '是否允许多选,默认 false(单选)' }
+            },
+            required: ['id', 'question']
+          }
+        }
+      },
+      required: ['questions']
+    },
+    async run(args, { sid, signal, emit }) {
+      const answers = await askUserQuestion({ questions: args.questions, sid, signal, emit });
+      return safeJson({ answers });
     }
   }
 ];
@@ -602,14 +659,23 @@ function dangerGuard(name, args) {
 
 // ---------------- 注册入口 ----------------
 
+// 真正依赖 SSH 连接的远程工具(未连接时不可用,本地模式下从模型可见工具集剔除)。
+// 注意:todo_write / skill / skill_copy_builtin 虽然与远程工具同组定义,但本身并不依赖
+// SSH,绝不能纳入此集——否则未连接时加载技能、写任务清单会被误伤报"SSH 连接已断开"。
+const SSH_ONLY_TOOLS = new Set([
+  'list_directory', 'read_file', 'write_file', 'edit_file', 'run_command',
+  'create_directory', 'delete_path', 'search_code', 'get_workspace_info'
+]);
+
 /** 把全部内置工具与守卫注册到注册表(由 agent 启动时调用一次) */
 export function registerTools(registry) {
-  for (const def of toolDefs) registry.register(def);
+  // 依赖 SSH 的工具打 remote 标记,供本地模式(未连接)下 schemas() 过滤用
+  for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...def, remote: true } : def);
+  for (const def of interactionToolDefs) registry.register(def);
   for (const def of localToolDefs) registry.register(def);
-  // 守卫 1:SSH 连接状态 —— 仅远程工具需要连接;本地工具(local_*)无需 SSH,
-  // 连接断开时不得误伤本机工具链
-  const REMOTE_TOOLS = new Set(toolDefs.map((d) => d.name));
-  registry.guard((name) => (REMOTE_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));
+  // 守卫 1:SSH 连接状态 —— 仅真正依赖 SSH 的远程工具需要连接;本地工具(local_*)、
+  // 交互工具与技能/任务清单等非远程工具不受影响,连接断开时绝不误伤本机工具链
+  registry.guard((name) => (SSH_ONLY_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));
   // 守卫 2:高危命令拦截(远程 run_command 与本机 run_local_command 都拦)
   registry.guard(dangerGuard);
 }
@@ -1075,22 +1141,215 @@ const LEVEL_LABEL = {
 };
 
 // ---------------- 引擎探测(带缓存) ----------------
-let engineCache = null;
+// 探测结果:{ kind: 'rg'|'grep'|'findstr'|'python'|'busybox', bin: 实际可执行名 } 或 null(全无)。
+// 缓存用 undefined 作"未探测"哨兵,这样 null(探测过但全无)也能被缓存,避免每次搜索重复探测。
+let engineCache;
 let engineProbe = null;
 async function detectSearchEngine() {
-  if (engineCache !== null) return engineCache;
+  if (engineCache !== undefined) return engineCache;
   if (engineProbe) return engineProbe;
   const probe = (async () => {
+    const win = ssh.platform === 'win32';
     const check = (cmd) => ssh.exec(cmd, { timeout: 8000 })
       .then((r) => r.code === 0 && r.stdout.trim().length > 0)
       .catch(() => false);
-    const hasRg = await check(ssh.platform === 'win32' ? 'where rg' : 'command -v rg');
-    const hasGrep = await check(ssh.platform === 'win32' ? 'where findstr' : 'command -v grep');
-    engineCache = hasRg ? 'rg' : hasGrep ? 'grep' : null;
-    return engineCache;
+    const which = (bin) => (win ? `where ${bin}` : `command -v ${bin}`);
+    if (await check(which('rg'))) return { kind: 'rg', bin: 'rg' };
+    if (!win) {
+      if (await check(which('grep'))) return { kind: 'grep', bin: 'grep' };
+      if (await check(which('python3'))) return { kind: 'python', bin: 'python3' };
+      if (await check(which('python'))) return { kind: 'python', bin: 'python' };
+      if (await check(which('busybox'))) return { kind: 'busybox', bin: 'busybox' };
+      return null;
+    }
+    if (await check(which('findstr'))) return { kind: 'findstr', bin: 'findstr' };
+    return null;
   })();
   engineProbe = probe;
-  try { return await probe; } finally { engineProbe = null; }
+  try { engineCache = await probe; return engineCache; }
+  finally { engineProbe = null; }
+}
+
+// 切换服务器/重连后,上一台的探测结果失效,清掉缓存重新探测
+export function clearSearchEngine() {
+  engineCache = undefined;
+  engineProbe = null;
+}
+
+// ---------------- 搜索工具自动安装(连接后自检 / 搜索失败兜底) ----------------
+// 连接服务器后确保远程具备基础搜索工具(rg/grep/python/busybox):
+// 缺失时按系统包管理器自动安装(rg 优先,失败再装 grep,仍缺则装 python3 兜底)。
+// 无包管理器 / 非 root 且无免密 sudo / 安装失败时仅记录日志,绝不影响连接与 agent 任务。
+// 并发安全:同一时刻只跑一轮,其余调用复用同一 Promise;结果按服务器 + TTL 缓存,避免反复尝试。
+
+// 待装工具与包名(各主流发行版 ripgrep 包名统一为 ripgrep)
+const INSTALL_TOOLS = [
+  { tool: 'rg', pkg: 'ripgrep' },
+  { tool: 'grep', pkg: 'grep' },
+  { tool: 'python3', pkg: 'python3' }
+];
+
+// 包管理器探测与安装命令;sudo 前缀由调用方按权限决定
+const PACKAGE_MANAGERS = [
+  { name: 'apt',    probe: 'command -v apt-get', install: (sudo, pkg) => `${sudo}apt-get update -qq >/dev/null 2>&1 || true; ${sudo}apt-get install -y ${pkg}` },
+  { name: 'dnf',    probe: 'command -v dnf',     install: (sudo, pkg) => `${sudo}dnf install -y ${pkg}` },
+  { name: 'yum',    probe: 'command -v yum',     install: (sudo, pkg) => `${sudo}yum install -y ${pkg}` },
+  { name: 'apk',    probe: 'command -v apk',     install: (sudo, pkg) => `${sudo}apk add --no-cache ${pkg}` },
+  { name: 'pacman', probe: 'command -v pacman',  install: (sudo, pkg) => `${sudo}pacman -S --noconfirm --needed ${pkg}` },
+  { name: 'zypper', probe: 'command -v zypper',  install: (sudo, pkg) => `${sudo}zypper -n install ${pkg}` }
+];
+
+const ENSURE_TTL_MS = 5 * 60_000; // 同一服务器 5 分钟内不重复安装尝试(避免每轮搜索都重试)
+let ensureToolsPromise = null;    // 在途安装(并发调用合并)
+let ensureCache = null;           // { key, at, result }
+
+function ensureConnKey() {
+  const hi = ssh.hostInfo || {};
+  return hi.host ? `${hi.username}@${hi.host}:${hi.port}` : 'local';
+}
+
+/**
+ * 确保远程具备基础搜索工具;缺失时自动安装。
+ * @param {{force?: boolean}} [opts] force=true 时忽略缓存强制重新探测(连接成功后调用)
+ * @returns {Promise<{ok:boolean, reason?:string, installed?:string[], failed?:string[]}>}
+ */
+export function ensureSearchTools({ force = false } = {}) {
+  const key = ensureConnKey();
+  if (!force && ensureCache && ensureCache.key === key && Date.now() - ensureCache.at < ENSURE_TTL_MS) {
+    return Promise.resolve(ensureCache.result);
+  }
+  if (!ensureToolsPromise) {
+    ensureToolsPromise = doEnsureSearchTools()
+      .then((result) => { ensureCache = { key, at: Date.now(), result }; return result; })
+      .catch((e) => ({ ok: false, reason: 'error', message: e.message }))
+      .finally(() => { ensureToolsPromise = null; });
+  }
+  return ensureToolsPromise;
+}
+
+async function doEnsureSearchTools() {
+  if (!ssh.connected) return { ok: false, reason: 'not-connected' };
+  if (ssh.platform === 'win32') return { ok: true, platform: 'win32', installed: [] }; // findstr 原生存在,无需安装
+  const log = (level, message) => { try { ssh.emit('log', level, `[环境自检] ${message}`); } catch {} };
+  const targetKey = ensureConnKey(); // 连接中途被切换时停止安装,避免装到别的服务器上
+
+  // 全部走后台队列:探测快、安装可长达 180s,都不能占用 agent 的主命令队列
+  const probe = async (cmd) => {
+    try {
+      const r = await ssh.execBackground(cmd, { timeout: 8000 });
+      return r.code === 0 && r.stdout.trim().length > 0;
+    } catch { return false; }
+  };
+  const which = (bin) => `command -v ${bin}`;
+
+  const present = {};
+  for (const bin of ['rg', 'grep', 'python3', 'python', 'busybox']) present[bin] = await probe(which(bin));
+  log('info', `搜索工具: rg=${present.rg ? '✓' : '—'} grep=${present.grep ? '✓' : '—'} python=${present.python3 || present.python ? '✓' : '—'} busybox=${present.busybox ? '✓' : '—'}`);
+  // 已有任一可用搜索工具(rg 最优,其次 grep/python/busybox)即满足搜索链路,无需安装
+  if (present.rg || present.grep || present.python3 || present.python || present.busybox) return { ok: true, installed: [] };
+
+  // 权限:root 直接装;非 root 需免密 sudo(-n 不交互,避免安装卡在密码输入)
+  const uid = await ssh.execBackground('id -u', { timeout: 8000 });
+  const isRoot = uid.code === 0 && String(uid.stdout || '').trim() === '0';
+  let sudo = '';
+  if (!isRoot) {
+    if (!(await probe('sudo -n true'))) {
+      log('warn', '缺少搜索工具,且当前用户非 root、无免密 sudo,无法自动安装;可 run_command 手动安装 ripgrep 或 grep');
+      return { ok: false, reason: 'no-permission' };
+    }
+    sudo = 'sudo -n ';
+  }
+
+  let pm = null;
+  for (const m of PACKAGE_MANAGERS) {
+    if (await probe(m.probe)) { pm = m; break; }
+  }
+  if (!pm) {
+    log('warn', '未识别到包管理器(apt/dnf/yum/apk/pacman/zypper),跳过自动安装;可 run_command 手动安装 ripgrep 或 grep');
+    return { ok: false, reason: 'no-package-manager' };
+  }
+
+  const installed = [];
+  const failed = [];
+  for (const { tool, pkg } of INSTALL_TOOLS) {
+    if (ensureConnKey() !== targetKey || !ssh.connected) { log('warn', '连接已切换或断开,取消剩余安装'); break; }
+    if (tool !== 'rg' && installed.includes('rg')) break; // rg 装好即满足,不再装 grep/python3
+    log('info', `正在安装 ${pkg}(${pm.name})...`);
+    const r = await ssh.execBackground(pm.install(sudo, pkg), { timeout: 180_000 });
+    if (r.code === 0 && !r.timedOut) {
+      installed.push(tool);
+      log('info', `已安装 ${tool}`);
+    } else {
+      failed.push(tool);
+      log('warn', `安装 ${pkg} 失败(退出码 ${r.code}${r.timedOut ? ', 超时' : ''}): ${(r.stderr || '').slice(0, 200)}`);
+    }
+  }
+  if (installed.length) clearSearchEngine(); // 安装成功后清缓存,下次搜索重新探测到新工具
+  log(installed.length ? 'info' : 'warn', `搜索工具就绪${installed.length ? `:已安装 ${installed.join(', ')}` : '（无需新增）'}${failed.length ? `,失败: ${failed.join(', ')}` : ''}`);
+  return { ok: installed.length > 0, installed, failed };
+}
+
+// Python 递归搜索脚本(无 rg/grep 时的兜底):os.walk 遍历,逐行正则匹配,
+// 输出 grep -n 风格的 `file:line:content`。用 String.raw 保留源码里的 \n 字面量,
+// 且全程只用双引号,便于被 shQuotePosix 单引号整段包裹而不破坏 shell 引号。
+const PYTHON_SEARCH_SOURCE = String.raw`
+import sys, os, re, fnmatch, io
+pat = sys.argv[1]
+root = sys.argv[2]
+inc = sys.argv[3] if len(sys.argv) > 3 else ""
+if not os.path.isdir(root):
+    sys.stderr.write("no such directory: %s\n" % root)
+    sys.exit(2)
+try:
+    rx = re.compile(pat)
+except Exception as e:
+    sys.stderr.write("invalid pattern: %s\n" % e)
+    sys.exit(2)
+skip = {".git", "node_modules", "__pycache__", ".venv", "venv", ".svn", ".hg", "dist", "build", ".next", ".cache", ".tox"}
+found = 0
+for dp, dn, fn in os.walk(root):
+    dn[:] = [d for d in dn if d not in skip]
+    for f in fn:
+        if inc and not fnmatch.fnmatch(f, inc):
+            continue
+        fp = os.path.join(dp, f)
+        try:
+            if os.path.getsize(fp) > 5242880:
+                continue
+            with io.open(fp, "r", encoding="utf-8", errors="ignore") as fh:
+                for i, line in enumerate(fh, 1):
+                    if rx.search(line):
+                        sys.stdout.write("%s:%d:%s\n" % (fp, i, line.rstrip("\n")))
+                        found += 1
+        except (OSError, IOError):
+            pass
+sys.exit(0 if found else 1)
+`;
+
+// 依探测到的引擎拼出搜索命令。pattern/path 一律经 shQuote 单引号包裹,
+// 修复原先 rg 分支 pattern/path 未加引号导致 `|`/空格被 shell 当成管道/分词的问题。
+function buildSearchCommand(engine, pattern, p, include) {
+  const q = shQuote;
+  switch (engine.kind) {
+    case 'rg': {
+      const opts = ['-n', '--no-heading', '-g', '!.git', '-g', '!node_modules'];
+      if (include) opts.push('-g', include.replace(/^\.?\*/g, '*'));
+      return ['rg', ...opts, '--', q(pattern), q(p)].join(' ');
+    }
+    case 'grep':
+      return `grep -rn ${include ? `--include=${q(include)}` : ''} ${q(pattern)} ${q(p)} --exclude-dir=.git --exclude-dir=node_modules`;
+    case 'busybox':
+      return `busybox grep -rn ${include ? `--include=${q(include)}` : ''} ${q(pattern)} ${q(p)} --exclude-dir=.git --exclude-dir=node_modules`;
+    case 'findstr': {
+      // 远端 Windows:findstr 仅字面/基础匹配,不支持 --include 通配(与本机 search_local_code 对齐)
+      const base = p.replace(/[\\/]+$/, '');
+      return `findstr /s /n /c:${shQuoteWin(pattern)} ${shQuoteWin(base + '\\*')}`;
+    }
+    case 'python':
+      return `${engine.bin} -c ${q(PYTHON_SEARCH_SOURCE)} ${q(pattern)} ${q(p)} ${q(include || '')}`;
+    default:
+      throw new Error('未知搜索引擎: ' + engine.kind);
+  }
 }
 
 function formatSize(n) {

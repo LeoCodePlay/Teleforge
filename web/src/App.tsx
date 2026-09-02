@@ -25,7 +25,7 @@ interface ViewerState {
 
 // 本地面板起点:真实家目录来自服务端 status 事件(localHome = os.homedir())
 export default function App() {
-  const { confirm } = useFeedback();
+  const { confirm, toast } = useFeedback();
   const [status, setStatus] = useState<ServerStatus>({
     status: 'disconnected', host: null, port: null, username: null,
     platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null
@@ -69,6 +69,22 @@ export default function App() {
     setActiveSessionId(r.active ?? null);
   };
 
+  // 会话按服务器/本地模式隔离:活动连接(或连接状态)变化时,重新拉取当前作用域的会话列表
+  const scopeKey = status.status === 'connected' && status.host
+    ? `${status.username}@${status.host}:${status.port || 22}`
+    : status.status === 'disconnected' ? 'local' : null;
+  const prevScopeRef = useRef('local'); // 初始为本地模式,避免挂载时重复拉取
+  useEffect(() => {
+    if (!scopeKey || scopeKey === prevScopeRef.current) return;
+    prevScopeRef.current = scopeKey;
+    api.request('session_list', {}, 8000)
+      .then((r) => { setSessions(r.sessions || []); setActiveSessionId(r.active || null); setSessionSeq((n) => n + 1); })
+      .catch(() => {});
+  }, [scopeKey]);
+
+  // 当前作用域标签(左上角会话面板标题提示用)
+  const scopeLabel = status.status === 'connected' && status.host ? `${status.username}@${status.host}` : '本地工作区';
+
   // 初始化拉取会话列表;并按服务端推送的 sessions 快照刷新(新消息/清空后 msgCount 与时间变化)
   useEffect(() => {
     api.request('session_list', {}, 8000)
@@ -93,8 +109,21 @@ export default function App() {
     setActiveSessionId(r.active ?? null);
     setSessionSeq((n) => n + 1);
   };
-  const newSession = () => api.request('session_create', {}, 8000).then(refreshSessions).catch(() => {});
-  const switchSession = (id: string) => api.request('session_switch', { id }, 8000).then(refreshSessions).catch(() => {});
+  const newSession = () => api.request('session_create', {}, 8000).then(refreshSessions).catch((e) => toast.error(`新建会话失败: ${(e as Error).message}`));
+  // 切换会话(点击当前会话也会重新触发 session_switch + 重载,用于加载失败/进行中时重试)
+  const switchSession = (id: string) => api.request('session_switch', { id }, 8000).then(refreshSessions).catch((e) => toast.error(`切换会话失败: ${(e as Error).message}`));
+  // 点击其他服务器后台运行的会话:先切回该服务器(conn_switch),再打开该会话。
+  // connKey = 服务端作用域键(username@host:port 或 'local');'local' 需断开连接才可达,直接忽略
+  const switchForeignSession = (id: string, connKey: string) => {
+    if (connKey === scopeKey) { switchSession(id); return; }
+    if (connKey === 'local') return;
+    const conn = (status.conns || []).find((c) => `${c.username}@${c.host}:${c.port || 22}` === connKey && c.status === 'connected');
+    if (!conn) return;
+    api.request('conn_switch', { id: conn.id }, 8000)
+      .then(() => api.request('session_switch', { id }, 8000))
+      .then(refreshSessions)
+      .catch((e) => toast.error(`切换会话失败: ${(e as Error).message}`));
+  };
   // 在新对话中分支:克隆当前会话为新会话并切换。at 为 turns 索引时截断到该条消息
   // (用于从任意历史消息处分支),缺省 -1 从尾部整体克隆
   const forkSession = (at = -1) => api.request('session_fork', { at }, 8000).then(refreshSessions).catch(() => {});
@@ -121,6 +150,9 @@ export default function App() {
   }, []);
 
   const connected = status.status === 'connected';
+  // 多连接池:统计当前在线连接数(含活动连接),用于顶栏提示「可快速切换」
+  const connCount = (status.conns || []).filter((c) => c.status === 'connected').length;
+  const multiConn = connCount > 1;
   // 多会话并行:busySessions 是运行中的会话集合;聊天区只关心"当前活跃会话"是否在运行
   const busySessions = status.busySessions || [];
   const activeBusy = activeSessionId != null && busySessions.includes(activeSessionId);
@@ -136,12 +168,6 @@ export default function App() {
     setViewer({ path: `local:${path}`, name });
   };
 
-  // 选择本地工作区:通知服务端切换,并在状态里记住
-  const onSetLocalWorkspace = (p: string) =>
-    api.request('set_local_workspace', { path: p }, 20000)
-      .then(() => setStatus((s) => ({ ...s, localWorkspace: p })))
-      .catch(() => {});
-
   // ---- 按服务器保存的工作区历史:key = "host:port",每个服务器记住添加/打开过的工作区 ----
   const WS_KEY = 'sshai.wsByHost';
   const loadWsByHost = (): Record<string, string[]> => {
@@ -152,6 +178,30 @@ export default function App() {
   };
   const saveWsByHost = (m: Record<string, string[]>) => localStorage.setItem(WS_KEY, JSON.stringify(m));
   const [wsByHost, setWsByHost] = useState<Record<string, string[]>>(loadWsByHost);
+
+  // ---- 本机保存的本地工作区历史(跨服务器全局,最近使用的排最前),与远程历史对称 ----
+  const LOCAL_WS_KEY = 'sshai.localWorkspaces';
+  const loadLocalWs = (): string[] => {
+    try {
+      const a = JSON.parse(localStorage.getItem(LOCAL_WS_KEY) || '[]');
+      return Array.isArray(a) ? a.filter((x) => typeof x === 'string') : [];
+    } catch { return []; }
+  };
+  const saveLocalWs = (list: string[]) => localStorage.setItem(LOCAL_WS_KEY, JSON.stringify(list));
+  const [localWs, setLocalWs] = useState<string[]>(loadLocalWs);
+
+  // 选择本地工作区:通知服务端切换,记录到历史,并在状态里记住
+  const onSetLocalWorkspace = (p: string) =>
+    api.request('set_local_workspace', { path: p }, 20000)
+      .then(() => {
+        setStatus((s) => ({ ...s, localWorkspace: p }));
+        setLocalWs((m) => {
+          const next = [p, ...(m || []).filter((x) => x !== p)];
+          saveLocalWs(next);
+          return next;
+        });
+      })
+      .catch(() => {});
 
   const onWorkspaceSet = (ws: string) => {
     setStatus((s) => ({ ...s, workspace: ws }));
@@ -164,6 +214,28 @@ export default function App() {
       list.unshift(ws); // 最近使用的排最前
       const next = { ...m, [key]: list };
       saveWsByHost(next);
+      return next;
+    });
+  };
+
+  // 从当前服务器的工作区历史中删除一条记录(仅删快捷记录,不影响远程目录)
+  const onDeleteWs = (ws: string) => {
+    const st = statusRef.current;
+    const key = st.host ? `${st.host}:${st.port || 22}` : '';
+    if (!key) return;
+    setWsByHost((m) => {
+      const list = (m[key] || []).filter((x) => x !== ws);
+      const next = { ...m, [key]: list };
+      saveWsByHost(next);
+      return next;
+    });
+  };
+
+  // 从本地工作区历史中删除一条记录
+  const onDeleteLocalWs = (p: string) => {
+    setLocalWs((m) => {
+      const next = (m || []).filter((x) => x !== p);
+      saveLocalWs(next);
       return next;
     });
   };
@@ -187,7 +259,7 @@ export default function App() {
             onClick={() => setSshOpen(true)}
           >
             {connected
-              ? `● 已连接 ${status.username}@${status.host}`
+              ? `● 已连接 ${status.username}@${status.host}${multiConn ? ` · 在线${connCount}台(点开可切换)` : ''}`
               : status.status === 'disconnected'
                 ? '● 未连接 · 点击 SSH 连接'
                 : `● ${STATUS_LABEL[status.status] || status.status}`}
@@ -203,8 +275,11 @@ export default function App() {
             sessions={sessions}
             activeId={activeSessionId}
             busyIds={busySessions}
+            scopeLabel={scopeLabel}
+            scopeKey={scopeKey}
             onNew={newSession}
             onSwitch={switchSession}
+            onSwitchForeign={switchForeignSession}
             onRename={renameSession}
             onDelete={deleteSession}
           />
@@ -218,7 +293,6 @@ export default function App() {
             remoteCwd={remoteCwd}
             onLocalCwdChange={setLocalCwd}
             onRemoteCwdChange={setRemoteCwd}
-            onSetLocalWorkspace={onSetLocalWorkspace}
             onOpenFile={handleOpenFile}
             onOpenLocalFile={handleOpenLocalFile}
           />
@@ -235,13 +309,15 @@ export default function App() {
           </div>
           <div className="tab-body">
             {activeTab === 'agent' && (
-              <ChatPanel key="agent" connected={connected} workspace={status.workspace} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
+              <ChatPanel key="agent" connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
-              onWorkspaceSet={onWorkspaceSet} onFork={forkSession} />
+              localHome={status.localHome} savedLocalWs={localWs}
+              onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
+              onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession} />
             )}
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
             <div className={`tab-pane ${activeTab === 'console' ? '' : 'hide'}`}>
-              <ConsolePanel connected={connected} visible={activeTab === 'console'} />
+              <ConsolePanel connected={connected} visible={activeTab === 'console'} activeConn={status.activeConn ?? null} />
             </div>
           </div>
         </main>

@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api';
 import { useLlm } from '../llm-context';
-import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem } from '../types';
+import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, SkillInjected } from '../types';
 import DirBrowser from './DirBrowser';
+import LocalDirBrowser from './LocalDirBrowser';
 import GlassSelect from './GlassSelect';
 import ContextMeter from './ContextMeter';
 import TodoPanel from './TodoPanel';
@@ -12,6 +13,10 @@ import SlashMenu, { rankSlashItems } from './SlashMenu';
 import type { SlashItem } from './SlashMenu';
 import type { GlassOption } from './GlassSelect';
 import { useFeedback } from '../feedback';
+import AskPanel from './AskPanel';
+import { ToolCallList } from './ToolCallList';
+import { ReasoningRow } from './ReasoningRow';
+import { refreshOverlayScrollbar } from '../scrollbar-ui';
 
 // 完整 Markdown 解析(marked + DOMPurify):
 // gfm 支持表格/任务列表等,breaks 保留单换行即换行的聊天习惯;
@@ -37,25 +42,12 @@ function renderMarkdown(text = '') {
   const html = mdParser.parse(text) as string;
   return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
 }
-// 思考块:整体默认折叠,头部显示 "思考 (N 字符)"
-function ThinkingBlock({ text = '' }: { text?: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <details className="thinking" open={open}>
-      <summary onClick={(e) => { e.preventDefault(); setOpen(!open); }}>
-        <span className="muted">🧠 思考 ({text.length} 字符) {open ? '▾' : '▸'}</span>
-      </summary>
-      <div className="tf-body">{text.split('\n').map((l, i) => <div key={i} className="tf-line">{l}</div>)}</div>
-    </details>
-  );
-}
-
-// 提取 ```thinking …``` 块为折叠卡片,剩余文本交给 AssistantText 继续渲染;
-// 当正文只由 thinking 块组成(纯推理回复)时,返回 null,仅显示思考卡片。
+// 提取 ```thinking …``` 块为折叠行(ReasoningRow,与 reasoning 通道同款呈现),
+// 剩余文本交给 AssistantText 继续渲染;当正文只由 thinking 块组成(纯推理回复)时,返回 null。
 function renderAssistantContent(content = '') {
   const blocks: React.ReactElement[] = [];
   const rest = content.replace(/```thinking\s*([\s\S]*?)```/g, (_m, t) => {
-    blocks.push(<ThinkingBlock key={blocks.length} text={t.trim()} />);
+    blocks.push(<ReasoningRow key={blocks.length} text={t.trim()} />);
     return '';
   });
   if (!blocks.length) return null; // 无 thinking 块:交给调用方直接渲染
@@ -82,47 +74,38 @@ function AssistantText({ text }: { text: string }) {
   return <>{spans}</>;
 }
 
-function ToolCard({ call }: { call: ToolCallInfo }) {
+// 已加载技能折叠行(参考 harness ContextInjectionRow 的披露行设计):
+// 折叠头一行带过(图标+标题+分隔点+技能名),点击展开看每个技能的描述与指令预览;
+// 与 ToolRun 共用一套玻璃折叠条视觉,保持对话流内记录组件的一致节奏
+function SkillRun({ skills = [] }: { skills?: SkillInjected[] }) {
   const [open, setOpen] = useState(false);
-  const icon = call.ok === undefined ? '🔧' : call.ok ? '✅' : '❌';
+  if (!skills.length) return null;
   return (
-    <div className="toolcard">
-      <div className="toolcard-head" onClick={() => setOpen(!open)} title={open ? '收起详情' : '展开参数/结果'}>
-        <span>
-          <span className="tc-arrow">{open ? '▾' : '▸'}</span>
-          {icon} <b>{call.tool}</b>
-          {call.ms != null && <span className="muted">{call.ms}ms</span>}
-        </span>
-        {!open && call.ok === undefined && <span className="muted">进行中</span>}
+    <div className="skillrun">
+      <div className="skillrun-head" onClick={() => setOpen(!open)} title={open ? '收起技能详情' : '展开技能详情'}>
+        <span className="tc-arrow">{open ? '▾' : '▸'}</span>
+        <span className="skillrun-title">📚 已加载技能</span>
+        {skills.map((s) => (
+          <span key={s.name} className="skillrun-item">
+            <span className="skillrun-sep" aria-hidden />
+            <code className="skillrun-name">{s.name}</code>
+          </span>
+        ))}
+        <span className="muted">{skills.length > 1 ? `${skills.length} 个技能指令已注入本轮对话` : '技能指令已注入本轮对话'}</span>
       </div>
       {open && (
-        <>
-          {call.args != null && <pre className="args">参数<br />{call.args || '{}'}</pre>}
-          {call.result !== undefined && <pre className={`res ${call.ok ? '' : 'err'}`}>{call.result || (call.ok === undefined ? '…' : '(无输出)')}</pre>}
-          {call.ok === undefined && !call.result && <pre className="res pending">执行中…</pre>}
-        </>
+        <div className="skillrun-body">
+          {skills.map((s) => (
+            <div key={s.name} className="skillrun-card">
+              <div className="skillrun-card-head">
+                <code className="skillrun-name">{s.name}</code>
+                {s.description && <span className="muted">{s.description}</span>}
+              </div>
+              {s.preview && <pre className="skillrun-preview">{s.preview}{s.preview.length >= 600 ? '\n…(完整指令已注入模型上下文)' : ''}</pre>}
+            </div>
+          ))}
+        </div>
       )}
-    </div>
-  );
-}
-
-// 连续的工具调用合并为一组折叠条(默认收起);展开后每张卡片独立折叠
-function ToolRun({ tools = [] }: { tools?: ToolCallInfo[] }) {
-  const [open, setOpen] = useState(false);
-  const count = tools.length;
-  if (!count) return null;
-  const ok = tools.filter((t) => t.ok === true).length;
-  const fail = tools.filter((t) => t.ok === false).length;
-  const pending = tools.filter((t) => t.ok === undefined).length;
-  const status = pending ? `(${ok + fail + pending} 次调用,进行中)` : fail ? `(${ok} 成功 / ${fail} 失败)` : `(全部 ${ok} 次成功)`;
-  return (
-    <div className="toolrun">
-      <div className="toolrun-head" onClick={() => setOpen(!open)} title={open ? '收起这组工具调用' : '展开这组工具调用'}>
-        <span className="tc-arrow">{open ? '▾' : '▸'}</span>
-        <span>🔧 工具调用 × {count}</span>
-        <span className="muted">{status}</span>
-      </div>
-      {open && <div className="toolrun-body">{tools.map((t, ti) => <ToolCard key={ti} call={t} />)}</div>}
     </div>
   );
 }
@@ -183,6 +166,24 @@ function MessageActions({ text, onBranch }: {
   );
 }
 
+// 把服务端的 skillsInjected 归一化为 SkillInjected[]:
+// 新格式为对象数组(name+description+preview),旧会话可能持久化过纯名字数组(string[]),做兼容
+function normalizeSkills(raw: any): SkillInjected[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SkillInjected[] = [];
+  for (const s of raw) {
+    if (typeof s === 'string') { out.push({ name: s }); continue; }
+    if (s && typeof s === 'object' && typeof s.name === 'string') {
+      out.push({
+        name: s.name,
+        description: s.description ? String(s.description) : '',
+        preview: s.preview ? String(s.preview) : ''
+      });
+    }
+  }
+  return out;
+}
+
 // 区段合并辅助:文本/思考/工具组按到达顺序交替追加;
 // 连续同类合并(连续工具调用并为一组,连续思考增量并成一段)
 function appendSeg(msg: ChatMessage, seg: MsgSegment) {
@@ -219,14 +220,20 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
     if (t.role === 'tool') {
       if (t.tool_call_id) {
         const id = String(t.tool_call_id);
-        toolById.set(id, { tool: t.tool_name, args: t.tool_args, ok: t.ok ?? true, ms: t.ms, result: t.content || '' });
+        toolById.set(id, { tool: t.tool_name, args: t.tool_args, ok: t.ok ?? true, ms: t.ms, result: t.content || '', meta: t.meta });
       }
       // 工具结果并入所在回复,该消息的分支点随之推进到这条 turn
       const last = out[out.length - 1];
       if (last) last.forkTail = ti;
       continue; // tool 消息本身不渲染,只作为结果并入上游工具组
     }
-    if (t.role === 'user') { out.push({ role: 'user', content: t.content || '', forkTail: ti }); continue; }
+    if (t.role === 'user') {
+      out.push({ role: 'user', content: t.content || '', forkTail: ti });
+      // 手动调用技能(/技能名)注入过:紧跟一条"已加载技能"折叠行,历史/分支回放时同样可恢复
+      const sk = normalizeSkills(t.skillsInjected);
+      if (sk.length) out.push({ role: 'skilltag', skills: sk, forkTail: ti });
+      continue;
+    }
     if (t.role === 'assistant') {
       const calls = t.tool_calls_json ? JSON.parse(t.tool_calls_json) : (t.tool_calls || []);
       const tools: ToolCallInfo[] = (Array.isArray(calls) ? calls : [])
@@ -260,20 +267,56 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
   return out;
 }
 
+// ---- 输入区:单一可编辑文本 + 高亮叠加层 ----
+// 不再用"冻结文本段 + 技能 tag"分段输入(会导致布局错乱且冻结文本不可编辑);
+// 输入框始终是普通 textarea,内容完整可编辑。叠加层按后端同款规则
+// (行首/空白后的 /word,其后跟空白或结尾)把 /技能名 高亮显示;
+// 退格时光标紧邻完整 /技能名 时整词删除(连同其后单个空格)。
+type OverlaySeg = { t: 'text' | 'skill'; v: string };
+
+function tokenizeInput(text: string): OverlaySeg[] {
+  const out: OverlaySeg[] = [];
+  const re = /(?:^|\s)(\/[a-z0-9][a-z0-9-]*)(?=\s|$)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) {
+      // 前导空白归入文本段(不高亮),只高亮 /word 本身
+      out.push({ t: 'text', v: text.slice(last, m.index + (m[0].length - m[1].length)) });
+    }
+    out.push({ t: 'skill', v: m[1] });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push({ t: 'text', v: text.slice(last) });
+  return out;
+}
+
 interface ChatPanelProps {
   connected: boolean;
   workspace: string | null;
+  /** 本地工作区(未连接服务器时可据此在本地模式对话) */
+  localWorkspace?: string | null;
   busy: boolean;
   sessionSeq?: number;
   sid?: string | null;
   home?: string | null;
   savedWs?: string[];
+  /** 本机家目录(本地工作区下拉/浏览默认起点) */
+  localHome?: string | null;
+  /** 本机保存过的本地工作区历史 */
+  savedLocalWs?: string[];
   onWorkspaceSet: (ws: string) => void;
+  /** 选择/切换本地工作区 */
+  onLocalWorkspaceSet?: (p: string) => void;
+  /** 从当前服务器的工作区历史中删除一条记录(仅删快捷记录,不影响远程目录) */
+  onDeleteWs?: (ws: string) => void;
+  /** 从本地工作区历史中删除一条记录 */
+  onDeleteLocalWs?: (p: string) => void;
   /** 在新对话中分支:由 App 执行 session_fork 并刷新会话(at 为 turns 索引,-1 表示从尾部;缺省时隐藏分支按钮) */
   onFork?: (at: number) => void;
 }
 
-export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], onWorkspaceSet, onFork }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -286,6 +329,12 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
   const [agentState, setAgentState] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
   const [iter, setIter] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
+  // 会话切换加载指示:切换期间保留上一会话内容 + 顶部提示,历史到达后再整体替换,避免空白闪烁
+  const [switching, setSwitching] = useState(false);
+  // 会话历史缓存:切回已加载过的会话时秒开(零网络),后台静默刷新保持最新
+  const histCache = useRef(new Map<string, { msgs: ChatMessage[]; todos: TodoItem[] }>());
+  // 模型提问挂起(ask_user_question):未作答前锁定输入框与停止按钮
+  const [askPending, setAskPending] = useState(false);
   const [reasoning, setReasoning] = useState(() => {
     // 迁移旧设置:以前独立存的 thinkingMode=off 等价于现在的推理等级 off;其余回落到 high/默认
     const tm = localStorage.getItem('sshai.thinkingMode');
@@ -296,11 +345,13 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
   });
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null); // 高亮叠加层(与 textarea 滚动同步)
   const userMsgRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [activeDot, setActiveDot] = useState(-1);
   // 悬停跳转点时的自定义内容提示(不用原生 title,支持两行截断省略)
   const [dotTip, setDotTip] = useState<{ top: number; left: number; text: string } | null>(null);
   const hasLive = useRef(false); // 用户已发起新对话时置 true,避免历史覆盖新消息
+  const justSwitchedRef = useRef(false); // 会话切换后标记一次:绘制完成后再强制滚底+重绘拇指
   // 分支点计数器:本会话"消息面 turn"计数,与服务端 projectEvents 投影出的 turns 数组
   // 索引对齐(0 基)。历史载入后以 turns 长度为基准,流式事件逐条递增——
   // 保证"空会话直接连续对话"时每条渲染消息也能拿到准确的分支索引。
@@ -336,13 +387,22 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 180) + 'px';
   };
-  useEffect(autoGrow, [input]);
+  // 高亮叠加层与 textarea 滚动同步(内容超过 max-height 出现滚动时保持对齐)
+  const syncOverlayScroll = () => {
+    const el = taRef.current;
+    const ov = overlayRef.current;
+    if (el && ov) ov.scrollTop = el.scrollTop;
+  };
+  useEffect(() => { autoGrow(); syncOverlayScroll(); }, [input]);
 
   const push = (fn: (m: ChatMessage[]) => ChatMessage[]) => setMessages(fn);
 
   useEffect(() => {
     const subs = [
-      api.on('history_cleared', () => setMessages([])),
+      api.on('history_cleared', () => {
+        histCache.current.delete(activeRef.current ?? ''); // 清空后旧缓存失效,下次切换重新拉取
+        setMessages([]);
+      }),
       api.on('agent', (m: any) => {
         // 多会话并行:只处理当前活跃会话的事件,其他会话(后台运行中)的流不进入本视图
         if (m.sid && activeRef.current && m.sid !== activeRef.current) return;
@@ -402,6 +462,17 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
               return copy;
             });
             break;
+          case 'skill_loaded':
+            // 用户手动调用技能(/技能名 命中注入):显示"已加载技能"折叠行,插到流式回复之前
+            push((msgs) => {
+              const c = [...msgs];
+              const last = c[c.length - 1];
+              const tag = { role: 'skilltag', skills: normalizeSkills(m.skills) };
+              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, tag);
+              else c.push(tag);
+              return c;
+            });
+            break;
           case 'tool_result':
             // 每条工具结果对应一条 tool/result turn,分支点推进到最后落定的结果
             forkTurnRef.current += 1;
@@ -415,7 +486,7 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
                   const tools = tseg.tools || [];
                   const byId = m.callId ? tools.find((x) => x.id === m.callId) : null;
                   const target = byId || tools.find((x) => x.tool === m.tool && x.ok === undefined);
-                  if (target) Object.assign(target, { ok: m.ok, ms: m.ms, result: m.result });
+                  if (target) Object.assign(target, { ok: m.ok, ms: m.ms, result: m.result, meta: m.meta });
                 }
               }
               return copy;
@@ -479,17 +550,24 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
     return () => subs.forEach((off) => off());
   }, []);
 
-  // 挂载或会话切换时,载入当前活跃会话的历史(失败静默回到空态)
+  // 挂载或会话切换时,载入当前活跃会话的历史。
+  // 不先清空消息:保留上一会话内容 + 「正在加载会话」提示,新会话历史到达后再整体替换,
+  // 避免切换出现空白闪烁;已加载过的会话走缓存秒开,后台静默刷新保持最新。
   useEffect(() => {
     let alive = true;
+    const target = sid; // 本次要加载的会话 id(防止异步响应串到别的会话)
     hasLive.current = false; // 切换会话:重置"已有新对话"标记,让新会话历史立即显示
+    justSwitchedRef.current = true; // 切换会话:绘制后兜底重测滚底/拇指,见下方 [messages] 兜底 effect
     forkTurnRef.current = 0; lastIterRef.current = 0; // 分支点计数器随会话重置
-    setMessages([]);
     setTodos([]);
     setAgentState('idle'); setIter(0); setErrorMsg('');
+    // 有缓存则立即显示(切回已看过的会话零等待);无缓存时保留旧内容 + 加载指示
+    const cached = histCache.current.get(target ?? '');
+    if (cached) { setMessages(cached.msgs); setTodos(cached.todos); setSwitching(false); }
+    else setSwitching(true);
     api.request('get_history', {}, 8000)
       .then((r) => {
-        if (!alive || hasLive.current) return;
+        if (!alive || hasLive.current || activeRef.current !== target) return;
         // 历史 turns 长度即该会话已累计的消息面 turn 数,作为后续流式递增的基准
         forkTurnRef.current = (r.turns || []).length;
         const msgs = turnsToMessages(r.turns || []);
@@ -498,12 +576,23 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
           const last = msgs[msgs.length - 1];
           if (last?.role === 'assistant') last.streaming = true;
         }
+        histCache.current.set(target ?? '', { msgs, todos: Array.isArray(r.todos) ? r.todos : [] });
         setMessages(msgs);
         setTodos(Array.isArray(r.todos) ? r.todos : []); // 该会话当前的任务计划
+        setSwitching(false);
       })
-      .catch(() => {});
+      .catch((e) => {
+        if (!alive) return;
+        setSwitching(false);
+        if (cached) return; // 有缓存:继续显示缓存(可能略旧),静默忽略本次刷新失败
+        // 无缓存且加载失败:清掉可能已混入的上一会话内容,提示可重试(会话项不再被 activeId 守卫挡住)
+        histCache.current.delete(target ?? '');
+        setMessages([]);
+        setTodos([]);
+        setErrorMsg(`加载会话历史失败: ${(e as Error).message} — 再次点击该会话可重试`);
+      });
     return () => { alive = false; };
-  }, [sessionSeq]);
+  }, [sessionSeq, sid]);
 
   const clearAll = async () => {
     const ok = await confirm({
@@ -545,10 +634,40 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
     el.scrollTo({ top, behavior: 'smooth' });
   };
 
-  useEffect(() => {
+  // 用 useLayoutEffect:在浏览器绘制前同步完成「清残留拇指 → 滚到底 → 重绘拇指」,
+  // 保证会话切换/流式更新时滚动条与内容在同一帧就位。这里强制瞬时定位:
+  // 1) 临时禁用平滑滚动(scroll-behavior:smooth 会让程序化 scrollTop 赋值也
+  //    动画,造成"内容从上面缓缓落下"的过渡);2) 拇指跳过淡入立即就位。
+  useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const prevBehavior = el.style.scrollBehavior;
+    el.style.scrollBehavior = 'auto'; // 覆盖任何来源的平滑滚动,保证瞬间滚底
+    refreshOverlayScrollbar(el, true); // 先清掉上一会话残留的绝对定位拇指(scrollHeight 才恢复真实值)
+    el.scrollTop = el.scrollHeight;    // 滚到底部(最新消息)——切换会话与流式期间都保持底部
+    refreshOverlayScrollbar(el, true); // 同一帧内把拇指重绘到当前正确位置/尺寸
+    el.style.scrollBehavior = prevBehavior;
     updateActiveDot();
+  }, [messages]);
+
+  // 会话切换的兜底:首帧布局时内容挂载动画/延迟加载的图片可能在绘制后几帧内
+  // 才把 scrollHeight 撑到最终值,首帧测得的底部与拇指长度会偏小,看起来就像
+  // "滚动条从长到短缓缓过渡"。绘制后下一帧再强制滚底 + 重绘一次拇指,保证
+  // 切换会话后滚动条立即是最终形态(仅会话切换后触发一次,不干扰普通流式)。
+  useEffect(() => {
+    if (!justSwitchedRef.current) return;
+    justSwitchedRef.current = false;
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const prevBehavior = el.style.scrollBehavior;
+      el.style.scrollBehavior = 'auto';
+      el.scrollTop = el.scrollHeight;
+      refreshOverlayScrollbar(el, true);
+      el.style.scrollBehavior = prevBehavior;
+      updateActiveDot();
+    });
+    return () => cancelAnimationFrame(id);
   }, [messages]);
 
   // 跳转点悬停提示:取不被裁剪的 fixed 定位,按当前点视口坐标弹出到右侧
@@ -558,13 +677,18 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
   };
   const hideDotTip = () => setDotTip(null);
 
+  // 发送文本就是输入框原文(技能 /词 原样保留,后端按独立词解析注入)
+  const composedInput = input;
+  // 输入中是否已含完整 /技能名(用于占位提示与去重判断)
+  const hasSkillToken = /(?:^|\s)\/[a-z0-9][a-z0-9-]*(?=\s|$)/i.test(input);
+
   const send = () => {
-    const text = input.trim();
-    // 工作中仍可发送:服务端会把消息转为 steer(补充指令注入下一步)
-    if (!text || !connected || !workspace) return;
+    // 工作中仍可发送:服务端会把消息转为 steer(补充指令注入下一步);
+    // 提问挂起时禁止发送(须先作答或取消)
+    if (!input.trim() || !canSend || askPending) return;
     setInput('');
     setMessages((m) => [...m]);
-    api.send('speak', { text, reasoning });
+    api.send('speak', { text: composedInput, reasoning });
   };
 
   // ---- / 命令菜单(照搬 deepseek-harness 的行内命令交互) ----
@@ -620,12 +744,12 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
       .catch(() => {});
   };
 
-  // 输入 / 唤醒菜单:仅当整行以 / 开头(最多一个空格前)时开启,对齐 harness 的 leadingInput 判定
+  // 输入 / 唤醒菜单:行首 或 空白后 的 / 且其后是词尾时开启(对齐 harness 的 leadingInput,
+  // 并支持选完技能后,在需求文字后再输空格 + / 继续追加技能)
   const syncSlash = (text: string) => {
-    const m = /^\/([a-z0-9-]*)/i.exec(text);
-    const trigger = m !== null && text.length <= (m[1]?.length || 0) + 1;
-    if (trigger) {
-      setSlashQuery(m![1] || '');
+    const m = /(?:^|\s)\/([a-z0-9-]*)$/i.exec(text);
+    if (m) {
+      setSlashQuery(m[1] || '');
       setSlashOpen(true);
       if (slashActive < 0) setSlashActive(0);
       openSlash(); // 首次打开时拉取技能列表
@@ -636,14 +760,24 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
   const closeSlash = () => { setSlashOpen(false); setSlashActive(-1); };
 
   // 选中命令/技能:
-  // - 技能:改写输入为 "/技能名 ",用户在后面继续输入需求再 Enter 发送(对齐 harness onPick 落字)
+  // - 技能:把末尾刚输入的 /词替换为 /name + 空格,整段文本仍是普通可编辑文本,
+  //   叠加层按规则高亮显示;同一技能已完整存在于文本中则不重复插入
   // - 系统命令:直接执行(dispatch)
   const pickSlash = (item: SlashItem, query: string) => {
     if (item.kind === 'skill') {
-      setInput(`/${item.name} `);
+      const name = item.name;
+      // 把末尾刚输入的 /词替换为 /name + 空格(保留 / 前文字,整段文本仍可继续编辑,
+      // 高亮叠加层负责把它显示为高亮 token)
+      const m = /(^|\s)\/[a-z0-9-]*$/i.exec(input);
+      const head = m ? input.slice(0, m.index + m[1].length) : input;
+      // 同一技能已完整存在于文本中则不重复追加
+      const already = new RegExp(`(?:^|\\s)/${name}(?=\\s|$)`, 'i').test(input);
+      const next = already ? head : `${head}/${name} `;
+      setInput(next);
+      syncSlash(next);
       setSlashOpen(false);
       setSlashActive(-1);
-      requestAnimationFrame(() => { const el = taRef.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+      requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
       return;
     }
     closeSlash();
@@ -656,15 +790,18 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
   // ---- 工作区切换(输入框下方):点击弹出下拉,切换/浏览选择工作区 ----
   const [wsBrowserOpen, setWsBrowserOpen] = useState(false);
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  // ---- 本地工作区:与远程工作区并排,同样支持多个本地工作区 ----
+  const [localWsBrowserOpen, setLocalWsBrowserOpen] = useState(false);
+  const [localWsMenuOpen, setLocalWsMenuOpen] = useState(false);
   const wsbarRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!wsMenuOpen) return;
+    if (!wsMenuOpen && !localWsMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (wsbarRef.current && !wsbarRef.current.contains(e.target as Node)) setWsMenuOpen(false);
+      if (wsbarRef.current && !wsbarRef.current.contains(e.target as Node)) { setWsMenuOpen(false); setLocalWsMenuOpen(false); }
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [wsMenuOpen]);
+  }, [wsMenuOpen, localWsMenuOpen]);
 
   const setWorkspace = async (p: string) => {
     try {
@@ -673,19 +810,48 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
     } catch (e) { toast.error((e as Error).message); }
   };
 
+  const setLocalWorkspace = (p: string) => {
+    if (!onLocalWorkspaceSet) return;
+    onLocalWorkspaceSet(p); // App 内负责 set_local_workspace 请求 + 记录历史
+    setLocalWsBrowserOpen(false); setLocalWsMenuOpen(false);
+  };
+
+  // 从历史中删除一条工作区记录:先确认(仅删快捷记录,不动远程/本地目录本身)
+  const removeWs = async (p: string) => {
+    const ok = await confirm({
+      title: '删除工作区记录',
+      message: `从历史记录中删除「${p}」?仅移除该工作区的快捷记录,不会删除远程目录本身`,
+      confirmLabel: '删除',
+      danger: true
+    });
+    if (!ok) return;
+    onDeleteWs?.(p);
+  };
+  const removeLocalWs = async (p: string) => {
+    const ok = await confirm({
+      title: '删除本地工作区记录',
+      message: `从历史记录中删除「${p}」?仅移除该工作区的快捷记录,不会删除本地目录本身`,
+      confirmLabel: '删除',
+      danger: true
+    });
+    if (!ok) return;
+    onDeleteLocalWs?.(p);
+  };
+
   // 发送后等待回答 / agent 工作期间都应允许暂停:busy(服务端 status) 与 agentState 任一命中即视为工作中
   const working = busy || agentState === 'working';
-  // 工作中也允许输入发送(自动作为运行中补充指令);仅未连接/未选工作区时禁用
-  const canSend = connected && workspace;
+  // 工作中也允许输入发送(自动作为运行中补充指令);连接时需远程工作区,本地模式需本地工作区;
+  // 模型提问挂起时锁定输入与暂停(须先作答或取消提问);会话切换加载中也锁定,避免发到错误会话
+  const canSend = (connected ? !!workspace : !!localWorkspace) && !askPending && !switching;
 
   return (
     <div className="chatwrap">
       <div className="chat-head">
         <span className="muted">
-          {working ? `Agent 工作中 · 迭代 #${iter}` : agentState === 'error' ? '出现错误' : agentState === 'done' ? '已完成' : '空闲'}
+          {switching ? '正在加载会话…' : askPending ? '等待你回答问题…' : working ? `Agent 工作中 · 迭代 #${iter}` : agentState === 'error' ? '出现错误' : agentState === 'done' ? '已完成' : '空闲'}
         </span>
         <span className="row gap">
-          {working && <button className="ghost sm" onClick={stop}>⏹ 停止</button>}
+          {working && !askPending && <button className="ghost sm" onClick={stop}>⏹ 停止</button>}
           {messages.length > 0 && <button className="ghost sm" title="清空对话历史(含服务端持久化)" onClick={clearAll}>🗑 清空</button>}
         </span>
       </div>
@@ -693,22 +859,28 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
         <div className="chat" ref={scrollRef} onScroll={() => { updateActiveDot(); hideDotTip(); }}>
           {messages.length === 0 && (
             <div className="empty">
-              <div>🤖 连接服务器、选择工作区后,即可让 Agent 在远程服务器上工作</div>
+              <div>{connected ? '连接服务器、选择工作区后,即可让 Agent 在远程服务器上工作' : '未连接服务器 · 选择本地工作区后,即可让 Agent 在本机工作'}</div>
               <div className="muted">例如:「帮我看一下这个项目结构,然后修复 main.js 里的 bug」</div>
             </div>
           )}
           {messages.map((m, i) => (
             <div key={i} className={`msg ${m.role}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
               {m.role === 'notice' && <div className="bubble notice-bubble">⚠ {m.content}</div>}
+              {m.role === 'skilltag' && <SkillRun skills={m.skills} />}
               {m.role === 'user' && <div className="bubble user-bubble">{m.content}</div>}
               {m.role === 'assistant' && (
                 <div className="msg-col">
                   <div className="bubble ai-bubble">
                     {(m.segments || []).map((seg, si) => {
-                      if (seg.kind === 'tools') return <ToolRun key={si} tools={seg.tools} />;
-                      // 思考段:穿插在文本/工具组之间,折叠展示(对齐 dsh 的 ReasoningRow 逐块渲染)
+                      if (seg.kind === 'tools') return (
+                        <ToolCallList key={si} tools={seg.tools || []} workspace={(connected ? workspace : localWorkspace) ?? undefined} />
+                      );
+                      // 思考段:穿插在文本/工具组之间,折叠展示(照搬 dsh 的 ReasoningRow;
+                      // 流式时仅最后一段标记 running 获得扫光)
                       if (seg.kind === 'reasoning') {
-                        return (seg.text && seg.text.trim()) ? <ThinkingBlock key={si} text={seg.text.trim()} /> : null;
+                        return (seg.text && seg.text.trim())
+                          ? <ReasoningRow key={si} text={seg.text.trim()} running={m.streaming && si === (m.segments || []).length - 1} />
+                          : null;
                       }
                       return <div key={si}>{renderAssistantContent(seg.text || '') || <AssistantText text={seg.text || ''} />}</div>;
                     })}
@@ -751,11 +923,13 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
         <div className="dot-tip" style={{ top: dotTip.top, left: dotTip.left }}>{dotTip.text}</div>
       )}
       {errorMsg && <div className="error">{errorMsg}</div>}
+      {/* 任务计划面板:输入区玻璃面板之外,独立玻璃卡片悬浮(默认折叠,无计划时隐藏) */}
+      <TodoPanel todos={todos} />
       <div className="composer">
-        {/* 任务计划面板:输入框上方,默认折叠(照搬 deepseek-harness 的 TodoPanel 停靠位) */}
-        <TodoPanel todos={todos} />
+        {/* 模型提问面板(ask_user_question):内联显示在输入框上方,无遮罩;作答/取消前锁定输入 */}
+        <AskPanel sid={sid} onPendingChange={setAskPending} />
         <div className="composer-box">
-          {/* / 命令菜单:输入以 / 开头时浮在输入框上方,前缀优先+模糊匹配过滤 */}
+          {/* / 命令菜单:输入 / (行首或空格后)时浮在输入框上方,前缀优先+模糊匹配过滤 */}
           {slashOpen && (
             <SlashMenu
               items={slashAll}
@@ -766,39 +940,76 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
               onClose={closeSlash}
             />
           )}
-          <textarea ref={taRef} rows={1} value={input}
-            onChange={(e) => { const v = e.target.value; setInput(v); syncSlash(v); }}
-            placeholder={!connected ? '请先连接 SSH' : !workspace ? '请先选择远程工作区'
-              : working ? 'Agent 工作中,输入内容将作为补充指令注入下一步…' : '输入 / 可唤起命令与技能菜单…'}
-            disabled={!canSend}
-            onKeyDown={(e) => {
-              // / 命令菜单打开时的键盘交互(对齐 harness):↑↓ 移动、Enter 选中、Esc 关闭、Tab 补全
-              if (slashOpen) {
-                const list = rankSlashItems(slashAll, slashQuery);
-                if (e.key === 'ArrowDown') { e.preventDefault(); setSlashActive((i) => (list.length ? (i + 1) % list.length : -1)); return; }
-                if (e.key === 'ArrowUp') { e.preventDefault(); setSlashActive((i) => (list.length ? (i - 1 + list.length) % list.length : -1)); return; }
-                if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
-                if (e.key === 'Enter' && !e.shiftKey && list.length) {
-                  e.preventDefault();
-                  const it = list[slashActive >= 0 ? slashActive : 0];
-                  if (it) pickSlash(it, slashQuery);
-                  return;
+          <div className="composer-input">
+            {/* 高亮叠加层:文字透明只露出 /技能名 高亮底;pointer-events 穿透,不挡输入 */}
+            <div className="composer-overlay" ref={overlayRef} aria-hidden="true">
+              {tokenizeInput(input).map((s, i) => s.t === 'skill'
+                ? <span className="composer-token" key={i}>{s.v}</span>
+                : <span key={i}>{s.v}</span>)}
+              {input.endsWith('\n') && <span> </span>}
+            </div>
+            <textarea ref={taRef} rows={1} value={input}
+              onChange={(e) => { const v = e.target.value; setInput(v); syncSlash(v); }}
+              onScroll={syncOverlayScroll}
+              placeholder={!connected && !localWorkspace ? '未连接服务器 · 选择本地工作区后即可对话'
+                : connected && !workspace ? '请先选择远程工作区'
+                : askPending ? '请先在提问面板中作答或取消…'
+                : working ? 'Agent 工作中,输入内容将作为补充指令注入下一步…'
+                : hasSkillToken ? '输入需求…' : '输入 / 可唤起命令与技能菜单…'}
+              disabled={!canSend}
+              onKeyDown={(e) => {
+                // / 命令菜单打开时的键盘交互(对齐 harness):↑↓ 移动、Enter 选中、Esc 关闭、Tab 补全
+                if (slashOpen) {
+                  const list = rankSlashItems(slashAll, slashQuery);
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setSlashActive((i) => (list.length ? (i + 1) % list.length : -1)); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setSlashActive((i) => (list.length ? (i - 1 + list.length) % list.length : -1)); return; }
+                  if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
+                  if (e.key === 'Enter' && !e.shiftKey && list.length) {
+                    e.preventDefault();
+                    const it = list[slashActive >= 0 ? slashActive : 0];
+                    if (it) pickSlash(it, slashQuery);
+                    return;
+                  }
+                  if (e.key === 'Tab' && list.length) {
+                    e.preventDefault();
+                    const it = list[slashActive >= 0 ? slashActive : 0];
+                    if (it) pickSlash(it, slashQuery);
+                    return;
+                  }
                 }
-                if (e.key === 'Tab' && list.length) {
-                  e.preventDefault();
-                  const it = list[slashActive >= 0 ? slashActive : 0];
-                  if (it) pickSlash(it, slashQuery);
-                  return;
+                // 退格整词删除:光标紧邻完整 /技能名(行首/空白后、后跟空白或结尾)时,
+                // 一整个删除(连同其后单个空格,避免留下双空格)
+                if (!slashOpen && e.key === 'Backspace') {
+                  const el = e.currentTarget as HTMLTextAreaElement;
+                  if (el.selectionStart === el.selectionEnd) {
+                    const pre = el.value.slice(0, el.selectionStart);
+                    const m = /(^|\s)(\/[a-z0-9][a-z0-9-]*[ \t]?)$/i.exec(pre);
+                    if (m) {
+                      e.preventDefault();
+                      let end = el.selectionStart;
+                      // m[2] 未带尾随空格且光标后紧跟一个空格时一并删掉,避免留下双空格
+                      if (!/[ \t]$/.test(m[2]) && /[ \t]/.test(el.value[end] || '')) end += 1;
+                      const start = el.selectionStart - m[2].length;
+                      const next = el.value.slice(0, start) + el.value.slice(end);
+                      setInput(next);
+                      syncSlash(next);
+                      requestAnimationFrame(() => {
+                        const t = taRef.current;
+                        if (t) { t.setSelectionRange(start, start); t.focus(); }
+                      });
+                      return;
+                    }
+                  }
                 }
-              }
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-              else if (e.key === 'Escape') setInput('');
-            }} />
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+                else if (e.key === 'Escape') setInput('');
+              }} />
+          </div>
           <div className="composer-foot">
             <span className="muted composer-tip">Enter 发送 · Shift+Enter 换行</span>
-            <ContextMeter messages={messages} input={input}
+            <ContextMeter messages={messages} input={composedInput}
               contextWindow={llm.effModelContext?.contextWindow || 0} />
-            {working
+            {working && !askPending
               ? <button className="send-btn stop" title="停止 (Ctrl+C 也可)" onClick={stop}>⏹</button>
               : <button className="send-btn" disabled={!canSend || !input.trim()} title="发送" onClick={send}>➤</button>}
           </div>
@@ -834,54 +1045,101 @@ export default function ChatPanel({ connected, workspace, busy, sessionSeq = 0, 
               value={llm.customModel} onChange={(e) => llm.setCustomModel(e.target.value)} placeholder="自定义模型名" />
           )}
         </div>
-        {/* 工作区:单个可点击条目,点击弹出下拉(切换该服务器保存过的工作区 / 浏览选择新工作区) */}
-        <div className="wsbar" ref={wsbarRef}>
-          <button
-            className={`ws-chip ${workspace ? '' : 'none'}`}
-            disabled={!connected}
-            title={workspace ? (connected ? '点击切换/选择工作区' : workspace) : (connected ? '点击选择工作区' : '未连接服务器')}
-            onClick={() => setWsMenuOpen((v) => !v)}
-          >
-            <span className="ws-chip-path">{workspace ? `📂 ${workspace}` : '选择工作区'}</span>
-            <span className="ws-chip-arrow">{wsMenuOpen ? '▾' : '▸'}</span>
-          </button>
-          {wsMenuOpen && (
-            <div className="ws-pick" onClick={(e) => e.stopPropagation()}>
-              {!connected ? (
-                <div className="muted ws-pick-empty">未连接服务器</div>
-              ) : (
-                <>
+        {/* 工作区:远程 + 本地并排,各自点击弹出下拉(切换保存过的工作区 / 浏览选择新工作区) */}
+        <div className="wsbar-row" ref={wsbarRef}>
+          {connected && (
+            <div className="wsbar">
+              <button
+                className={`ws-chip ${workspace ? '' : 'none'}`}
+                title={workspace ? (connected ? '点击切换/选择工作区' : workspace) : (connected ? '点击选择工作区' : '未连接服务器')}
+                onClick={() => { setWsMenuOpen((v) => !v); setLocalWsMenuOpen(false); }}
+              >
+                <span className="ws-chip-path">{workspace ? `📂 ${workspace}` : '选择工作区'}</span>
+                <span className="ws-chip-arrow">{wsMenuOpen ? '▾' : '▸'}</span>
+              </button>
+              {wsMenuOpen && (
+                <div className="ws-pick" onClick={(e) => e.stopPropagation()}>
                   {savedWs.length === 0 ? (
                     <div className="muted ws-pick-empty">还没有已保存的工作区</div>
                   ) : (
                     <div className="ws-pick-list">
                       {savedWs.map((p) => (
-                        <button key={p} className={`ws-pick-item ${workspace === p ? 'on' : ''}`}
-                          title={workspace === p ? '当前工作区' : `切换工作区到 ${p}`}
-                          onClick={() => setWorkspace(p)}>
-                          <span className="ws-pick-path">{p}</span>
-                          {workspace === p && <span className="ws-pick-cur">✓</span>}
-                        </button>
+                        <div key={p} className={`ws-pick-item ${workspace === p ? 'on' : ''}`}>
+                          <button type="button" className="ws-pick-main"
+                            title={workspace === p ? '当前工作区' : `切换工作区到 ${p}`}
+                            onClick={() => setWorkspace(p)}>
+                            <span className="ws-pick-path">{p}</span>
+                            {workspace === p && <span className="ws-pick-cur">✓</span>}
+                          </button>
+                          <button type="button" className="ws-pick-del" aria-label={`从历史中删除工作区 ${p}`}
+                            title="从历史记录中删除(不影响远程目录)"
+                            onClick={() => removeWs(p)}>🗑</button>
+                        </div>
                       ))}
                     </div>
                   )}
                   <div className="ctx-sep" />
-                  <button className="ws-pick-item" onClick={() => { setWsMenuOpen(false); setWsBrowserOpen(true); }}>
+                  <button className="ws-pick-item ws-pick-action" onClick={() => { setWsMenuOpen(false); setWsBrowserOpen(true); }}>
                     📁 浏览选择其他目录…
                   </button>
                   {home && (
-                    <button className="ws-pick-item" onClick={() => setWorkspace(home)} title={`设为家目录 ${home}`}>
+                    <button className="ws-pick-item ws-pick-action" onClick={() => setWorkspace(home)} title={`设为家目录 ${home}`}>
                       🏠 家目录
                     </button>
                   )}
-                </>
+                </div>
               )}
             </div>
           )}
+          <div className="wsbar">
+            <button
+              className={`ws-chip local ${localWorkspace ? '' : 'none'}`}
+              title={localWorkspace ? '点击切换/选择本地工作区' : '点击选择本地工作区'}
+              onClick={() => { setLocalWsMenuOpen((v) => !v); setWsMenuOpen(false); }}
+            >
+              <span className="ws-chip-path">{localWorkspace ? `🖥 ${localWorkspace}` : '选择本地工作区'}</span>
+              <span className="ws-chip-arrow">{localWsMenuOpen ? '▾' : '▸'}</span>
+            </button>
+            {localWsMenuOpen && (
+              <div className="ws-pick" onClick={(e) => e.stopPropagation()}>
+                {savedLocalWs.length === 0 ? (
+                  <div className="muted ws-pick-empty">还没有已保存的本地工作区</div>
+                ) : (
+                  <div className="ws-pick-list">
+                    {savedLocalWs.map((p) => (
+                      <div key={p} className={`ws-pick-item ${localWorkspace === p ? 'on' : ''}`}>
+                        <button type="button" className="ws-pick-main"
+                          title={localWorkspace === p ? '当前本地工作区' : `切换本地工作区到 ${p}`}
+                          onClick={() => setLocalWorkspace(p)}>
+                          <span className="ws-pick-path">{p}</span>
+                          {localWorkspace === p && <span className="ws-pick-cur">✓</span>}
+                        </button>
+                        <button type="button" className="ws-pick-del" aria-label={`从历史中删除本地工作区 ${p}`}
+                          title="从历史记录中删除(不影响本地目录)"
+                          onClick={() => removeLocalWs(p)}>🗑</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="ctx-sep" />
+                <button className="ws-pick-item ws-pick-action" onClick={() => { setLocalWsMenuOpen(false); setLocalWsBrowserOpen(true); }}>
+                  🖥 浏览选择其他本地目录…
+                </button>
+                {localHome && (
+                  <button className="ws-pick-item ws-pick-action" onClick={() => setLocalWorkspace(localHome)} title={`设为家目录 ${localHome}`}>
+                    🏠 家目录
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {wsBrowserOpen && (
         <DirBrowser initial={workspace || home || '/'} home={home} onClose={() => setWsBrowserOpen(false)} onPick={setWorkspace} />
+      )}
+      {localWsBrowserOpen && (
+        <LocalDirBrowser initial={localWorkspace || localHome || undefined} home={localHome} onClose={() => setLocalWsBrowserOpen(false)} onPick={setLocalWorkspace} />
       )}
     </div>
   );

@@ -1,7 +1,14 @@
-// SSH 连接管理器:建立/保活/自动重连,SFTP 文件操作,exec 命令执行
+// SSH 单连接:建立/保活/自动重连,SFTP 文件操作,exec 命令执行。
+// 连接池(文件底部 SshManager)同时持有多个 SshConnection,各自独立保活,
+// 同一时刻只有一个是「活动连接」,文件与命令操作都作用在活动连接上。
 import { EventEmitter } from 'node:events';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Client } from 'ssh2';
 import { SSH, EXEC, FILE } from './config.js';
+
+// 连接作用域:agent 会话一轮运行期间被绑定到它所属服务器的连接。
+// 用户切走活动连接后,后台会话的工具调用仍走绑定连接,不会误操作新服务器。
+const connScope = new AsyncLocalStorage();
 
 // 远程路径归一化(兼容 posix / windows 反斜杠),返回不带尾斜杠的绝对路径
 export function normalizeRemote(p) {
@@ -30,7 +37,7 @@ const call = (fn, ...args) => new Promise((resolve, reject) => {
   fn(...args, (err, res) => (err ? reject(err) : resolve(res)));
 });
 
-export class SshManager extends EventEmitter {
+export class SshConnection extends EventEmitter {
   constructor() {
     super();
     this.client = null;   // ssh2 Client
@@ -42,27 +49,30 @@ export class SshManager extends EventEmitter {
     this.timer = null;    // 重连定时器
     this.platform = null; // 'win32' | 'posix' | null
     this.home = null;     // 远程家目录
-    this.workspace = null;// 用户选择的工作区
+    this.workspace = null;// 用户选择的工作区(每台服务器独立保存)
     this.execQueue = Promise.resolve();
+    this.bgQueue = Promise.resolve(); // 后台维护任务队列(环境自检/工具安装),与主命令队列隔离
     this.activeRuns = new Map(); // runId -> { stream, done, stopped, killTimer },供 kill/超时终止命令
     this.hostInfo = null; // {host,port,username}
+    this.profileId = null;// 由哪个已保存配置发起(连接池用 profileId 做连接 id)
+    this.reason = null;   // 最近一次重连原因(供 UI 展示)
+    this._readyPromise = null; // 正在进行的连接(连接池复用「连接中」连接时需等待它)
   }
 
   get connected() { return this.status === 'connected'; }
 
   // ---------- 连接生命周期 ----------
-  async connect(opts) {
-    // 用户主动发起新连接:若切换到了不同的服务器(host/port/username 任一不同),重置工作区
-    // (各服务器的工作区相互独立,避免沿用上一台服务器的路径)
-    const prev = this.hostInfo;
-    if (prev && (prev.host !== opts.host || (prev.port || 22) !== (opts.port || 22) || prev.username !== opts.username)) {
-      this.workspace = null;
-    }
+  // 建立/重建本连接;工作区按服务器独立,连接自身不复位。返回就绪(或失败)的 Promise
+  connect(opts) {
     this.desired = true;
     this.opts = opts;
     this.retry = 0;
+    this.reason = null;
     this.hostInfo = { host: opts.host, port: opts.port, username: opts.username };
-    await this._open();
+    const p = this._open();
+    this._readyPromise = p;
+    p.catch(() => {}).finally(() => { if (this._readyPromise === p) this._readyPromise = null; });
+    return p;
   }
 
   _open() {
@@ -148,6 +158,7 @@ export class SshManager extends EventEmitter {
     if (!this.desired || this.timer) return;
     const delay = Math.min(SSH.RECONNECT_BASE_MS * Math.pow(2, this.retry), SSH.RECONNECT_MAX_MS);
     this.retry += 1;
+    this.reason = reason;
     this._setStatus('reconnecting', { reason, retry: this.retry, delay });
     this.emit('log', 'warn', `${delay / 1000}s 后自动重连(${reason})`);
     this.timer = setTimeout(async () => {
@@ -179,6 +190,15 @@ export class SshManager extends EventEmitter {
     // 串行队列,避免并发通道互相干扰
     const run = this.execQueue.then(() => this._execRaw(cmd, { runId, timeout, onOut, onErr, maxOutput }));
     this.execQueue = run.catch(() => {});
+    return run;
+  }
+
+  // 后台维护任务(环境自检/搜索工具安装)专用队列:与主命令队列隔离,
+  // 避免长时间安装(可达 180s)阻塞 agent 的 run_command 等前台命令。
+  // 与 exec 一样走 _execRaw,ssh2 支持同连接上多路 exec 通道并行。
+  execBackground(cmd, opts = {}) {
+    const run = this.bgQueue.then(() => this._execRaw(cmd, opts));
+    this.bgQueue = run.catch(() => {});
     return run;
   }
 
@@ -498,6 +518,193 @@ function remoteDirName(p) {
   const n = normalizeRemote(p);
   const i = n.lastIndexOf('/');
   return i <= 0 ? '/' : n.slice(0, i);
+}
+
+// ---------- 多连接连接池(对外门面) ----------
+// 同时维护 N 个独立保活的 SshConnection;文件/命令操作统一委托给「活动连接」。
+// 切换活动连接只改指针、不做任何网络动作,已建立的连接保持不断 => 快速切换。
+// 连接 id:由已保存配置发起的用 profileId,直接连接用 "host:port:username"。
+export class SshManager extends EventEmitter {
+  constructor() {
+    super();
+    this.conns = new Map(); // id -> SshConnection
+    this._activeId = null;  // 当前活动连接 id
+    // 以下字段仅用于测试直接赋值(模拟单连接形态),平时保持 undefined 走活动连接
+    this._status = undefined; this._platform = undefined; this._home = undefined;
+    this._workspace = undefined; this._hostInfo = undefined; this._sftp = undefined;
+  }
+
+  get active() {
+    // 连接作用域优先:agent 运行期间取绑定连接;作用域外(undefined)才回落活动连接
+    const scoped = connScope.getStore();
+    if (scoped !== undefined) return scoped || null;
+    return (this._activeId && this.conns.get(this._activeId)) || null;
+  }
+  get activeId() { return this._activeId; }
+  // 读取优先活动连接(生产路径);直接赋值(测试 mock)在无活动连接时生效,setter 双向同步
+  get status() { return this.active ? this.active.status : (this._status ?? 'disconnected'); }
+  set status(v) { this._status = v; if (this.active) this.active.status = v; }
+  get platform() { return this.active ? this.active.platform : (this._platform ?? null); }
+  set platform(v) { this._platform = v; if (this.active) this.active.platform = v; }
+  get home() { return this.active ? this.active.home : (this._home ?? null); }
+  set home(v) { this._home = v; if (this.active) this.active.home = v; }
+  get workspace() { return this.active ? this.active.workspace : (this._workspace ?? null); }
+  set workspace(v) { this._workspace = v; if (this.active) this.active.workspace = v; }
+  get hostInfo() { return this.active ? this.active.hostInfo : (this._hostInfo ?? null); }
+  set hostInfo(v) { this._hostInfo = v; if (this.active) this.active.hostInfo = v; }
+  get sftp() { return this.active ? this.active.sftp : (this._sftp ?? null); }
+  set sftp(v) { this._sftp = v; if (this.active) this.active.sftp = v; }
+  get connected() { return this.status === 'connected'; }
+
+  // 连接 id:由已保存配置发起用 profileId,直接连接用 "host:port:username"
+  static keyOf(opts = {}) {
+    if (opts.profileId) return String(opts.profileId);
+    const host = String(opts.host || '').trim();
+    if (!host || !opts.username) return '';
+    return `${host}:${Number(opts.port) || 22}:${opts.username}`;
+  }
+
+  // 建立连接;若该服务器已有存活连接,直接切为活动连接,不重新握手
+  async connect(opts = {}) {
+    const key = SshManager.keyOf(opts);
+    if (!key || !/\S/.test(key)) throw new Error('缺少 host/port/username 或 profileId');
+    let conn = this.conns.get(key);
+    if (!conn && opts.profileId) {
+      // 有同服务器的「未绑定配置」连接:改绑到该配置,避免同一台服务器重复建连
+      const dupKey = SshManager.keyOf({ host: opts.host, port: opts.port, username: opts.username });
+      const dup = dupKey && this.conns.get(dupKey);
+      if (dup && !dup.profileId) {
+        this.conns.delete(dupKey);
+        if (this._activeId === dupKey) this._activeId = key;
+        this.conns.set(key, dup);
+        conn = dup;
+      }
+    }
+    if (!conn) {
+      conn = new SshConnection();
+      this.conns.set(key, conn);
+      this._hook(key, conn);
+    }
+    conn.profileId = opts.profileId || null;
+    if (conn.connected || conn.status === 'connecting') {
+      // 已连接 / 连接中:改为活动连接即可(快速切换,不重连)
+      this._activeId = key;
+      if (conn.status === 'connecting' && conn._readyPromise) await conn._readyPromise.catch(() => {});
+      this.emit('status');
+      return key;
+    }
+    this._activeId = key;
+    const p = conn.connect(opts);
+    try { await p; } catch (e) { /* 连接失败维持 disconnected,由调用方提示 */ }
+    finally { this.emit('status'); }
+    return key;
+  }
+
+  // 一键切换活动连接(无任何网络动作);连接不存在时返回 false
+  switchActive(id) {
+    if (!this.conns.has(String(id))) return false;
+    if (this._activeId === String(id)) return true;
+    this._activeId = String(id);
+    this.emit('status');
+    return true;
+  }
+
+  // 在指定连接的作用域内执行 fn:作用域内 active 解析为该连接。
+  // agent 的会话一轮(boundConn)用它绑定到所属服务器,切换活动连接不影响后台运行。
+  runWithConn(conn, fn) {
+    return connScope.run(conn || null, fn);
+  }
+
+  // 断开某连接(缺省 = 活动连接);断开后自动回落到其他存活连接
+  async disconnect(id) {
+    const key = id || this._activeId;
+    const conn = key ? this.conns.get(key) : null;
+    if (conn) {
+      await conn.disconnect(); // 先断开(desired=false,不会触发全局 connection-lost)
+      if (this._activeId === key) this._activeId = null;
+    }
+    this.conns.delete(key);
+    this._fallbackActive();
+    this.emit('status');
+  }
+
+  async disconnectAll() {
+    const list = [...this.conns.values()];
+    this.conns.clear();
+    this._activeId = null;
+    await Promise.all(list.map((c) => c.disconnect().catch(() => {})));
+    this.emit('status');
+  }
+
+  // 活动连接掉线时自动切到其他存活连接;没有别的连接但本连接在自动重连则保留显示重连状态
+  _fallbackActive() {
+    const cur = this._activeId ? this.conns.get(this._activeId) : null;
+    if (cur && cur.status !== 'disconnected') return;
+    for (const [id, c] of this.conns) {
+      if (id !== this._activeId && c.status !== 'disconnected') { this._activeId = id; return; }
+    }
+    if (cur && cur.desired) return; // 自动重连接管,状态随后变 reconnecting
+    this._activeId = null;
+  }
+
+  // 供前端渲染的连接列表 + 当前活动 id
+  snapshot() {
+    return {
+      activeConn: this._activeId,
+      conns: [...this.conns.entries()].map(([id, c]) => ({
+        id,
+        profileId: c.profileId || null,
+        status: c.status,
+        host: c.hostInfo?.host ?? null,
+        port: c.hostInfo?.port ?? null,
+        username: c.hostInfo?.username ?? null,
+        platform: c.platform ?? null,
+        home: c.home ?? null,
+        workspace: c.workspace ?? null,
+        autoReconnect: c.desired,
+        reason: c.reason || null,
+        retry: c.retry || 0
+      })).sort((a, b) => (a.id < b.id ? -1 : 1))
+    };
+  }
+
+  _hook(key, conn) {
+    conn.on('status', (info) => {
+      const wasActive = this._activeId === key;
+      const becameDisconnected = info?.status === 'disconnected';
+      this._fallbackActive();
+      // 意外掉线(desired 仍为 true,非用户手动断开):触发全局清理。
+      // 任意连接都发(不限于活动连接)——切走服务器后仍在后台运行的会话绑定的是它。
+      if (becameDisconnected && conn.desired) this.emit('connection-lost', key);
+      this.emit('status');
+    });
+    conn.on('log', (level, message) => this.emit('log', level, message));
+  }
+
+  // ---- 以下操作委托给活动连接 ----
+  listDir(p) { return this._act('listDir', p); }
+  stat(p) { return this._act('stat', p); }
+  readFileChunk(p, o) { return this._act('readFileChunk', p, o); }
+  isProbablyBinary(b) { return this._act('isProbablyBinary', b); }
+  writeRemoteFile(p, c, o) { return this._act('writeRemoteFile', p, c, o); }
+  mkdirp(p) { return this._act('mkdirp', p); }
+  atype(p) { return this._act('atype', p); }
+  rmdirRecursive(p, cb, allow) { return this._act('rmdirRecursive', p, cb, allow); }
+  copyPath(s, d, o) { return this._act('copyPath', s, d, o); }
+  exec(cmd, o) { return this._act('exec', cmd, o); }
+  execBackground(cmd, o) { return this._act('execBackground', cmd, o); }
+  shell(o) { return this._act('shell', o); }
+  kill(runId, o) { return this.active ? this.active.kill(runId, o) : false; }
+  cdCommand(cmd) { return this.active ? this.active.cdCommand(cmd) : cmd; }
+
+  _act(name, ...args) {
+    const c = this.active;
+    if (!c) {
+      if (name === 'isProbablyBinary') return false;
+      return Promise.reject(new Error('SSH 未连接'));
+    }
+    return c[name](...args);
+  }
 }
 
 export const sshManager = new SshManager();

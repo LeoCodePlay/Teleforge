@@ -29,6 +29,12 @@ const DEFAULT_CONTEXT: Record<string, ModelContextConfig> = {
   'doubao-seed-1-6-250615': { ...MEGA_CONTEXT },
   'doubao-seed-1-6-flash-250615': { ...MEGA_CONTEXT }
 };
+// 查询某模型名的默认上下文能力:优先默认表,否则全局兜底(1M/32k)
+// 供「添加/编辑提供方」弹窗在每行模型输入框里以 placeholder 展示默认值
+export function getDefaultModelContext(model: string): ModelContextConfig {
+  return DEFAULT_CONTEXT[model] || { ...MEGA_CONTEXT };
+}
+
 // 从默认表里挑出指定模型的上下文能力(仅供预置提供方声明 modelConfig)
 const pickCfg = (models: string[]): Record<string, ModelContextConfig> =>
   Object.fromEntries(models.filter((m) => DEFAULT_CONTEXT[m]).map((m) => [m, DEFAULT_CONTEXT[m]]));
