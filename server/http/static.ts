@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 生产模式静态托管插件:托管前端构建产物 + SPA 回退(非 /api、/ws 的路径全部落到 index.html)
 import fs from 'node:fs';
 import path from 'node:path';

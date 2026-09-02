@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 用户提问(ask_user_question)能力接缝(设计参照 deepseek-harness 的
 // interaction / user-questions + tool-ask-user):
 // - 模型侧工具 ask_user_question 在 tools.js 注册;工具运行时会阻塞到用户回答;
@@ -7,12 +6,22 @@
 //   长时间未作答(超时),统一清理 pending 并向模型返回结构化错误而不是挂死整轮。
 import { randomUUID } from 'node:crypto';
 
-const pending = new Map(); // askId -> { resolve, reject, sid, emit, signal, onAbort, timer }
+interface PendingEntry {
+  resolve: (value: any) => void;
+  reject: (reason?: any) => void;
+  sid?: string;
+  emit?: (event: string, payload: any) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+const pending = new Map<string, PendingEntry>(); // askId -> PendingEntry
 // 单次提问最长等待 10 分钟;超时自动取消(短于注册表兜底超时,保证先清理 pending 再报错)
 const ASK_TIMEOUT_MS = 600_000;
 
 // 规范化模型传入的题面:只保留前端渲染需要的字段(非法项静默丢弃)
-function normalizeQuestions(questions) {
+function normalizeQuestions(questions: any[]): any[] {
   return (Array.isArray(questions) ? questions : [])
     .filter((q) => q && typeof q.question === 'string' && q.question.trim())
     .map((q) => ({
@@ -22,8 +31,8 @@ function normalizeQuestions(questions) {
       ...(Array.isArray(q.options) && q.options.length
         ? {
             options: q.options
-              .filter((o) => o && o.label)
-              .map((o) => ({
+              .filter((o: any) => o && o.label)
+              .map((o: any) => ({
                 label: String(o.label),
                 ...(o.description ? { description: String(o.description) } : {})
               }))
@@ -33,12 +42,12 @@ function normalizeQuestions(questions) {
     }));
 }
 
-function cancel(askId, reason) {
+function cancel(askId: string, reason: string) {
   const p = pending.get(askId);
   if (!p) return;
   pending.delete(askId);
-  clearTimeout(p.timer);
-  if (p.signal) p.signal.removeEventListener('abort', p.onAbort);
+  if (p.timer) clearTimeout(p.timer);
+  if (p.signal && p.onAbort) p.signal.removeEventListener('abort', p.onAbort);
   p.reject(new Error(reason));
   // 通知前端关闭/移除该批次提问(即使在最坏路径,UI 也不会永久残留)
   p.emit?.('agent', { event: 'ask_user_cancelled', askId, sid: p.sid });
@@ -46,10 +55,8 @@ function cancel(askId, reason) {
 
 /**
  * 向用户提出一组问题并等待回答(ask_user_question 工具内调用)。
- * @param {{questions: object[], sid?: string, signal?: AbortSignal, emit?: Function}} opts
- * @returns {Promise<Array<{id: string, selected: string[], custom?: string}>>}
  */
-export function askUserQuestion({ questions, sid, signal, emit }) {
+export function askUserQuestion({ questions, sid, signal, emit }: { questions: any[]; sid?: string; signal?: AbortSignal; emit?: (event: string, payload: any) => void }): Promise<any[]> {
   const qs = normalizeQuestions(questions);
   if (!qs.length) return Promise.reject(new Error('ask_user_question 需要至少一个有效问题'));
   return new Promise((resolve, reject) => {
@@ -58,7 +65,7 @@ export function askUserQuestion({ questions, sid, signal, emit }) {
       reject(new Error('Agent 已停止,提问作废'));
       return;
     }
-    const entry = { resolve, reject, sid, emit, signal };
+    const entry: PendingEntry = { resolve, reject, sid, emit, signal };
     const onAbort = () => cancel(askId, 'Agent 已停止,提问作废');
     const timer = setTimeout(
       () => cancel(askId, '用户长时间未回答,提问已超时取消(如需确认请再次调用 ask_user_question)'),
@@ -73,19 +80,19 @@ export function askUserQuestion({ questions, sid, signal, emit }) {
 }
 
 /** 前端作答回传(ws 层):resolve 对应 pending;返回是否命中 */
-export function answerAskUser(askId, answers) {
+export function answerAskUser(askId: unknown, answers: any[]): boolean {
   const key = String(askId || '');
   const p = pending.get(key);
   if (!p) return false;
   pending.delete(key);
-  clearTimeout(p.timer);
-  p.signal?.removeEventListener('abort', p.onAbort);
+  if (p.timer) clearTimeout(p.timer);
+  p.signal?.removeEventListener('abort', p.onAbort!);
   p.resolve(Array.isArray(answers) ? answers.filter((a) => a) : []);
   return true;
 }
 
 /** 用户主动取消提问(ws 层);返回是否命中 */
-export function rejectAskUser(askId, reason = '用户取消了提问') {
+export function rejectAskUser(askId: unknown, reason = '用户取消了提问'): boolean {
   const key = String(askId || '');
   if (!pending.has(key)) return false;
   cancel(key, reason);
@@ -93,11 +100,11 @@ export function rejectAskUser(askId, reason = '用户取消了提问') {
 }
 
 /** 全部作废(前端断开等全局场景),返回作废数量 */
-export function rejectAllAskUser(reason = '提问已取消') {
+export function rejectAllAskUser(reason = '提问已取消'): number {
   const ids = [...pending.keys()];
   for (const askId of ids) cancel(askId, reason);
   return ids.length;
 }
 
 /** 当前挂起的提问批次数量(诊断用) */
-export function pendingAskCount() { return pending.size; }
+export function pendingAskCount(): number { return pending.size; }

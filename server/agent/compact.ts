@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 上下文窗口自动压缩(设计参照 deepseek-harness 的 compaction-basic 子系统):
 // - 每个模型可在提供方配置里声明 contextWindow(输入上下文长度)与 maxTokens(单次输出上限)。
 // - 每次发请求前按"对话组"(一条 user 到下一条 user 之间)估算 token;
