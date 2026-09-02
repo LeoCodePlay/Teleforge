@@ -3,7 +3,7 @@
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-const { localFs, resolveInLocalWorkspace } = await import('../server/local-fs.ts');
+const { localFs, resolveInLocalWorkspace } = await import('../server/core/local-fs.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };

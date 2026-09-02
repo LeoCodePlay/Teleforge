@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 const { startMockSsh } = await import('./mock-ssh-server.js');
-const { sshManager: ssh } = await import('../server/ssh-manager.ts');
+const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };

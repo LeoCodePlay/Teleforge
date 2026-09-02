@@ -7,8 +7,8 @@ process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), 'sshai-sk-'));
 process.env.LOCAL_USER_SKILLS = mkdtempSync(path.join(tmpdir(), 'sshai-lu-'));
 writeFileSync(path.join(process.env.LOCAL_USER_SKILLS, 'my-local-skill.md'), '---\nname: my-local-skill\ndescription: 测试本地技能\n---\n\n# 正文\n这是本地技能指令。\n');
 const { refreshSkillsCatalog, getSkillsCatalog } = await import('../server/agent/tools.ts');
-const { sshManager: ssh } = await import('../server/ssh-manager.ts');
-const { localFs } = await import('../server/local-fs.ts');
+const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
+const { localFs } = await import('../server/core/local-fs.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };

@@ -1,14 +1,14 @@
 // RPC 路由注册表契约测试:golden 类型清单 / 重复注册 / 未知类型 / reply 包装
-import { createRpcRouter } from '../server/rpc/router.ts';
-import { registerSsh } from '../server/rpc/ssh.ts';
-import { registerAgent } from '../server/rpc/agent.ts';
-import { registerSkills } from '../server/rpc/skills.ts';
-import { registerConfig } from '../server/rpc/config.ts';
-import { registerLocal } from '../server/rpc/local.ts';
-import { registerRemote } from '../server/rpc/remote.ts';
-import { registerTransfer } from '../server/rpc/transfer.ts';
-import { registerExec } from '../server/rpc/exec.ts';
-import { registerAskUser } from '../server/rpc/ask-user.ts';
+import { createRpcRouter } from '../server/api/rpc/router.ts';
+import { registerSsh } from '../server/api/rpc/ssh.ts';
+import { registerAgent } from '../server/api/rpc/agent.ts';
+import { registerSkills } from '../server/api/rpc/skills.ts';
+import { registerConfig } from '../server/api/rpc/config.ts';
+import { registerLocal } from '../server/api/rpc/local.ts';
+import { registerRemote } from '../server/api/rpc/remote.ts';
+import { registerTransfer } from '../server/api/rpc/transfer.ts';
+import { registerExec } from '../server/api/rpc/exec.ts';
+import { registerAskUser } from '../server/api/rpc/ask-user.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };

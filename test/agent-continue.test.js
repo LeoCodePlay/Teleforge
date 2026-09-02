@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-cnt-'));
 const { Agent } = await import('../server/agent/agent.ts');
-const { sshManager: ssh } = await import('../server/ssh-manager.ts');
+const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n} ${e}`); } };

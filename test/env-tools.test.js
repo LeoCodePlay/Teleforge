@@ -2,7 +2,7 @@
 // 已有工具时幂等、无权限/无包管理器时仅记录不抛错、并发调用合并为同一轮安装、TTL 内命中缓存。
 // 用实例方法覆盖 ssh.execBackground 返回预设结果,让自检逻辑可确定性测试(不依赖真实服务器)。
 import { ensureSearchTools } from '../server/agent/tools.ts';
-import { sshManager as ssh } from '../server/ssh-manager.ts';
+import { sshManager as ssh } from '../server/core/ssh-manager.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n} ${e}`); } };
