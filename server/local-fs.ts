@@ -1,4 +1,3 @@
-// @ts-nocheck
 // 本地文件系统适配层:与 ssh-manager 的 SFTP 方法签名对齐,底层用 Node fs/path。
 // 供 Agent 本地工具、WS 本地浏览/读写、双向传输共用;持有 localWorkspace 状态。
 import fs from 'node:fs';
@@ -7,11 +6,24 @@ import path from 'node:path';
 import os from 'node:os';
 import { FILE } from './config.ts';
 
+export interface FsEntry {
+  name: string;
+  type: 'dir' | 'file' | 'link';
+  size: number;
+  mtime: number;
+}
+
+export interface ChunkReadResult {
+  buffer: Buffer;
+  size: number;
+  truncated: boolean;
+}
+
 export class LocalFs {
-  constructor() { this.workspace = null; } // 用户选择的本地工作区绝对路径(可空)
+  workspace: string | null = null; // 用户选择的本地工作区绝对路径(可空)
   get home() { return os.homedir(); }
 
-  async listDir(p) {
+  async listDir(p: string): Promise<FsEntry[]> {
     // 空串/root: 表示"我的电脑"根视图(Windows 列出盘符,POSIX 列出根)
     let raw = String(p ?? '');
     if (raw === '' || raw === 'root:') return listRoots();
@@ -22,7 +34,7 @@ export class LocalFs {
     if (drive) raw = drive[1] + ':\\';
     const abs = path.resolve(raw || this.workspace || this.home || '.');
     const dirents = await fsp.readdir(abs, { withFileTypes: true });
-    const entries = [];
+    const entries: FsEntry[] = [];
     for (const d of dirents) {
       const full = path.join(abs, d.name);
       let st; try { st = await fsp.lstat(full); } catch { continue; }
@@ -32,15 +44,15 @@ export class LocalFs {
     return entries.sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1);
   }
 
-  async stat(p) {
+  async stat(p: string): Promise<fs.Stats | null> {
     // 与 listDir 一致:Windows 裸盘符 'C:' 归一为 'C:\',避免解析成该盘当前工作目录
     const dm = /^([A-Za-z]):[\\/]?$/.exec(String(p ?? ''));
     const resolved = dm ? dm[1] + ':\\' : p;
     try { return await fsp.stat(path.resolve(resolved)); }
-    catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+    catch (e: any) { if (e.code === 'ENOENT') return null; throw e; }
   }
 
-  async readFileChunk(p, { maxBytes = FILE.READ_MAX_BYTES, offset = 0 } = {}) {
+  async readFileChunk(p: string, { maxBytes = FILE.READ_MAX_BYTES, offset = 0 }: { maxBytes?: number; offset?: number } = {}): Promise<ChunkReadResult> {
     const abs = path.resolve(p);
     const st = await this.stat(abs);
     if (!st) throw new Error(`文件不存在: ${abs}`);
@@ -61,7 +73,7 @@ export class LocalFs {
     } finally { await fh.close(); }
   }
 
-  async writeFile(p, content, { maxBytes = FILE.WRITE_MAX_BYTES, mkdir = true } = {}) {
+  async writeFile(p: string, content: string | Buffer, { maxBytes = FILE.WRITE_MAX_BYTES, mkdir = true }: { maxBytes?: number; mkdir?: boolean } = {}): Promise<number> {
     const abs = path.resolve(p);
     const buf = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
     if (maxBytes && buf.length > maxBytes) throw new Error(`文件过大(>${Math.round(maxBytes / 1024 / 1024)}MB): ${abs}`);
@@ -70,9 +82,9 @@ export class LocalFs {
     return buf.length;
   }
 
-  async mkdirp(p) { await fsp.mkdir(path.resolve(p), { recursive: true }); }
+  async mkdirp(p: string): Promise<void> { await fsp.mkdir(path.resolve(p), { recursive: true }); }
 
-  async rmdirRecursive(p, onProgress) {
+  async rmdirRecursive(p: string, onProgress?: (cur: string) => void): Promise<void> {
     p = path.resolve(p);
     const type = await this.atype(p);
     if (!type) return;
@@ -83,7 +95,7 @@ export class LocalFs {
     onProgress?.(p);
   }
 
-  async copyPath(src, dst, { overwrite = false } = {}) {
+  async copyPath(src: string, dst: string, { overwrite = false }: { overwrite?: boolean } = {}): Promise<{ src: string; dst: string }> {
     src = path.resolve(src); dst = path.resolve(dst);
     if (src === dst) throw new Error('源与目标相同');
     if (dst.startsWith(src + path.sep)) throw new Error('不能复制到自身内部');
@@ -98,7 +110,7 @@ export class LocalFs {
     else { await fsp.mkdir(path.dirname(dst), { recursive: true }); await fsp.copyFile(src, dst); }
     return { src, dst };
   }
-  async _copyDir(src, dst) {
+  async _copyDir(src: string, dst: string): Promise<void> {
     for (const e of await this.listDir(src)) {
       const sp = path.join(src, e.name), dp = path.join(dst, e.name);
       if (e.type === 'dir') { await fsp.mkdir(dp, { recursive: true }); await this._copyDir(sp, dp); }
@@ -106,14 +118,14 @@ export class LocalFs {
     }
   }
 
-  async atype(p) {
+  async atype(p: string): Promise<'dir' | 'file' | 'link' | null> {
     try {
       const a = await fsp.lstat(path.resolve(p));
       return a.isDirectory() ? 'dir' : a.isSymbolicLink() ? 'link' : 'file';
-    } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+    } catch (e: any) { if (e.code === 'ENOENT') return null; throw e; }
   }
 
-  isProbablyBinary(buf) {
+  isProbablyBinary(buf: Buffer | null): boolean {
     if (!buf) return false;
     const n = Math.min(buf.length, FILE.DISCARD_BYTES);
     for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
@@ -124,9 +136,9 @@ export class LocalFs {
 export const localFs = new LocalFs();
 
 // "我的电脑"根视图:Windows 枚举所有存在的盘符(如 C:\) ,POSIX 返回根 /
-export async function listRoots() {
+export async function listRoots(): Promise<FsEntry[]> {
   if (process.platform === 'win32') {
-    const drives = [];
+    const drives: FsEntry[] = [];
     for (let c = 65; c <= 90; c++) {
       const d = String.fromCharCode(c) + ':\\';
       try { if (fs.existsSync(d)) drives.push({ name: d, type: 'dir', size: 0, mtime: 0 }); } catch {}
@@ -137,7 +149,7 @@ export async function listRoots() {
 }
 
 // 把路径解析到本地工作区内;越界/未设工作区报错(与远程 resolveInWorkspace 对称)
-export function resolveInLocalWorkspace(p, { allowRoot = true } = {}) {
+export function resolveInLocalWorkspace(p: string, { allowRoot = true }: { allowRoot?: boolean } = {}): string {
   const ws = localFs.workspace;
   if (!ws) throw new Error('尚未选择本地工作区,请先在界面中选择本地目录作为本地工作区');
   const wsAbs = path.resolve(ws);
