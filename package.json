@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "SSH 远程 AI 编程工具:保持 SSH 连接、选择远程工作区、AI Agent 在远程服务器上读写文件与执行命令",
+  "author": "liaozhenqiang",
+  "license": "GPL-3.0",
   "engines": {
     "node": ">=18.17"
   },

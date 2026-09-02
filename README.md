@@ -189,3 +189,4 @@ npm test
 ### 许可证 / License
 
 本项目基于 **GNU General Public License v3.0** 开源，详见 [LICENSE](LICENSE)。
+Copyright (C) 2026 liaozhenqiang.
