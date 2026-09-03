@@ -470,11 +470,8 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
               onClick={(ev) => handleRowClick(ev, e)}
               onDoubleClick={() => openEntry(e)}
               onContextMenu={(ev) => openMenu(ev, e)}>
-              <span className="fm-ico">{e.type === 'dir' ? '📁' : e.type === 'link' ? '🔗' : '📄'}</span>
-              {renaming === e.name ? (
-                <span className="fm-name">
-                  <span className="fm-name-hide">{e.name}</span>
-                  <input className="fm-rename" autoFocus value={renameDraft}
+              {renaming === e.name
+                ? <input className="fm-rename" autoFocus value={renameDraft}
                     spellCheck={false}
                     onChange={(ev) => setRenameDraft(ev.target.value)}
                     onFocus={(ev) => {
@@ -494,12 +491,16 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
                       else if (ev.key === 'Escape') { setRenaming(null); setRenameDraft(''); }
                     }}
                     onBlur={commitRename} />
-                </span>
-              ) : (
-                <span className="fm-name" data-tip={e.name} data-tip-ellipsis data-tip-follow>{e.name}</span>
+                : (<>
+                    <span className="fm-ico">{e.type === 'dir' ? '📁' : e.type === 'link' ? '🔗' : '📄'}</span>
+                    <span className="fm-name" data-tip={e.name} data-tip-ellipsis data-tip-follow>{e.name}</span>
+                  </>)}
+              {renaming !== e.name && (
+                <>
+                  <span className="fm-size">{e.type === 'dir' ? '—' : fmtSize(e.size)}</span>
+                  <span className="fm-time">{fmtTime(e.mtime)}</span>
+                </>
               )}
-              <span className="fm-size">{e.type === 'dir' ? '—' : fmtSize(e.size)}</span>
-              <span className="fm-time">{fmtTime(e.mtime)}</span>
               {renaming === e.name && renameBusy
                 ? <span className="fm-loading" data-tip="重命名中…" />
                 : navPath === navLoading && <span className="fm-loading" data-tip="加载中…" />}

@@ -421,12 +421,17 @@ button.sm { padding: 4px 11px; font-size: 12px; }
   box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 .fm-ico { flex: none; }
-/* position:relative 供重命名输入框以绝对定位叠放,不参与布局 */
-.fm-name { position: relative; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 重命名时隐藏原文件名:visibility 保留布局位置,行高不变,避免页面抖动 */
-.fm-name-hide { display: block; visibility: hidden; }
+/* 文件名列:超长省略显示(悬停有完整名称 tooltip) */
+.fm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-size { flex: none; width: 62px; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .fm-time { flex: none; width: 108px; text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* 重命名时整行变成输入框:撑满剩余空间,方便编辑长文件名 */
+.fm-rename {
+  flex: 1; min-width: 0; height: 22px; padding: 0 6px;
+  border: 1px solid var(--accent-border); border-radius: 5px;
+  background: var(--code-bg-solid); color: var(--text); font-size: 12.5px;
+  outline: none; box-shadow: 0 0 0 2px var(--focus-ring);
+}
 /* 进入子目录时的行内加载(文件夹右侧转圈,不触发全局加载) */
 .fm-loading {
   flex: none; width: 12px; height: 12px; margin-left: 4px;
@@ -435,14 +440,6 @@ button.sm { padding: 4px 11px; font-size: 12px; }
 }
 .fmrow.nav-loading { background: var(--accent-soft); }
 @keyframes fm-spin { to { transform: rotate(360deg); } }
-/* 重命名输入框:绝对定位叠在文件名区域上,高度不撑开行,避免行高变化引起抖动 */
-.fm-rename {
-  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
-  height: 18px; padding: 0 6px;
-  border: 1px solid var(--accent-border); border-radius: 5px;
-  background: var(--code-bg-solid); color: var(--text); font-size: 12.5px;
-  outline: none; box-shadow: 0 0 0 2px var(--focus-ring);
-}
 
 /* ---- 右键菜单:悬浮厚玻璃 ---- */
 .ctxmenu {
