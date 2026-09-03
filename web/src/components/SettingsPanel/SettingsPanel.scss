@@ -1,0 +1,37 @@
+/* ---- 设置面板独有样式(左侧菜单 + 右侧内容):厚玻璃容器 ---- */
+.settings {
+  width: 860px; max-width: 94vw; height: 76vh;
+  background: linear-gradient(150deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-lg);
+  overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow-lg);
+  animation: modal-in .2s cubic-bezier(.2, .9, .3, 1.2);
+}
+.settings-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 16px; border-bottom: 1px solid var(--line); font-weight: 600;
+}
+.settings-body { flex: 1; min-height: 0; display: flex; }
+.settings-menu {
+  width: 190px; flex: none; border-right: 1px solid var(--line-soft);
+  padding: 10px 8px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
+  background: var(--fill-1-lo);
+}
+.settings-menu button {
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  background: transparent; border: 1px solid transparent;
+  border-radius: var(--r-sm); padding: 9px 12px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+  box-shadow: none; transition: all .18s;
+}
+.settings-menu button:hover { background: var(--glass-bg-hover); transform: none; box-shadow: none; }
+.settings-menu button.on {
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  color: var(--accent-2); border-color: var(--accent-border);
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 14px var(--accent-soft);
+}
+.settings-menu button span { flex: none; }
+.settings-menu .menu-cat { font-size: 11px; color: var(--muted); padding: 10px 12px 2px; letter-spacing: .5px; }
+.settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px; }

@@ -4,9 +4,10 @@
 
 import React from 'react';
 import type { ToolCallInfo, WebSearchSourceMeta } from '../../types';
-import { ToolRow } from '../ToolRow';
-import { IconBrowseOutline16 } from '../icons';
+import { ToolRow } from '../ToolRow/ToolRow';
+import { IconBrowseOutline16 } from '../icons/icons';
 import { toolRowModel } from '../../utils/toolRowModel';
+import './WebSearchRow.scss';
 
 export function WebSearchRow({ call, inspect }: {
   call: ToolCallInfo;

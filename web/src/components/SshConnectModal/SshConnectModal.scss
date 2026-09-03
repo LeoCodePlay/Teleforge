@@ -1,0 +1,37 @@
+/* ---- SshConnectModal 独有样式:SSH 连接弹窗 ---- */
+.ssh-modal { width: 460px; }
+.ssh-modal .modal-body { max-height: 70vh; overflow-y: auto; }
+.ssh-item button.sm.ok { color: var(--green); }
+.ssh-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.ssh-item {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-md); padding: 4px;
+  background: var(--glass-bg); box-shadow: inset 0 1px 0 var(--glass-hi);
+  transition: all .18s ease;
+}
+.ssh-item:hover { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
+.ssh-item-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  background: transparent; border: none; text-align: left; padding: 6px 9px;
+  color: var(--text); border-radius: var(--r-sm); box-shadow: none;
+}
+.ssh-item-main:hover:not(:disabled) { background: var(--glass-bg-hover); border: none; color: var(--text); transform: none; box-shadow: none; }
+.ssh-item-name { font-size: 13px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-item-name .badge { margin-left: 7px; vertical-align: 1px; }
+.ssh-item-sub { font-size: 11.5px; color: var(--muted); font-family: var(--mono); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-item > button.sm { flex: none; }
+.ssh-empty {
+  border: 1px dashed var(--line-dash); border-radius: var(--r-md);
+  padding: 14px; text-align: center; color: var(--muted); font-size: 12px; margin-top: 6px;
+}
+.ssh-add {
+  width: 100%; margin-top: 12px; display: flex; justify-content: center; align-items: center; gap: 6px;
+  border: 1px dashed var(--line-dash); border-radius: var(--r-md); padding: 11px;
+  color: var(--muted); background: transparent; font-size: 13px; box-shadow: none;
+}
+.ssh-add:hover:not(:disabled) {
+  border-color: var(--accent); color: var(--accent-2);
+  background: var(--accent-soft); transform: none; box-shadow: 0 0 18px var(--accent-soft);
+}
+.ssh-save-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ssh-save-check { margin: 0; white-space: nowrap; }

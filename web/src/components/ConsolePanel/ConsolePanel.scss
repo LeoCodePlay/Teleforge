@@ -1,0 +1,115 @@
+/* ---- ConsolePanel 独有样式:命令台(xterm.js 真实终端),保持近黑底保证对比度 ---- */
+
+/* 命令台容器:左侧终端主体 + 右侧终端列表 */
+.consolewrap { flex: 1; display: flex; flex-direction: row; min-height: 0; }
+.console-main { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+
+.xterm-area {
+  position: relative; flex: 1; min-height: 0;
+  overflow: hidden;
+}
+/* 每个模式的终端面板:绝对定位铺满;隐藏时仅 visibility:hidden(保持尺寸,渲染与
+   滚动缓存原样保留,切换瞬间即见,shell 亦不受影响) */
+.xterm-pane { position: absolute; inset: 0; display: flex; }
+.xterm-pane.off { visibility: hidden; }
+.xterm-host {
+  flex: 1; min-height: 0;
+  background: var(--xterm-bg);
+  backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm);
+  padding: 8px 6px 8px 12px; cursor: text;
+}
+.xterm-host .xterm { height: 100%; }
+.xterm-host .xterm-viewport { background-color: var(--xterm-bg) !important; }
+.term-state { font-size: 12px; color: var(--muted); flex: none; }
+.term-state.ok { color: var(--green); }
+.term-state.err { color: var(--red); }
+.term-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  border-top: 1px solid var(--line-soft); padding: 8px 16px;
+  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
+}
+/* 终端状态点(常驻连线指示:绿=已连接 / 黄=打开中 / 红=已结束 / 灰=等待) */
+.term-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 5px; vertical-align: -1px;
+  background: var(--muted); box-shadow: 0 0 0 0 transparent;
+}
+.term-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.term-dot.busy { background: var(--amber-bright); box-shadow: 0 0 6px var(--amber-bright); animation: term-dot-pulse 1s ease-in-out infinite; }
+.term-dot.err { background: var(--red); box-shadow: 0 0 6px var(--red); }
+@keyframes term-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* 右侧终端列表:可打开新终端、删除当前终端(至少保留一个);可拖拽调宽 / 拖拽排序 */
+.term-list {
+  position: relative; flex: none; width: 200px; display: flex; flex-direction: column; min-height: 0;
+  border-left: 1px solid var(--line-soft);
+  background: var(--fill-1-lo);
+}
+.term-list-resizer {
+  position: absolute; top: 0; left: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 10;
+}
+.term-list-resizer:hover { background: var(--accent-glow); box-shadow: 0 0 12px var(--accent-glow); }
+.term-list-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--line-soft);
+}
+.term-list-title { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .4px; text-transform: uppercase; }
+.term-list-add { display: flex; gap: 5px; }
+.term-list-add .chip-btn { white-space: nowrap; }
+.term-list-items { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px; display: flex; flex-direction: column; gap: 5px; }
+.term-list-item {
+  position: relative; display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 9px;
+  background: transparent; border: 1px solid transparent; cursor: pointer; user-select: none;
+  color: var(--text);
+}
+.term-list-item:hover { background: var(--glass-bg-hover); }
+.term-list-item.active {
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  border-color: var(--accent-border); box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+/* 拖拽排序:被拖项半透明,悬停项显示插入指示线(上/下) */
+.term-list-item.dragging { opacity: .45; }
+.term-list-item.drop-before::before,
+.term-list-item.drop-after::after {
+  content: ''; position: absolute; left: 9px; right: 9px; height: 2px; border-radius: 2px;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+.term-list-item.drop-before::before { top: -3px; }
+.term-list-item.drop-after::after { bottom: -3px; }
+/* 内联重命名输入框:height 与文本行高一致(border-box),不影响列表项高度 */
+.term-edit {
+  flex: 1; min-width: 0; font-size: 12.5px;
+  height: 1.5em; padding: 0 6px; box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid var(--accent-border); background: var(--code-bg-solid); color: var(--text); outline: none;
+}
+.term-list-item .term-dot { margin-right: 0; flex: none; }
+.term-list-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.term-list-del {
+  flex: none; border: none; background: transparent; cursor: pointer;
+  width: 19px; height: 19px; line-height: 1; font-size: 12px; border-radius: 6px;
+  /* 覆盖全局 button 的 padding:7px 13px(border-box 下会让 19×19 内容盒宽变负,✕ 被挤裁/错位),改为 flex 居中 */
+  padding: 0; display: flex; align-items: center; justify-content: center;
+  /* 颜色与 hover/active 反馈由 .action-icon.danger 统一提供 */
+}
+.term-list-del:disabled { opacity: .28; cursor: default; }
+.term-list-hint { padding: 8px 12px; font-size: 10.5px; color: var(--muted); border-top: 1px solid var(--line-faint); line-height: 1.5; }
+
+/* 终端右键菜单(液态玻璃) */
+.term-menu {
+  position: fixed; z-index: 200; min-width: 150px; padding: 6px;
+  background: var(--pop-bg-lo);
+  backdrop-filter: var(--blur-lg); -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border); border-radius: 12px;
+  box-shadow: 0 12px 36px var(--shadow-2), inset 0 1px 0 var(--glass-hi);
+}
+.term-menu-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 7px 10px; border: none; border-radius: 8px;
+  background: transparent; color: var(--text); text-align: left;
+  font-size: 13px; cursor: pointer;
+}
+.term-menu-item:hover:not(:disabled) { background: var(--glass-bg-hover); }
+.term-menu-item:disabled { opacity: .4; cursor: default; }
+.term-menu-key { font-size: 10.5px; color: var(--muted); letter-spacing: .3px; }

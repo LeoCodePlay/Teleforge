@@ -1,0 +1,102 @@
+/* ---- App 主框架布局独有样式(顶栏/侧栏/标签页/命令台容器),其余公共基元见 styles.scss ---- */
+
+/* 布局 */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ---- 顶栏:悬浮玻璃条 ---- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 48px; padding: 0 16px;
+  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  border-bottom: 1px solid var(--line-soft);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 24px var(--shadow-1);
+  position: relative; z-index: 20;
+}
+.brand {
+  font-weight: 700; letter-spacing: .5px; font-size: 14px;
+  display: flex; align-items: center; gap: 7px;
+  background: linear-gradient(120deg, var(--brand-a) 30%, var(--accent-2) 70%, var(--brand-b));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.brand-logo { width: 28px; height: 28px; display: block; }
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
+.edge-toggle {
+  padding: 4px 8px; font-size: 11px; color: var(--muted);
+  border-radius: var(--r-sm); background: transparent; border: 1px solid transparent;
+}
+/* 右上角设置图标:放大显示 */
+.settings-btn { font-size: 17px; line-height: 1; padding: 2px 6px; }
+.edge-toggle:hover:not(:disabled) {
+  color: var(--text); background: var(--glass-bg-hover);
+  border-color: var(--glass-border);
+}
+
+/* 右上角 SSH 连接状态入口(可点击打开连接弹窗) */
+.conn-chip {
+  padding: 5px 13px; border-radius: var(--r-pill); font-size: 12px; cursor: pointer;
+  background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--muted);
+  white-space: nowrap; backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  transition: all .18s ease;
+}
+.conn-chip:hover:not(:disabled) {
+  border-color: var(--glass-border-hover); color: var(--text);
+  background: var(--glass-bg-hover);
+}
+.conn-chip.ok { color: var(--green); border-color: var(--ok-border); }
+.conn-chip.warn { color: var(--amber); border-color: var(--warn-border); }
+.conn-chip.off { color: var(--accent-2); }
+.ws-path { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-2); }
+
+.layout { display: flex; flex: 1; min-height: 0; }
+
+/* ---- 左侧栏:大块磨砂玻璃面板 ---- */
+.sidebar {
+  min-width: 0; overflow-y: auto;
+  background: linear-gradient(160deg, var(--bar-tint-a), var(--bar-tint-b));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  padding-bottom: 40px;
+}
+.sidebar-left {
+  position: relative; width: 320px; min-width: 220px;
+  border-right: 1px solid var(--line-soft);
+  box-shadow: inset -1px 0 0 var(--ins-hl), 8px 0 32px var(--shadow-1);
+}
+.sidebar.hidden { display: none; }
+.resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 10; }
+.resizer:hover { background: var(--accent-glow); box-shadow: 0 0 12px var(--accent-glow); }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing * { cursor: col-resize !important; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* ---- 标签页:发光玻璃胶囊 ---- */
+.tabs {
+  display: flex; gap: 6px; padding: 10px 14px 0;
+  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
+  backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm);
+  border-bottom: 1px solid var(--line-soft);
+}
+.tab {
+  border: 1px solid transparent; border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent; padding: 8px 16px; font-weight: 600;
+  box-shadow: none; color: var(--muted);
+  transition: all .18s;
+}
+.tab:hover:not(.active) { background: var(--glass-bg-hover); color: var(--text); transform: none; box-shadow: none; }
+.tab.active {
+  color: var(--accent-2); background: var(--accent-soft);
+  border-color: var(--accent-border); border-bottom-color: transparent;
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 -2px 16px var(--accent-soft);
+  text-shadow: 0 0 12px var(--accent-glow);
+}
+/* 对话主区域(聊天/控制台)的定位基准:供跳转点等贴左对齐 */
+.tab-body { flex: 1; min-height: 0; display: flex; position: relative; }
+
+/* ---- 命令台(chat/console 切页容器):常驻挂载,隐藏时仅 display:none ---- */
+.tab-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tab-pane.hide { display: none; }

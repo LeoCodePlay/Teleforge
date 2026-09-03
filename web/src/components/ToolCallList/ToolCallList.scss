@@ -1,0 +1,4 @@
+/* ---- ToolCallList 独有样式:平铺 ToolRow,子调用树缩进预留 ---- */
+.dsh-tooltree { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px; min-width: 0; }
+.dsh-callRow { border-radius: 6px; min-width: 0; }
+.dsh-subCalls { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 2px 22px; padding-left: 8px; border-left: 1px solid var(--line-strong); }

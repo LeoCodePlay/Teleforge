@@ -1,0 +1,5 @@
+/* ---- ReadRow 独有样式:读文件卡 ---- */
+.dsh-read { margin: 4px 0 4px 4px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg); overflow: hidden; }
+.dsh-read-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--muted); }
+.dsh-read-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.dsh-read-body { padding: 10px 12px; max-height: 224px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 18px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); }

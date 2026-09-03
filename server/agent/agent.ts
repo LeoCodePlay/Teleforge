@@ -12,8 +12,8 @@
 //   各会话独立驱动互不阻塞;所有发给前端的事件都带 sid,前端按会话路由显示。
 import { AGENT } from '../config.ts';
 import { LlmClient } from './llm.ts';
-import { compactHistory, summarizeWithLlm, messageTokens } from './compact.ts';
-import { Session, foldTodos } from './session.ts';
+import { compactHistory, summarizeWithLlm, messageTokens, resolveCharBudget } from './compact.ts';
+import { Session, foldTodos, trimMessagesByBudget } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
 import { localFs } from '../core/local-fs.ts';
@@ -32,8 +32,11 @@ export { registry as toolRegistry };
 // 避免每轮重复 get_workspace_info / list_directory 探测环境。
 const STORE_HEAD = 4000;
 const STORE_TAIL = 1000;
-function storeCap(s) {
-  if (!s || s.length <= STORE_HEAD + STORE_TAIL) return s;
+const NO_MIDDLE_TRIM_TOOLS = new Set(['read_file', 'read_local_file', 'search_code', 'search_local_code']);
+function storeCap(s: string, toolName?: string) {
+  if (!s) return s;
+  if (toolName && NO_MIDDLE_TRIM_TOOLS.has(toolName)) return s;
+  if (s.length <= STORE_HEAD + STORE_TAIL) return s;
   const omitted = s.length - STORE_HEAD - STORE_TAIL;
   return s.slice(0, STORE_HEAD) + `\n…[工具结果过长,历史中省略中间 ${omitted} 字符]…\n` + s.slice(s.length - STORE_TAIL);
 }
@@ -812,9 +815,11 @@ export class Agent {
         // 若模型配置了声明的输入上下文窗口(>0),超过阈值水位时先自动压缩早期历史
         // (见 compact.js:早期对话组压缩成摘要并 squash 进日志,保留最近窗口)
         const systemText = this._systemPrompt(reasoning);
-        const trace = session.deriveMessagesWithTrace({ budgetChars: AGENT.HISTORY_BUDGET_CHARS });
-        let historyMsgs = trace.map((t) => t.msg);
         const ctxWindow = (this.llm && this.llm.contextWindow) || 0;
+        // 先用完整历史投影(不裁剪),让摘要压缩基于完整信息工作;
+        // 字符兜底裁剪放到摘要之后(见下),且永不丢弃原始任务锚点。
+        const trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
+        let historyMsgs = trace.map((t) => t.msg);
         if (ctxWindow > 0 && historyMsgs.length > 2) {
           const c = await compactHistory({
             messages: historyMsgs, system: systemText, llm: this.llm, signal: signal.signal,
@@ -828,6 +833,9 @@ export class Agent {
             console.log(`[agent] 上下文超限,已自动压缩早期 ${c.dropCount} 条消息(窗口 ${ctxWindow})`);
           }
         }
+        // 兜底字符裁剪:摘要未触发/未配置窗口时仍按预算裁剪,但永不丢原始任务锚点。
+        // 预算由输入窗口推导(未配置窗口回退固定默认),对齐前端仪表盘的 token 口径。
+        historyMsgs = trimMessagesByBudget(historyMsgs, resolveCharBudget(ctxWindow));
         const messages = [{ role: 'system', content: systemText }, ...historyMsgs];
 
         let res;
@@ -1090,7 +1098,7 @@ export class Agent {
   _emitToolResult(session: Session, runSessionId: string | null, turn: number, step: number, tc: any, r: ToolResult) {
     session.append('tool/result', {
       turn, step, callId: tc.id, name: tc.name,
-      isError: r.isError, content: storeCap(r.content), ms: r.ms,
+      isError: r.isError, content: storeCap(r.content, tc.name), ms: r.ms,
       ...(r.meta !== undefined ? { meta: r.meta } : {}) // 结构化 UI 数据(终端卡 exitCode/cwd 等)
     });
     const short = r.content.length > 4000 ? r.content.slice(0, 4000) + `\n…[结果较多,已折叠展示 ${r.content.length} 字符]…` : r.content;

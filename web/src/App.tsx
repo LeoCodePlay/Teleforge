@@ -1,16 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import type { ServerStatus, Session, SshProfileInfo } from './types';
-import SshConnectModal from './components/SshConnectModal';
-import SessionPanel from './components/SessionPanel';
-import WorkspacePanel from './components/WorkspacePanel';
-import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel';
-import ConsolePanel from './components/ConsolePanel';
-import FileViewer from './components/FileViewer';
-import SettingsPanel from './components/SettingsPanel';
-import TooltipHost from './components/Tooltip';
+import SshConnectModal from './components/SshConnectModal/SshConnectModal';
+import SessionPanel from './components/SessionPanel/SessionPanel';
+import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel';
+import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';
+import ConsolePanel from './components/ConsolePanel/ConsolePanel';
+import FileViewer from './components/FileViewer/FileViewer';
+import SettingsPanel from './components/SettingsPanel/SettingsPanel';
+import TooltipHost from './components/Tooltip/Tooltip';
 import { LlmProvider } from './context/llm-context';
 import { useFeedback } from './context/feedback';
+import './App.scss';
 
 const STATUS_LABEL: Record<string, string> = {
   connected: '已连接',

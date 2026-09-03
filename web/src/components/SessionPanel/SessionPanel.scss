@@ -1,0 +1,51 @@
+/* ---- 会话侧栏独有样式:历史会话列表 + 跨服务器会话 ---- */
+
+/* ---- 历史会话列表 ---- */
+.sessions { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.s-scope { margin-top: 6px; font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-item {
+  display: flex; align-items: center; gap: 6px; padding: 7px 10px;
+  height: 33px; box-sizing: border-box;   /* 固定行高:进入/退出重命名编辑时高度恒定,列表不伸缩抖动 */
+  border-radius: var(--r-md); border: 1px solid transparent;
+  cursor: pointer; font-size: 12.5px; transition: all .18s ease;
+}
+.session-item:hover { background: var(--glass-bg-hover); border-color: var(--glass-border); }
+.session-item.active {
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  border-color: var(--accent-border);
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 16px var(--accent-soft);
+}
+.session-item .s-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.session-item .s-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+/* 会话运行中徽标(多会话并行:该会话有任务正在后台执行) */
+.session-item .s-run { color: var(--green); font-size: 12px; flex: none; animation: s-run-pulse 1.2s ease-in-out infinite; text-shadow: 0 0 8px var(--ok-border); }
+@keyframes s-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.session-item .s-actions { display: flex; gap: 2px; }
+.session-item .s-actions button {
+  padding: 1px 6px; font-size: 11px; background: transparent; border-color: transparent;
+  box-shadow: none; border-radius: var(--r-sm);
+  /* 颜色与 hover/active 反馈由 .action-icon 统一提供 */
+}
+.session-item .s-actions button:disabled { opacity: .35; cursor: not-allowed; }
+/* 重命名输入框:纵向拉伸填满固定行高的内容区(box-sizing:border-box 内边距),
+   且 height:auto + align-self:stretch 使输入框高度与行高解耦——进入/退出编辑时
+   所在行的总高度由 .session-item 的固定 height 钉死,列表不会上下伸缩抖动。
+   文本在 input 内默认为垂直居中,无需额外 line-height。 */
+.s-edit {
+  align-self: stretch; height: auto;
+  padding: 0 6px; font-size: 12.5px; box-sizing: border-box;
+  border-radius: var(--r-sm);
+}
+
+/* 其他服务器后台运行的会话(跨服务器可见,运行期间显示,点击切回该服务器) */
+.s-foreign { margin-top: 10px; border-top: 1px dashed var(--glass-border); padding-top: 8px; }
+.s-foreign-title { font-size: 11px; color: var(--muted); margin-bottom: 4px; padding: 0 10px; }
+.s-foreign .session-item { border-color: var(--glass-border); background: var(--accent-fill-hover); }
+.s-foreign .session-item:hover { background: var(--accent-fill); }
+.s-foreign .s-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.s-foreign-badge {
+  flex: none; font-size: 10px; color: var(--accent);
+  background: var(--accent-fill); border: 1px solid var(--accent-border);
+  border-radius: var(--r-sm); padding: 1px 5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px;
+}

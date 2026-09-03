@@ -6,8 +6,9 @@
 
 import React from 'react';
 import type { ToolCallInfo } from '../../types';
-import { ToolRow } from '../ToolRow';
-import { IconSkillOutline16 } from '../icons';
+import { ToolRow } from '../ToolRow/ToolRow';
+import { IconSkillOutline16 } from '../icons/icons';
+import './SkillRow.scss';
 
 function firstLine(text: string): string {
   const nl = text.indexOf('\n');

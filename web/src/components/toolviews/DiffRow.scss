@@ -1,0 +1,7 @@
+/* ---- DiffRow 独有样式:文件改动卡 ---- */
+.dsh-diff { margin: 4px 0 4px 4px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg); padding: 10px 12px; font-family: var(--mono); font-size: 12px; line-height: 18px; max-height: 224px; overflow: auto; }
+.dsh-diff-path { font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
+.dsh-diff-line { white-space: pre-wrap; word-break: break-word; }
+.dsh-diff-line.del { color: var(--red); }
+.dsh-diff-line.add { color: var(--green); }
+.dsh-diff-result { color: var(--muted); margin-top: 6px; border-top: 1px solid var(--line-soft); padding-top: 6px; white-space: pre-wrap; word-break: break-word; }

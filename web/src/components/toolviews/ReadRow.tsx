@@ -4,9 +4,10 @@
 
 import React from 'react';
 import type { ToolCallInfo } from '../../types';
-import { ToolRow } from '../ToolRow';
-import { IconBrowseOutline16 } from '../icons';
+import { ToolRow } from '../ToolRow/ToolRow';
+import { IconBrowseOutline16 } from '../icons/icons';
 import { toolRowModel, relativizeToCwd } from '../../utils/toolRowModel';
+import './ReadRow.scss';
 
 function parseArgs(argsRaw?: string | null): Record<string, unknown> {
   if (!argsRaw) return {};

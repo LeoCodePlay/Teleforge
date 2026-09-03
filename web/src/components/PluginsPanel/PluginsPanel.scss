@@ -1,0 +1,35 @@
+/* ---- PluginsPanel 独有样式:工具插件卡片 + 玻璃拨动开关 ---- */
+.plugin-list { display: flex; flex-direction: column; gap: 8px; }
+.plugin-card {
+  display: flex; align-items: center; gap: 14px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-md); padding: 11px 13px;
+  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  transition: all .18s ease;
+}
+.plugin-card:hover { border-color: var(--glass-border-hover); }
+.plugin-card.off { opacity: .62; }
+.plugin-main { flex: 1; min-width: 0; }
+.plugin-desc {
+  color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.plugin-switch {
+  flex: none; width: 42px; height: 24px; padding: 0;
+  border-radius: var(--r-pill); border: 1px solid var(--glass-border);
+  background: var(--glass-bg-inset); cursor: pointer; position: relative;
+  transition: all .2s ease; box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+.plugin-switch .plugin-knob {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--switch-track);
+  box-shadow: 0 1px 4px var(--shadow-1);
+  transition: all .2s ease;
+}
+.plugin-switch.on {
+  background: linear-gradient(135deg, var(--btn-a), var(--btn-b));
+  border-color: var(--btn-bor);
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 14px var(--accent-soft);
+}
+.plugin-switch.on .plugin-knob { left: 20px; background: var(--switch-knob); }
+.plugin-switch:disabled { opacity: .5; cursor: default; }

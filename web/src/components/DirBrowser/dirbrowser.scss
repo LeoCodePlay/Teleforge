@@ -1,0 +1,18 @@
+/* ---- 目录浏览弹窗(DirBrowser/LocalDirBrowser 共享)独有样式 ---- */
+.dirlist {
+  position: relative; max-height: 340px; min-height: 180px; overflow: auto; margin-top: 8px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  padding: 6px; background: var(--glass-bg-inset);
+}
+.dirlink { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 9px; border-radius: var(--r-sm); cursor: pointer; transition: background .15s; }
+.dirlink:hover { background: var(--glass-bg-hover); }
+.dirlink.disabled { opacity: .6; cursor: default; }
+.spinner-inline { width: 12px; height: 12px; flex: none; border: 1.5px solid var(--accent); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+.dirlist-loading {
+  position: absolute; inset: 6px; z-index: 5; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px;
+  color: var(--muted); font-size: 12px;
+  background: var(--code-bg-soft); backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm); border-radius: var(--r-sm);
+}
+.dirlist-loading .spinner { width: 18px; height: 18px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }

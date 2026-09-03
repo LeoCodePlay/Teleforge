@@ -1,0 +1,9 @@
+/* ---- SearchRow 独有样式:搜索结果卡(文件命中明细;卡底/顶栏 .dsh-search 为共享) ---- */
+.dsh-search-file { padding: 4px 0; }
+.dsh-search-fileHeader { display: flex; align-items: center; gap: 8px; width: 100%; padding: 2px 12px; border: none; background: none; text-align: left; font-family: var(--mono); font-size: 12px; cursor: default; }
+.dsh-search-filePath { flex: 1 1 auto; min-width: 0; font-weight: 600; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-search-fileCount { flex: none; color: var(--text-faint); }
+.dsh-search-line { display: flex; gap: 8px; padding: 0 12px 0 20px; font-family: var(--mono); font-size: 12px; line-height: 18px; color: var(--text-2); white-space: pre; overflow-x: auto; }
+.dsh-search-lineNumber { flex: none; color: var(--text-faint); }
+.dsh-search-lineText { flex: 1 1 auto; }
+.dsh-search-more { padding: 2px 12px 2px 20px; font-size: 11px; color: var(--text-faint); }

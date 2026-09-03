@@ -1,0 +1,91 @@
+/* ---- 工作区文件管理页(FileManager/LocalFileManager 共享)独有样式 ---- */
+
+/* 远程/本地文件管理器 Tab 常驻挂载,非激活 Tab 用 CSS 隐藏(避免切回时重新加载) */
+.fm-pane.hide { display: none; }
+.fm-toolbar { display: flex; align-items: center; gap: 4px; }
+/* 面包屑:长路径保持单行,横向滚动查看(滚动条由全局覆盖式引擎接管,不占空间) */
+.fm-crumbs {
+  flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 1px;
+  font-size: 12.5px; overflow-x: auto;
+}
+/* 横向溢出时点亮 grab 光标,提示可按住拖拽(useHorizontalScroller.ts 动态切换) */
+.fm-crumbs.dx-grab { cursor: grab; }
+.fm-crumbs.dx-scrolling { cursor: grabbing; user-select: none; }
+.crumb-wrap { flex: none; display: inline-flex; align-items: center; gap: 1px; }
+.crumb { flex: none; cursor: pointer; color: var(--accent-2); padding: 2px 6px; border-radius: 6px; white-space: nowrap; transition: all .15s; }
+.crumb:hover { background: var(--glass-bg-hover); text-shadow: 0 0 10px var(--accent-glow); }
+.crumb.cur { color: var(--text); font-weight: 600; }
+.crumb-sep { color: var(--muted); user-select: none; }
+.fm-addrbar { margin-top: 6px; }
+.fm-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 操作行(上级/刷新/上传/传到本地):原内联 margin-top 收敛到类上 */
+.fm-actions { margin-top: 8px; }
+/* 「上传」按钮:单个按钮,点击展开文件/文件夹选择菜单 */
+.fm-upload { position: relative; }
+.ctxmenu.fm-upload-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 220; min-width: 168px; }
+.fmlist {
+  margin-top: 8px; border: 1px solid var(--glass-border); border-radius: var(--r-md);
+  background: var(--row-hover);
+  overflow: hidden; max-height: 46vh; min-height: 72px; overflow-y: auto;
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+.fmlist:focus { outline: none; }
+.fmph { padding: 14px 12px; }
+.fmrow {
+  position: relative; /* 作为重命名输入框(绝对定位覆盖整行)的定位基准 */
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12.5px;
+  cursor: default; user-select: none;
+  border-bottom: 1px solid var(--line-faint);
+  transition: background .15s;
+}
+.fmrow:last-child { border-bottom: none; }
+.fmrow:hover { background: var(--glass-bg-hover); }
+.fmrow.selected {
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.fm-ico { flex: none; }
+/* 重命名时隐藏底层内容但保留占位:visibility 不参与布局,行高/行宽不变,消除抖动 */
+.fm-hide { visibility: hidden; }
+/* 文件名列:超长省略显示(悬停有完整名称 tooltip) */
+.fm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-size { flex: none; width: 62px; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.fm-time { flex: none; width: 108px; text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* 重命名输入框:绝对定位覆盖整行(从行左 padding 到右 padding,含图标/名称/大小/时间)。
+   各列仍以 fm-hide 留在文档流占位 → 行高/行宽与普通行完全一致,进出重命名零抖动 */
+.fm-rename {
+  position: absolute; left: 10px; right: 10px; top: 50%; transform: translateY(-50%);
+  z-index: 1; box-sizing: border-box; height: 20px; padding: 0 6px;
+  border: 1px solid var(--accent-border); border-radius: 5px;
+  background: var(--code-bg-solid); color: var(--text); font-size: 12.5px; line-height: normal;
+  outline: none; box-shadow: 0 0 0 2px var(--focus-ring);
+}
+/* 进入子目录时的行内加载(文件夹右侧转圈,不触发全局加载)。
+   position:relative+z-index 使其在重命名提交时浮于整行输入框之上 */
+.fm-loading {
+  position: relative; z-index: 2; flex: none; width: 12px; height: 12px; margin-left: 4px;
+  border: 2px solid var(--accent-soft); border-top-color: var(--accent);
+  border-radius: 50%; animation: fm-spin .7s linear infinite;
+}
+.fmrow.nav-loading { background: var(--accent-soft); }
+@keyframes fm-spin { to { transform: rotate(360deg); } }
+
+/* 上传进度:发光进度条 */
+.progress { height: 5px; background: var(--progress-track); border-radius: 4px; margin: 6px 0; overflow: hidden; box-shadow: inset 0 1px 0 var(--ins-hl); }
+.progress-bar {
+  height: 100%; border-radius: 4px;
+  background: linear-gradient(90deg, var(--btn-b), var(--accent-2));
+  box-shadow: 0 0 10px var(--accent-glow);
+  transition: width .2s;
+}
+/* 删除/未知总量:不确定进度条(左右流动) */
+.progress-bar.indet {
+  width: 40%;
+  background: linear-gradient(90deg, var(--accent) 25%, var(--accent-2) 50%, var(--accent) 75%);
+  background-size: 200% 100%;
+  animation: indet-slide 1.2s linear infinite;
+}
+@keyframes indet-slide {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}

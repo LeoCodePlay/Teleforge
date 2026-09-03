@@ -219,20 +219,41 @@ export function foldTodos(events: SessionEvent[]): Array<{ content: string; stat
   return todos;
 }
 
-// 按"对话组"裁剪(作用于带 seq 的 trace):超预算时从头部整组丢弃(一组 = 一条 user
-// 到下一条 user 之前),保证剩余历史仍以 user 开头、assistant/tool_calls 配对完整。
-function trimByBudget(traced: TracedMessage[], budget: number): TracedMessage[] {
-  if (!Number.isFinite(budget) || budget <= 0) return traced;
-  const mlen = (t: TracedMessage) => String(t.msg.content || '').length + String(t.msg.reasoning_content || '').length;
-  let total = traced.reduce((n, t) => n + mlen(t), 0);
-  let start = 0;
-  while (total > budget && start < traced.length) {
+// 按"对话组"裁剪的通用核心:超预算时从头部整组丢弃(一组 = 一条 user 到下一条 user 之前),
+// 保证剩余历史仍以 user 开头、assistant/tool_calls 配对完整。
+// 关键:第一条 user 消息(原始任务锚点)永不丢弃——它是用户最初的需求,丢了模型会"失忆",
+// 退化成"我已就绪,没有任务"。裁剪只作用于第二组及之后的早期历史。
+function trimByBudgetCore<T>(items: T[], budget: number, getMsg: (t: T) => any): T[] {
+  if (!Number.isFinite(budget) || budget <= 0) return items;
+  const mlen = (t: T) => {
+    const m = getMsg(t);
+    return String(m?.content || '').length + String(m?.reasoning_content || '').length;
+  };
+  let total = items.reduce((n, t) => n + mlen(t), 0);
+  if (total <= budget) return items;
+  const isUser = (t: T) => getMsg(t)?.role === 'user';
+  // 定位原始任务锚点组的结束位置(下一个 user 消息或数组末尾)。
+  // 调用方保证 items[0] 必为 user(deriveMessagesWithTrace 已丢弃首个 user 之前的消息)。
+  let anchorEnd = 1;
+  while (anchorEnd < items.length && !isUser(items[anchorEnd])) anchorEnd++;
+  // 从第二组开始从头部整组丢弃,直到回到预算内
+  let start = anchorEnd;
+  while (total > budget && start < items.length) {
     let end = start + 1;
-    while (end < traced.length && traced[end].msg.role !== 'user') end++;
-    for (let i = start; i < end; i++) total -= mlen(traced[i]);
+    while (end < items.length && !isUser(items[end])) end++;
+    for (let i = start; i < end; i++) total -= mlen(items[i]);
     start = end;
   }
-  return start > 0 ? traced.slice(start) : traced;
+  return items.slice(0, anchorEnd).concat(items.slice(start));
+}
+
+function trimByBudget(traced: TracedMessage[], budget: number): TracedMessage[] {
+  return trimByBudgetCore(traced, budget, (t) => t.msg);
+}
+
+/** 纯消息数组(无 seq)版本的兜底裁剪:同样保第一条 user 锚点。供 agent 在摘要压缩后再兜底。 */
+export function trimMessagesByBudget(msgs: LlmMessage[], budget: number): LlmMessage[] {
+  return trimByBudgetCore(msgs, budget, (m) => m);
 }
 
 /**

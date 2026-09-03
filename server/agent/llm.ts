@@ -77,18 +77,15 @@ export class LlmClient {
   async chat({ messages, tools, signal, onDelta, onRetry, reasoning = 'default' }: ChatOptions): Promise<ChatResult> {
     if (this.isMock) return mockChat({ messages, tools, signal, onDelta });
     const deepseekV4 = isDeepSeekV4(this.model);
-    // 历史 assistant 消息中的 reasoning_content 处理(对齐 dsh llm-deepseek serialize 的 passback 规则):
+    // 历史 assistant 消息中的 reasoning_content 处理(DeepSeek thinking 模式的 passback 规则):
     // - 非 DeepSeek v4 模型:整体剥离(从 v4 切到其他模型/网关时,该字段可能不被上游接受导致 400)
-    // - DeepSeek v4:仅在带 tool_calls 的轮次原样回传(官方 thinking 模式的要求);
-    //   纯文本轮省略——官方规则里该字段此时被忽略,省掉可节约 token
+    // - DeepSeek v4 思考开启(reasoning != 'off'):所有 assistant 消息的 reasoning_content 必须
+    //   原样回传,无论是否带 tool_calls。一旦剥离纯文本轮的 reasoning_content,上游会 400
+    //   (The reasoning_content in the thinking mode must be passed back to the API)
+    // - DeepSeek v4 关闭思考(reasoning === 'off'):剥离 reasoning_content,与 thinking.type=disabled 一致
     let requestMessages = messages;
-    if (!deepseekV4) {
+    if (!deepseekV4 || reasoning === 'off') {
       requestMessages = messages.map(stripReasoning);
-    } else {
-      requestMessages = messages.map((m) => {
-        const hasToolCalls = m && typeof m === 'object' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
-        return hasToolCalls ? m : stripReasoning(m);
-      });
     }
     validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
     const url = `${this.baseUrl}/chat/completions`;

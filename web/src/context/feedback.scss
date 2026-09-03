@@ -1,0 +1,46 @@
+/* ---- 全局确认弹窗:复用公共 .modal 玻璃面板,更窄;遮罩抬升层级压在业务弹窗之上 ---- */
+.confirm-overlay { z-index: 300; }
+.confirm-modal { width: 400px; max-width: 92vw; }
+.confirm-msg {
+  font-size: 13px; line-height: 1.7; color: var(--text);
+  white-space: pre-line; word-break: break-word;
+}
+.confirm-msg code {
+  font-family: var(--mono); background: var(--code-bg);
+  padding: 1px 6px; border-radius: 5px; border: 1px solid var(--code-bor);
+  color: var(--code-ink);
+}
+
+/* ---- 消息弹出提示(toast):顶部居中玻璃胶囊,自动消失 ---- */
+.toast-host {
+  position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+  z-index: 400; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto; cursor: pointer;
+  display: flex; align-items: flex-start; gap: 9px;
+  max-width: min(520px, 92vw);
+  padding: 9px 15px; border-radius: var(--r-md);
+  font-size: 12.5px; line-height: 1.55; color: var(--text);
+  background: linear-gradient(150deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border-hover);
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
+  animation: toast-in .22s cubic-bezier(.2, .9, .3, 1.2);
+  word-break: break-word;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-10px) scale(.95); }
+  to   { opacity: 1; transform: none; }
+}
+.toast-ico { flex: none; font-size: 13px; font-weight: 700; line-height: 1.55; }
+.toast.success { border-color: var(--ok-border); }
+.toast.success .toast-ico { color: var(--green); text-shadow: 0 0 10px var(--ok-border); }
+.toast.error { border-color: var(--err-border); }
+.toast.error .toast-ico { color: var(--red); text-shadow: 0 0 10px var(--err-border); }
+.toast.warning { border-color: var(--warn-border); }
+.toast.warning .toast-ico { color: var(--amber); text-shadow: 0 0 10px var(--warn-border); }
+.toast.info { border-color: var(--accent-border); }
+.toast.info .toast-ico { color: var(--accent-2); text-shadow: 0 0 10px var(--accent-glow); }

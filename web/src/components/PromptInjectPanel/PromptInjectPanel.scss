@@ -1,0 +1,8 @@
+/* ---- PromptInjectPanel 独有样式:全局指令注入编辑区 ---- */
+.inject-edit {
+  width: 100%; min-height: 260px; line-height: 1.6; font-size: 13px;
+  resize: vertical; font-family: var(--mono);
+  background: var(--code-bg); color: var(--code-ink);
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 10px 12px;
+}
+.inject-edit:focus { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }

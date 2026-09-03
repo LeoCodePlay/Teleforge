@@ -4,8 +4,8 @@
 
 import React from 'react';
 import type { ToolCallInfo } from '../../types';
-import { ToolRow } from '../ToolRow';
-import { IconQuestionOutline14 } from '../icons';
+import { ToolRow } from '../ToolRow/ToolRow';
+import { IconQuestionOutline14 } from '../icons/icons';
 import { toolRowModel } from '../../utils/toolRowModel';
 
 function askSummary(call: ToolCallInfo): { summary: string; state: 'running' | 'ok' | 'error' } {

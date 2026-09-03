@@ -1,0 +1,77 @@
+/* ---- ModelMenu 独有样式:模型选择器 ----- */
+.msm { position: relative; display: inline-flex; flex: none; }
+.msm-trigger {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 240px;
+  padding: 4px 11px; font-size: 12px; cursor: pointer;
+  background: var(--glass-bg-inset); color: var(--text);
+  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  box-shadow: inset 0 1px 0 var(--ins-hl);
+  transition: border-color .18s, background .18s, box-shadow .18s;
+}
+.msm-trigger:hover { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); transform: none; }
+.msm.open .msm-trigger {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 14px var(--accent-soft);
+}
+.msm-label {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono);
+}
+.msm-effort { flex: none; font-size: 10.5px; color: var(--muted); }
+.msm-arrow { flex: none; font-size: 9px; color: var(--muted); transition: transform .18s; }
+.msm.open .msm-arrow { transform: rotate(180deg); }
+/* 二级菜单:右对齐、向上弹出,同款玻璃卡片 */
+.msm-menu {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 150;
+  width: min(240px, 84vw);
+  background: linear-gradient(135deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
+  padding: 5px; box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  animation: glass-pop .16s ease-out;
+  display: flex; flex-direction: column; gap: 2px;
+}
+/* 根菜单两行:模型 / 推理等级,右侧显示当前值 + 下钻箭头 */
+.msm-cell {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 9px 11px; border-radius: var(--r-sm);
+  background: transparent; border: none; color: var(--text); font-size: 12.5px;
+  cursor: pointer; box-shadow: none; transition: background .15s;
+}
+.msm-cell:hover { background: var(--glass-bg-hover); color: var(--accent-2); }
+.msm-cell-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msm-cell-value {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 11.5px;
+}
+.msm-cell-chev { flex: none; color: var(--muted); font-size: 11px; }
+/* 下钻列表:可滚动分组 */
+.msm-groups {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: min(340px, 58vh); overflow-y: auto;
+}
+.msm-group + .msm-group { margin-top: 4px; }
+/* 提供商名:仅作分组标题(不可选),吸顶以区分相邻提供商 */
+.msm-group-title {
+  position: sticky; top: 0; z-index: 1;
+  font-size: 10.5px; color: var(--muted); letter-spacing: .5px;
+  padding: 5px 9px 3px; user-select: none;
+  background: var(--pop-bg-strong);
+}
+.msm-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; text-align: left; padding: 7px 10px; border-radius: var(--r-sm);
+  background: transparent; border: none; color: var(--text); font-size: 12.5px;
+  cursor: pointer; box-shadow: none; transition: background .15s;
+}
+.msm-option:hover { background: var(--glass-bg-hover); color: var(--accent-2); }
+.msm-option.on { background: var(--accent-soft); color: var(--accent-2); }
+.msm-option-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono);
+}
+.msm-option .msm-custom { color: var(--muted); font-family: inherit; }
+.msm-option.on .msm-custom { color: var(--accent-2); }
+.msm-check { flex: none; color: var(--green); font-size: 12px; }
+.msm-empty { padding: 6px 10px; font-size: 11px; color: var(--muted); }

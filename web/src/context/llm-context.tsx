@@ -4,6 +4,7 @@ import { api } from '../api';
 import { PROVIDERS, DEFAULT_PROVIDER } from '../data/llm-providers';
 import { useFeedback } from './feedback';
 import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../types';
+import './llm-context.scss';
 
 const LS = (k: string, v: string) => localStorage.getItem('sshai.' + k) || v;
 const LSS = (k: string, v: string) => localStorage.setItem('sshai.' + k, v);

@@ -1,0 +1,29 @@
+/* ---- SkillsPanel 独有样式:技能卡片(文件形态,项目级/用户级) + 标题行/筛选工具条 ---- */
+.skill-card {
+  border: 1px solid var(--glass-border); border-radius: var(--r-md); padding: 11px 13px;
+  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  transition: all .18s ease;
+}
+.skill-card:hover { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); box-shadow: inset 0 1px 0 var(--glass-hi); }
+.skill-desc {
+  color: var(--text); font-size: 12.5px; margin-top: 5px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.skill-file {
+  color: var(--muted); font-size: 11px; font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;
+}
+.skill-modal { width: 640px; max-width: 94vw; }
+.skill-modal .codeedit {
+  width: 100%; min-height: 220px; line-height: 1.6; font-size: 12.5px; resize: vertical;
+  background: var(--code-bg); color: var(--code-ink);
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 10px 12px;
+}
+.skill-modal .codeedit:focus { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+
+/* 标题行 + 筛选工具条(GlassSelect) */
+.skills-head button { white-space: nowrap; }
+.skill-toolbar { margin-bottom: 8px; }
+.skill-toolbar .skill-filter { min-width: 168px; }
+.skill-toolbar .skill-count { flex: none; white-space: nowrap; }

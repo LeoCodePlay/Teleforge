@@ -1,0 +1,12 @@
+/* ---- Tooltip 独有样式:全局自定义 tooltip(替代原生 title 提示;由 TooltipHost 统一渲染) ---- */
+.tip-host {
+  position: fixed; z-index: 500; max-width: min(320px, 80vw);
+  padding: 6px 10px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+  color: var(--text); background: var(--pop-bg-strong);
+  backdrop-filter: var(--blur-lg); -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 10px 28px var(--shadow-2), inset 0 1px 0 var(--glass-hi);
+  pointer-events: none; white-space: normal; word-break: break-word;
+  animation: tip-in .14s ease-out;
+}
+@keyframes tip-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }

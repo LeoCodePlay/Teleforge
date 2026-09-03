@@ -1,0 +1,75 @@
+/* ---- ContextMeter 独有样式:上下文用量指示器 ----
+   发送按钮左侧:圆形进度环;悬浮弹出横向进度 + 分项明细 */
+.ctx-meter {
+  position: relative;
+  margin-left: auto;
+  display: inline-flex; align-items: center;
+  padding: 1px;
+  border-radius: 50%;
+  cursor: default; user-select: none;
+  transition: filter .18s ease;
+}
+.ctx-meter:hover { filter: brightness(1.2); }
+.ctx-ring {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+}
+.ctx-ring svg { display: block; }
+.ctx-ring-track {
+  fill: none; stroke: var(--line-soft); stroke-width: 3.5;
+}
+.ctx-ring-fill {
+  fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 50% 50%;
+  filter: drop-shadow(0 0 3px var(--accent-glow));
+  transition: stroke-dashoffset .35s ease, stroke .25s ease;
+}
+.ctx-ring-pct {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 600; color: var(--accent-2);
+  font-variant-numeric: tabular-nums;
+}
+.ctx-meter.warn .ctx-ring-fill { stroke: var(--amber); }
+.ctx-meter.warn .ctx-ring-pct { color: var(--amber); }
+.ctx-meter.danger .ctx-ring-fill { stroke: var(--red); }
+.ctx-meter.danger .ctx-ring-pct { color: var(--red); }
+
+/* 悬浮面板:数字 + 横向进度条 + 三行分项(向上弹出) */
+.ctx-pop {
+  position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 130;
+  width: 268px; padding: 11px 13px;
+  background: linear-gradient(135deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  animation: glass-pop .16s ease-out;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.ctx-pop-nums { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.ctx-pop-pct { color: var(--accent-2); margin-left: 4px; font-variant-numeric: tabular-nums; }
+.ctx-pop-track {
+  height: 5px; border-radius: 3px; background: var(--progress-track);
+  overflow: hidden; box-shadow: inset 0 1px 0 var(--shadow-1);
+}
+.ctx-pop-fill {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--btn-b), var(--accent-2));
+  box-shadow: 0 0 8px var(--accent-glow);
+  transition: width .35s ease;
+}
+.ctx-meter.warn .ctx-pop-fill { background: linear-gradient(90deg, var(--amber-bright), var(--amber)); }
+.ctx-meter.danger .ctx-pop-fill { background: linear-gradient(90deg, var(--btn-danger-b), var(--red)); }
+.ctx-pop-segs { display: flex; flex-direction: column; gap: 5px; }
+.ctx-seg { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.ctx-seg-name { flex: none; width: 62px; color: var(--muted); }
+.ctx-seg-track {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: var(--progress-track); overflow: hidden;
+}
+.ctx-seg-fill { display: block; height: 100%; border-radius: 3px; }
+.ctx-seg-fill.sys { background: var(--violet); box-shadow: 0 0 6px var(--violet-glow); }
+.ctx-seg-fill.tool { background: var(--amber-bright); box-shadow: 0 0 6px var(--warn-border); }
+.ctx-seg-fill.conv { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
+.ctx-seg-nums { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ctx-pop-hint { font-size: 10.5px; color: var(--muted); border-top: 1px solid var(--line-soft); padding-top: 6px; }

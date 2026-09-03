@@ -55,6 +55,15 @@ export function resolveCompactSpec(contextWindow: unknown, maxTokens: unknown): 
   };
 }
 
+/** 兜底字符裁剪预算:由输入窗口(token)换算(保守取 2 字符/token),未配置窗口时回退固定默认
+ *  (AGENT.HISTORY_BUDGET_CHARS)。目的:对齐前端仪表盘的 token 口径,消除"模型窗口还很足
+ *  却被固定字符数硬裁"的单位错配。精确水位保护由摘要压缩的 token 估算承担,这里只是兜底。 */
+export function resolveCharBudget(contextWindow: unknown): number {
+  const win = Number(contextWindow) || 0;
+  if (win <= 0) return AGENT.HISTORY_BUDGET_CHARS;
+  return Math.floor(win * 2);
+}
+
 /**
  * 选择可压缩区间:从头部整组丢弃,保留最近的 retainTokens 窗口(至少保留最后一条 user 组)。
  * 组边界保证:压缩掉的区间内部 user/assistant/tool 配对完整,
@@ -123,9 +132,15 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
     role: 'user',
     content: summary
       ? `【上下文已自动压缩】为节省上下文窗口,早期对话被压缩为以下摘要(如需细节请让助手展开):\n${summary}`
-      : `【上下文已自动压缩】早期 ${range.drop.length} 条消息因超出上下文窗口已省略。`
+      : `【上下文已自动压缩】早期 ${range.drop.length} 条消息因超出上下文窗口已省略。${preserveOriginalTask(range.drop)}`
   };
   return { messages: [summaryMsg, ...range.recent], compacted: true, dropCount: range.drop.length };
+}
+
+/** 摘要生成失败降级裁剪时,至少保留被裁区间的原始任务锚点(第一条 user 消息),避免模型"失忆" */
+function preserveOriginalTask(dropMsgs: any[]): string {
+  const first = (dropMsgs || []).find((m) => m && m.role === 'user' && m.content);
+  return first ? `\n原始任务(降级裁剪时保留,供后续对话回顾):\n${first.content}` : '';
 }
 
 /** 调用 LLM 生成摘要:沿用原始 system 前缀 + 被压缩的历史 + 摘要指令,不带工具、关闭思考 */

@@ -1,0 +1,63 @@
+/* ---- GlassSelect 独有样式:液态玻璃自定义下拉 ---- */
+.gselect { position: relative; display: inline-flex; flex: none; }
+.gselect.tb-model { min-width: 140px; }
+.gselect.full { display: flex; width: 100%; }
+.gselect-trigger {
+  display: inline-flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 11px; font-size: 12px; cursor: pointer;
+  background: var(--glass-bg-inset); color: var(--text);
+  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  box-shadow: inset 0 1px 0 var(--ins-hl);
+  transition: border-color .18s, background .18s, box-shadow .18s;
+  max-width: 240px;
+}
+.gselect.full .gselect-trigger { max-width: none; }
+.gselect-trigger:hover:not(:disabled) {
+  border-color: var(--glass-border-hover);
+  background: var(--glass-bg-hover); transform: none;
+}
+.gselect.open .gselect-trigger {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 14px var(--accent-soft);
+}
+.gselect-trigger:disabled { opacity: .45; cursor: not-allowed; }
+.gselect-val {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono);
+}
+.gselect-arrow { flex: none; font-size: 9px; color: var(--muted); transition: transform .18s; }
+.gselect.open .gselect-arrow { transform: rotate(180deg); }
+.gselect-menu {
+  position: absolute; z-index: 150; min-width: 100%; max-width: min(300px, 80vw);
+  max-height: min(340px, 58vh); overflow-y: auto;
+  background: linear-gradient(135deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
+  padding: 5px; box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  animation: glass-pop .16s ease-out;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.gselect-menu.down { top: calc(100% + 8px); }
+.gselect-menu.up { bottom: calc(100% + 8px); }
+.gselect-menu.right { right: 0; left: auto; }
+.gselect-group {
+  font-size: 10.5px; color: var(--muted); letter-spacing: .5px;
+  padding: 6px 9px 3px; user-select: none;
+}
+.gselect-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  text-align: left; padding: 7px 10px; border-radius: var(--r-sm);
+  background: transparent; border: none; color: var(--text); font-size: 12.5px;
+  cursor: pointer; box-shadow: none; width: 100%; transition: background .15s;
+}
+.gselect-item:hover:not(:disabled) {
+  background: var(--glass-bg-hover); color: var(--accent-2); transform: none; box-shadow: none;
+}
+.gselect-item.on { background: var(--accent-soft); color: var(--accent-2); }
+.gselect-item.hl { background: var(--glass-bg-hover); color: var(--accent-2); }
+.gselect-item.disabled { opacity: .55; cursor: not-allowed; }
+.gselect-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gselect-hint { flex: none; font-size: 10.5px; color: var(--muted); }
+.gselect-item.on .gselect-hint { color: var(--accent-2); }
+.gselect-empty { padding: 8px 10px; font-size: 12px; color: var(--muted); text-align: center; }

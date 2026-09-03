@@ -5,10 +5,11 @@
 
 import React from 'react';
 import type { ToolCallInfo } from '../../types';
-import { ToolRow } from '../ToolRow';
-import { StateDot } from '../StateDot';
-import { IconApiOutline14 } from '../icons';
+import { ToolRow } from '../ToolRow/ToolRow';
+import { StateDot } from '../StateDot/StateDot';
+import { IconApiOutline14 } from '../icons/icons';
 import { toolRowModel } from '../../utils/toolRowModel';
+import './TerminalRow.scss';
 
 function parseArgs(argsRaw?: string | null): Record<string, unknown> {
   if (!argsRaw) return {};

@@ -1,0 +1,403 @@
+/* ---- ChatPanel 独有样式:聊天主区/消息气泡/输入区/工作区选择/工具执行折叠 ---- */
+
+/* 聊天 */
+/* 会话区限宽居中(780px):消息输出与输入框整体不超过 780px,内容行不过长,两侧留白可承载其它面板 */
+.chatwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; max-width: 780px; width: 100%; margin: 0 auto; }
+.chat-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; color: var(--muted); font-size: 12px; }
+.chat-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 18px 16px; min-width: 0; }
+.empty { text-align: center; color: var(--muted); margin-top: 12vh; font-size: 14px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.empty-logo { width: 72px; height: 72px; opacity: .9; margin-bottom: 6px; user-select: none; -webkit-user-drag: none; }
+.msg { margin-bottom: 14px; display: flex; }
+/* 挂载入场动画只给最新一条消息:历史整表切换/载入时若全部消息同时重放
+   msg-in(.25s 淡入+上移),整段会话看起来就从上面"缓缓落下";
+   流式追加的最新回复仍保留入场动效,普通消息保持静止。 */
+.msg:last-child { animation: msg-in .25s ease-out; }
+/* 历史载入(挂载/切换会话/后台刷新)时由 ChatPanel 加 no-anim:
+   连最新一条的入场动画也不播,切换瞬间就是静止的成品画面;
+   用户实时发送消息时移除该类,新消息恢复浮现动效 */
+.chat.no-anim .msg:last-child { animation: none; }
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+.msg.user { justify-content: flex-end; flex-direction: column; align-items: flex-end; }
+.msg.assistant { justify-content: flex-start; }
+.bubble { max-width: 78%; min-width: 0; padding: 10px 14px; border-radius: var(--r-md); line-height: 1.6; font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
+
+/* 用户气泡:深色玻璃 + 主色淡晕,不套磨砂避免每屏气泡数超 backdrop-filter 额度。
+   跟随主题 token(玻璃深底 + 主色渐变),不再用亮色实底;宽度上限占父元素 70% */
+.user-bubble {
+  max-width: 70%;
+  background: linear-gradient(135deg, var(--accent-soft), transparent 78%), var(--glass-bg-strong);
+  color: var(--text); border-top-right-radius: 5px;
+  border: 1px solid var(--glass-border-hover);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 18px var(--shadow-1);
+}
+/* AI 消息:无气泡外壳、占满整行宽度( 聊天布局——
+   助手回复直接铺满页面宽度,只保留内容排版,不套背景/边框/磨砂玻璃) */
+.ai-bubble {
+  width: 100%; max-width: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: none;
+  box-shadow: none;
+  white-space: normal;
+  padding: 2px 4px;
+}
+
+/* ---- 消息操作栏 ----
+   每条完成的 AI 回复下方:28px 圆形图标钮;分支仅最新回复可用。
+   无背景无边框无阴影(保留按钮宽高),悬浮时仅把图标高亮为主色 */
+.msg-col { display: flex; flex-direction: column; min-width: 0; width: 100%; }
+.msg-actions {
+  display: flex; align-items: center; gap: 6px;
+  height: 28px; margin: 2px 4px -6px;
+}
+.msg-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 6px;
+  border: none; border-radius: var(--r-pill);
+  /* 颜色与 hover/active 反馈由 .action-icon 统一提供 */
+}
+.msg-action[data-unavailable] { cursor: default; opacity: .35; }
+
+/* ---- 用户消息脚注(时间 + 操作栏,位于气泡下方) ----
+   整行右对齐;默认整体隐藏,鼠标进入该条用户消息范围内一起淡入显示 */
+.user-msg-foot {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  min-height: 28px; margin: 4px 2px 0;
+  opacity: 0; transition: opacity .18s ease;
+}
+.user-msg-time { font-size: 11px; color: var(--muted); line-height: 1; white-space: nowrap; }
+.user-msg-actions { height: auto; margin: 0; gap: 4px; }
+.msg.user:hover .user-msg-foot,
+.msg.user:focus-within .user-msg-foot { opacity: 1; }
+
+/* ---- 用户消息跳转点:absolute 贴对话主区域最左侧 ----
+   相对 .tab-body 对齐(main 内、sidebar 右侧),不随限宽聊天内容移动,
+   也不钉在浏览器窗口最左;垂直居中于对话区 */
+.chat-dots {
+  position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
+  z-index: 3;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  max-height: 74%; overflow-y: auto;
+  padding: 3px 2px;
+  scrollbar-width: none;
+}
+.chat-dots::-webkit-scrollbar { display: none; }
+.chat-dot {
+  width: 7px; height: 7px; padding: 0; border: none; border-radius: 50%;
+  flex: none; cursor: pointer;
+  background: var(--line-strong);
+  transition: background .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+.chat-dot:hover { background: var(--hover-bg-hard); }
+.chat-dot.on {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  transform: scale(1.3);
+}
+
+/* ---- 跳转点悬停提示:固定定位防裁剪,最多两行、限宽省略 ----
+   纯深玻璃背景不透明,无需 backdrop-filter,不占用性能额度 */
+.dot-tip {
+  position: fixed;
+  transform: translateY(-50%);
+  top: 0; left: 0;
+  z-index: 40;
+  max-width: min(280px, calc(100vw - 60px));
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  font-size: 11.5px; line-height: 1.5;
+  color: var(--text);
+  background: var(--pop-bg-strong);
+  border: 1px solid var(--glass-border-hover);
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), 0 4px 14px var(--shadow-1);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
+  pointer-events: none;
+  animation: dot-tip-in .16s ease-out;
+}
+@keyframes dot-tip-in {
+  from { opacity: 0; transform: translateY(-50%) translateX(-5px); }
+  to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+}
+
+/* 任务相关提示气泡 / 模型重试提示 */
+.notice-bubble {
+  background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--amber);
+  border-radius: var(--r-sm); font-size: 12px; white-space: normal;
+  box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+/* 模型请求失败进入重试的提示(重试第 N/M 次):红色警示,区别于普通琥珀色通知 */
+.retry-bubble {
+  background: var(--err-bg); border: 1px solid var(--err-border); color: var(--red);
+  border-radius: var(--r-sm); font-size: 12px; white-space: normal;
+  box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+.msg.notice { justify-content: center; }
+.md { white-space: normal; }
+.md code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; border: 1px solid var(--code-bor); color: var(--code-ink); }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 10px 0 6px; line-height: 1.3; }
+.md h1 { font-size: 17px; } .md h2 { font-size: 16px; } .md h3 { font-size: 15px; }
+.md h4, .md h5, .md h6 { font-size: 14px; }
+.md p { margin: 6px 0; }
+.md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md li > ul, .md li > ol { margin: 2px 0; }
+.md blockquote {
+  margin: 8px 0; padding: 4px 12px; color: var(--muted);
+  border-left: 3px solid var(--accent); background: var(--accent-soft);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.md blockquote p { margin: 3px 0; }
+.md table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block; max-width: 100%; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line-soft); padding: 4px 10px; text-align: left; word-break: break-word; }
+.md th { background: var(--code-bg); font-weight: 600; white-space: nowrap; color: var(--code-ink); }
+.md tr:nth-child(even) td { background: var(--fill-1-lo); }
+.md a { color: var(--accent-2); text-shadow: 0 0 10px var(--accent-soft); }
+.md hr { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
+.md del { opacity: 0.65; }
+.md input[type="checkbox"] { accent-color: var(--accent); margin-right: 6px; vertical-align: middle; }
+
+.cursor { display: inline-block; width: 2px; height: 1.05em; background: var(--accent-2); vertical-align: text-bottom; border-radius: 1px; animation: blink 1s infinite; box-shadow: 0 0 6px var(--accent-glow); }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* 工具调用:单条回复内按组折叠为一条,展开才显示各卡片 */
+.toolrun { margin-top: 8px; min-width: 0; }
+.toolrun-head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 11px; font-size: 12.5px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  cursor: pointer; user-select: none; min-width: 0;
+  transition: all .18s;
+}
+.toolrun-head:hover:not(:disabled) { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
+.toolrun-head .muted { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolrun-body {
+  border: 1px solid var(--line); border-top: none;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  padding: 6px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  background: var(--code-bg-soft);
+}
+.toolcard {
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  background: var(--code-bg-soft); min-width: 0;
+  box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+.toolcard-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 11px; font-size: 12.5px; cursor: pointer; user-select: none; min-width: 0; }
+.toolcard-head:hover:not(:disabled) { color: var(--accent-2); }
+.toolcard-head b { color: var(--accent-2); }
+.toolcard pre { border-top: 1px solid var(--line-soft); margin: 0; max-width: 100%; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.toolcard pre.args { color: var(--muted); max-height: 140px; }
+.toolcard pre.res.err { color: var(--err-text); }
+.toolcard pre.pending { color: var(--muted); border-top: none; }
+.tc-arrow { color: var(--muted); font-size: 10px; }
+
+/* 思考折叠块(```thinking …```) */
+.thinking {
+  border: 1px dashed var(--line-strong); border-radius: var(--r-sm);
+  background: var(--accent-fill-hover); margin: 6px 0;
+}
+.thinking summary { cursor: pointer; padding: 6px 11px; user-select: none; color: var(--muted); }
+.thinking summary:hover { color: var(--accent-2); }
+.thinking .tf-body { border-top: 1px dashed var(--line-soft); padding: 6px 11px; max-height: 320px; overflow: auto; }
+.thinking .tf-line { font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+
+/* ---- AI 提问独占聚焦(askPending):只显示提问面板 ----
+   挂起提问时隐藏输入框/工具栏/工作区切换/待执行队列/任务计划/消息操作与跳转点,
+   对话区整体 inert(可滚动阅读上下文,但不许点选/操作),提问面板居中突出展示;
+   作答或取消后提问结束,其余面板自动恢复。 */
+.chatwrap.ask-focus .chat-scroll { pointer-events: none; }
+.chatwrap.ask-focus .chat-dots,
+.chatwrap.ask-focus .dot-tip,
+.chatwrap.ask-focus .todo-panel,
+.chatwrap.ask-focus .queue-panel,
+.chatwrap.ask-focus .composer-box,
+.chatwrap.ask-focus .composer-toolbar,
+.chatwrap.ask-focus .wsbar-row,
+.chatwrap.ask-focus .msg-actions { display: none; }
+/* 用户消息下的操作栏(复制/删除/回退)同为操作入口,一并隐藏 */
+.chatwrap.ask-focus .user-msg-foot { opacity: 0; }
+/* 收起 composer 玻璃底垫,让提问面板以独立卡片呈现并居中 */
+.chatwrap.ask-focus .composer {
+  padding: 6px 14px 10px;
+  margin: 2px 12px 12px;
+  gap: 0;
+}
+.chatwrap.ask-focus .composer::before { display: none; }
+.chatwrap.ask-focus .ask-panel {
+  max-width: 560px; width: 100%; margin: 0 auto;
+}
+.chatwrap.ask-focus .ask-body { max-height: 54vh; }
+
+/* 命令台容器:左侧终端主体 + 右侧终端列表 —— 布局在 console.scss,此处仅输入区 */
+
+/* 输入区:液态玻璃停靠面板(半透明 + 仅背景模糊)——
+   模糊只作用于 ::before 背景层;子元素(输入框/工具栏/工作区条)通过
+   position:relative 抬到绘制层级之上,保持清晰、可点击。
+   任务计划面板(TodoPanel)渲染在本面板之外,不被包进玻璃底 */
+.composer {
+  position: relative;
+  margin: 0 12px 12px; /* 四周留缝,让圆角悬浮感可见 */
+  border-radius: var(--r-lg);
+  padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+/* 子元素高于 ::before 背景层:树序在后即可,不借助 z-index/isolation,
+   保证背景层的 backdrop-filter 能采样到页面极光光斑(隔离会形成 backdrop-root) */
+.composer > * { position: relative; }
+.composer::before {
+  content: ''; position: absolute; inset: 0;
+  border-radius: inherit;
+  /* LIQUID_GLASS 规范玻璃底色:半透明渐变,底层光斑透出并被模糊折射 */
+  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
+  border: 1px solid var(--glass-border);
+  /* 三段式玻璃阴影:顶部高光 + 底部微光 + 悬浮投影 */
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+}
+/* 任务计划面板停靠在玻璃面板之外:与面板左右边缘对齐,底部留 8px 缝 */
+.chatwrap > .todo-panel { margin: 0 12px 8px; }
+.composer textarea { min-height: 44px; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---- 主聊天输入框:厚玻璃卡片,聚焦时整体发光 ---- */
+.composer-box {
+  position: relative; /* / 命令菜单以其为锚点浮在上方 */
+  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border); border-radius: var(--r-lg);
+  padding: 10px 10px 6px 14px;
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 20px var(--shadow-1);
+  transition: all .22s ease;
+}
+.composer-box:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 0 3px var(--accent-soft), 0 8px 32px var(--accent-soft);
+}
+.composer-box textarea {
+  background: transparent; border: none; padding: 2px 4px; min-height: 24px; max-height: 180px;
+  resize: none; line-height: 1.5; font-size: 13.5px; width: 100%;
+  font-family: inherit; word-break: break-word; /* 与叠加层同字体度量,保证高亮对齐 */
+  position: relative; z-index: 1; /* 置于高亮叠加层之上 */
+}
+.composer-box textarea:focus { border: none; box-shadow: none; background: transparent; }
+.composer-box textarea:disabled { opacity: .5; }
+.composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.composer-tip { font-size: 11px; }
+
+/* ---- 输入区:可编辑 textarea + 高亮叠加层(单一文本源,无冻结段/tag) ---- */
+.composer-input { position: relative; }
+.composer-overlay {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  padding: 2px 4px; line-height: 1.5; font-size: 13.5px; font-family: inherit;
+  white-space: pre-wrap; word-break: break-word; color: transparent;
+}
+.composer-token {
+  color: transparent; /* 只露高亮底,字形仍由 textarea 绘制,严格同字体度量对齐 */
+  background: var(--ok-bg);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--ok-border);
+}
+
+.send-btn {
+  width: 32px; height: 32px; border-radius: 50%; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--btn-a), var(--btn-b));
+  border-color: var(--btn-bor); color: var(--btn-text); font-size: 14px; line-height: 1;
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 4px 14px var(--accent-glow);
+}
+.send-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--btn-hover-a), var(--btn-hover-b));
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 6px 20px var(--accent-glow);
+}
+.send-btn.stop {
+  background: linear-gradient(135deg, var(--btn-danger-a), var(--btn-danger-b));
+  border-color: var(--btn-danger-bor); color: var(--btn-danger-text);
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 4px 14px var(--btn-danger-glow);
+}
+.send-btn.stop:hover { border-color: var(--red); }
+
+/* 工作区(对话输入框下方):远程/本地两个入口并排,点击弹出下拉(切换/浏览选择工作区) */
+.wsbar-row { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.wsbar { position: relative; padding-top: 2px; }
+.ws-chip {
+  max-width: 100%; display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: var(--r-pill); font-size: 12px; cursor: pointer;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  color: var(--accent-2); font-family: var(--mono);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
+  transition: all .18s;
+}
+.ws-chip:hover:not(:disabled) { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
+.ws-chip.none { color: var(--muted); font-family: inherit; }
+/* 本地工作区 chip:绿色系与远程(蓝色)区分 */
+.ws-chip.local { color: var(--green); border-color: var(--ok-border); }
+.ws-chip.local.none { color: var(--muted); border-color: var(--glass-border); }
+.ws-chip-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-chip-arrow { flex: none; font-size: 10px; color: var(--muted); }
+.ws-pick {
+  position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 120;
+  min-width: 280px; max-width: min(560px, 92vw);
+  background: linear-gradient(135deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md); padding: 5px;
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  display: flex; flex-direction: column; gap: 2px;
+  animation: glass-pop .16s ease-out;
+}
+.ws-pick-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.ws-pick-item {
+  display: flex; align-items: center; gap: 2px; width: 100%; padding: 0;
+  background: transparent; border: none; border-radius: var(--r-sm);
+  transition: background .15s;
+}
+.ws-pick-item:hover { background: var(--glass-bg-hover); }
+.ws-pick-item.on { background: var(--accent-soft); }
+/* 行内主按钮 / 整行操作按钮(浏览/家目录等):整行可点 */
+.ws-pick-main, .ws-pick-action {
+  flex: 1; min-width: 0; width: 100%; display: flex; align-items: center; gap: 8px;
+  background: transparent; border: none; text-align: left;
+  padding: 7px 11px; font-size: 12.5px; color: var(--text);
+  box-shadow: none; cursor: pointer; transition: color .15s;
+}
+.ws-pick-item:hover > .ws-pick-main, .ws-pick-item.on > .ws-pick-main,
+.ws-pick-action:hover { color: var(--accent-2); }
+/* 历史记录删除按钮:常显灰字,悬停变红;无边框无阴影(去掉全局 button 的玻璃阴影) */
+.ws-pick-del {
+  flex: none; background: transparent; border: none; box-shadow: none; cursor: pointer;
+  padding: 5px 9px; font-size: 12px; line-height: 1;
+  border-radius: var(--r-sm);
+  /* 颜色与 hover/active 反馈由 .action-icon(.danger) 统一提供 */
+}
+.ws-pick-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.ws-pick-cur { flex: none; color: var(--green); }
+.ws-pick-empty { padding: 10px; text-align: center; }
+
+/* ---- 响应式:窄屏下取消限宽、收紧留白,消息与输入框始终贴合屏宽 ----
+   默认:会话区上限 780px 居中;屏宽低于上限后回到全宽,仅保留最小内边距 */
+@media (max-width: 860px) {
+  .chatwrap { max-width: 100%; }
+  .chat { padding: 8px 12px 14px; }
+  .composer { margin: 0 8px 8px; padding: 10px 12px; }
+}
+@media (max-width: 560px) {
+  .chat-head { padding: 6px 10px; }
+  .chat { padding: 6px 8px 12px; }
+  .bubble { max-width: 88%; }
+  .composer { margin: 0 6px 6px; padding: 8px 10px; border-radius: var(--r-md); }
+  .composer-box { padding: 8px 8px 4px 10px; border-radius: var(--r-md); }
+  .wsbar-row { gap: 6px; }
+}

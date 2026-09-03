@@ -4,11 +4,11 @@
 
 import React from 'react';
 import type { ToolCallInfo } from '../../types';
-import { ToolRow } from '../ToolRow';
+import { ToolRow } from '../ToolRow/ToolRow';
 import {
   IconApiOutline14, IconBrowseOutline16, IconChecklistOutline14, IconCodeOutline16,
   IconEditOutline16, IconQuestionOutline14, IconSearchOutline16, IconSparkle16,
-} from '../icons';
+} from '../icons/icons';
 import { toolRowModel, type ToolRowVariant } from '../../utils/toolRowModel';
 
 const VARIANT_ICONS: Record<ToolRowVariant, React.ReactNode> = {

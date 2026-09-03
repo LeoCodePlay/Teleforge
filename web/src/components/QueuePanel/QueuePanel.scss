@@ -1,0 +1,57 @@
+/* ---- QueuePanel 独有样式:待执行消息队列 ----
+   与 ask-panel 同款玻璃卡片,但不用 backdrop-filter(控制每屏模糊层数);泛光底 + 琥珀色边框
+   标识"等待中"语义,与提问(蓝)/任务计划(绿)面板区分 */
+.queue-panel {
+  background: linear-gradient(150deg, var(--pop-bg), var(--pop-bg-lo));
+  border: 1px solid var(--warn-border);
+  border-radius: var(--r-lg);
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
+  overflow: hidden;
+  animation: ask-in .22s cubic-bezier(.2, .9, .3, 1.2);
+}
+.queue-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line);
+  font-weight: 600; font-size: 13px;
+}
+.queue-badge { font-size: 12px; }
+.queue-title { color: var(--amber); }
+.queue-count { color: var(--muted); font-size: 12px; font-weight: 600; }
+.queue-hint { margin-left: auto; font-size: 11px; font-weight: 400; }
+.queue-list {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px; max-height: 24vh; overflow-y: auto;
+}
+.queue-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 9px; border-radius: var(--r-sm);
+  background: var(--glass-bg-inset);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  transition: border-color .18s ease, background .18s ease;
+}
+.queue-item:hover { border-color: var(--glass-border-hover); }
+.queue-idx {
+  flex: none; width: 18px; height: 18px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; line-height: 1; color: var(--accent);
+  background: var(--accent-soft);
+}
+.queue-text {
+  flex: 1; min-width: 0;
+  font-size: 13px; line-height: 1.5; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.queue-status {
+  flex: none; font-size: 11px; font-weight: 600; white-space: nowrap;
+  color: var(--amber);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: 999px; padding: 2px 8px;
+}
+.queue-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.queue-action {
+  width: 26px; height: 26px; border-radius: 8px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  /* 颜色与 hover/active 反馈由 .action-icon 统一提供 */
+}

@@ -3,8 +3,8 @@
 
 import React from 'react';
 import type { ToolCallInfo } from '../../types';
-import { ToolRow } from '../ToolRow';
-import { IconChecklistOutline14 } from '../icons';
+import { ToolRow } from '../ToolRow/ToolRow';
+import { IconChecklistOutline14 } from '../icons/icons';
 import { toolRowModel } from '../../utils/toolRowModel';
 
 function summarizeTodos(argsRaw?: string | null): { done: number; total: number } {
