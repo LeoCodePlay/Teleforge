@@ -10,6 +10,8 @@ import { SearchRow } from './toolviews/SearchRow';
 import { DiffRow } from './toolviews/DiffRow';
 import { TodoRow } from './toolviews/TodoRow';
 import { AskQuestionRow } from './toolviews/AskQuestionRow';
+import { WebSearchRow } from './toolviews/WebSearchRow';
+import { SkillRow } from './toolviews/SkillRow';
 import { GenericToolCard } from './toolviews/GenericToolCard';
 
 interface ToolCallListProps {
@@ -45,6 +47,10 @@ function ToolCallBranch({ call, workspace, onOpenFile }: { call: ToolCallInfo; w
     view = <TodoRow call={call} inspect={inspect} />;
   } else if (name === 'ask_user_question') {
     view = <AskQuestionRow call={call} inspect={inspect} />;
+  } else if (name === 'web_search') {
+    view = <WebSearchRow call={call} inspect={inspect} />;
+  } else if (name === 'skill') {
+    view = <SkillRow call={call} inspect={inspect} />;
   } else {
     view = <GenericToolCard call={call} onOpenFile={onOpenFile} inspect={inspect} />;
   }

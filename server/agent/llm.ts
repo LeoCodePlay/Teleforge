@@ -25,11 +25,25 @@ export interface LlmOptions {
   maxIters?: number;
 }
 
+/** 一次请求失败进入重试的信息(供上层把「重试第几次」推到前端,对齐 harness llm-retry 的 retry 事件语义) */
+export interface RetryInfo {
+  /** 当前第几次重试(从 1 起) */
+  retry: number;
+  /** 最大重试次数 */
+  maxRetries: number;
+  /** 本次重试前的等待时长(ms) */
+  delayMs: number;
+  /** 上次失败的简要原因 */
+  error?: string;
+}
+
 export interface ChatOptions {
   messages: LlmMessage[];
   tools?: any[];
   signal?: AbortSignal;
   onDelta?: (d: { kind: string; text?: string; index?: number }) => void;
+  /** 请求失败进入重试、等待下一次尝试前触发 */
+  onRetry?: (info: RetryInfo) => void;
   reasoning?: string;
 }
 
@@ -60,7 +74,7 @@ export class LlmClient {
    * finishReason:SSE 结束的 finish_reason(如 'stop' / 'length'),供 agent 判断
    * 输出是否因 max_tokens 被截断(length 时不当作"完成")。mock 模式下为 undefined。
    */
-  async chat({ messages, tools, signal, onDelta, reasoning = 'default' }: ChatOptions): Promise<ChatResult> {
+  async chat({ messages, tools, signal, onDelta, onRetry, reasoning = 'default' }: ChatOptions): Promise<ChatResult> {
     if (this.isMock) return mockChat({ messages, tools, signal, onDelta });
     const deepseekV4 = isDeepSeekV4(this.model);
     // 历史 assistant 消息中的 reasoning_content 处理(对齐 dsh llm-deepseek serialize 的 passback 规则):
@@ -121,6 +135,7 @@ export class LlmClient {
       if (attempt > 0) {
         if (signal?.aborted) throw lastErr;
         console.warn(`[llm] ${this.model} 请求失败(${lastErr?.message || lastErr}),${RETRY_DELAY_MS / 1000}s 后重试 (${attempt}/${RETRY_TIMES})`);
+        onRetry?.({ retry: attempt, maxRetries: RETRY_TIMES, delayMs: RETRY_DELAY_MS, error: String(lastErr?.message || lastErr) });
         await sleep(RETRY_DELAY_MS, signal);
       }
       let res: Response;

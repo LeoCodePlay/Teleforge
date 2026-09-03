@@ -103,6 +103,10 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
     profiles.find((p) => (p.id === c.profileId)
       || (c.host === p.host && String(c.port) === String(p.port || '22') && c.username === p.username)) || null;
 
+  // 当前活动连接对应的已保存配置 id(用于在列表上标记「当前」连接)
+  const activeConnObj = conns.find((c) => c.id === activeConn) || null;
+  const activeProfileId = (activeConnObj && profileForConn(activeConnObj)?.id) || null;
+
   // 手动表单:连接(可同时保存到后端)
   const doConnect = async () => {
     setErr('');
@@ -185,26 +189,7 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
         <div className="modal-body">
           {view === 'list' ? (
             <>
-              {(connected || connecting) && (
-                <div className="ssh-cur">
-                  <span className="dot">●</span>
-                  <div className="grow">
-                    <div className="ssh-cur-title">{connected ? '当前连接' : CONN_LABEL[status.status]}</div>
-                    <div className="ssh-cur-sub">{status.username}@{status.host}:{status.port}{status.platform ? ` (${status.platform})` : ''}</div>
-                  </div>
-                  <button className="danger sm" disabled={busy} onClick={() => disconnectConn()}>断开</button>
-                </div>
-              )}
-              {!connected && !connecting && (
-                <div className="ssh-cur off">
-                  <span className="dot">●</span>
-                  <div className="grow">
-                    <div className="ssh-cur-title off">未连接</div>
-                    <div className="ssh-cur-sub">连接后可保持多台服务器同时在线,随时快速切换</div>
-                  </div>
-                </div>
-              )}
-              {err && <div className="error" onClick={() => setErr('')} title="点击关闭">✕ {err}</div>}
+              {err && <div className="error" onClick={() => setErr('')}>✕ {err}</div>}
 
               {conns.length > 0 && (
                 <div className="field">
@@ -219,9 +204,12 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
                             className="ssh-item-main"
                             disabled={busy}
                             onClick={() => { if (!isActive && c.status !== 'disconnected') switchConn(c); }}
-                            title={isActive ? '当前操作连接' : (c.status === 'connected' ? '点击切换到该服务器(不重连)' : '未连接')}
+                            data-tip={isActive ? '当前操作连接' : (c.status === 'connected' ? '点击切换到该服务器(不重连)' : '未连接')}
                           >
-                            <span className="ssh-item-name">{prof ? prof.name : `${c.username}@${c.host}:${c.port}`}</span>
+                            <span className="ssh-item-name">
+                              {prof ? prof.name : `${c.username}@${c.host}:${c.port}`}
+                              {isActive && <span className="badge ok">当前</span>}
+                            </span>
                             <span className="ssh-item-sub">
                               {prof ? `${c.username}@${c.host}:${c.port} ` : ''}
                               [{CONN_LABEL[c.status] || c.status}{c.status === 'reconnecting' && c.retry ? `第${c.retry}次` : ''}{c.status === 'reconnecting' && c.reason ? ` · ${c.reason}` : ''}]
@@ -229,9 +217,9 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
                             </span>
                           </button>
                           {!isActive && c.status === 'connected' && (
-                            <button className="sm ok" title="快速切换(不重连)" disabled={busy} onClick={() => switchConn(c)}>切换</button>
+                            <button className="sm ok" data-tip="快速切换(不重连)" disabled={busy} onClick={() => switchConn(c)}>切换</button>
                           )}
-                          <button className="sm danger" title="断开此连接" disabled={busy} onClick={() => disconnectConn(c)}>断开</button>
+                          <button className="sm danger" disabled={busy} onClick={() => disconnectConn(c)}>断开</button>
                         </div>
                       );
                     })}
@@ -248,11 +236,14 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
                     {profiles.map((p) => (
                       <div key={p.id} className="ssh-item">
                         <button className="ssh-item-main" disabled={busy || connecting} onClick={() => connectProfile(p)}>
-                          <span className="ssh-item-name">{p.name}</span>
+                          <span className="ssh-item-name">
+                            {p.name}
+                            {p.id === activeProfileId && <span className="badge ok">当前</span>}
+                          </span>
                           <span className="ssh-item-sub">{p.username}@{p.host}:{p.port}{p.authType === 'key' ? ' · 私钥' : ''}{p.hasPassword ? '' : p.authType === 'password' ? ' · 未存密码' : ''}</span>
                         </button>
-                        <button className="sm" title="编辑" disabled={busy} onClick={() => openEdit(p)}>✎</button>
-                        <button className="sm" title="删除" disabled={busy} onClick={() => deleteProfile(p)}>🗑</button>
+                        <button className="sm" disabled={busy} onClick={() => openEdit(p)}>✎</button>
+                        <button className="sm" disabled={busy} onClick={() => deleteProfile(p)}>🗑</button>
                       </div>
                     ))}
                   </div>
@@ -311,7 +302,7 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
                 <div className="hint">{form.save ? '保存到后端,换浏览器 / 刷新页面都可用;密码密钥只存服务端' : '连接后不保存该服务器,下次需重新填写'}</div>
               </div>
 
-              {err && <div className="error" onClick={() => setErr('')} title="点击关闭">✕ {err}</div>}
+              {err && <div className="error" onClick={() => setErr('')}>✕ {err}</div>}
 
               <div className="row gap">
                 <button className="ghost" disabled={busy} onClick={backToList}>← 返回</button>

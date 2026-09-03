@@ -1,5 +1,5 @@
 // Agent 工具集:工具定义(name/description/parameters + run)+ 注册与守卫。
-// 定义参照 deepseek-harness 的 ToolDefinition:模型可见字段(name/description/parameters)
+// 定义 的 ToolDefinition:模型可见字段(name/description/parameters)
 // 与宿主执行细节(run/timeoutMs)分离,由 registry.schemas() 白名单投影进模型请求;
 // 执行统一走 registry.execute() 管线(守卫 -> 超时 -> 结构化结果)。
 import { AGENT } from '../config.ts';
@@ -12,10 +12,11 @@ import { localFs, resolveInLocalWorkspace } from '../core/local-fs.ts';
 import type { FsEntry } from '../core/local-fs.ts';
 import { execLocal } from '../core/local-exec.ts';
 import { askUserQuestion } from './ask-user.ts';
+import { webSearch, renderSearchResult } from './web-search.ts';
 import type { ToolDef, ToolRegistry } from './registry.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// 内置技能库(随工具分发,本地目录;已从 deepseek-harness / Claude Code 全局收集)
+// 内置技能库
 const BUILTIN_SKILLS_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(__dirname, '..', 'skills');
 // 本机技能根目录(无需 SSH,随本机文件系统管理):
 //   local-project:   工具运行目录(process.cwd())下的 .agents/skills   —— 随本机当前项目
@@ -209,7 +210,9 @@ const toolDefs: ToolDef[] = [
     timeoutMs: 660_000, // 注册表兜底超时:比工具自身最大 600s 再宽一档
     async run({ command, timeout, description }) {
       if (!command) throw new Error('命令为空');
-      const res = await ssh.exec(ssh.cdCommand(command), { timeout: (timeout || 300) * 1000 });
+      // concurrent:true 绕过串行队列,走 ssh2 多路 exec 通道——agent 一次发起
+      // 多条 run_command 时可并行执行互不阻塞(串行模式下同一时刻仅一条,行为不变)
+      const res = await ssh.exec(ssh.cdCommand(command), { timeout: (timeout || 300) * 1000, concurrent: true });
       if (res.error) throw new Error(res.stderr || '命令执行失败');
       const parts = [`[退出码 ${res.code === -1 ? '超时/终止' : res.code}${res.signal ? `, 信号 ${res.signal}` : ''}]`];
       if (res.stdout.trim()) parts.push('--- stdout ---\n' + res.stdout);
@@ -279,7 +282,9 @@ const toolDefs: ToolDef[] = [
       let engine = await detectSearchEngine();
       if (!engine) {
         // 兜底:先自动安装缺失的搜索工具,再重新探测一次(连接时也做过一轮,这里覆盖"安装未生效"的场景)
-        await ensureSearchTools().catch(() => {});
+        const ensured = await ensureSearchTools().catch(() => null);
+        // 工具已就绪(原本就有或刚装好)时强制刷新探测缓存,避免命中首次探测失败遗留的 null 缓存
+        if (ensured && ensured.ok) clearSearchEngine();
         engine = await detectSearchEngine();
       }
       if (!engine) throw new Error('远程未找到可用搜索工具(rg/grep/python/busybox),自动安装未生效;请 run_command 手动安装 ripgrep 或 grep(需 root 或免密 sudo)');
@@ -295,7 +300,7 @@ const toolDefs: ToolDef[] = [
   },
 
   {
-    // 任务计划工具(照搬 deepseek-harness 的 tool-todo):整表替换语义。
+    // 任务计划工具:整表替换语义。
     // 模型按任务难度自主决定是否建表(描述里明确"简单单步任务跳过"),
     // 每完成一项立即标 completed;写入会话事件日志 todo/write 供前端面板渲染。
     name: 'todo_write',
@@ -355,7 +360,7 @@ const toolDefs: ToolDef[] = [
   },
 
   {
-    // 技能加载工具(照搬 deepseek-harness 的 tool-skill):模型侧唯一入口。
+    // 技能加载工具:模型侧唯一入口。
     // 技能来自远程 <workspace>/.agents/skills/ 与 ~/.agents/skills/,
     // 目录(名称+描述)由 system prompt 注入;本工具按名加载完整指令正文。
     name: 'skill',
@@ -455,6 +460,29 @@ const toolDefs: ToolDef[] = [
       // 缓存环境快照,供下一轮 system prompt 注入,避免重复探测
       envCache = { workspace: info.workspace, summary: text };
       return text;
+    }
+  },
+
+  {
+    // 网络搜索工具(DuckDuckGo 免 key,机制对齐 ddgs):连接 SSH 时在服务器上执行
+    // (Python 标准库脚本,零安装),否则在本机用 fetch 直抓;无需 API Key,不依赖 SSH
+    // (本地模式也能用),也不进 SSH_ONLY_TOOLS 守卫集。
+    name: 'web_search',
+    description: 'Search the web for up-to-date information and return cited sources (title, snippet, url). Use when the answer needs current or real-world facts beyond the workspace: news, docs, package versions, prices, incidents, and so on. Free, no API key required. When an SSH server is connected the search runs on the server; otherwise it runs locally.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '要搜索的问题或关键词,越具体越好' }
+      },
+      required: ['query']
+    },
+    timeoutMs: 240_000, // 首次搜索可能触发远端 ddgs 的 pip 安装(最长 180s)+ 搜索 30s;安装有缓存,之后秒级
+    async run({ query }, { signal }: any = {}) {
+      const q = String(query || '').trim();
+      if (!q) throw new Error('查询词为空');
+      const outcome = await webSearch({ query: q, signal });
+      // meta:结构化来源列表,供前端 WebSearchRow 卡片忠实呈现(标题/摘要/链接)
+      return { content: renderSearchResult(outcome), meta: { card: 'web_search', sources: outcome.sources } };
     }
   }
 ];
@@ -688,8 +716,8 @@ export function getEnvInfo() { return envCache; }
 export function clearEnvInfo() { envCache = null; }
 
 // ---------------- 技能(skills)发现与目录 ----------------
-// 照搬 deepseek-harness 的本地技能发现,扩展为六级来源(高优先级覆盖低优先级):
-//   1. builtin          内置技能库(随工具分发的本地目录,来自 deepseek-harness / Claude Code 收集)
+// 照搬 的本地技能发现,扩展为六级来源(高优先级覆盖低优先级):
+//   1. builtin          内置技能库
 //   2. local-user       本机 <用户主目录>/.agents/skills                 本机用户技能(跨项目共享)
 //   3. user             远程 <家目录>/.agents/skills                    远程用户技能(跨工作区)
 //   4. local-project    本机 <工具运行目录>/.agents/skills               本机项目技能(随本机项目)
@@ -1255,8 +1283,13 @@ async function doEnsureSearchTools() {
   const present: Record<string, boolean> = {};
   for (const bin of ['rg', 'grep', 'python3', 'python', 'busybox']) present[bin] = await probe(which(bin));
   log('info', `搜索工具: rg=${present.rg ? '✓' : '—'} grep=${present.grep ? '✓' : '—'} python=${present.python3 || present.python ? '✓' : '—'} busybox=${present.busybox ? '✓' : '—'}`);
-  // 已有任一可用搜索工具(rg 最优,其次 grep/python/busybox)即满足搜索链路,无需安装
-  if (present.rg || present.grep || present.python3 || present.python || present.busybox) return { ok: true, installed: [] };
+  // 已有任一可用搜索工具(rg 最优,其次 grep/python/busybox)即满足搜索链路,无需安装。
+  // 同时刷新探测缓存:否则首次探测失败的 null 会被永久缓存,即使远程其实有工具,
+  // search_code 兜底调用本函数也因"未安装任何东西"不清缓存,导致一直误报"未找到搜索工具"。
+  if (present.rg || present.grep || present.python3 || present.python || present.busybox) {
+    clearSearchEngine();
+    return { ok: true, installed: [] };
+  }
 
   // 权限:root 直接装;非 root 需免密 sudo(-n 不交互,避免安装卡在密码输入)
   const uid = await ssh.execBackground('id -u', { timeout: 8000 });

@@ -34,13 +34,14 @@ export const AGENT = {
   MAX_ITERS: 500,              // 单轮对话最大工具迭代次数(全局默认;前端不再单独编辑覆盖)
   TOOL_RESULT_MAX_CHARS: 60_000,
   HISTORY_BUDGET_CHARS: 180_000,
-  CONCURRENT_TOOL_CALLS: false, // 串行执行,便于观察
-  // 自动续推(移植自 deepseek-harness 的 goal-round-driver + tool-goal authority):
+  CONCURRENT_TOOL_CALLS: true,  // 并行执行工具调用( 的有界滚动池,设 false 回退串行)
+  MAX_PARALLEL_TOOL_CALLS: 4,   // 并行工具调用并发上限(bounded rolling pool,串行模式忽略)
+ 
   GOAL_BLOCKED_AFTER: 3,       // 连续"模型宣称完成但任务计划仍有未完成项"达到该次数即停止续推,防死循环
   GOAL_ROUND_MAX: 64,          // 单轮内自动续推次数硬上限(防失控,超限按 max-iters 结束)
   CONTINUE_TRUNCATED: true,    // 模型输出因 max_tokens 被截断时自动注入续推消息继续,而非误判为完成
   CHAT_ONLY_TTL_MS: 10 * 60 * 1000, // 工具降级纯对话的失效时间:超时后自动重试工具调用(避免网关临时故障把会话永久打成纯对话)
-  REPEAT_REMIND_THRESHOLDS: [3, 5, 8], // 连续相同工具+参数调用达到该次数时注入提醒(移植 harness repeat-tool-reminder)
+  REPEAT_REMIND_THRESHOLDS: [3, 5, 8], // 连续相同工具+参数调用达到该次数时注入提醒(repeat-tool-reminder)
   REPEAT_ARG_PREVIEW: 200      // 重复调用提醒里引用的参数预览上限(字符),防超大参数膨胀
 };
 

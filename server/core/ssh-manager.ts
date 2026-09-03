@@ -40,6 +40,9 @@ export interface ExecOptions {
   onOut?: (d: string) => void;
   onErr?: (d: string) => void;
   maxOutput?: number;
+  // true 时绕过 execQueue 串行队列,直接走 ssh2 多路 exec 通道并行执行
+  // (agent 并行工具调用用;命令台/RPC 等外部命令保持默认串行)
+  concurrent?: boolean;
 }
 
 export interface ExecResult {
@@ -238,9 +241,12 @@ export class SshConnection extends EventEmitter {
 
   // ---------- 命令执行 ----------
   // 返回 ExecResult ;onOut/onErr 实时回调;截断已处理
-  exec(cmd: string, { runId, timeout, onOut, onErr, maxOutput = EXEC.MAX_OUTPUT_CHARS }: ExecOptions = {}): Promise<ExecResult> {
-    // 串行队列,避免并发通道互相干扰
-    const run = this.execQueue.then(() => this._execRaw(cmd, { runId, timeout, onOut, onErr, maxOutput }));
+  // concurrent=true 时绕过串行队列:ssh2 支持同连接多路 exec 通道并行,
+  // 供 agent 并行工具调用(多批 run_command 同时执行)使用,不互相阻塞。
+  exec(cmd: string, { concurrent, ...rest }: ExecOptions = {}): Promise<ExecResult> {
+    if (concurrent) return this._execRaw(cmd, rest);
+    // 串行队列,避免并发通道互相干扰(命令台/RPC 等外部命令默认走这里)
+    const run = this.execQueue.then(() => this._execRaw(cmd, rest));
     this.execQueue = run.catch(() => {});
     return run;
   }
@@ -528,6 +534,19 @@ export class SshConnection extends EventEmitter {
     return { src, dst };
   }
 
+  // 重命名(原子 rename,不经过复制);目标已存在时报错,不静默覆盖
+  async renamePath(src: string, dst: string): Promise<{ src: string; dst: string }> {
+    src = normalizeRemote(src);
+    dst = normalizeRemote(dst);
+    if (src === '/') throw new Error('不能重命名根目录');
+    if (src === dst) throw new Error('新名称与旧名称相同');
+    if (!(await this.atype(src))) throw new Error(`源不存在: ${src}`);
+    if (await this.atype(dst)) throw new Error(`目标已存在: ${dst}`);
+    if (!this.sftp) throw new Error('SFTP 未就绪');
+    await call((cb) => this.sftp!.rename(src, dst, cb));
+    return { src, dst };
+  }
+
   async _copyFile(src: string, dst: string): Promise<void> {
     if (!this.sftp) throw new Error('SFTP 未就绪');
     await this.mkdirp(remoteDirName(dst));
@@ -759,6 +778,7 @@ export class SshManager extends EventEmitter {
   atype(p: string) { return this._act('atype', p); }
   rmdirRecursive(p: string, cb?: (cur: string) => void, allow?: boolean) { return this._act('rmdirRecursive', p, cb, allow); }
   copyPath(s: string, d: string, o?: any) { return this._act('copyPath', s, d, o); }
+  renamePath(s: string, d: string) { return this._act('renamePath', s, d); }
   exec(cmd: string, o?: ExecOptions) { return this._act('exec', cmd, o); }
   execBackground(cmd: string, o?: ExecOptions) { return this._act('execBackground', cmd, o); }
   shell(o?: any) { return this._act('shell', o); }

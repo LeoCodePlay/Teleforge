@@ -1,5 +1,5 @@
 // 工具插件启用/禁用持久化(设置 → 工具插件):
-// 参照 deepseek-harness 的插件可配置启停(cordis 插件禁用配置)——被禁用的工具
+//  的插件可配置启停(cordis 插件禁用配置)——被禁用的工具
 // 不进入 schemas() 投影,模型看不到也无法调用;执行管线同样拒绝,双保险。
 // 存储格式:data/agent-tools.json { "disabled": ["write_file", ...] }
 import fs from 'node:fs';

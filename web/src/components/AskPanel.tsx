@@ -98,7 +98,7 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
             {total > 1 ? ` · 第 ${qIndex + 1}/${total} 题` : ''} · 已答 {answeredCount}/{total}
           </span>
         </span>
-        <button className="ghost sm" title="取消本次提问(不再作答)" onClick={cancel}>✕</button>
+        <button className="ghost sm" onClick={cancel}>✕</button>
       </div>
 
       <div className="ask-body" key={q.id}>
@@ -147,7 +147,7 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
           <button className="ghost sm" disabled={isFirst} onClick={() => setQIndex(qIndex - 1)}>‹ 上一道</button>
           <div className="ask-dots" aria-hidden>
             {active.questions.map((qn, i) => (
-              <span key={qn.id} className={`ask-dot ${i === qIndex ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`} title={answered(qn) ? '已作答' : '未作答'} />
+              <span key={qn.id} className={`ask-dot ${i === qIndex ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`} data-tip={answered(qn) ? '已作答' : '未作答'} />
             ))}
           </div>
           <button

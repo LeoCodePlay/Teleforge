@@ -1,4 +1,4 @@
-// 用户提问(ask_user_question)能力接缝(设计参照 deepseek-harness 的
+// 用户提问(ask_user_question)能力接缝(设计 的
 // interaction / user-questions + tool-ask-user):
 // - 模型侧工具 ask_user_question 在 tools.js 注册;工具运行时会阻塞到用户回答;
 // - 前端 UI 通过 agent 事件 ask_user 收到题面,作答后经 ws 消息 ask_user_answer 回传;

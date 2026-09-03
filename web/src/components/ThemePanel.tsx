@@ -1,5 +1,5 @@
 // 主题设置面板(位于设置面板中)
-// 集中管理主题:切换三套预设 / 新建 / 编辑 / 删除自定义主题。
+// 集中管理主题:切换预设(深色三套 + 亮色一套)/ 新建 / 编辑 / 删除自定义主题。
 // 主题的 token 定义与持久化逻辑见 ../themes.ts,本组件只负责 UI 与「应用+保存」。
 import React, { useState } from 'react';
 import {
@@ -135,21 +135,20 @@ interface ThemeCardProps {
 
 function ThemeCard({ t, active, onClick, onEdit, onDelete }: ThemeCardProps) {
   return (
-    <div className={'theme-card' + (active ? ' active' : '')} onClick={onClick} title="点击切换该主题">
+    <div className={'theme-card' + (active ? ' active' : '')} onClick={onClick}>
       <div className="tc-head">
         <span className="tc-name">{t.name}</span>
         {t.preset ? <span className="muted sm">预设</span> : active ? <span className="badge ok">使用中</span> : null}
       </div>
       <div className="tc-swatches">
-        <span className="sw" style={{ background: t.bgDeep, borderColor: t.glassBorder }} title="背景" />
-        <span className="sw" style={{ background: t.aurora1 }} title="光斑 1" />
-        <span className="sw" style={{ background: t.accent }} title="强调色" />
-        <span className="sw" style={{ background: t.text }} title="文字色" />
-        <span className="sw" style={{ background: t.green }} title="成功色" />
-        <span className="sw" style={{ background: t.red }} title="危险色" />
+        <span className="sw" style={{ background: t.bgDeep, borderColor: t.glassBorder }} />
+        <span className="sw" style={{ background: t.aurora1 }} />
+        <span className="sw" style={{ background: t.accent }} />
+        <span className="sw" style={{ background: t.text }} />
+        <span className="sw" style={{ background: t.green }} />
+        <span className="sw" style={{ background: t.red }} />
       </div>
       <div className="tc-actions" onClick={(e) => e.stopPropagation()}>
-        {!active && <button className="sm" onClick={onClick}>使用</button>}
         {onEdit && <button className="sm" onClick={onEdit}>编辑</button>}
         {onDelete && <button className="sm danger" onClick={onDelete}>删除</button>}
       </div>

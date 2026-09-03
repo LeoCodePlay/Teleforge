@@ -101,7 +101,7 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
             onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); closeConfirm(false); } }}>
             <div className="modal-head">
               <span>{confirmOpts.title ?? '操作确认'}</span>
-              <button type="button" className="ghost" title="取消" onClick={() => closeConfirm(false)}>✕</button>
+              <button type="button" className="ghost" onClick={() => closeConfirm(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="confirm-msg">{confirmOpts.message}</div>
@@ -122,7 +122,7 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
       {/* 消息弹出:顶部居中堆叠 */}
       <div className="toast-host">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.type}`} title="点击关闭"
+          <div key={t.id} className={`toast ${t.type}`} data-tip="点击关闭"
             onClick={() => setToasts((list) => list.filter((x) => x.id !== t.id))}>
             <span className="toast-ico">{TOAST_ICON[t.type]}</span>
             <span className="toast-content">{t.content}</span>

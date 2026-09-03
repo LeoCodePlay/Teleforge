@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import type { ServerStatus, Session } from './types';
+import type { ServerStatus, Session, SshProfileInfo } from './types';
 import SshConnectModal from './components/SshConnectModal';
 import SessionPanel from './components/SessionPanel';
 import WorkspacePanel from './components/WorkspacePanel';
-import ChatPanel from './components/ChatPanel';
+import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel';
 import ConsolePanel from './components/ConsolePanel';
 import FileViewer from './components/FileViewer';
 import SettingsPanel from './components/SettingsPanel';
+import TooltipHost from './components/Tooltip';
 import { LlmProvider } from './context/llm-context';
 import { useFeedback } from './context/feedback';
 
@@ -63,6 +64,16 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionSeq, setSessionSeq] = useState(0); // 会话切换/新建后自增,触发 ChatPanel 重载
+  // 新建会话草稿态:点击「新建」时先不创建服务端会话(sid=占位符),输入内容按固定键缓存;
+  // 发送首条消息时由 ChatPanel 真正 session_create 并通过 onSessionCreated 回调刷新。
+  const pendingNewRef = useRef(false);
+
+  // 会话操作版本:每次「主动会话操作」(新建/切换/分支/草稿态建会话成功/删除)自增。
+  // 异步 session_list 响应在其发起后若版本已变化,说明期间用户已做了更新的会话操作,
+  // 该响应就是过期快照,丢弃以免把前端视图覆盖回旧会话,导致前端 sid 与后端活跃
+  // 会话失步(后果:发送的消息进后端活跃会话,但事件按 sid 路由被前端过滤,界面无反应)。
+  const opRef = useRef(0);
+  const bumpOp = () => { opRef.current += 1; };
 
   const refreshFrom = (r: any) => {
     setSessions(r.sessions || []);
@@ -77,8 +88,14 @@ export default function App() {
   useEffect(() => {
     if (!scopeKey || scopeKey === prevScopeRef.current) return;
     prevScopeRef.current = scopeKey;
+    const my = opRef.current; // 记录发起时版本:期间用户新建/切换了会话则丢弃过期快照
     api.request('session_list', {}, 8000)
-      .then((r) => { setSessions(r.sessions || []); setActiveSessionId(r.active || null); setSessionSeq((n) => n + 1); })
+      .then((r) => {
+        if (opRef.current !== my) return;
+        setSessions(r.sessions || []);
+        if (!pendingNewRef.current) setActiveSessionId(r.active || null);
+        setSessionSeq((n) => n + 1);
+      })
       .catch(() => {});
   }, [scopeKey]);
 
@@ -87,36 +104,77 @@ export default function App() {
 
   // 初始化拉取会话列表;并按服务端推送的 sessions 快照刷新(新消息/清空后 msgCount 与时间变化)
   useEffect(() => {
+    const my = opRef.current; // 初始快照:用户若在响应到达前新建/切换了会话,则丢弃过期结果
     api.request('session_list', {}, 8000)
-      .then((r) => { setSessions(r.sessions || []); setActiveSessionId(r.active || null); })
+      .then((r) => {
+        if (opRef.current !== my) return;
+        setSessions(r.sessions || []);
+        if (!pendingNewRef.current) setActiveSessionId(r.active || null);
+      })
       .catch(() => {});
     const off = api.on('sessions', (m: any) => {
       setSessions(m.sessions || []);
-      setActiveSessionId(m.active ?? null);
+      // 新会话草稿态(尚未创建服务端会话):忽略服务端推送的 active,避免被拉回旧会话
+      if (!pendingNewRef.current) setActiveSessionId(m.active ?? null);
     });
     // 后台会话任务结束时也会推送 sessions_changed:静默刷新列表,不打扰当前聊天视图
     const offChanged = api.on('agent', (m: any) => {
       if (m.event !== 'sessions_changed') return;
+      const my = opRef.current;
       api.request('session_list', {}, 8000)
-        .then((r) => { setSessions(r.sessions || []); setActiveSessionId(r.active ?? null); })
+        .then((r) => {
+          if (opRef.current !== my) return;
+          setSessions(r.sessions || []);
+          if (!pendingNewRef.current) setActiveSessionId(r.active ?? null);
+        })
         .catch(() => {});
     });
-    return () => { off(); offChanged(); };
+    // 后端重启/WS 断线重连后:后端会话状态(列表/活跃会话)已按磁盘恢复,与前端内存可能脱节。
+    // 重连成功后重新拉取对齐;期间用户已新建/切换过会话(草稿态)则保持不动,避免打断当前操作。
+    const offOpen = api.on('open', () => {
+      const my = opRef.current;
+      api.request('session_list', {}, 8000)
+        .then((r) => {
+          if (opRef.current !== my) return;
+          setSessions(r.sessions || []);
+          if (!pendingNewRef.current) setActiveSessionId(r.active ?? null);
+        })
+        .catch(() => {});
+    });
+    // RPC 同步错误(如 speak 因 LLM 未配置/未选工作区被拒)无 reqId,默认无人处理会静默
+    // 成"发送没反应",这里显式 toast,让失败原因可见
+    const offErr = api.on('server_error', (m: any) => {
+      toast.error(m?.error || '服务器错误');
+    });
+    return () => { off(); offChanged(); offOpen(); offErr(); };
   }, []);
 
-  const refreshSessions = (r: any) => {
+  const refreshSessions = (r: any, opts?: { forceActive?: boolean }) => {
     setSessions(r.sessions || []);
-    setActiveSessionId(r.active ?? null);
+    if (opts?.forceActive || !pendingNewRef.current) setActiveSessionId(r.active ?? null);
     setSessionSeq((n) => n + 1);
   };
-  const newSession = () => api.request('session_create', {}, 8000).then(refreshSessions).catch((e) => toast.error(`新建会话失败: ${(e as Error).message}`));
+  // 新建会话:进入"新会话草稿态"(sid=占位符,不创建服务端会话、不进入历史列表)。
+  // 输入内容按固定键缓存;只有发送首条消息(ChatPanel 内 session_create)后才真正创建并显示到历史列表。
+  const newSession = () => {
+    bumpOp(); // 使在飞 session_list 快照失效,防止旧响应覆盖切回旧会话
+    pendingNewRef.current = true;
+    setActiveSessionId(NEW_SESSION_ID);
+    setSessionSeq((n) => n + 1);
+  };
   // 切换会话(点击当前会话也会重新触发 session_switch + 重载,用于加载失败/进行中时重试)
-  const switchSession = (id: string) => api.request('session_switch', { id }, 8000).then(refreshSessions).catch((e) => toast.error(`切换会话失败: ${(e as Error).message}`));
+  const switchSession = (id: string) => {
+    bumpOp();
+    pendingNewRef.current = false;
+    api.request('session_switch', { id }, 8000).then(refreshSessions).catch((e) => toast.error(`切换会话失败: ${(e as Error).message}`));
+  };
   // 点击其他服务器后台运行的会话:先切回该服务器(conn_switch),再打开该会话。
   // connKey = 服务端作用域键(username@host:port 或 'local');'local' 需断开连接才可达,直接忽略
   const switchForeignSession = (id: string, connKey: string) => {
     if (connKey === scopeKey) { switchSession(id); return; }
     if (connKey === 'local') return;
+    bumpOp();
+    pendingNewRef.current = false;
     const conn = (status.conns || []).find((c) => `${c.username}@${c.host}:${c.port || 22}` === connKey && c.status === 'connected');
     if (!conn) return;
     api.request('conn_switch', { id: conn.id }, 8000)
@@ -126,8 +184,18 @@ export default function App() {
   };
   // 在新对话中分支:克隆当前会话为新会话并切换。at 为 turns 索引时截断到该条消息
   // (用于从任意历史消息处分支),缺省 -1 从尾部整体克隆
-  const forkSession = (at = -1) => api.request('session_fork', { at }, 8000).then(refreshSessions).catch(() => {});
+  const forkSession = (at = -1) => {
+    bumpOp();
+    pendingNewRef.current = false;
+    api.request('session_fork', { at }, 8000).then(refreshSessions).catch(() => {});
+  };
   const renameSession = (id: string, title: string) => api.request('session_rename', { id, title }, 8000).then(refreshSessions).catch(() => {});
+  // 新会话草稿态发送首条消息:ChatPanel 创建服务端会话成功后回调,把会话列入历史列表并激活
+  const handleSessionCreated = (r: any) => {
+    bumpOp();
+    pendingNewRef.current = false;
+    refreshSessions(r, { forceActive: true });
+  };
   const deleteSession = async (id: string) => {
     if (id === activeSessionId) return;
     const ok = await confirm({
@@ -137,6 +205,7 @@ export default function App() {
       danger: true
     });
     if (!ok) return;
+    bumpOp();
     api.request('session_delete', { id }, 8000).then(refreshSessions).catch(() => {});
   };
 
@@ -149,10 +218,41 @@ export default function App() {
     return () => { offStatus(); api.close(); };
   }, []);
 
+  // 活动连接变化(切换/断开)后,远程文件查看器已不属于当前服务器:
+  // 立即关闭,避免看到旧服务器内容或将编辑误保存到新服务器(本地文件不受影响)
+  const prevActiveRef = useRef<string | null>(null);
+  useEffect(() => {
+    const next = status.activeConn ?? null;
+    if (prevActiveRef.current === next) return;
+    prevActiveRef.current = next;
+    setViewer((v) => (v && !v.path.startsWith('local:') ? null : v));
+  }, [status.activeConn]);
+
   const connected = status.status === 'connected';
   // 多连接池:统计当前在线连接数(含活动连接),用于顶栏提示「可快速切换」
   const connCount = (status.conns || []).filter((c) => c.status === 'connected').length;
   const multiConn = connCount > 1;
+
+  // 已保存的 SSH 配置:顶栏连接信息显示「配置名称 · IP」,连接切换/弹窗关闭后刷新
+  const [profiles, setProfiles] = useState<SshProfileInfo[]>([]);
+  useEffect(() => {
+    api.request('ssh_profiles_list', {}, 8000)
+      .then((m) => setProfiles(m.profiles || []))
+      .catch(() => {});
+  }, [status.activeConn, sshOpen]);
+
+  // 活动连接对应的已保存配置(按配置 id 或 host/port/user 兜底匹配),用于顶栏显示服务器名称
+  const activeProfile = useMemo(() => {
+    const c = (status.conns || []).find((x) => x.id === status.activeConn);
+    if (c) {
+      return profiles.find((p) => p.id === c.profileId
+        || (c.host === p.host && String(c.port) === String(p.port || '22') && c.username === p.username)) || null;
+    }
+    if (!status.host) return null;
+    return profiles.find((p) => status.host === p.host
+      && String(status.port || '22') === String(p.port || '22')
+      && status.username === p.username) || null;
+  }, [profiles, status.activeConn, status.conns, status.host, status.port, status.username]);
   // 多会话并行:busySessions 是运行中的会话集合;聊天区只关心"当前活跃会话"是否在运行
   const busySessions = status.busySessions || [];
   const activeBusy = activeSessionId != null && busySessions.includes(activeSessionId);
@@ -196,7 +296,9 @@ export default function App() {
       .then(() => {
         setStatus((s) => ({ ...s, localWorkspace: p }));
         setLocalWs((m) => {
-          const next = [p, ...(m || []).filter((x) => x !== p)];
+          const cur = m || [];
+          // 保持原顺序:已存在则原位不动,新路径追加到末尾(不再"最近用的排最前",避免切换乱序)
+          const next = cur.includes(p) ? cur : [...cur, p];
           saveLocalWs(next);
           return next;
         });
@@ -210,11 +312,12 @@ export default function App() {
     const key = st.host ? `${st.host}:${st.port || 22}` : '';
     if (!key) return;
     setWsByHost((m) => {
-      const list = m[key] ? m[key].filter((x) => x !== ws) : [];
-      list.unshift(ws); // 最近使用的排最前
-      const next = { ...m, [key]: list };
-      saveWsByHost(next);
-      return next;
+      const cur = m[key] || [];
+      // 保持原顺序:已存在则原位不动,新路径追加到末尾(不再"最近用的排最前",避免切换乱序)
+      const next = cur.includes(ws) ? cur : [...cur, ws];
+      const obj = { ...m, [key]: next };
+      saveWsByHost(obj);
+      return obj;
     });
   };
 
@@ -245,28 +348,27 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="topbar-left">
-          <button className="ghost edge-toggle" title={leftOpen ? '收起左侧栏' : '展开左侧栏'} onClick={() => setLeftOpen((v) => !v)}>{leftOpen ? '◀' : '▶'}</button>
+          <button className="ghost edge-toggle" data-tip={leftOpen ? '收起左侧栏' : '展开左侧栏'} onClick={() => setLeftOpen((v) => !v)}>{leftOpen ? '◀' : '▶'}</button>
           <div className="brand"><img className="brand-logo" src="/logo-64.png" alt="" /> Teleforge</div>
         </div>
         <div className="topbar-right">
           <button
             className={`conn-chip ${connected ? 'ok' : status.status === 'disconnected' ? 'off' : 'warn'}`}
-            title="SSH 连接管理"
             onClick={() => setSshOpen(true)}
           >
             {connected
-              ? `● 已连接 ${status.username}@${status.host}${multiConn ? ` · 在线${connCount}台(点开可切换)` : ''}`
+              ? `● 已连接 ${activeProfile?.name ? `${activeProfile.name} · ${status.host}` : status.host}${multiConn ? ` · 在线${connCount}台(点开可切换)` : ''}`
               : status.status === 'disconnected'
                 ? '● 未连接 · 点击 SSH 连接'
                 : `● ${STATUS_LABEL[status.status] || status.status}`}
           </button>
-          <button className="ghost edge-toggle" title="设置" onClick={() => setSettingsOpen(true)}>⚙</button>
+          <button className="ghost edge-toggle settings-btn" onClick={() => setSettingsOpen(true)}>⚙</button>
         </div>
       </header>
 
       <div className="layout">
         <aside ref={leftRef} style={{ width: leftWidth }} className={`sidebar sidebar-left ${leftOpen ? '' : 'hidden'}`}>
-          <div className="resizer" title="拖动调整宽度" onPointerDown={startResize} />
+          <div className="resizer" data-tip="拖动调整宽度" onPointerDown={startResize} />
           <SessionPanel
             sessions={sessions}
             activeId={activeSessionId}
@@ -283,6 +385,7 @@ export default function App() {
             connected={connected}
             workspace={status.workspace}
             home={status.home}
+            connId={status.activeConn ?? null}
             localWorkspace={status.localWorkspace}
             localHome={status.localHome}
             localCwd={localCwd}
@@ -309,11 +412,12 @@ export default function App() {
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
               localHome={status.localHome} savedLocalWs={localWs}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
-              onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession} />
+              onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}
+              onSessionCreated={handleSessionCreated} />
             )}
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
             <div className={`tab-pane ${activeTab === 'console' ? '' : 'hide'}`}>
-              <ConsolePanel connected={connected} visible={activeTab === 'console'} activeConn={status.activeConn ?? null} />
+              <ConsolePanel connected={connected} visible={activeTab === 'console'} activeConn={status.activeConn ?? null} hostIp={status.host} />
             </div>
           </div>
         </main>
@@ -322,6 +426,7 @@ export default function App() {
       {viewer && <FileViewer path={viewer.path} name={viewer.name} onClose={() => setViewer(null)} />}
       {settingsOpen && <SettingsPanel connected={connected} onClose={() => setSettingsOpen(false)} />}
       {sshOpen && <SshConnectModal status={status} onClose={() => setSshOpen(false)} />}
+      <TooltipHost />
     </div>
     </LlmProvider>
   );

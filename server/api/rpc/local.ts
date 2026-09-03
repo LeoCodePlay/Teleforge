@@ -52,6 +52,12 @@ export function registerLocal(rpc: RpcModule) {
     reply({ type: 'local_copied', ...r });
   });
 
+  rpc.register('local_rename', async (msg, { reply }) => {
+    if (!msg.src || !msg.dst) throw new Error('缺少 src 或 dst');
+    const r = await localFs.renamePath(msg.src, msg.dst);
+    reply({ type: 'local_renamed', ...r });
+  });
+
   rpc.register('set_local_workspace', async (msg, { reply, emitStatus }) => {
     // 原 ws.js set_local_workspace case(372-381)逐字复制
     const st = await localFs.stat(msg.path);

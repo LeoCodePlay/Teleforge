@@ -39,20 +39,32 @@ export interface ContextBreakdown {
  * - system:系统提示词 + 工具 schema(固定近似)
  * - tools:历史中的工具调用(schema 之外)与工具执行结果消息
  * - conversation:用户/助手正文消息 + 当前输入框内容
+ *
+ * 分类按"段"而非"整条消息":一条 assistant 回复往往同时含 思考/正文/工具组,
+ * 若按消息判断(任一段为 tools 即整条归工具),正文会被误计入工具调用。
  */
 export function estimateBreakdown(msgs: unknown[], input: unknown): ContextBreakdown {
   let tools = 0;
   let conversation = 0;
+  const estOf = (v: unknown) => estimateTokens(v) + MSG_OVERHEAD;
   for (const m of msgs || []) {
-    const obj = m as { role?: string; segments?: Array<{ kind?: string }>; tool_calls?: unknown } | null;
-    let json: string;
-    try { json = JSON.stringify(m); } catch { json = ''; }
-    const est = estimateTokens(json) + MSG_OVERHEAD;
-    const isToolSide = obj?.role === 'tool'
-      || !!obj?.tool_calls
-      || (Array.isArray(obj?.segments) && obj.segments.some((s) => s?.kind === 'tools'));
-    if (isToolSide) tools += est;
-    else conversation += est;
+    const obj = m as { role?: string; content?: unknown; segments?: Array<{ kind?: string; text?: string; tools?: unknown }>; tool_calls?: unknown } | null;
+    // 纯工具执行结果消息:整条归工具
+    if (obj?.role === 'tool') {
+      tools += estOf(m);
+      continue;
+    }
+    // 带分段的渲染消息:思考/正文归对话,工具组归工具
+    if (Array.isArray(obj?.segments) && obj.segments.length) {
+      for (const s of obj.segments) {
+        if (s?.kind === 'tools') tools += estOf(s.tools);
+        else conversation += estOf(s?.text ?? '');
+      }
+      continue;
+    }
+    // 无分段:仅含 tool_calls 的消息归工具,其余(user/纯文本 assistant/notice 等)归对话
+    if (!!obj?.tool_calls) tools += estOf(m);
+    else conversation += estOf(m);
   }
   conversation += estimateTokens(String(input ?? '')) + MSG_OVERHEAD;
   return { system: SYSTEM_EST, tools, conversation };

@@ -98,7 +98,7 @@ export default function GlassSelect({
   return (
     <div ref={ref} onKeyDown={onKeyDown}
       className={`gselect ${open ? 'open' : ''} ${className || ''} ${full ? 'full' : ''}`}>
-      <button type="button" className="gselect-trigger" disabled={disabled} title={title}
+      <button type="button" className="gselect-trigger" disabled={disabled} data-tip={title}
         onClick={() => { if (!disabled) { setHl(null); setOpen((v) => !v); } }}>
         <span className="gselect-val">{selected ? selected.label : placeholder}</span>
         <span className="gselect-arrow">▾</span>

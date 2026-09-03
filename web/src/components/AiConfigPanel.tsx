@@ -1,5 +1,6 @@
 // AI 模型 · 提供商配置面板(位于设置面板中)
-// 布局:我的提供商列表(使用中置顶,增删改复制) → 预置提供商快速切换
+// 布局:我的提供商列表(使用中置顶,增删改复制);预置提供商不单独展示,
+// 仅作为「添加提供方」弹窗里的快速填充模板(预置了标准接口地址,免手输 Base URL)
 // 状态与聊天输入框下方的切换器共享(见 llm-context.tsx)
 import React, { useMemo, useState } from 'react';
 import { useLlm } from '../context/llm-context';
@@ -27,7 +28,7 @@ export default function AiConfigPanel() {
 
   return (
     <div>
-      {llm.err && <div className="error" onClick={() => llm.setErr('')} title="点击关闭">✕ {llm.err}</div>}
+      {llm.err && <div className="error" onClick={() => llm.setErr('')}>✕ {llm.err}</div>}
 
       {/* ---- 我的提供商列表(使用中置顶,点击卡片切换为当前使用) ---- */}
       <div className="panel-title row">
@@ -47,25 +48,12 @@ export default function AiConfigPanel() {
             onCopy={() => duplicateProvider(p.id)}
             onDelete={() => removeProvider(p.id)} />
         ))}
-        <button className="provider-add" onClick={() => setModal({})} title="添加自定义提供商">
+        <button className="provider-add" onClick={() => setModal({})}>
           <span className="pa-icon">＋</span> 添加提供方
         </button>
       </div>
 
-      {/* ---- 预置提供商快速切换 ---- */}
-      <div className="panel-title row">
-        <span>预置提供商</span>
-        <span className="grow" />
-        <span className="muted sm">点击直接切换</span>
-      </div>
-      <div className="provider-chips">
-        {PROVIDERS.map((p) => (
-          <button key={p.id} className={providerId === p.id ? 'on' : ''}
-            title={p.note ? `${p.baseUrl}\n${p.note}` : p.baseUrl}
-            onClick={() => switchProvider(p.id)}>{p.name}</button>
-        ))}
-      </div>
-
+      {/* ---- 预置提供商不单独展示:预置仅是模板(标准接口地址),添加提供方时可快速填充 ---- */}
       {/* 添加 / 编辑提供商弹窗 */}
       {modal && (
         <ProviderModal
@@ -90,12 +78,12 @@ interface ProviderCardProps {
 
 function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete }: ProviderCardProps) {
   return (
-    <div className={'provider-card' + (active ? ' active' : '')} onClick={onUse} title="点击切换为当前使用">
+    <div className={'provider-card' + (active ? ' active' : '')} onClick={onUse}>
       <div className="pc-head">
         <span className="pc-name">{p.name}</span>
         {active && <span className="badge ok">使用中</span>}
       </div>
-      <div className="pc-url" title={p.baseUrl}>{p.baseUrl}</div>
+      <div className="pc-url">{p.baseUrl}</div>
       <div className="pc-meta">
         <span>{p.models.length > 0 ? `${p.models.length} 个模型` : '无模型(手动输入)'}</span>
         <span>{p.apiKey ? 'Key 已配置' : '未配置 Key'}</span>
@@ -281,7 +269,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                   const fmt = (n?: number) => (n ? (n >= 1000000 ? (n / 1000000) + 'M' : n >= 1000 ? (n / 1000) + 'k' : String(n)) : '');
                   return (
                     <div key={m} className="model-config-row">
-                      <span className="mc-name" title={m}>{m}</span>
+                      <span className="mc-name" data-tip={m}>{m}</span>
                       <label className="mc-field">
                         <span>上下文</span>
                         <input type="number" min={0} step={1000}
@@ -296,7 +284,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                           placeholder={dflt.maxTokens ? '默认 ' + fmt(dflt.maxTokens) : '默认'}
                           onChange={(e) => updateModelCfg(m, 'maxTokens', e.target.value)} />
                       </label>
-                      <button className="mc-remove" title="移除" onClick={() => toggleModel(m)}>✕</button>
+                      <button className="mc-remove action-icon danger" onClick={() => toggleModel(m)}>✕</button>
                     </div>
                   );
                 })}

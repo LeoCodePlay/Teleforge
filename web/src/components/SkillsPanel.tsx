@@ -123,7 +123,7 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
       </div>
       {/* 筛选工具条:改用统一的 GlassSelect 组件;数量放入菜单 hint,选项文字不再挤占标题行 */}
       <div className="skill-toolbar row">
-        <GlassSelect className="skill-filter" value={filter} onChange={(v) => setFilter(v)} title="按来源筛选"
+        <GlassSelect className="skill-filter" value={filter} onChange={(v) => setFilter(v)}
           options={[
             { value: 'all', label: '全部技能', hint: `${counts.all} 个` },
             { value: 'local', label: '本机 · 项目/用户级', hint: `${counts.local} 个` },
@@ -141,13 +141,16 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
         同名时 项目级(远程) &gt; 工作区级(本机) &gt; 项目级(本机) &gt; 用户级(远程) &gt; 用户级(本机) &gt; 内置。
         本机技能无需 SSH 即可创建/编辑,内置技能可复制到任意级别后编辑。
       </div>
-      {err && <div className="error" onClick={() => setErr('')} title="点击关闭">✕ {err}</div>}
+      {err && <div className="error" onClick={() => setErr('')}>✕ {err}</div>}
 
       <div className="provider-list">
+        <button className="provider-add" onClick={() => setModal({})}>
+          <span className="pa-icon">＋</span> 新建技能
+        </button>
         {loading && skills.length === 0 && <div className="provider-empty">正在扫描技能目录…</div>}
         {!loading && shown.length === 0 && <div className="provider-empty">该分类下暂无技能</div>}
         {shown.map((s) => (
-          <div key={`${s.source}:${s.name}`} className="skill-card" title={s.file}>
+          <div key={`${s.source}:${s.name}`} className="skill-card">
             <div className="pc-head">
               <span className="pc-name">{s.name}</span>
               <span className={`badge ${s.source === 'builtin' ? '' : s.source === 'local-project' || s.source === 'project' ? 'ok' : 'warn'}`}>
@@ -159,23 +162,20 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
             <div className="pc-actions">
               {s.source === 'builtin' ? (
                 <>
-                  <button className="sm" disabled={!connected} title={connected ? '复制到远程项目级后可在远程编辑(其他工作区不可见)' : '先连接 SSH'} onClick={() => onCopyBuiltin(s, 'project')}>复制→远程项目级</button>
-                  <button className="sm" disabled={!connected} title={connected ? '复制到远程用户级后可在远程编辑(跨工作区共享)' : '先连接 SSH'} onClick={() => onCopyBuiltin(s, 'user')}>复制→远程用户级</button>
-                  <button className="sm" title="复制到本机工具目录 .agents/skills,无需 SSH" onClick={() => onCopyBuiltin(s, 'local-project')}>复制→本机项目级</button>
-                  <button className="sm" title="复制到本机用户主目录 .agents/skills,无需 SSH" onClick={() => onCopyBuiltin(s, 'local-user')}>复制→本机用户级</button>
+                  <button className="sm" disabled={!connected} onClick={() => onCopyBuiltin(s, 'project')}>复制→远程项目级</button>
+                  <button className="sm" disabled={!connected} onClick={() => onCopyBuiltin(s, 'user')}>复制→远程用户级</button>
+                  <button className="sm" onClick={() => onCopyBuiltin(s, 'local-project')}>复制→本机项目级</button>
+                  <button className="sm" onClick={() => onCopyBuiltin(s, 'local-user')}>复制→本机用户级</button>
                 </>
               ) : (
                 <>
                   <button className="sm" onClick={() => setModal({ skill: s })}>编辑</button>
-                  <button className="sm" disabled={!connected && !isLocal(s.source)} title={isLocal(s.source) ? '删除本机技能文件' : '先连接 SSH'} onClick={() => onDelete(s)}>删除</button>
+                  <button className="sm" disabled={!connected && !isLocal(s.source)} onClick={() => onDelete(s)}>删除</button>
                 </>
               )}
             </div>
           </div>
         ))}
-        <button className="provider-add" onClick={() => setModal({})}>
-          <span className="pa-icon">＋</span> 新建技能
-        </button>
       </div>
 
       {modal && (

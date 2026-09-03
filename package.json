@@ -16,7 +16,7 @@
     "build": "vite build --config web/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json",
     "start": "node server/index.ts",
-    "test": "node test/agent-history.test.js && node test/agent-continue.test.js && node test/session-scope.test.js && node test/compact.test.js && node test/local-fs.test.js && node test/local-exec.test.js && node test/transfer.test.js && node test/ssh-read-maxbytes.test.js && node test/agent-local.test.js && node test/skills-catalog.test.js && node test/env-tools.test.js && node test/e2e.js && node test/rpc-registry.test.js"
+    "test": "node test/agent-history.test.js && node test/agent-continue.test.js && node test/session-scope.test.js && node test/tool-parallel.test.js && node test/compact.test.js && node test/local-fs.test.js && node test/local-exec.test.js && node test/transfer.test.js && node test/ssh-read-maxbytes.test.js && node test/agent-local.test.js && node test/skills-catalog.test.js && node test/env-tools.test.js && node test/verify-search-fix.test.js && node test/e2e.js && node test/rpc-registry.test.js"
   },
   "dependencies": {
     "@fastify/middie": "^9.3.3",
@@ -27,6 +27,7 @@
     "fastify": "^5.12.1",
     "marked": "^18.0.11",
     "multer": "^1.4.5-lts.2",
+    "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "ssh2": "^1.16.0",

@@ -21,6 +21,25 @@ function check(name, cond, extra = '') {
   else { fail++; console.log(`  ✗ ${name} ${extra}`); }
 }
 
+// 校验 tar 流内每个条目头校验和(按解包器算法:校验和区视为空格后求和),防止校验和错误导致解压为空
+const tarChecksumsValid = (buf) => {
+  let off = 0;
+  const zero = Buffer.alloc(512);
+  while (off + 512 <= buf.length) {
+    const h = buf.subarray(off, off + 512);
+    if (h.equals(zero)) { off += 512; continue; }
+    const stored = parseInt(h.subarray(148, 154).toString('ascii'), 8);
+    const tmp = Buffer.from(h);
+    tmp.fill(0x20, 148, 156);
+    let sum = 0;
+    for (let i = 0; i < 512; i++) sum += tmp[i];
+    if (stored !== sum) return false;
+    const size = parseInt(h.subarray(124, 136).toString('ascii'), 8) || 0;
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return off === buf.length;
+};
+
 // ---- 简易 ws 客户端 ----
 function wsClient(url) {
   const ws = new WebSocket(url);
@@ -182,6 +201,7 @@ async function main() {
     check('tar 包含目录项(folder/)', gun.includes(Buffer.from('folder/')), '');
     check('tar 包含文件内容(nested-a)', gun.includes(Buffer.from('nested-a')), '');
     check('tar 包含新上传内容(into-dir)', gun.includes(Buffer.from('into-dir')), '');
+    check('tar 所有条目校验和合法(解压器可识别)', tarChecksumsValid(gun), '');
 
     // 多选打包下载:多个 path 打包到一个 tar.gz(置于 download/ 下)
     const dlMulti = await fetch(`http://127.0.0.1:${APP_PORT}/api/downloaddir?path=${encodeURIComponent('/src/up/hello.txt')}&path=${encodeURIComponent('/src/main.js')}`);
@@ -191,7 +211,48 @@ async function main() {
       check('多选包含 download/hello.txt 条目', mGun.includes(Buffer.from('download/hello.txt')), '');
       check('多选包含 download/main.js 条目', mGun.includes(Buffer.from('download/main.js')), '');
       check('多选包含各文件内容', mGun.includes(Buffer.from('upload-single')) && mGun.includes(Buffer.from('const greeting')), '');
+      check('多选 tar 所有条目校验和合法', tarChecksumsValid(mGun), '');
     }
+  }
+
+  // 6.6.5 重命名(rename/local_rename)
+  console.log('== 测试重命名 ==');
+  {
+    // 文件重命名:旧名消失、新名出现
+    const rn = await ws.request('rename', { src: '/src/main-copy.js', dst: '/src/main-renamed.js' });
+    const rnList = await ws.request('list_dir', { path: '/src' });
+    check('重命名文件生效(旧名消失/新名出现)',
+      rn.type === 'renamed'
+      && rnList.entries.some((e) => e.name === 'main-renamed.js' && e.type === 'file')
+      && !rnList.entries.some((e) => e.name === 'main-copy.js'),
+      JSON.stringify(rn) + ' ' + JSON.stringify(rnList.entries.map((e) => e.name)));
+
+    // 目录重命名
+    await ws.request('rename', { src: '/src/up-copy', dst: '/src/up-copy2' });
+    const rnDir = await ws.request('list_dir', { path: '/src/up-copy2' });
+    check('重命名文件夹生效(内容保留)', rnDir.entries && rnDir.entries.some((e) => e.name === 'hello.txt'), JSON.stringify(rnDir.entries));
+
+    // 目标已存在 -> 报错,不覆盖
+    const rnConflict = await ws.request('rename', { src: '/src/main.js', dst: '/src/main-renamed.js' });
+    check('重命名目标已存在时报错', rnConflict.type === 'error' && (rnConflict.error || '').includes('目标已存在'), JSON.stringify(rnConflict));
+
+    // 同名(源=目标)报错
+    const rnSame = await ws.request('rename', { src: '/src/main.js', dst: '/src/main.js' });
+    check('重命名同名报错', rnSame.type === 'error', JSON.stringify(rnSame));
+
+    // 源不存在报错
+    const rnMissing = await ws.request('rename', { src: '/src/nope.js', dst: '/src/whatever.js' });
+    check('重命名源不存在报错', rnMissing.type === 'error', JSON.stringify(rnMissing));
+
+    // 本地重命名
+    const lws2 = path.join(ROOT, 'localws2');
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(lws2, { recursive: true });
+    fs.writeFileSync(path.join(lws2, 'a.txt'), 'x');
+    await ws.request('local_rename', { src: path.join(lws2, 'a.txt'), dst: path.join(lws2, 'b.txt') });
+    check('本地重命名生效', fs.existsSync(path.join(lws2, 'b.txt')) && !fs.existsSync(path.join(lws2, 'a.txt')));
+    const rnLocalMissing = await ws.request('local_rename', { src: path.join(lws2, 'a.txt'), dst: path.join(lws2, 'c.txt') });
+    check('本地重命名源不存在报错', rnLocalMissing.type === 'error' && (rnLocalMissing.error || '').includes('源不存在'), JSON.stringify(rnLocalMissing));
   }
 
   // 6.65 本地文件浏览/读写/工作区(服务端 fs 直读写,无需 SSH)

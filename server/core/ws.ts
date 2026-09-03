@@ -10,7 +10,10 @@ import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { Server, IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
+import { spawnSync } from 'node:child_process';
 import type { ClientChannel } from 'ssh2';
+import * as pty from 'node-pty';
+import type { IPty } from 'node-pty';
 import type { SshConnection } from './ssh-manager.ts';
 import { WS_MAX_PAYLOAD } from '../config.ts';
 import { createRpcRouter } from '../api/rpc/router.ts';
@@ -137,37 +140,83 @@ export function setupWs(httpServer: Server) {
   });
 
   // ---------- 交互式终端通道(/ws/term) ----------
-  // 每个连接对应一个远程 PTY shell;连接关闭即关闭 shell。
-  // 文本帧(JSON):start {cols,rows} / resize {cols,rows}
+  // 每个连接对应一个可切换模式(remote=远程 SSH PTY / local=本机 shell)的会话;连接关闭即关闭会话。
+  // start 消息携带 mode 字段:缺省为 remote(保持旧行为)。
+  // 文本帧(JSON):start {mode,cols,rows} / resize {cols,rows} / kill
   // 二进制帧:客户端键盘输入 -> shell;shell 输出 -> 客户端屏幕
   termWss.on('connection', (ws: WebSocket) => {
-    let stream: ClientChannel | null = null; // 当前 shell 通道
+    let stream: ClientChannel | null = null; // 远程 PTY shell 通道
+    let localPty: IPty | null = null;        // 本机 shell 进程(ConPTY 真终端)
     let closed = false;
 
     const sendJson = (o: any) => { try { ws.send(JSON.stringify(o)); } catch {} };
+    const isLocalAlive = () => localPty !== null;
     const closeStream = () => {
-      if (!stream) return;
-      const s = stream; stream = null;
-      try { s.close(); } catch {}
-      try { s.end?.(); } catch {}
+      if (stream) {
+        const s = stream; stream = null;
+        try { s.close(); } catch {}
+        try { s.end?.(); } catch {}
+      }
+      if (localPty) {
+        const p = localPty; localPty = null;
+        try { p.kill(); } catch {}
+      }
+    };
+
+    // 打开本机交互式终端:node-pty(Windows 走 ConPTY)起真实终端,
+    // 回显/回车/方向键历史/Tab 补全等由 OS 终端层处理,前端 xterm 直接透传。
+    // cwd 默认本地工作区,未设置则回退到服务器进程工作目录。
+    // Windows 优先 PowerShell(pwsh 7 排最前,其次系统自带 powershell.exe),都无再回退 cmd。
+    const pickWinShell = (): string => {
+      const probe = (name: string) => {
+        try { return spawnSync(name, ['-NoProfile', '-Command', 'exit 0'], { stdio: 'ignore' }).status === 0; }
+        catch { return false; }
+      };
+      if (probe('pwsh')) return 'pwsh';
+      if (probe('powershell.exe')) return 'powershell.exe';
+      return process.env.ComSpec || 'cmd.exe';
+    };
+    const startLocal = (cols: number, rows: number) => {
+      if (localPty) return; // 已有会话
+      const isWin = process.platform === 'win32';
+      const shell = isWin ? pickWinShell() : (process.env.SHELL || 'bash');
+      // 默认 cwd:已选择本地工作区则用工作区,否则回退到用户家目录(而非服务进程目录)
+      const cwd = localFs.workspace || localFs.home;
+      let term: IPty;
+      try {
+        term = pty.spawn(shell, [], {
+          name: 'xterm-256color',
+          cols, rows,
+          cwd,
+          env: process.env as NodeJS.ProcessEnv
+        });
+      } catch (e: any) { sendJson({ type: 'error', error: `打开本地终端失败: ${e.message}` }); return; }
+      localPty = term;
+      term.onData((d: string) => { if (ws.readyState === 1) { try { ws.send(Buffer.from(d)); } catch {} } });
+      term.onExit(() => { if (localPty === term) { localPty = null; sendJson({ type: 'exit' }); } });
+      sendJson({ type: 'ready' });
     };
 
     ws.on('message', (raw: any, isBinary: boolean) => {
-      // 二进制帧:键盘输入直接进 shell
+      // 二进制帧:键盘输入直接进会话(远程 PTY 或本机 shell 的 stdin)
       if (isBinary) {
-        if (stream && ws.readyState === 1) { try { stream.write(raw); } catch {} }
+        if (ws.readyState !== 1) return;
+        if (stream) { try { stream.write(raw); } catch {} return; }
+        if (isLocalAlive()) { try { localPty!.write(raw.toString('utf8')); } catch {} return; }
         return;
       }
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      const mode = msg.mode === 'local' ? 'local' : 'remote';
 
       if (msg.type === 'start') {
-        if (stream || closed) return; // 已有会话/正在关闭
-        if (!ssh.connected) { sendJson({ type: 'error', error: 'SSH 未连接,无法打开终端' }); return; }
+        if (stream || localPty || closed) return; // 已有会话/正在关闭
         const cols = Math.max(2, Math.min(500, msg.cols | 0 || 80));
         const rows = Math.max(2, Math.min(300, msg.rows | 0 || 24));
+        if (mode === 'local') { startLocal(cols, rows); return; }
+        if (!ssh.connected) { sendJson({ type: 'error', error: 'SSH 未连接,无法打开远程终端' }); return; }
         ssh.shell({ cols, rows }).then((s: ClientChannel) => {
-          if (closed || stream) { try { s.close(); } catch {} return; }
+          if (closed || stream || localPty) { try { s.close(); } catch {} return; }
           stream = s;
           s.on('data', (d: Buffer) => { if (ws.readyState === 1) { try { ws.send(d); } catch {} } });
           // PTY shell 输出走 stdout,stderr 一般为空,保险起见也转发
@@ -182,11 +231,13 @@ export function setupWs(httpServer: Server) {
               : `cd '${ssh.workspace.replace(/'/g, `'\\''`)}'`;
             try { s.write(wsq + '\n'); } catch {}
           }
-        }).catch((e: any) => sendJson({ type: 'error', error: `打开终端失败: ${e.message}` }));
+        }).catch((e: any) => sendJson({ type: 'error', error: `打开远程终端失败: ${e.message}` }));
       } else if (msg.type === 'resize') {
         const cols = Math.max(2, Math.min(500, msg.cols | 0 || 80));
         const rows = Math.max(2, Math.min(300, msg.rows | 0 || 24));
+        // 远程 PTY 与本地 ConPTY 均支持实时 resize(本机早期管道版曾忽略,现已支持)
         try { stream?.setWindow(rows, cols, 0, 0); } catch {}
+        try { localPty?.resize(cols, rows); } catch {}
       } else if (msg.type === 'kill') {
         // 关闭当前 shell(前端"重启终端"用),close 事件会回发 exit
         closeStream();

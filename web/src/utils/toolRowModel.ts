@@ -28,6 +28,7 @@ const TOOL_VARIANTS: Record<string, ToolRowVariant> = {
   write_file: 'write', write_local_file: 'write',
   edit_file: 'edit', edit_local_file: 'edit',
   search_code: 'search', search_local_code: 'search',
+  web_search: 'search',
   todo_write: 'todo', ask_user_question: 'ask',
   skill: 'others', available_skills: 'others',
 };
@@ -40,6 +41,7 @@ const TOOL_TITLES: Record<string, string> = {
   write_file: '写入文件', write_local_file: '写入本机文件',
   edit_file: '编辑文件', edit_local_file: '编辑本机文件',
   search_code: '搜索代码', search_local_code: '搜索本机代码',
+  web_search: '网络搜索',
   todo_write: '任务计划', ask_user_question: '提问',
   get_workspace_info: '环境信息', get_local_info: '本机环境',
   create_directory: '创建目录', create_local_dir: '创建本机目录',

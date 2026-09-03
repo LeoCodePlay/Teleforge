@@ -6,6 +6,7 @@ interface WorkspacePanelProps {
   connected: boolean;
   workspace: string | null;
   home: string | null;
+  connId: string | null; // 当前活动连接 id,切换服务器时驱动远程文件面板刷新
   localWorkspace: string | null;
   localHome: string | null;
   localCwd: string;
@@ -30,7 +31,7 @@ export default function WorkspacePanel(props: WorkspacePanelProps) {
       </div>
       <div className={`fm-pane ${tab === 'remote' ? '' : 'hide'}`}>
         {!props.connected ? <div className="muted">连接服务器后即可浏览远程目录</div>
-          : <FileManager workspace={props.workspace} home={props.home} localCwd={props.localCwd} onCwdChange={props.onRemoteCwdChange} onOpenFile={props.onOpenFile} />}
+          : <FileManager workspace={props.workspace} home={props.home} connId={props.connId} localCwd={props.localCwd} onCwdChange={props.onRemoteCwdChange} onOpenFile={props.onOpenFile} />}
       </div>
       <div className={`fm-pane ${tab === 'local' ? '' : 'hide'}`}>
         {/* 本地文件:未选工作区时默认显示本地家目录(C盘默认文件夹),选择工作区后切到工作区目录 */}

@@ -1,4 +1,4 @@
-// 工具注册表与执行管线(设计参照 deepseek-harness 的 tools 子系统):
+// 工具注册表与执行管线(设计 的 tools 子系统):
 // - register/get/schemas:schemas() 只向模型投影 name/description/parameters 三个
 //   白名单字段,执行函数、超时等宿主元数据绝不进入模型请求。
 // - guard:pre-execute 单调守卫——只能拒绝(返回理由),不能推翻其他守卫的拒绝;

@@ -3,37 +3,54 @@ import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api';
 import { useLlm } from '../context/llm-context';
-import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, SkillInjected } from '../types';
+import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem } from '../types';
 import DirBrowser from './DirBrowser';
 import LocalDirBrowser from './LocalDirBrowser';
-import GlassSelect from './GlassSelect';
+import ModelMenu from './ModelMenu';
 import ContextMeter from './ContextMeter';
 import TodoPanel from './TodoPanel';
 import SlashMenu, { rankSlashItems } from './SlashMenu';
 import type { SlashItem } from './SlashMenu';
-import type { GlassOption } from './GlassSelect';
 import { useFeedback } from '../context/feedback';
 import AskPanel from './AskPanel';
+import QueuePanel, { QueueItem } from './QueuePanel';
 import { ToolCallList } from './ToolCallList';
 import { ReasoningRow } from './ReasoningRow';
 import { refreshOverlayScrollbar } from '../utils/scrollbar-ui';
+
+// 新会话(尚未创建服务端会话)的前端占位 sid:用于"草稿式"新建——
+// 点击「新建」只进入空对话的草稿态,不创建服务端会话、不进入历史列表;
+// 发送首条消息时才真正 session_create,创建后按会话内容出现在历史会话列表。
+export const NEW_SESSION_ID = '__new__';
+
+// 输入草稿缓存:按会话(或"新会话")保存输入框内容,切走再切回可恢复;
+// 存 localStorage,刷新/切换标签页不丢。键 = 会话 id,新会话(尚未创建)用固定键。
+const DRAFT_STORE_KEY = 'sshai.drafts.v1';
+const NEW_DRAFT_KEY = NEW_SESSION_ID;
+function loadDrafts(): Record<string, string> {
+  try {
+    const o = JSON.parse(localStorage.getItem(DRAFT_STORE_KEY) || '{}');
+    return o && typeof o === 'object' ? o : {};
+  } catch { return {}; }
+}
+function saveDrafts(d: Record<string, string>) {
+  try { localStorage.setItem(DRAFT_STORE_KEY, JSON.stringify(d)); } catch {}
+}
+
+// 只取路径最后一段(文件夹名)用于工作区 chip 显示:兼容 / 与 \ 分隔,
+// 忽略末尾分隔符;根目录 / 或盘符根等无上级的路径原样返回。
+function lastPathSegment(p: string): string {
+  const t = p.replace(/[\\/]+$/, '');
+  const i = Math.max(t.lastIndexOf('/'), t.lastIndexOf('\\'));
+  return i >= 0 ? t.slice(i + 1) : p;
+}
 
 // 完整 Markdown 解析(marked + DOMPurify):
 // gfm 支持表格/任务列表等,breaks 保留单换行即换行的聊天习惯;
 // 输出再经 DOMPurify 白名单清洗,AI 内容里即使夹带 HTML 也不会注入。
 const mdParser = new Marked({ gfm: true, breaks: true });
 
-// 推理等级 = 模型的 reasoning_effort 参数,共 6 档:
-// Default(不传,用提供方默认)/ Off(关闭思考,thinking.type=disabled)/
-// Low / High / Xhigh / Max。Off 即关闭思考,无需单独的思考开关。
-const REASONING_LEVELS = [
-  { id: 'default', label: '默认', title: 'DeepSeek v4 显式开启思考(不传 effort);其余模型用提供方默认推理强度' },
-  { id: 'off', label: '关闭', title: '关闭思考模式(thinking.type=disabled),直接作答,最快' },
-  { id: 'low', label: '低', title: 'reasoning_effort=low,轻量推理' },
-  { id: 'high', label: '高', title: 'reasoning_effort=high,标准推理强度' },
-  { id: 'xhigh', label: '较高', title: 'reasoning_effort=xhigh,更强推理' },
-  { id: 'max', label: '最高', title: 'reasoning_effort=max,极限推理,适合复杂 Agent 任务' }
-];
+// 推理等级定义与选择器已迁移到 ModelMenu.tsx(REASONING_LEVELS + 二级菜单)。
 
 // ---------------- markdown 渲染(完整排版,白名单清洗后输出) ----------------
 function renderMarkdown(text = '') {
@@ -60,6 +77,26 @@ function renderAssistantContent(content = '') {
   );
 }
 
+// 用户消息时间戳格式化(按天粒度):
+// - 今天:仅显示 HH:MM
+// - 昨天:显示「昨天 HH:MM」
+// - 前天及更早:显示「M月D日 HH:MM」;跨年时补上「YYYY年」
+function formatMsgTime(ts?: number) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (dayDiff <= 0) return hm; // 今天(或未来的异常时间戳)
+  if (dayDiff === 1) return `昨天 ${hm}`;
+  const date = d.getFullYear() === now.getFullYear()
+    ? `${d.getMonth() + 1}月${d.getDate()}日`
+    : `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${date} ${hm}`;
+}
+
 function AssistantText({ text }: { text: string }) {
   const spans: React.ReactNode[] = [];
   const parts = text.split(/(```[\s\S]*?```)/g);
@@ -72,42 +109,6 @@ function AssistantText({ text }: { text: string }) {
     }
   });
   return <>{spans}</>;
-}
-
-// 已加载技能折叠行(参考 harness ContextInjectionRow 的披露行设计):
-// 折叠头一行带过(图标+标题+分隔点+技能名),点击展开看每个技能的描述与指令预览;
-// 与 ToolRun 共用一套玻璃折叠条视觉,保持对话流内记录组件的一致节奏
-function SkillRun({ skills = [] }: { skills?: SkillInjected[] }) {
-  const [open, setOpen] = useState(false);
-  if (!skills.length) return null;
-  return (
-    <div className="skillrun">
-      <div className="skillrun-head" onClick={() => setOpen(!open)} title={open ? '收起技能详情' : '展开技能详情'}>
-        <span className="tc-arrow">{open ? '▾' : '▸'}</span>
-        <span className="skillrun-title">📚 已加载技能</span>
-        {skills.map((s) => (
-          <span key={s.name} className="skillrun-item">
-            <span className="skillrun-sep" aria-hidden />
-            <code className="skillrun-name">{s.name}</code>
-          </span>
-        ))}
-        <span className="muted">{skills.length > 1 ? `${skills.length} 个技能指令已注入本轮对话` : '技能指令已注入本轮对话'}</span>
-      </div>
-      {open && (
-        <div className="skillrun-body">
-          {skills.map((s) => (
-            <div key={s.name} className="skillrun-card">
-              <div className="skillrun-card-head">
-                <code className="skillrun-name">{s.name}</code>
-                {s.description && <span className="muted">{s.description}</span>}
-              </div>
-              {s.preview && <pre className="skillrun-preview">{s.preview}{s.preview.length >= 600 ? '\n…(完整指令已注入模型上下文)' : ''}</pre>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // 消息操作栏(照搬 deepseek-harness 的 MessageIconActions):
@@ -151,13 +152,13 @@ function MessageActions({ text, onBranch }: {
   };
   return (
     <div className="msg-actions">
-      <button type="button" className="msg-action" aria-label="复制"
-        title={copied ? '已复制' : '复制'} onClick={onCopy}>
+      <button type="button" className="msg-action action-icon" aria-label="复制"
+        data-tip={copied ? '已复制' : '复制'} onClick={onCopy}>
         {copied ? <IconCheck /> : <IconCopy />}
       </button>
       {onBranch && (
-        <button type="button" className="msg-action" aria-label="在新对话中分支"
-          title="在新对话中从此处分支继续(保留此条回复之前的内容,之后另起炉灶)"
+        <button type="button" className="msg-action action-icon" aria-label="在新对话中分支"
+          data-tip="在新对话中分支"
           onClick={onBranch}>
           <IconBranch />
         </button>
@@ -166,22 +167,55 @@ function MessageActions({ text, onBranch }: {
   );
 }
 
-// 把服务端的 skillsInjected 归一化为 SkillInjected[]:
-// 新格式为对象数组(name+description+preview),旧会话可能持久化过纯名字数组(string[]),做兼容
-function normalizeSkills(raw: any): SkillInjected[] {
-  if (!Array.isArray(raw)) return [];
-  const out: SkillInjected[] = [];
-  for (const s of raw) {
-    if (typeof s === 'string') { out.push({ name: s }); continue; }
-    if (s && typeof s === 'object' && typeof s.name === 'string') {
-      out.push({
-        name: s.name,
-        description: s.description ? String(s.description) : '',
-        preview: s.preview ? String(s.preview) : ''
-      });
-    }
-  }
-  return out;
+const IconTrash = () => (
+  <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M2.5 4h11M6.5 4V2.8c0-.4.3-.8.8-.8h1.4c.4 0 .8.4.8.8V4M4 4l.6 8.2c.04.5.45.8.95.8h4.9c.5 0 .9-.3.95-.8L12 4M6.5 7v4M9.5 7v4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+const IconRewind = () => (
+  <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M7 3 3 7l4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M4.5 7H11c1.1 0 2 .9 2 2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+// 用户消息操作栏(位于用户气泡下方,与 AI 回复的操作栏呼应):
+// 纯图标钮,说明文案走悬停 tip:
+// - 复制:复制该条用户消息原文,成功后短暂显示 ✓
+// - 删除:删除这条消息及其对应的整轮回复
+// - 回到本轮对话发起前:把对话回退到这条消息之前(移除它及其之后的所有内容)
+function UserMessageActions({ text, onDelete, onRewind }: {
+  text: string;
+  onDelete: () => void;
+  onRewind: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timerRef.current !== null) clearTimeout(timerRef.current); }, []);
+  const onCopy = async () => {
+    if (copied) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      timerRef.current = setTimeout(() => { timerRef.current = null; setCopied(false); }, 1000);
+    } catch { /* 剪贴板不可用时静默 */ }
+  };
+  return (
+    <div className="msg-actions user-msg-actions">
+      <button type="button" className="msg-action action-icon" aria-label="复制"
+        data-tip={copied ? '已复制' : '复制'} onClick={onCopy}>
+        {copied ? <IconCheck /> : <IconCopy />}
+      </button>
+      <button type="button" className="msg-action action-icon danger" aria-label="删除消息"
+        data-tip="删除消息" onClick={onDelete}>
+        <IconTrash />
+      </button>
+      <button type="button" className="msg-action action-icon" aria-label="回到本轮对话发起前"
+        data-tip="回到本轮对话发起前" onClick={onRewind}>
+        <IconRewind />
+      </button>
+    </div>
+  );
 }
 
 // 区段合并辅助:文本/思考/工具组按到达顺序交替追加;
@@ -214,24 +248,26 @@ function segText(msg: ChatMessage) {
 // 一次 run 的多轮 assistant/tool 在渲染上合并为一条回复,按「思考 / 文本 / 连续工具组」实际发生顺序分段
 function turnsToMessages(turns: any[]): ChatMessage[] {
   const out: ChatMessage[] = [];
+  // 先扫一遍把工具结果聚齐:历史 turns 的顺序是 assistant(含 tool_calls)在前、
+  // tool(执行结果)在后,若边循环边查 map,处理 assistant 时结果还没写入,
+  // 会漏配导致工具永远显示"执行中"。预扫后无论顺序如何都能配对成功。
   const toolById = new Map<string, ToolCallInfo>(); // tool_call_id -> {tool, ok, ms?, result}
+  for (const t of turns) {
+    if (t && t.role === 'tool' && t.tool_call_id) {
+      const id = String(t.tool_call_id);
+      toolById.set(id, { tool: t.tool_name, args: t.tool_args, ok: t.ok ?? true, ms: t.ms, result: t.content || '', meta: t.meta });
+    }
+  }
   for (let ti = 0; ti < turns.length; ti++) {
     const t = turns[ti];
     if (t.role === 'tool') {
-      if (t.tool_call_id) {
-        const id = String(t.tool_call_id);
-        toolById.set(id, { tool: t.tool_name, args: t.tool_args, ok: t.ok ?? true, ms: t.ms, result: t.content || '', meta: t.meta });
-      }
       // 工具结果并入所在回复,该消息的分支点随之推进到这条 turn
       const last = out[out.length - 1];
       if (last) last.forkTail = ti;
       continue; // tool 消息本身不渲染,只作为结果并入上游工具组
     }
     if (t.role === 'user') {
-      out.push({ role: 'user', content: t.content || '', forkTail: ti });
-      // 手动调用技能(/技能名)注入过:紧跟一条"已加载技能"折叠行,历史/分支回放时同样可恢复
-      const sk = normalizeSkills(t.skillsInjected);
-      if (sk.length) out.push({ role: 'skilltag', skills: sk, forkTail: ti });
+      out.push({ role: 'user', content: t.content || '', forkTail: ti, time: t.time });
       continue;
     }
     if (t.role === 'assistant') {
@@ -314,12 +350,42 @@ interface ChatPanelProps {
   onDeleteLocalWs?: (p: string) => void;
   /** 在新对话中分支:由 App 执行 session_fork 并刷新会话(at 为 turns 索引,-1 表示从尾部;缺省时隐藏分支按钮) */
   onFork?: (at: number) => void;
+  /** 新会话草稿态发送首条消息:ChatPanel 先创建服务端会话,成功后回调让 App 刷新会话列表/active/sessionSeq */
+  onSessionCreated?: (r: any) => void;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
+  // 输入草稿:切换会话时保存当前输入、恢复目标会话输入(见 [sessionSeq, sid] effect);
+  // 实时写入 draftsRef 内存 + 防抖落盘 localStorage,发送成功后清除。
+  const draftsRef = useRef<Record<string, string>>(loadDrafts());
+  const inputValueRef = useRef(input); // 渲染期同步,供 effect 读取最新输入
+  inputValueRef.current = input;
+  // 当前输入归属的草稿键:仅显式新建的草稿态(sid='__new__')用固定键,真实会话用 sid;
+  // sid==null(App 初次加载尚未定向会话)时不算草稿键,不读写草稿
+  const currentDraftKey = sid === NEW_SESSION_ID ? NEW_DRAFT_KEY : sid;
+  const prevDraftKeyRef = useRef<string | null>(currentDraftKey); // 上一次 effect 运行的草稿键(即"旧会话")
+  const firstDraftRunRef = useRef(true); // 挂载首帧只恢复草稿,不把空输入写进 localStorage
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistDrafts = () => {
+    if (persistTimer.current) { clearTimeout(persistTimer.current); persistTimer.current = null; }
+    saveDrafts(draftsRef.current);
+  };
+  const schedulePersist = () => {
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(() => saveDrafts(draftsRef.current), 400);
+  };
+  // 统一更新输入 + 同步当前会话草稿(发送/斜杠命令/撤回编辑等程序化写入也走这里)
+  const updateInput = (v: string) => {
+    setInput(v);
+    if (currentDraftKey) {
+      if (v.trim()) draftsRef.current[currentDraftKey] = v;
+      else delete draftsRef.current[currentDraftKey];
+      schedulePersist();
+    }
+  };
   // / 命令菜单(照搬 harness 的行内命令交互):slashOpen=true 时输入以 / 开头,
   // slashQuery 为斜杠后的过滤词;技能候选来自 skills_list(未连接时仍返回内置+本机技能)
   const [slashOpen, setSlashOpen] = useState(false);
@@ -339,6 +405,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   const histCache = useRef(new Map<string, { msgs: ChatMessage[]; todos: TodoItem[] }>());
   // 模型提问挂起(ask_user_question):未作答前锁定输入框与停止按钮
   const [askPending, setAskPending] = useState(false);
+  // 新会话草稿态发送成功后:跳过随后 sid 变化触发的历史回载(首条消息由事件流渲染)
+  const skipHistoryOnceRef = useRef(false);
+  // 待执行消息队列(工作中发送的消息,显示在输入框上方,当前轮结束后按 FIFO 自动执行)
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [reasoning, setReasoning] = useState(() => {
     // 迁移旧设置:以前独立存的 thinkingMode=off 等价于现在的推理等级 off;其余回落到 high/默认
     const tm = localStorage.getItem('sshai.thinkingMode');
@@ -363,15 +433,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   const lastIterRef = useRef(0); // 最近一次 iteration 编号(truncate 重开会重复同值,用于去重)
   const llm = useLlm();
   const { confirm, toast } = useFeedback();
-
-  // 对话提供方下拉:仅显示已保存且配置了 API Key 的提供商;预置提供商只作为添加时的模板,不进切换列表
-  const keyedProviders = llm.userProviders.filter((p) => p.apiKey);
-  const curInKeyed = keyedProviders.some((p) => p.id === llm.providerId);
-  const providerOptions: GlassOption[] = [
-    // 当前使用的提供商若不在列表(如预置未配 Key / mock),置顶显示为占位,提示需配置
-    ...(!curInKeyed ? [{ value: llm.providerId, label: llm.provider.name, hint: llm.isMock ? '联调模式' : '未配 Key', disabled: true }] : []),
-    ...keyedProviders.map((p) => ({ value: p.id, label: `★ ${p.name}`, hint: 'Key ✓' }))
-  ];
 
   // 多会话并行:事件按 sid 路由,本视图只显示当前活跃会话的流
   const activeRef = useRef<string | null>(sid);
@@ -406,16 +467,22 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
       api.on('history_cleared', () => {
         histCache.current.delete(activeRef.current ?? ''); // 清空后旧缓存失效,下次切换重新拉取
         setMessages([]);
+        setQueue([]); // 历史清空:待执行队列一并复位
       }),
       api.on('agent', (m: any) => {
-        // 多会话并行:只处理当前活跃会话的事件,其他会话(后台运行中)的流不进入本视图
-        if (m.sid && activeRef.current && m.sid !== activeRef.current) return;
+        // 多会话并行:只处理当前活跃会话的事件,其他会话(后台运行中)的流不进入本视图;
+        // 新会话草稿态(sid 为占位符或尚未定向)无真实会话,丢弃所有带 sid 的事件,避免串入旧会话流
+        if (m.sid && (activeRef.current == null || activeRef.current === NEW_SESSION_ID || m.sid !== activeRef.current)) return;
         switch (m.event) {
           case 'status':
             setAgentState(m.status === 'running' ? 'working' : 'idle');
             if (m.status !== 'running') {
               push((msgs) => { const c = [...msgs]; const l = c[c.length - 1]; if (l?.streaming) l.streaming = false; return c; });
             }
+            break;
+          case 'queue_update':
+            // 待执行队列整表快照(新增排队/立即执行/删除/自动派发都会触发)
+            setQueue(Array.isArray(m.queue) ? m.queue : []);
             break;
           case 'start':
             hasLive.current = true;
@@ -424,7 +491,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
             setAgentState('working'); setIter(0); setErrorMsg('');
             setTodos([]); // 开启新一轮:上一轮的任务计划清空(对齐 harness 的 standing plan 语义)
             setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
-            push((msgs) => [...msgs, { role: 'user', content: m.text, forkTail: forkTurnRef.current - 1 }]);
+            push((msgs) => [...msgs, { role: 'user', content: m.text, time: Date.now(), forkTail: forkTurnRef.current - 1 }]);
             push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: forkTurnRef.current - 1 }]);
             break;
           case 'todo_update':
@@ -465,17 +532,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                 appendTools(last, [{ id: m.callId, tool: m.tool, args: m.args, ok: undefined, ms: undefined, result: undefined }]);
               }
               return copy;
-            });
-            break;
-          case 'skill_loaded':
-            // 用户手动调用技能(/技能名 命中注入):显示"已加载技能"折叠行,插到流式回复之前
-            push((msgs) => {
-              const c = [...msgs];
-              const last = c[c.length - 1];
-              const tag = { role: 'skilltag', skills: normalizeSkills(m.skills) };
-              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, tag);
-              else c.push(tag);
-              return c;
             });
             break;
           case 'tool_result':
@@ -536,6 +592,26 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
               return c;
             });
             break;
+          case 'retry':
+            // 模型请求失败进入重试:显示「重试第 N/M 次」(对齐 harness llm-retry 语义)。
+            // 同一失败的重试提示原地更新,避免堆叠;流式 assistant 存在时插到它前面
+            push((msgs) => {
+              const c = [...msgs];
+              const err = String(m.error || '网络错误').slice(0, 120);
+              const delay = Math.round((Number(m.delayMs) || 2000) / 1000);
+              const content = `请求失败(${err}),${delay}s 后重试(第 ${m.retry}/${m.maxRetries} 次)`;
+              for (let i = c.length - 1; i >= 0; i--) {
+                if (c[i]?.retryNotice) { c[i] = { role: 'notice', content, retryNotice: true }; return c; }
+              }
+              const last = c[c.length - 1];
+              if (last?.role === 'assistant' && last.streaming) {
+                c.splice(c.length - 1, 0, { role: 'notice', content, retryNotice: true });
+              } else {
+                c.push({ role: 'notice', content, retryNotice: true });
+              }
+              return c;
+            });
+            break;
           case 'steer':
             // 运行中补充的指令:显示为用户消息,并另起一条流式 assistant 气泡接收后续输出
             // (后端会写入一条 steer 的 user/message,计入分支点计数)
@@ -545,7 +621,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
               const c = [...msgs];
               const l = c[c.length - 1];
               if (l?.streaming) l.streaming = false;
-              c.push({ role: 'user', content: m.text, forkTail: forkTurnRef.current - 1 });
+              c.push({ role: 'user', content: m.text, time: Date.now(), forkTail: forkTurnRef.current - 1 });
               c.push({ role: 'assistant', segments: [], streaming: true, forkTail: forkTurnRef.current - 1 });
               return c;
             });
@@ -556,17 +632,60 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     return () => subs.forEach((off) => off());
   }, []);
 
+  // 组件卸载(切走标签页/关闭)前立即落盘草稿,避免 400ms 防抖窗口内的输入丢失
+  useEffect(() => () => persistDrafts(), []);
+
   // 挂载或会话切换时,载入当前活跃会话的历史。
   // 不先清空消息:保留上一会话内容 + 「正在加载会话」提示,新会话历史到达后再整体替换,
   // 避免切换出现空白闪烁;已加载过的会话走缓存秒开,后台静默刷新保持最新。
   useEffect(() => {
     let alive = true;
     const target = sid; // 本次要加载的会话 id(防止异步响应串到别的会话)
+    const skipHistory = skipHistoryOnceRef.current; // 新会话草稿态刚创建并发送:消息由事件流渲染
+    skipHistoryOnceRef.current = false;
+
+    // ---- 输入草稿:离开旧会话前保存输入,进入新会话后恢复其草稿 ----
+    // 草稿键 = 目标会话的真实 sid(草稿态为 __new__);target=null(App 初次加载未定向)不算切换,不读写草稿
+    const targetKey = target === NEW_SESSION_ID ? NEW_DRAFT_KEY : target;
+    const isFirstRun = firstDraftRunRef.current;
+    firstDraftRunRef.current = false;
+    const prevKey = prevDraftKeyRef.current;
+    prevDraftKeyRef.current = targetKey;
+    if (!isFirstRun && prevKey !== null && targetKey !== null && prevKey !== targetKey) {
+      // 离开旧会话:把当前输入保存到旧草稿键(空输入则清掉该 key)
+      const cur = inputValueRef.current;
+      if (cur && cur.trim()) draftsRef.current[prevKey] = cur;
+      else delete draftsRef.current[prevKey];
+    }
+    // 进入新会话:恢复其草稿;target=null(App 初次加载尚未定向)时不设置输入,避免闪现
+    if (targetKey !== null) {
+      setInput(draftsRef.current[targetKey] ?? '');
+    }
+    saveDrafts(draftsRef.current);
+
     hasLive.current = false; // 切换会话:重置"已有新对话"标记,让新会话历史立即显示
     justSwitchedRef.current = true; // 切换会话:绘制后兜底重测滚底/拇指,见下方 [messages] 兜底 effect
     forkTurnRef.current = 0; lastIterRef.current = 0; // 分支点计数器随会话重置
     setTodos([]);
     setAgentState('idle'); setIter(0); setErrorMsg('');
+    setQueue([]); // 切会话先复位队列,避免串到上一会话;真实队列随 get_history 返回
+
+    // 新会话草稿态(sid 为占位符):不请求历史,显示空对话;sid=null(App 初次加载尚未定向)
+    // 则沿用原切换重载逻辑(请求 get_history 拿回服务端活跃会话)
+    if (target === NEW_SESSION_ID) {
+      setSuppressIn(true);
+      setMessages([]);
+      setSwitching(false);
+      return () => { alive = false; };
+    }
+    // 刚由新会话草稿发送创建:首条消息正由事件流渲染,跳过历史回载避免重复;
+    // 不重置消息(事件流 start/steer 到达即渲染),也不清空,避免与事件竞态
+    if (skipHistory) {
+      histCache.current.delete(target ?? '');
+      setSuppressIn(true);
+      setSwitching(false);
+      return () => { alive = false; };
+    }
     // 有缓存则立即显示(切回已看过的会话零等待);无缓存时保留旧内容 + 加载指示
     const cached = histCache.current.get(target ?? '');
     if (cached) { setSuppressIn(true); setMessages(cached.msgs); setTodos(cached.todos); setSwitching(false); }
@@ -586,6 +705,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
         setSuppressIn(true); // 历史整表替换:抑制最新一条的入场动画,切换画面保持静止
         setMessages(msgs);
         setTodos(Array.isArray(r.todos) ? r.todos : []); // 该会话当前的任务计划
+        setQueue(Array.isArray(r.queue) ? r.queue : []); // 该会话的待执行队列快照
         setSwitching(false);
       })
       .catch((e) => {
@@ -611,6 +731,47 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     if (!ok) return;
     api.send('clear_history', {});
     setMessages([]);
+    setQueue([]);
+  };
+
+  // 用服务端返回的最新 turns 整表刷新消息与任务计划(删除/回退消息后调用),
+  // 同时更新缓存与分支点计数,切走再切回仍是最新
+  const applyTurns = (r: any) => {
+    const msgs = turnsToMessages(r.turns || []);
+    histCache.current.set(activeRef.current ?? '', { msgs, todos: Array.isArray(r.todos) ? r.todos : [] });
+    forkTurnRef.current = (r.turns || []).length; // 分支点/删除索引重新对齐服务端 turns 长度
+    lastIterRef.current = 0;
+    setSuppressIn(true);
+    setMessages(msgs);
+    setTodos(Array.isArray(r.todos) ? r.todos : []);
+  };
+
+  // 删除消息:删掉该条用户消息及其对应的一轮回复(仅作用于所在轮,其后内容保留)
+  const deleteMsg = async (m: ChatMessage, i: number) => {
+    const ok = await confirm({
+      title: '删除消息',
+      message: '删除这条消息及其对应的回复?该操作会同步清除服务端的持久化历史,不可恢复',
+      confirmLabel: '删除',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      applyTurns(await api.request('message_delete', { at: m.forkTail ?? i }, 8000));
+    } catch (e) { toast.error((e as Error).message); }
+  };
+
+  // 回到本轮对话发起前:把对话回退到这条消息之前(移除它及其之后的所有内容)
+  const rewindMsg = async (m: ChatMessage, i: number) => {
+    const ok = await confirm({
+      title: '回到本轮对话发起前',
+      message: '将对话回退到这条消息之前?该条消息及其之后的所有内容都会被移除,不可恢复',
+      confirmLabel: '回退',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      applyTurns(await api.request('message_rewind', { at: m.forkTail ?? i }, 8000));
+    } catch (e) { toast.error((e as Error).message); }
   };
 
   // 用户消息索引(左侧跳转点数据源:每条用户消息对应一个点)
@@ -689,13 +850,64 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   // 输入中是否已含完整 /技能名(用于占位提示与去重判断)
   const hasSkillToken = /(?:^|\s)\/[a-z0-9][a-z0-9-]*(?=\s|$)/i.test(input);
 
-  const send = () => {
-    // 工作中仍可发送:服务端会把消息转为 steer(补充指令注入下一步);
+  const send = async () => {
+    // 工作中仍可发送:服务端会把消息放入待执行队列(当前轮结束后按序自动执行,不打断回复);
     // 提问挂起时禁止发送(须先作答或取消)
     if (!input.trim() || !canSend || askPending) return;
+    const text = composedInput;
+    // 新会话草稿态(sid 为占位符或尚未加载):先真正创建服务端会话(此时才列入历史会话列表),
+    // 创建失败则保留输入与草稿,不发送
+    if (sid == null || sid === NEW_SESSION_ID) {
+      try {
+        const r = await api.request('session_create', {}, 8000);
+        activeRef.current = r.active ?? null; // 立即更新事件路由,不等 App 侧 state 同步
+        skipHistoryOnceRef.current = true; // 跳过随后 sid 变化触发的历史回载(消息由事件流渲染)
+        onSessionCreated?.(r); // App 刷新会话列表并激活新会话
+      } catch (e) {
+        toast.error(`新建会话失败: ${(e as Error).message}`);
+        return;
+      }
+    }
+    // 发送即使用草稿:清除对应会话(或新会话)的输入草稿
+    if (sid === NEW_SESSION_ID) delete draftsRef.current[NEW_DRAFT_KEY];
+    else if (sid) delete draftsRef.current[sid];
+    saveDrafts(draftsRef.current);
     setInput('');
+    inputValueRef.current = ''; // 同步最新输入,防止随后的草稿保存把已发送文本回写
     setMessages((m) => [...m]);
-    api.send('speak', { text: composedInput, reasoning });
+    api.send('speak', { text, reasoning });
+  };
+
+  // ---- 待执行队列操作 ----
+  // 立即执行:把排队中的消息立即注入当前对话(忙碌时作为下一步 steer,空闲时直接开新轮)
+  const runQueueNow = async (item: QueueItem) => {
+    try {
+      const r = await api.request('queue_steer', { id: item.id }, 8000);
+      setQueue(Array.isArray(r.queue) ? r.queue : []);
+    } catch (e) { toast.error((e as Error).message); }
+  };
+  // 编辑:把排队中的消息撤回输入框重新编辑(该条先移出队列,发送后重新排队)
+  const editQueueItem = async (item: QueueItem) => {
+    try {
+      const r = await api.request('queue_remove', { id: item.id }, 8000);
+      setQueue(Array.isArray(r.queue) ? r.queue : []);
+      updateInput(item.text);
+      requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
+    } catch (e) { toast.error((e as Error).message); }
+  };
+  // 删除:直接从队列移除,不再执行
+  const deleteQueueItem = async (item: QueueItem) => {
+    const ok = await confirm({
+      title: '删除排队消息',
+      message: `从待执行队列中移除「${item.text}」?该消息将不再执行`,
+      confirmLabel: '删除',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      const r = await api.request('queue_remove', { id: item.id }, 8000);
+      setQueue(Array.isArray(r.queue) ? r.queue : []);
+    } catch (e) { toast.error((e as Error).message); }
   };
 
   // ---- / 命令菜单(照搬 deepseek-harness 的行内命令交互) ----
@@ -734,7 +946,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
       description: '查看可用命令',
       run: (q: string) => {
         api.send('speak', { text: '请用一句话列出当前可用的斜杠命令及其用途。', reasoning });
-        setInput('');
+        updateInput('');
         return true;
       }
     }
@@ -780,7 +992,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
       // 同一技能已完整存在于文本中则不重复追加
       const already = new RegExp(`(?:^|\\s)/${name}(?=\\s|$)`, 'i').test(input);
       const next = already ? head : `${head}/${name} `;
-      setInput(next);
+      updateInput(next);
       syncSlash(next);
       setSlashOpen(false);
       setSlashActive(-1);
@@ -788,7 +1000,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
       return;
     }
     closeSlash();
-    setInput('');
+    updateInput('');
     item.run?.(query);
   };
 
@@ -800,11 +1012,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   // ---- 本地工作区:与远程工作区并排,同样支持多个本地工作区 ----
   const [localWsBrowserOpen, setLocalWsBrowserOpen] = useState(false);
   const [localWsMenuOpen, setLocalWsMenuOpen] = useState(false);
-  const wsbarRef = useRef<HTMLDivElement>(null);
+  const wsBarRef = useRef<HTMLDivElement>(null);     // 远程工作区弹窗容器(chip + 下拉)
+  const localWsBarRef = useRef<HTMLDivElement>(null); // 本地工作区弹窗容器(chip + 下拉)
   useEffect(() => {
     if (!wsMenuOpen && !localWsMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (wsbarRef.current && !wsbarRef.current.contains(e.target as Node)) { setWsMenuOpen(false); setLocalWsMenuOpen(false); }
+      // 只把「当前打开弹窗所在的容器(chip + 下拉)」视为内部区域:点击其中不关闭
+      // (chip 的切换/选择由其 onClick 处理);点击该容器之外——包括 wsbar-row 里
+      // 的其它位置、另一个 chip、模型菜单等——一律视为外部点击,关闭弹窗。
+      const activeBar = wsMenuOpen ? wsBarRef.current : localWsBarRef.current;
+      if (activeBar && activeBar.contains(e.target as Node)) return;
+      setWsMenuOpen(false); setLocalWsMenuOpen(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
@@ -847,19 +1065,20 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
 
   // 发送后等待回答 / agent 工作期间都应允许暂停:busy(服务端 status) 与 agentState 任一命中即视为工作中
   const working = busy || agentState === 'working';
-  // 工作中也允许输入发送(自动作为运行中补充指令);连接时需远程工作区,本地模式需本地工作区;
+  // 工作中也允许输入发送(自动进入待执行队列,当前轮结束后按序执行);
+  // 连接时需远程工作区,本地模式需本地工作区;
   // 模型提问挂起时锁定输入与暂停(须先作答或取消提问);会话切换加载中也锁定,避免发到错误会话
   const canSend = (connected ? !!workspace : !!localWorkspace) && !askPending && !switching;
 
   return (
-    <div className="chatwrap">
+    <div className={`chatwrap${askPending ? ' ask-focus' : ''}`}>
       <div className="chat-head">
         <span className="muted">
           {switching ? '正在加载会话…' : askPending ? '等待你回答问题…' : working ? `Agent 工作中 · 迭代 #${iter}` : agentState === 'error' ? '出现错误' : agentState === 'done' ? '已完成' : '空闲'}
         </span>
         <span className="row gap">
           {working && !askPending && <button className="ghost sm" onClick={stop}>⏹ 停止</button>}
-          {messages.length > 0 && <button className="ghost sm" title="清空对话历史(含服务端持久化)" onClick={clearAll}>🗑 清空</button>}
+          {messages.length > 0 && !askPending && <button className="ghost sm" data-tip="清空对话历史(含服务端持久化)" onClick={clearAll}>🗑 清空</button>}
         </span>
       </div>
       <div className="chat-scroll">
@@ -873,9 +1092,20 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
           )}
           {messages.map((m, i) => (
             <div key={i} className={`msg ${m.role}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
-              {m.role === 'notice' && <div className="bubble notice-bubble">⚠ {m.content}</div>}
-              {m.role === 'skilltag' && <SkillRun skills={m.skills} />}
-              {m.role === 'user' && <div className="bubble user-bubble">{m.content}</div>}
+              {m.role === 'notice' && <div className={`bubble ${m.retryNotice ? 'retry-bubble' : 'notice-bubble'}`}>⚠ {m.content}</div>}
+              {m.role === 'user' && (
+                <>
+                  <div className="bubble user-bubble">{m.content}</div>
+                  <div className="user-msg-foot">
+                    {!!m.time && <span className="user-msg-time">{formatMsgTime(m.time)}</span>}
+                    <UserMessageActions
+                      text={m.content || ''}
+                      onDelete={() => deleteMsg(m, i)}
+                      onRewind={() => rewindMsg(m, i)}
+                    />
+                  </div>
+                </>
+              )}
               {m.role === 'assistant' && (
                 <div className="msg-col">
                   <div className="bubble ai-bubble">
@@ -892,7 +1122,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                       }
                       return <div key={si}>{renderAssistantContent(seg.text || '') || <AssistantText text={seg.text || ''} />}</div>;
                     })}
-                    {m.streaming && (m.segments || []).length === 0 && <span className="cursor">▍</span>}
+                    {m.streaming && (m.segments || []).length === 0 && <span className="cursor" aria-hidden="true" />}
                   </div>
                   {!m.streaming && (
                     <MessageActions
@@ -936,6 +1166,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
       <div className="composer">
         {/* 模型提问面板(ask_user_question):内联显示在输入框上方,无遮罩;作答/取消前锁定输入 */}
         <AskPanel sid={sid} onPendingChange={setAskPending} />
+        {/* 待执行消息队列:对话进行中发送的消息在此排队等待,当前轮结束后按 FIFO 自动执行 */}
+        <QueuePanel queue={queue} onRunNow={runQueueNow} onEdit={editQueueItem} onDelete={deleteQueueItem} />
         <div className="composer-box">
           {/* / 命令菜单:输入 / (行首或空格后)时浮在输入框上方,前缀优先+模糊匹配过滤 */}
           {slashOpen && (
@@ -957,12 +1189,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
               {input.endsWith('\n') && <span> </span>}
             </div>
             <textarea ref={taRef} rows={1} value={input}
-              onChange={(e) => { const v = e.target.value; setInput(v); syncSlash(v); }}
+              onChange={(e) => { const v = e.target.value; updateInput(v); syncSlash(v); }}
               onScroll={syncOverlayScroll}
               placeholder={!connected && !localWorkspace ? '未连接服务器 · 选择本地工作区后即可对话'
                 : connected && !workspace ? '请先选择远程工作区'
                 : askPending ? '请先在提问面板中作答或取消…'
-                : working ? 'Agent 工作中,输入内容将作为补充指令注入下一步…'
+                : working ? 'Agent 工作中,发送后将进入队列等待执行…'
                 : hasSkillToken ? '输入需求…' : '输入 / 可唤起命令与技能菜单…'}
               disabled={!canSend}
               onKeyDown={(e) => {
@@ -999,7 +1231,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                       if (!/[ \t]$/.test(m[2]) && /[ \t]/.test(el.value[end] || '')) end += 1;
                       const start = el.selectionStart - m[2].length;
                       const next = el.value.slice(0, start) + el.value.slice(end);
-                      setInput(next);
+                      updateInput(next);
                       syncSlash(next);
                       requestAnimationFrame(() => {
                         const t = taRef.current;
@@ -1010,59 +1242,31 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                   }
                 }
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-                else if (e.key === 'Escape') setInput('');
+                else if (e.key === 'Escape') updateInput('');
               }} />
           </div>
           <div className="composer-foot">
             <span className="muted composer-tip">Enter 发送 · Shift+Enter 换行</span>
             <ContextMeter messages={messages} input={composedInput}
               contextWindow={llm.effModelContext?.contextWindow || 0} />
-            {working && !askPending
-              ? <button className="send-btn stop" title="停止 (Ctrl+C 也可)" onClick={stop}>⏹</button>
-              : <button className="send-btn" disabled={!canSend || !input.trim()} title="发送" onClick={send}>➤</button>}
+            {/* 工作中且输入框为空:显示停止按钮;有内容时变为发送按钮,
+                发送后默认进入待执行队列等待执行 */}
+            {working && !askPending && !input.trim()
+              ? <button className="send-btn stop" onClick={stop} title="停止当前任务">⏹</button>
+              : <button className="send-btn"
+                  title={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
+                  disabled={!canSend || !input.trim()} onClick={send}>➤</button>}
           </div>
         </div>
-        <div className="composer-toolbar">
-          <span className="muted toolbar-label" title="模型的推理强度,对应 reasoning_effort 参数(Default/Off/Low/High/Xhigh/Max)">推理等级</span>
-          <GlassSelect className="tb-reasoning" dir="up" value={reasoning}
-            title={REASONING_LEVELS.find((lv) => lv.id === reasoning)?.title}
-            onChange={changeReasoning}
-            options={REASONING_LEVELS.map((lv) => ({ value: lv.id, label: lv.label }))} />
-          <div className="grow" />
-          <GlassSelect className="tb-provider" dir="up" align="right" value={llm.providerId}
-            onChange={(v) => llm.switchProvider(v)}
-            title="切换 AI 提供方(仅显示已保存并配置密钥的提供商)"
-            placeholder="选择提供方"
-            options={providerOptions} />
-          {llm.isMock ? (
-            <span className="muted tb-model" title="mock 联调模式,无需 API Key">mock 模式</span>
-          ) : llm.provider.models.length > 0 ? (
-            <GlassSelect className="tb-model" dir="up" title="切换模型"
-              value={llm.provider.models.includes(llm.effModel) ? llm.effModel : '__custom__'}
-              onChange={(v) => llm.setModel(v)}
-              options={[
-                ...llm.provider.models.map((m) => ({ value: m, label: m })),
-                { value: '__custom__', label: '自定义…' }
-              ]} />
-          ) : (
-            <input className="tb-model" title="模型名"
-              value={llm.model} onChange={(e) => llm.setModel(e.target.value)} placeholder="模型名" />
-          )}
-          {llm.model === '__custom__' && !llm.isMock && llm.provider.models.length > 0 && (
-            <input className="tb-model" title="自定义模型名"
-              value={llm.customModel} onChange={(e) => llm.setCustomModel(e.target.value)} placeholder="自定义模型名" />
-          )}
-        </div>
-        {/* 工作区:远程 + 本地并排,各自点击弹出下拉(切换保存过的工作区 / 浏览选择新工作区) */}
-        <div className="wsbar-row" ref={wsbarRef}>
+        {/* 工作区 + 模型:工作区在左,模型在右;模型为二级菜单(模型清单按提供商分组 / 推理等级) */}
+        <div className="wsbar-row">
           {connected && (
-            <div className="wsbar">
+            <div className="wsbar" ref={wsBarRef}>
               <button
                 className={`ws-chip ${workspace ? '' : 'none'}`}
-                title={workspace ? (connected ? '点击切换/选择工作区' : workspace) : (connected ? '点击选择工作区' : '未连接服务器')}
                 onClick={() => { setWsMenuOpen((v) => !v); setLocalWsMenuOpen(false); }}
               >
-                <span className="ws-chip-path">{workspace ? `📂 ${workspace}` : '选择工作区'}</span>
+                <span className="ws-chip-path">{workspace ? `📂 ${lastPathSegment(workspace)}` : '选择远程工作区'}</span>
                 <span className="ws-chip-arrow">{wsMenuOpen ? '▾' : '▸'}</span>
               </button>
               {wsMenuOpen && (
@@ -1074,13 +1278,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                       {savedWs.map((p) => (
                         <div key={p} className={`ws-pick-item ${workspace === p ? 'on' : ''}`}>
                           <button type="button" className="ws-pick-main"
-                            title={workspace === p ? '当前工作区' : `切换工作区到 ${p}`}
+                            data-tip={p}
                             onClick={() => setWorkspace(p)}>
-                            <span className="ws-pick-path">{p}</span>
+                            <span className="ws-pick-path">{lastPathSegment(p)}</span>
                             {workspace === p && <span className="ws-pick-cur">✓</span>}
                           </button>
-                          <button type="button" className="ws-pick-del" aria-label={`从历史中删除工作区 ${p}`}
-                            title="从历史记录中删除(不影响远程目录)"
+                          <button type="button" className="ws-pick-del action-icon danger" aria-label={`从历史中删除工作区 ${p}`}
                             onClick={() => removeWs(p)}>🗑</button>
                         </div>
                       ))}
@@ -1091,7 +1294,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                     📁 浏览选择其他目录…
                   </button>
                   {home && (
-                    <button className="ws-pick-item ws-pick-action" onClick={() => setWorkspace(home)} title={`设为家目录 ${home}`}>
+                    <button className="ws-pick-item ws-pick-action" onClick={() => setWorkspace(home)}>
                       🏠 家目录
                     </button>
                   )}
@@ -1099,13 +1302,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
               )}
             </div>
           )}
-          <div className="wsbar">
+          <div className="wsbar" ref={localWsBarRef}>
             <button
               className={`ws-chip local ${localWorkspace ? '' : 'none'}`}
-              title={localWorkspace ? '点击切换/选择本地工作区' : '点击选择本地工作区'}
               onClick={() => { setLocalWsMenuOpen((v) => !v); setWsMenuOpen(false); }}
             >
-              <span className="ws-chip-path">{localWorkspace ? `🖥 ${localWorkspace}` : '选择本地工作区'}</span>
+              <span className="ws-chip-path">{localWorkspace ? `🖥 ${lastPathSegment(localWorkspace)}` : '选择本地工作区'}</span>
               <span className="ws-chip-arrow">{localWsMenuOpen ? '▾' : '▸'}</span>
             </button>
             {localWsMenuOpen && (
@@ -1117,13 +1319,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                     {savedLocalWs.map((p) => (
                       <div key={p} className={`ws-pick-item ${localWorkspace === p ? 'on' : ''}`}>
                         <button type="button" className="ws-pick-main"
-                          title={localWorkspace === p ? '当前本地工作区' : `切换本地工作区到 ${p}`}
+                          data-tip={p}
                           onClick={() => setLocalWorkspace(p)}>
-                          <span className="ws-pick-path">{p}</span>
+                          <span className="ws-pick-path">{lastPathSegment(p)}</span>
                           {localWorkspace === p && <span className="ws-pick-cur">✓</span>}
                         </button>
-                        <button type="button" className="ws-pick-del" aria-label={`从历史中删除本地工作区 ${p}`}
-                          title="从历史记录中删除(不影响本地目录)"
+                        <button type="button" className="ws-pick-del action-icon danger" aria-label={`从历史中删除本地工作区 ${p}`}
                           onClick={() => removeLocalWs(p)}>🗑</button>
                       </div>
                     ))}
@@ -1131,16 +1332,26 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                 )}
                 <div className="ctx-sep" />
                 <button className="ws-pick-item ws-pick-action" onClick={() => { setLocalWsMenuOpen(false); setLocalWsBrowserOpen(true); }}>
-                  🖥 浏览选择其他本地目录…
+                  📁 浏览选择其他本地目录…
                 </button>
-                {localHome && (
-                  <button className="ws-pick-item ws-pick-action" onClick={() => setLocalWorkspace(localHome)} title={`设为家目录 ${localHome}`}>
-                    🏠 家目录
-                  </button>
-                )}
               </div>
             )}
           </div>
+          <div className="grow" />
+          {/* 模型选择(二级菜单):mock 联调模式仅展示,不可切换 */}
+          {llm.isMock ? (
+            <span className="muted tb-model" data-tip="mock 联调模式,无需 API Key">mock 模式</span>
+          ) : (
+            <ModelMenu reasoning={reasoning} onChangeReasoning={changeReasoning} />
+          )}
+          {/* 自定义模型输入:当前提供方无预置模型,或选中「自定义模型…」时显示 */}
+          {!llm.isMock && (llm.model === '__custom__' || llm.provider.models.length === 0) && (
+            <input className="tb-model"
+              value={llm.model === '__custom__' ? llm.customModel : llm.model}
+              onChange={(e) => { if (llm.model === '__custom__') llm.setCustomModel(e.target.value); else llm.setModel(e.target.value); }}
+              placeholder="自定义模型名"
+              title="输入模型名" />
+          )}
         </div>
       </div>
       {wsBrowserOpen && (

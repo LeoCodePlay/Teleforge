@@ -117,9 +117,10 @@ export interface ToolCallInfo {
  * - card='read':read_file 的读文件卡(path/size/offset/truncated)
  * - card='diff':write/edit 的改动卡(kind=write|edit)
  * - card='search':search_code 的搜索结果卡(pattern)
+ * - card='web_search':web_search 的网络搜索结果卡(query/sources)
  */
 export interface ToolCallMeta {
-  card?: 'terminal' | 'read' | 'diff' | 'search' | 'todo' | 'ask';
+  card?: 'terminal' | 'read' | 'diff' | 'search' | 'todo' | 'ask' | 'web_search';
   command?: string;
   cwd?: string;
   exitCode?: number | string | null;
@@ -131,6 +132,17 @@ export interface ToolCallMeta {
   truncated?: boolean;
   kind?: string;
   pattern?: string;
+  /** web_search 的来源列表(标题/摘要/链接/发布时间),由后端结构化附加 */
+  query?: string;
+  sources?: WebSearchSourceMeta[];
+}
+
+/** 一条网络搜索结果来源(与后端 web-search.ts 的 WebSearchSource 对齐) */
+export interface WebSearchSourceMeta {
+  url: string;
+  title?: string;
+  snippet?: string;
+  publishedAt?: string;
 }
 
 /** 聊天消息内的分段:文本 / 思考 / 连续工具组,按实际发生顺序排列(思考可穿插在工具组之间) */
@@ -140,23 +152,18 @@ export interface MsgSegment {
   tools?: ToolCallInfo[];
 }
 
-/** 手动调用技能(/技能名)后注入记录:名称 + 描述 + 指令预览 */
-export interface SkillInjected {
-  name: string;
-  description?: string;
-  preview?: string;
-}
-
 /** 渲染用聊天消息 */
 export interface ChatMessage {
-  role: string; // user | assistant | notice | skilltag ...
+  role: string; // user | assistant | notice
   content?: string;
   segments?: MsgSegment[];
   streaming?: boolean;
   /** 分支点:该消息在服务端 turns 数组中的结束索引(>=0 时按此截断克隆,缺省 -1 从尾部) */
   forkTail?: number;
-  /** 手动调用技能(/技能名)注入的技能详情,仅 role=skilltag 使用 */
-  skills?: SkillInjected[];
+  /** 消息时间戳(毫秒,来自服务端事件 time;实时消息用前端 Date.now()) */
+  time?: number;
+  /** 请求失败进入重试的提示消息(role=notice),同一失败重试时原地更新不堆叠 */
+  retryNotice?: boolean;
 }
 
 /** 任务计划项(todo_write 工具维护,状态对齐 deepseek-harness) */

@@ -1,5 +1,5 @@
 // Agent 主循环:接收用户指令 -> 流式调用 LLM -> 执行工具 -> 迭代直到完成。
-// 架构参照 deepseek-harness:
+// 架构:
 // - 事件溯源:会话是 append-only 的 SessionEvent 日志(见 session.js),LLM 消息
 //   历史由 deriveMessages() 投影得出,不再单独维护 history 数组——"模型可见即可回放"。
 // - Turn/Step 生命周期:一步(step)= 一次模型请求 + 它发起的工具调用;一轮(turn)=
@@ -14,7 +14,7 @@ import { AGENT } from '../config.ts';
 import { LlmClient } from './llm.ts';
 import { compactHistory, summarizeWithLlm, messageTokens } from './compact.ts';
 import { Session, foldTodos } from './session.ts';
-import { ToolRegistry } from './registry.ts';
+import { ToolRegistry, type ToolResult } from './registry.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
 import { localFs } from '../core/local-fs.ts';
 import { renderPromptInjectSection } from './prompt-inject.ts';
@@ -38,7 +38,7 @@ function storeCap(s) {
   return s.slice(0, STORE_HEAD) + `\n…[工具结果过长,历史中省略中间 ${omitted} 字符]…\n` + s.slice(s.length - STORE_TAIL);
 }
 
-// ---- 自动续推(移植自 deepseek-harness goal-round-driver)----
+// ---- 自动续推
 // 完成判定不再只是"模型返回 0 个 tool_calls":任务计划(todo/write 投影)仍有未完成项时,
 // 注入一条 source='goal_round' 的续推 user 消息并继续循环,强制模型在同一会话推进到真正完成。
 // hasIncompleteTodos:计划中存在未完成(pending/in_progress)项
@@ -115,6 +115,8 @@ function newRuntime(session) {
     signal: null,  // 该会话当前轮的 AbortController
     inbox: [],     // next-turn 输入队列(followup,空闲时逐条开新轮)
     steer: [],     // next-step 注入队列(运行中补充指令,下一步生效)
+    pending: [],   // 待执行队列(工作中提交的消息,FIFO,当前轮结束后逐条自动执行)
+    queueSeq: 0,   // 待执行队列项的自增 id(供前端按 id 做立即执行/删除等操作)
     driving: null, // 进行中的 driver promise(同会话并发提交复用同一驱动)
     boundConn: null, // 当前轮绑定的 SSH 连接(切走活动连接后工具仍操作它)
     goalBlocked: 0,  // 连续"模型宣称完成但任务计划仍有未完成项"的次数(自动续推防死循环门槛)
@@ -138,11 +140,13 @@ function projectEvents(events) {
       out.push({
         // 前端显示用户原文;带注入技能时它携纯原文(display),模型历史才用注入后的 content
         role: 'user', content: d.display ?? d.content,
+        // 事件时间戳随投影下发,前端据此显示"今天/昨天/日期+时间"
+        time: ev.time,
         // 手动调用技能注入的技能详情随历史回放,前端可恢复"已加载技能"折叠行
         ...(Array.isArray(d.skillsInjected) && d.skillsInjected.length ? { skillsInjected: d.skillsInjected } : {})
       });
     } else if (ev.type === 'compaction/done') {
-      out.push({ role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。' });
+      out.push({ role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。', time: ev.time });
     } else if (ev.type === 'assistant/message') {
       const m = d.message || {};
       out.push({
@@ -175,6 +179,25 @@ function cutAtTurn(events, idx) {
     }
   }
   return -1;
+}
+
+// 定位第 idx 条"消息面 turn"对应的事件数组下标(与 projectEvents 的投影顺序一致);
+// 找不到返回 -1。供删除/回退单条用户消息使用。
+function findTurnEvent(events, idx) {
+  let n = 0;
+  for (let i = 0; i < events.length; i++) {
+    const t = events[i].type;
+    if (t === 'user/message' || t === 'compaction/done' || t === 'assistant/message' || t === 'tool/result') {
+      if (n === idx) return i;
+      n++;
+    }
+  }
+  return -1;
+}
+
+// 事件数组过滤/截断后重排 seq(与 Session 构造对齐:seq = 新数组下标,time 缺失补当前时间)
+function reindexEvents(events) {
+  return events.map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
 }
 
 export class Agent {
@@ -368,6 +391,75 @@ export class Agent {
     this.emit('agent', { event: 'sessions_changed' });
   }
 
+  /**
+   * 删除一条用户消息(at 为消息面 turn 索引,与前端 forkTail 对齐):
+   * - 用户发起消息(user/message source='user'):删除整轮(turn/start..turn/end,
+   *   即该条消息与 AI 对它的整轮回复)
+   * - 运行中注入(steer/goal_round):只删除该条注入消息,不拆散所在轮
+   * - 压缩摘要(compaction/done):删除该摘要
+   * 运行中的会话禁止删除(等待 idle,避免破坏进行中的事件写入)。
+   */
+  deleteMessageAt(at) {
+    const rt = this._runtimes.get(this.sessionId);
+    if (!rt) throw new Error('当前没有可操作的会话');
+    if (rt.busy) throw new Error('会话正在运行,请先停止或等待完成');
+    const session = rt.session;
+    const events = session.events;
+    const idx = findTurnEvent(events, at);
+    if (idx < 0) throw new Error('目标消息不存在');
+    const ev = events[idx];
+    let kept;
+    if (ev.type === 'user/message' && ev.data.source === 'user') {
+      // 用户发起消息:删除其所在整轮。注意 user/message 事件本身不带 data.turn,
+      // 需按事件区间定位:最近的 turn/start 起,到配对 turn/end 止。
+      let s = idx;
+      while (s > 0 && events[s - 1].type !== 'turn/start') s--;
+      const turnStartIdx = s - 1;
+      if (turnStartIdx < 0) throw new Error('目标消息不在任何一轮内');
+      const turn = events[turnStartIdx].data.turn;
+      let e = turnStartIdx + 1;
+      while (e < events.length && !(events[e].type === 'turn/end' && events[e].data.turn === turn)) e++;
+      if (e >= events.length) throw new Error('目标轮未闭合,无法删除');
+      kept = events.filter((_, i) => i < turnStartIdx || i > e);
+    } else {
+      // 注入消息 / 压缩摘要:只删这一条
+      kept = events.filter((_, i) => i !== idx);
+    }
+    session.events = reindexEvents(kept);
+    if (this.sessionId) sessions.saveEvents(this.sessionId, session.events);
+    this.emit('agent', { event: 'sessions_changed' });
+  }
+
+  /**
+   * 回到本轮对话发起前(at 为消息面 turn 索引):截断事件日志到该条消息所属轮
+   * 发起(turn/start)之前,移除该条消息及其之后的所有对话;该条是首条时等价于清空。
+   */
+  rewindToBefore(at) {
+    const rt = this._runtimes.get(this.sessionId);
+    if (!rt) throw new Error('当前没有可操作的会话');
+    if (rt.busy) throw new Error('会话正在运行,请先停止或等待完成');
+    const session = rt.session;
+    const events = session.events;
+    const idx = findTurnEvent(events, at);
+    if (idx < 0) throw new Error('目标消息不存在');
+    const ev = events[idx];
+    let cut;
+    if (ev.type === 'compaction/done') {
+      // 摘要消息:回到它之前,摘要本身及其后的内容一并移除
+      cut = idx;
+    } else if (ev.type === 'user/message') {
+      // 回溯到该条消息所属轮的 turn/start(本轮对话发起);首条无轮则从 0 截断
+      let j = idx;
+      while (j > 0 && events[j - 1].type !== 'turn/start') j--;
+      cut = j > 0 ? j - 1 : 0;
+    } else {
+      throw new Error('目标不是用户消息,无法回退');
+    }
+    session.events = reindexEvents(events.slice(0, cut));
+    if (this.sessionId) sessions.saveEvents(this.sessionId, session.events);
+    this.emit('agent', { event: 'sessions_changed' });
+  }
+
   // 手动压缩当前会话上下文(/compact 命令,移植自 harness 的 command-compact):
   // 无条件把早期对话组压缩成一段摘要并 squash 进日志,不依赖自动压缩的阈值水位;
   // 保留最近一段(最高 contextWindow×16%,至少最后一组对话),与自动压缩同款范围选择。
@@ -489,7 +581,8 @@ export class Agent {
 
   /**
    * 提交一条用户输入到指定会话(= harness 的 followup + wake):
-   * 该会话空闲时开新轮;运行中则注入下一步(steer)。每个会话独立驱动,互不阻塞。
+   * 该会话空闲时开新轮;运行中则进入待执行队列(pending),当前轮结束后按 FIFO
+   * 自动逐条执行,不再当作 steer 立即打断当前回复。每个会话独立驱动,互不阻塞。
    * 返回的 promise 在该会话整个排空过程(含后续排队的输入)结束后 resolve。
    */
   submit(sessionId, userText, { reasoning = 'default' } = {}) {
@@ -498,15 +591,65 @@ export class Agent {
     if (!rt) throw new Error(`会话不存在: ${sessionId}`);
     const text = String(userText);
     if (rt.busy) {
-      rt.steer.push({ text, reasoning });
-      this.emit('agent', { event: 'steer', text, sid: sessionId });
+      // 运行中提交:默认进入待执行队列(不打断当前回复);
+      // 需要立即干预时,由前端"立即执行"操作单独转 steer(见 steerQueueItem)
+      rt.pending.push({ id: ++rt.queueSeq, text, reasoning });
+      this._emitQueue(rt, sessionId);
       return rt.driving;
+    }
+    // 空闲提交:先排空上一轮停止后遗留的排队项(保持 FIFO),再执行本次输入
+    if (rt.pending.length > 0) {
+      while (rt.pending.length > 0) rt.inbox.push(rt.pending.shift());
+      this._emitQueue(rt, sessionId);
     }
     rt.inbox.push({ text, reasoning });
     return this._drive(rt, sessionId);
   }
 
-  // 兼容旧接口:提交到当前活跃会话(运行中自动转为 steer 注入)
+  // 待执行队列快照(供 get_history / RPC reply:前端按 {id, text} 渲染)
+  queueSnapshot(id = this.sessionId) {
+    const rt = id != null ? this._runtimes.get(id) : null;
+    return rt ? rt.pending.map((p) => ({ id: p.id, text: p.text })) : [];
+  }
+
+  // 队列变化广播:前端据此刷新"等待执行"面板(事件按 sid 路由,只进活跃会话)
+  _emitQueue(rt, sid) {
+    this.emit('agent', { event: 'queue_update', sid, queue: this.queueSnapshot(sid) });
+  }
+
+  /**
+   * "立即执行"一条排队消息:从待执行队列取出后立即生效——
+   * 会话忙碌时作为下一步注入当前运行(steer);会话空闲时直接开新轮。
+   * 返回最新队列快照供 RPC reply。
+   */
+  steerQueueItem(id) {
+    const rt = this._runtimes.get(this.sessionId);
+    if (!rt) throw new Error('当前没有可操作的会话');
+    const idx = rt.pending.findIndex((p) => p.id === id);
+    if (idx < 0) throw new Error('该消息不在待执行队列中');
+    const [item] = rt.pending.splice(idx, 1);
+    if (rt.busy) {
+      rt.steer.push({ text: item.text, reasoning: item.reasoning });
+      this.emit('agent', { event: 'steer', text: item.text, sid: this.sessionId });
+    } else {
+      rt.inbox.push({ text: item.text, reasoning: item.reasoning });
+      this._drive(rt, this.sessionId); // 不 await:fire-and-forget,与 speak 一致
+    }
+    this._emitQueue(rt, this.sessionId);
+    return { queue: this.queueSnapshot(this.sessionId) };
+  }
+
+  // 从待执行队列删除一条消息(编辑=移除后由前端撤回输入框);返回最新队列快照
+  removeQueueItem(id) {
+    const rt = this._runtimes.get(this.sessionId);
+    if (!rt) throw new Error('当前没有可操作的会话');
+    const idx = rt.pending.findIndex((p) => p.id === id);
+    if (idx >= 0) rt.pending.splice(idx, 1);
+    this._emitQueue(rt, this.sessionId);
+    return { queue: this.queueSnapshot(this.sessionId) };
+  }
+
+  // 兼容旧接口:提交到当前活跃会话(运行中自动进入待执行队列)
   run(userText, opts = {}) { return this.submit(this.sessionId, userText, opts); }
   steer(userText, opts = {}) { return this.submit(this.sessionId, userText, opts); }
 
@@ -524,7 +667,13 @@ export class Agent {
     try {
       while (rt.inbox.length > 0) {
         const input = rt.inbox.shift();
-        await this._runTurn(rt, id, input);
+        const endReason = await this._runTurn(rt, id, input);
+        // 上一轮正常结束后,待执行队列按 FIFO 自动补齐下一条(一次一条,保持 busy 直至排空);
+        // 停止(aborted)只停当前轮,排队项保留,等下次对话正常结束后再执行
+        if (endReason && endReason.kind !== 'aborted' && rt.pending.length > 0) {
+          rt.inbox.push(rt.pending.shift());
+          this._emitQueue(rt, id);
+        }
       }
     } finally {
       rt.busy = false;
@@ -698,6 +847,10 @@ export class Agent {
                 stepPartialReasoning += d.text;
                 this.emit('agent', { event: 'reasoning_delta', text: d.text, sid: runSessionId });
               }
+            },
+            // 请求失败进入重试:把「重试第几次」推给前端显示(对齐 harness llm-retry 的 retry 事件语义)
+            onRetry: (r) => {
+              this.emit('agent', { event: 'retry', ...r, sid: runSessionId });
             }
           });
         } catch (e) {
@@ -780,45 +933,11 @@ export class Agent {
           break;
         }
 
-        // 串行执行工具调用(顺序与模型请求一致,结果紧跟对应的 assistant(tool_calls));
+        // 执行本步全部工具调用(串行或并行见 _runToolCalls;并行
+        // 的有界滚动池 runGroup:并发发起、结果按模型请求顺序提交)。
         // 执行任何工具都说明模型在实质工作,重置"卡住"计数
         rt.goalBlocked = 0;
-        let turnConcluded = false;
-        for (const tc of res.toolCalls) {
-          if (signal.signal.aborted) throw new Error('已停止');
-          const rawArgs = typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments);
-          let pretty = rawArgs;
-          try { pretty = JSON.stringify(JSON.parse(rawArgs), null, 2); } catch {}
-          this.emit('agent', { event: 'tool_call', tool: tc.name, args: pretty, callId: tc.id, sid: runSessionId });
-          session.append('tool/call', { turn, step, callId: tc.id, name: tc.name, arguments: rawArgs });
-
-          // repeat-tool-reminder(移植 harness guard):连续相同工具+参数调用达到阈值时,
-          // 在下一步注入提醒,防模型原地打转(advisory,不拦截调用)
-          const canonicalKey = JSON.stringify([tc.name, canonicalizeArgs(rawArgs)]);
-          rt.lastCallCount = rt.lastCallKey === canonicalKey ? rt.lastCallCount + 1 : 1;
-          rt.lastCallKey = canonicalKey;
-          if (AGENT.REPEAT_REMIND_THRESHOLDS.includes(rt.lastCallCount)) {
-            const preview = previewArgs(rawArgs, AGENT.REPEAT_ARG_PREVIEW);
-            rt.steer.unshift({
-              text: `你已连续 ${rt.lastCallCount} 次以相同参数调用 ${tc.name}${preview ? `(参数: ${preview})` : ''}。请分析上次结果、换参数或换方法;若已收集足够证据,直接用 todo_write 收尾并结束。`,
-              reasoning: 'default',
-              internal: true // 系统内部提醒:不会跨轮转成用户输入(见 _runTurnInner finally)
-            });
-          }
-
-          const r = await registry.execute({ name: tc.name, args: rawArgs, signal: signal.signal, invokeCtx });
-          session.append('tool/result', {
-            turn, step, callId: tc.id, name: tc.name,
-            isError: r.isError, content: storeCap(r.content), ms: r.ms,
-            ...(r.meta !== undefined ? { meta: r.meta } : {}) // 结构化 UI 数据(终端卡 exitCode/cwd 等)
-          });
-          const short = r.content.length > 4000 ? r.content.slice(0, 4000) + `\n…[结果较多,已折叠展示 ${r.content.length} 字符]…` : r.content;
-          this.emit('agent', {
-            event: 'tool_result', tool: tc.name, ok: !r.isError, ms: r.ms, result: short, callId: tc.id, sid: runSessionId,
-            ...(r.meta !== undefined ? { meta: r.meta } : {})
-          });
-          if (r.concludesTurn) turnConcluded = true; // 工具显式宣告本轮结束(harness concludesTurn)
-        }
+        const { turnConcluded } = await this._runToolCalls(rt, session, runSessionId, signal, turn, step, res.toolCalls, invokeCtx);
 
         session.append('step/end', { turn, step });
         if (turnConcluded) break; // 工具显式收尾:本轮到此为止,不再请求模型
@@ -884,6 +1003,116 @@ export class Agent {
         sessions.saveEvents(runSessionId, session.events); // 落盘,重启后可恢复
         this.emit('agent', { event: 'sessions_changed' }); // 后台会话结束也刷新前端会话列表
       }
+    }
+    // 把本轮收尾原因返回给 driver:正常结束(completed/error)时待执行队列自动续跑,
+    // 中止(aborted)时保留排队项等下次对话
+    return endReason;
+  }
+
+  /**
+   * 执行一步内的全部工具调用。
+   * - 串行模式(AGENT.CONCURRENT_TOOL_CALLS=false 或并发上限=1):逐条执行,保持
+   *   "结果紧跟对应调用"的原始语义。
+   * - 并行模式( agent-loop 的 runGroup):有界滚动池并发启动
+   *   至多 MAX_PARALLEL_TOOL_CALLS 个调用,结果按模型请求顺序(tool_calls 顺序)
+   *   提交,保证 tool/result 与 assistant 消息严格配对、历史可回放。
+   * - 中止:停止启动新调用,排干已启动调用(registry.execute 对中止返回结构化错误),
+   *   已产生的结果仍按序提交,随后抛 '已停止' 交由外层按 aborted 收尾;未启动的
+   *   调用不产生 tool/call 事件(与串行路径一致,由 finally 自愈兜底)。
+   */
+  async _runToolCalls(rt: any, session: Session, runSessionId: string | null, signal: AbortController, turn: number, step: number, toolCalls: any[], invokeCtx: any): Promise<{ turnConcluded: boolean }> {
+    const calls = toolCalls.map((tc: any) => {
+      const rawArgs = typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments);
+      let pretty = rawArgs;
+      try { pretty = JSON.stringify(JSON.parse(rawArgs), null, 2); } catch {}
+      return { tc, rawArgs, pretty };
+    });
+    const maxParallel = AGENT.CONCURRENT_TOOL_CALLS ? Math.max(1, AGENT.MAX_PARALLEL_TOOL_CALLS || 1) : 1;
+
+    // 结果槽位:只有连续(按模型顺序)槽位就绪才落盘,保证并发完成也不乱序
+    const slots: Array<ToolResult | undefined> = new Array(calls.length).fill(undefined);
+    const inFlight = new Map<number, Promise<void>>();
+    let nextToStart = 0;
+    let committed = 0;
+    let turnConcluded = false;
+
+    const commitReady = () => {
+      while (committed < calls.length) {
+        const slot = slots[committed];
+        if (!slot) break; // 前序(模型顺序更靠前)的调用还没完成,等它
+        this._emitToolResult(session, runSessionId, turn, step, calls[committed].tc, slot);
+        if (slot.concludesTurn) turnConcluded = true; // 工具显式宣告本轮结束(harness concludesTurn)
+        committed++;
+      }
+    };
+
+    const startCall = async (index: number) => {
+      const { tc, rawArgs, pretty } = calls[index];
+      if (signal.signal.aborted) throw new Error('已停止');
+      this.emit('agent', { event: 'tool_call', tool: tc.name, args: pretty, callId: tc.id, sid: runSessionId });
+      session.append('tool/call', { turn, step, callId: tc.id, name: tc.name, arguments: rawArgs });
+      this._toolRepeatReminder(rt, tc.name, rawArgs);
+      slots[index] = await registry.execute({ name: tc.name, args: rawArgs, signal: signal.signal, invokeCtx });
+    };
+
+    const fillPool = async () => {
+      while (!signal.signal.aborted && nextToStart < calls.length && inFlight.size < maxParallel) {
+        const index = nextToStart++;
+        const promise = startCall(index).then(
+          () => { inFlight.delete(index); },
+          (e) => { inFlight.delete(index); throw e; }
+        );
+        inFlight.set(index, promise);
+        commitReady(); // 已立即完成(同步/极快)的调用按序落盘,避免占用池位
+      }
+    };
+
+    try {
+      await fillPool();
+      while (inFlight.size > 0) {
+        await Promise.race(inFlight.values()); // 任一调用完成即腾出池位并继续补充
+        commitReady();
+        await fillPool();
+      }
+      commitReady();
+    } catch (e) {
+      // 调度/启动异常(如中止):排干已启动调用,已产生的结果仍按序提交,再重抛
+      await Promise.allSettled([...inFlight.values()]);
+      commitReady();
+      throw e;
+    }
+
+    if (signal.signal.aborted) throw new Error('已停止');
+    return { turnConcluded };
+  }
+
+  /** 提交单个工具结果:落盘 tool/result + 向前端发 tool_result(与工具执行解耦,供并行按序调用) */
+  _emitToolResult(session: Session, runSessionId: string | null, turn: number, step: number, tc: any, r: ToolResult) {
+    session.append('tool/result', {
+      turn, step, callId: tc.id, name: tc.name,
+      isError: r.isError, content: storeCap(r.content), ms: r.ms,
+      ...(r.meta !== undefined ? { meta: r.meta } : {}) // 结构化 UI 数据(终端卡 exitCode/cwd 等)
+    });
+    const short = r.content.length > 4000 ? r.content.slice(0, 4000) + `\n…[结果较多,已折叠展示 ${r.content.length} 字符]…` : r.content;
+    this.emit('agent', {
+      event: 'tool_result', tool: tc.name, ok: !r.isError, ms: r.ms, result: short, callId: tc.id, sid: runSessionId,
+      ...(r.meta !== undefined ? { meta: r.meta } : {})
+    });
+  }
+
+  // repeat-tool-reminder(移植 harness guard):连续相同工具+参数调用达到阈值时,
+  // 在下一步注入提醒,防模型原地打转(advisory,不拦截调用)。调用按模型顺序发起,故判定顺序不变。
+  _toolRepeatReminder(rt: any, name: string, rawArgs: string) {
+    const canonicalKey = JSON.stringify([name, canonicalizeArgs(rawArgs)]);
+    rt.lastCallCount = rt.lastCallKey === canonicalKey ? rt.lastCallCount + 1 : 1;
+    rt.lastCallKey = canonicalKey;
+    if (AGENT.REPEAT_REMIND_THRESHOLDS.includes(rt.lastCallCount)) {
+      const preview = previewArgs(rawArgs, AGENT.REPEAT_ARG_PREVIEW);
+      rt.steer.unshift({
+        text: `你已连续 ${rt.lastCallCount} 次以相同参数调用 ${name}${preview ? `(参数: ${preview})` : ''}。请分析上次结果、换参数或换方法;若已收集足够证据,直接用 todo_write 收尾并结束。`,
+        reasoning: 'default',
+        internal: true // 系统内部提醒:不会跨轮转成用户输入(见 _runTurnInner finally)
+      });
     }
   }
 

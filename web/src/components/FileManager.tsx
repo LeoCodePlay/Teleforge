@@ -30,6 +30,7 @@ const DELETE_TIMEOUT = 600000;
 interface FileManagerProps {
   workspace?: string | null;
   home?: string | null;
+  connId?: string | null;            // 当前活动连接 id:切换服务器时即使 workspace/home 相同也强制回到新服务器目录
   localCwd?: string;                 // 本地面板当前目录(传到本地的目标)
   onCwdChange?: (p: string) => void; // 当前目录变化时上报
   onOpenFile: (path: string) => void;
@@ -59,7 +60,7 @@ interface WriteState {
 // 文件管理器:导航式浏览远程目录(进入目录即显示其内容)
 // 选中:单击单选 · Ctrl/Cmd+单击 多选切换 · Shift+单击 连选 · Ctrl+A 全选 · Delete 删除
 // 操作:双击打开/进入 · 右键对选区执行 打开/下载/复制/删除/粘贴
-export default function FileManager({ workspace, home, localCwd, onCwdChange, onOpenFile }: FileManagerProps) {
+export default function FileManager({ workspace, home, connId, localCwd, onCwdChange, onOpenFile }: FileManagerProps) {
   const { confirm } = useFeedback();
   const [path, setPath] = useState(() => norm(workspace || home || '/'));
   const [pathDraft, setPathDraft] = useState(path);
@@ -70,6 +71,11 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
   const [selection, setSelection] = useState<Set<string>>(new Set()); // 选中的条目 name 集合
   const [anchor, setAnchor] = useState<string | null>(null); // shift 连选的锚点 name
   const [menu, setMenu] = useState<CtxMenu | null>(null); // 右键菜单 {x, y, item|null}
+  const [uploadMenu, setUploadMenu] = useState(false); // 「上传」按钮展开的选择菜单
+  const [renaming, setRenaming] = useState<string | null>(null); // 正在重命名的条目 name
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false); // 正在真正下发重命名:行右侧显示加载圈
+  const renameSubmitting = useRef(false); // 防 Enter 与 blur 双触发重复提交
   const [clipboard, setClipboard] = useState<Clipboard | null>(null); // {items: [path], op}
   const [msg, setMsg] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -81,6 +87,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
   const dirInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const crumbsRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const seqRef = useRef(0);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useHorizontalScroller(crumbsRef);
@@ -114,13 +121,14 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 工作区/家目录变化时,回到对应目录
+  // 工作区/家目录变化,或切换到另一台服务器(即使 workspace/home 值相同,目录内容也属于新服务器)时,
+  // 回到对应目录并重新加载
   useEffect(() => {
     const start = norm(workspace || home || '/');
     setPath(start); setPathDraft(start); setSelection(new Set()); setAnchor(null);
     load(start, { keepSelected: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, home]);
+  }, [workspace, home, connId]);
 
   const refresh = () => load(path, { keepSelected: true });
   const up = () => { if (path !== '/') load(path.slice(0, path.lastIndexOf('/')) || '/'); };
@@ -167,6 +175,10 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     } else if (e.key === 'Delete' && selection.size > 0 && !deleting) {
       e.preventDefault();
       doDelete();
+    } else if (e.key === 'F2' && selection.size === 1 && !renaming) {
+      e.preventDefault();
+      const only = selectedEntries[0];
+      if (only) startRename(only.name);
     }
   };
 
@@ -201,15 +213,32 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     if (!menu) return;
     const close = () => setMenu(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
-    window.addEventListener('click', close);
+    // 用 pointerdown 而非 click 监听关闭:文件行的 click 被 stopPropagation 拦截(见 handleRowClick),
+    // 但按下事件仍会冒泡到 window;点在菜单内部则忽略,保证菜单项的 click 能被正常触发
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current && menuRef.current.contains(t)) return;
+      setMenu(null);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
     window.addEventListener('scroll', close, true);
     return () => {
-      window.removeEventListener('click', close);
+      window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', close, true);
     };
   }, [menu]);
+
+  // 「上传」菜单:点击外部或 Esc 时收起
+  useEffect(() => {
+    if (!uploadMenu) return;
+    const close = () => setUploadMenu(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setUploadMenu(false); };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('click', close); window.removeEventListener('keydown', onKey); };
+  }, [uploadMenu]);
 
   // 订阅服务端删除进度事件(单次删除只有一条在跑,直接合并到当前 deleting)
   useEffect(() => {
@@ -386,24 +415,55 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
     xhr.send(fd);
   };
 
+  // 「上传」按钮:一个按钮同时支持选文件/选文件夹(浏览器单个 file input 只能二选一,故点击弹菜单)
+  const pickUpload = (kind: 'file' | 'dir') => () => {
+    setUploadMenu(false);
+    if (kind === 'dir') dirInputRef.current?.click();
+    else fileInputRef.current?.click();
+  };
+
+  // ---- 重命名 ----
+  const startRename = (name: string) => {
+    setMenu(null);
+    setRenaming(name);
+    setRenameDraft(name);
+  };
+  const commitRename = async () => {
+    if (renameSubmitting.current || !renaming) return;
+    const oldName = renaming;
+    const newName = renameDraft.trim();
+    // 名称未变化或为空:不真正重命名,直接退出编辑
+    if (!newName || newName === oldName) { setRenaming(null); setRenameDraft(''); return; }
+    if (newName.includes('/') || newName.includes('\\')) { setError('名称不能包含 / 或 \\'); setRenaming(null); setRenameDraft(''); return; }
+    renameSubmitting.current = true;
+    setRenameBusy(true); // 请求进行中:行右侧显示加载圈(复用 fm-loading)
+    try {
+      await api.request('rename', { src: entryPath(oldName), dst: entryPath(newName) }, 30000, 'renamed');
+      refresh();
+      flash(`✏️ 已重命名为 ${newName}`);
+    } catch (e) { setError((e as Error).message); refresh(); }
+    finally {
+      renameSubmitting.current = false;
+      setRenameBusy(false);
+      setRenaming(null); setRenameDraft('');
+    }
+  };
+
   // 面包屑
   const crumbs = path.split('/').filter(Boolean);
 
   const statusText = deleting
     ? `正在删除 ${deleting.index + 1}/${deleting.total}: ${deleting.name}…已删 ${deleting.done} 项`
-    : loading ? '加载中…'
-      : uploading ? (wrState ? `写入远程 ${wrState.done}/${wrState.total}` : `上传中 ${Math.min(progress, 99)}%`)
-        : transferring ? (wrState ? `传到本地 ${wrState.done}/${wrState.total}` : '传到本地…')
-          : msg ? msg
-            : selection.size > 1 ? `已选 ${selection.size} 项`
-              : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
+    : uploading ? (wrState ? `写入远程 ${wrState.done}/${wrState.total}` : `上传中 ${Math.min(progress, 99)}%`)
+      : transferring ? (wrState ? `传到本地 ${wrState.done}/${wrState.total}` : '传到本地…')
+        : msg ? msg
+          : selection.size > 1 ? `已选 ${selection.size} 项`
+            : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
 
   return (
     <div className="fm">
       <div className="fm-toolbar row gap">
-        <button className="ghost sm" onClick={up} disabled={path === '/'} title="上级目录">⬆ 上级</button>
-        <button className="ghost sm" onClick={refresh} title="刷新">↻</button>
-        {home && <button className="ghost sm" onClick={() => load(home)} title={`家目录 ${home}`}>🏠</button>}
+        {home && <button className="ghost sm" onClick={() => load(home)} data-tip={`家目录 ${home}`}>🏠</button>}
         <div className="fm-crumbs" ref={crumbsRef}>
           <span className={`crumb ${path === '/' ? 'cur' : ''}`} onClick={() => load('/')}>/</span>
           {crumbs.map((c, i) => {
@@ -425,17 +485,27 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
         <button disabled={!pathDraft.trim()} onClick={() => load(pathDraft.trim())}>跳转</button>
       </div>
 
-      <div className="row gap" style={{ marginTop: 8 }}>
-        <button className="ghost sm" disabled={uploading} onClick={() => fileInputRef.current?.click()} title="上传文件到当前目录">⬆ 文件</button>
-        <button className="ghost sm" disabled={uploading} onClick={() => dirInputRef.current?.click()} title="上传文件夹(保留目录结构)到当前目录">⬆ 文件夹</button>
+      <div className="row gap fm-actions">
+        <button className="ghost sm" onClick={up} disabled={path === '/'}>⬆ 上级</button>
+        <button className="ghost sm" onClick={refresh}>↻</button>
+        <div className="fm-upload">
+          <button className="ghost sm" disabled={uploading}
+            onClick={(e) => { e.stopPropagation(); setUploadMenu((v) => !v); }}>⬆ 上传 ▾</button>
+          {uploadMenu && (
+            <div className="ctxmenu fm-upload-menu" onContextMenu={(e) => e.preventDefault()}>
+              <button onClick={pickUpload('file')}>📄 上传文件</button>
+              <button onClick={pickUpload('dir')}>📁 上传文件夹</button>
+            </div>
+          )}
+        </div>
         <button className="ghost sm" disabled={transferring || opCount === 0 || !localCwd}
           onClick={doLocalTransfer}
-          title={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`}>⬇ 传到本地</button>
+          data-tip={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`}>⬇ 传到本地</button>
         {clipboard && (
-          <button className="ghost sm" onClick={() => pasteHere(path)} title="把已复制的项复制到当前目录">📋 粘贴</button>
+          <button className="ghost sm" onClick={() => pasteHere(path)}>📋 粘贴</button>
         )}
         <span className="muted sm fm-status"
-          title={deleting ? `正在删除: ${deleting.current || deleting.name}` : loading ? '加载中…' : selection.size > 1 ? `已选 ${selection.size} 项,点空白处取消` : msg || (clipboard ? `已复制:${clipboard.items.join(', ')}` : '')}>
+          data-tip={deleting ? `正在删除: ${deleting.current || deleting.name}` : selection.size > 1 ? `已选 ${selection.size} 项,点空白处取消` : msg || (clipboard ? `已复制:${clipboard.items.join(', ')}` : '')}>
           {statusText}
         </span>
       </div>
@@ -449,7 +519,7 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
                 : '100%' }} />
         </div>
       )}
-      {error && <div className="error" onClick={() => setError('')} title="点击关闭">✕ {error}</div>}
+      {error && <div className="error" onClick={() => setError('')}>✕ {error}</div>}
 
       <div className="fmlist" ref={listRef} tabIndex={-1}
         onClick={(e) => { if (e.target === e.currentTarget) { clearSelection(); e.currentTarget.focus(); } }}
@@ -465,22 +535,49 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
             <div key={e.name} className={`fmrow ${sel ? 'selected' : ''} ${navPath === navLoading ? 'nav-loading' : ''}`}
               onClick={(ev) => handleRowClick(ev, e)}
               onDoubleClick={() => openEntry(e)}
-              onContextMenu={(ev) => openMenu(ev, e)}
-              title={navPath}>
+              onContextMenu={(ev) => openMenu(ev, e)}>
               <span className="fm-ico">{e.type === 'dir' ? '📁' : e.type === 'link' ? '🔗' : '📄'}</span>
-              <span className="fm-name">{e.name}</span>
+              {renaming === e.name ? (
+                <span className="fm-name">
+                  <span className="fm-name-hide">{e.name}</span>
+                  <input className="fm-rename" autoFocus value={renameDraft}
+                    spellCheck={false}
+                    onChange={(ev) => setRenameDraft(ev.target.value)}
+                    onFocus={(ev) => {
+                      // 默认选中不含扩展名的部分,方便直接输入新名
+                      const dot = ev.target.value.lastIndexOf('.');
+                      if (dot > 0) ev.target.setSelectionRange(0, dot);
+                      else ev.target.select();
+                    }}
+                    onClick={(ev) => ev.stopPropagation()}
+                    onDoubleClick={(ev) => ev.stopPropagation()}
+                    onContextMenu={(ev) => ev.preventDefault()}
+                    onKeyDown={(ev) => {
+                      ev.stopPropagation();
+                      // 中文等输入法组词中:Enter 是确认候选字,不在此提交重命名
+                      if (ev.nativeEvent.isComposing) return;
+                      if (ev.key === 'Enter') commitRename();
+                      else if (ev.key === 'Escape') { setRenaming(null); setRenameDraft(''); }
+                    }}
+                    onBlur={commitRename} />
+                </span>
+              ) : (
+                <span className="fm-name" data-tip={e.name} data-tip-ellipsis data-tip-follow>{e.name}</span>
+              )}
               <span className="fm-size">{e.type === 'dir' ? '—' : fmtSize(e.size)}</span>
               <span className="fm-time">{fmtTime(e.mtime)}</span>
-              {navPath === navLoading && <span className="fm-loading" title="加载中…" />}
+              {renaming === e.name && renameBusy
+                ? <span className="fm-loading" data-tip="重命名中…" />
+                : navPath === navLoading && <span className="fm-loading" data-tip="加载中…" />}
             </div>
           );
         })}
       </div>
 
-      <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · 右键操作 · 上传到当前目录</div>
+      <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · F2 重命名 · 右键操作 · 上传到当前目录</div>
 
       {menu && createPortal(
-        <div className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
+        <div ref={menuRef} className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
           {menu.item && selection.size === 1 && menu.item.type === 'dir' && (
             <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}>📂 打开</button>
           )}
@@ -491,15 +588,18 @@ export default function FileManager({ workspace, home, localCwd, onCwdChange, on
             <button onClick={() => { closeMenu(); doDownload(); }}>⬇ 下载{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button disabled={transferring || !localCwd} title={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`} onClick={() => { closeMenu(); doLocalTransfer(); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button disabled={transferring || !localCwd} data-tip={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`} onClick={() => { closeMenu(); doLocalTransfer(); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
             <button onClick={() => { closeMenu(); doCopy(); }}>📋 复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
+          {menu.item && selection.size === 1 && !deleting && (
+            <button onClick={() => startRename(menu.item!.name)}>✏️ 重命名</button>
+          )}
           {clipboard ? (
             <button onClick={() => { closeMenu(); pasteHere(path); }}>📥 粘贴到此处</button>
           ) : (
-            <button disabled title="先右键复制文件/文件夹,再到这里粘贴">📥 粘贴到此处</button>
+            <button disabled data-tip="先右键复制文件/文件夹,再到这里粘贴">📥 粘贴到此处</button>
           )}
           {menu.item && (
             <>

@@ -41,11 +41,9 @@ export default function PromptInjectPanel() {
     <div>
       <div className="panel-title">全局指令注入</div>
       <div className="hint" style={{ marginBottom: 8 }}>
-        移植自 deepseek-harness 的 dsh-purge 插件。维护一段全局强指令,<b>每次会话</b>都会自动注入到
-        系统提示词中(优先级高于普通对话)。典型用途:固定工作要求、自定义行为准则、通用的编码规范。
         {file && <><br />注入文件:<code>{file}</code></>}
       </div>
-      {err && <div className="error" onClick={() => setErr('')} title="点击关闭">✕ {err}</div>}
+      {err && <div className="error" onClick={() => setErr('')}>✕ {err}</div>}
       {loading ? (
         <div className="provider-empty">正在读取注入文件…</div>
       ) : (

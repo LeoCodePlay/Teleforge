@@ -29,11 +29,11 @@ const scratchRpc = () => {
 
 const GOLDEN = {
   ssh:      ['connect', 'disconnect', 'conn_disconnect', 'conn_switch', 'ssh_profiles_list', 'ssh_profile_save', 'ssh_profile_delete'],
-  agent:    ['speak', 'stop_agent', 'get_history', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_rename', 'session_fork'],
+  agent:    ['speak', 'stop_agent', 'get_history', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
   skills:   ['skills_list', 'skill_get', 'skill_save', 'skill_delete', 'skill_copy_builtin'],
   config:   ['llm', 'get_status', 'tools_list', 'tool_toggle', 'prompt_inject_get', 'prompt_inject_set'],
-  local:    ['list_local_dir', 'read_local_file', 'write_local_file', 'create_local_dir', 'local_delete', 'local_copy', 'set_local_workspace'],
-  remote:   ['list_dir', 'read_file', 'write_file', 'create_dir', 'delete', 'copy', 'set_workspace'],
+  local:    ['list_local_dir', 'read_local_file', 'write_local_file', 'create_local_dir', 'local_delete', 'local_copy', 'local_rename', 'set_local_workspace'],
+  remote:   ['list_dir', 'read_file', 'write_file', 'create_dir', 'delete', 'copy', 'rename', 'set_workspace'],
   transfer: ['local_to_remote', 'remote_to_local'],
   exec:     ['run_command', 'stop_command'],
   'ask-user': ['ask_user_answer', 'ask_user_cancel']
@@ -57,15 +57,15 @@ for (const [name, fn, types] of [
 }
 
 // ---- router 全量 ----
-const ALL49 = [...Object.values(GOLDEN)].flat();
+const ALL_TYPES = [...Object.values(GOLDEN)].flat();
 const sent = [];
 const router = createRpcRouter({
   send: (p) => sent.push(p),
   emitStatus() {},
   syncAgentScope() {}
 });
-check('router 注册全部 49 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL49)),
-  `缺/多: ${sorted(router.types()).filter((t) => !ALL49.includes(t)).join(',') || '(无)'}`);
+check('router 注册全部 56 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
+  `缺/多: ${sorted(router.types()).filter((t) => !ALL_TYPES.includes(t)).join(',') || '(无)'}`);
 
 // 重复注册被拒
 let dup = '';

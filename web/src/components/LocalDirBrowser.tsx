@@ -95,7 +95,7 @@ export default function LocalDirBrowser({ initial, home, onClose, onPick }: Loca
           </div>
         </div>
         <div className="modal-foot">
-          <button className="primary grow" disabled={isRoot} title={isRoot ? '请先进入一个磁盘或文件夹' : ''} onClick={() => onPick(path)}>以此目录为本地工作区</button>
+          <button className="primary grow" disabled={isRoot} data-tip={isRoot ? '请先进入一个磁盘或文件夹' : ''} onClick={() => onPick(path)}>以此目录为本地工作区</button>
         </div>
       </div>
     </div>

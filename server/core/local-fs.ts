@@ -118,6 +118,16 @@ export class LocalFs {
     }
   }
 
+  // 重命名(原子 rename);目标已存在时报错,不静默覆盖
+  async renamePath(src: string, dst: string): Promise<{ src: string; dst: string }> {
+    src = path.resolve(src); dst = path.resolve(dst);
+    if (src === dst) throw new Error('新名称与旧名称相同');
+    if (!(await this.atype(src))) throw new Error(`源不存在: ${src}`);
+    if (await this.atype(dst)) throw new Error(`目标已存在: ${dst}`);
+    await fsp.rename(src, dst);
+    return { src, dst };
+  }
+
   async atype(p: string): Promise<'dir' | 'file' | 'link' | null> {
     try {
       const a = await fsp.lstat(path.resolve(p));

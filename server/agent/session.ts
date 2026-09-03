@@ -1,4 +1,4 @@
-// 事件溯源会话日志(设计参照 deepseek-harness 的 session 子系统):
+// 事件溯源会话日志(设计 的 session 子系统):
 // - append-only 的 SessionEvent 序列是唯一事实源。LLM 消息历史不单独存储,
 //   由 deriveMessages() 从事件投影得出——"模型可见即可回放":凡是发给模型的内容,
 //   都能从日志重建;回放就是同一份事件的重新投影。

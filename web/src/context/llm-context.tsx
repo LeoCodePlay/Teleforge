@@ -112,11 +112,12 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
           models: us.models || {},
           keys: us.keys || {}
         });
-        // 当前选中提供方:后端优先 → localStorage → 默认;并校验存在性
-        const pid = us.providerId && [...list, ...PROVIDERS].some((p) => p.id === us.providerId)
-          ? us.providerId
-          : initialProviderId();
-        const finalPid = [...list, ...PROVIDERS].some((p) => p.id === pid) ? pid : DEFAULT_PROVIDER;
+        // 当前选中提供方:后端优先 → localStorage → 「我的提供商」第一条。
+        // 预置条目不再作为可选中项(仅作添加模板),残留的预置 id 一律回退到我的提供商列表
+        const pid = list.some((p) => p.id === us.providerId) ? us.providerId
+          : list.some((p) => p.id === initialProviderId()) ? initialProviderId()
+          : (list[0]?.id || '');
+        const finalPid = pid || DEFAULT_PROVIDER;
         setProviderId(finalPid);
         // 模型:后端保存的该提供方模型优先,否则 localStorage
         const savedModel = (us.models && typeof us.models[finalPid] === 'string' && us.models[finalPid]) || LS('llm.model.' + finalPid, '');
@@ -219,6 +220,24 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effBaseUrl, effKey, effModel, providerId, apiKey, model, customModel, isMock]);
 
+  // 后端重启/WS 断线重连后:agent.llm 是后端内存态,重启即清空。
+  // 前端不刷新时不会重新触发上面的配置 effect,这里监听 open 重连后按当前生效
+  // 配置重新下发,否则重连后的第一条消息会因「尚未配置 LLM」被拒(且无提示,表现为发送没反应)。
+  useEffect(() => {
+    const off = api.on('open', () => {
+      const cfg = provider.modelConfig?.[effModel] || FALLBACK_CONTEXT;
+      api.send('llm', {
+        llm: {
+          baseUrl: effBaseUrl, apiKey: effKey, model: effModel,
+          contextWindow: cfg.contextWindow || 0,
+          maxTokens: cfg.maxTokens || 0
+        }
+      });
+    });
+    return () => { off(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effBaseUrl, effKey, effModel, providerId]);
+
   // ---- 添加 / 编辑 / 复制 / 删除「我的提供商」(增删改均写入服务端配置文件) ----
   // 添加成功后自动切换为当前使用;返回 true/false 供弹窗决定是否关闭
   const addProvider = async (d: ProviderDraft): Promise<boolean> => {
@@ -311,7 +330,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
         models: omitKey(s.models, id),
         keys: omitKey(s.keys, id)
       }));
-      if (providerId === id) switchProvider(DEFAULT_PROVIDER);
+      if (providerId === id) switchProvider(list[0]?.id || DEFAULT_PROVIDER);
     } catch (e) { setErr('删除提供商失败:' + (e as Error).message); }
   };
 

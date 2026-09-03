@@ -29,7 +29,7 @@ export default function SettingsPanel({ onClose, connected = false }: SettingsPa
       <div className="settings" onClick={(e) => e.stopPropagation()}>
         <div className="settings-head">
           <span>⚙ 设置</span>
-          <button className="ghost" title="关闭" onClick={onClose}>✕</button>
+          <button className="ghost" onClick={onClose}>✕</button>
         </div>
         <div className="settings-body">
           <div className="settings-menu">

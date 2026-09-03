@@ -43,23 +43,25 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
 
   // 其他服务器后台运行的会话:connKey 与当前作用域不同,且仅在运行中(服务端只下发运行中的)
   const foreign = scopeKey ? (sessions || []).filter((s) => s.connKey && s.connKey !== scopeKey) : [];
-  const mine = (sessions || []).filter((s) => !foreign.includes(s));
+  // 当前作用域的会话:仅显示"有对话内容"的(msgCount>0)、正运行中、或当前激活的——
+  // 新建会话(尚未发送首条消息,或服务端自动创建的空会话)不占历史列表位,
+  // 发送开始对话后才按内容出现在列表(服务端只在发言后计入 msgCount)
+  const mine = (sessions || []).filter((s) => !foreign.includes(s) && (s.id === activeId || busyIds.includes(s.id) || (s.msgCount ?? 0) > 0));
   const foreignLabel = (s: Session) => s.connKey === 'local' ? '本地工作区' : String(s.connKey || '');
 
   return (
     <div className="panel">
       <div className="panel-title row" style={{ justifyContent: 'space-between' }}>
         <span>历史会话</span>
-        <button className="sm" title="新建会话(原会话的任务继续在后台运行,可随时切换回来)" onClick={() => onNew()}>＋ 新建</button>
+        <button className="sm" onClick={() => onNew()}>＋ 新建</button>
       </div>
-      {scopeLabel && <div className="s-scope" title="当前范围:会话列表只显示该服务器/本地工作区的对话">📡 {scopeLabel}</div>}
+      {scopeLabel && <div className="s-scope">📡 {scopeLabel}</div>}
       {mine.length === 0 && <div className="muted" style={{ fontSize: 12 }}>暂无历史会话,点「＋ 新建」开始</div>}
       <div className="sessions">
         {mine.map((s) => {
           const running = busyIds.includes(s.id);
           return (
             <div key={s.id} className={`session-item ${s.id === activeId ? 'active' : ''}`}
-              title={running ? '任务进行中,点击切换查看' : s.id === activeId ? '当前会话' : '点击切换到此会话'}
               onClick={() => onSwitch(s.id)}>
               {editing === s.id ? (
                 <input className="s-edit grow" autoFocus value={editText}
@@ -69,7 +71,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
                   onClick={(e) => e.stopPropagation()} />
               ) : (
                 <>
-                  {running && <span className="s-run" title="任务进行中">●</span>}
+                  {running && <span className="s-run" data-tip="任务进行中">●</span>}
                   {/* 点击始终触发切换请求(含当前会话):重载失败/加载中的会话可再次点击重试,
                       而非被 activeId 守卫挡成 no-op */}
                   <span className="s-title">
@@ -79,8 +81,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
               )}
               <span className="s-meta">{s.msgCount ?? 0}条 {fmtTime(s.updatedAt)}</span>
               <span className="s-actions" onClick={(e) => e.stopPropagation()}>
-                <button title="重命名" onClick={() => (editing === s.id ? commitEdit(s.id) : startEdit(s))}>✎</button>
-                <button className="danger" title={running ? '任务进行中,不能删除' : '删除会话'} disabled={running || s.id === activeId}
+                <button className="action-icon" onClick={() => (editing === s.id ? commitEdit(s.id) : startEdit(s))}>✎</button>
+                <button className="action-icon danger" data-tip={running ? '任务进行中,不能删除' : null} disabled={running || s.id === activeId}
                   onClick={() => onDelete(s.id)}>🗑</button>
               </span>
             </div>
@@ -91,9 +93,9 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
         <div className="s-foreign">
           <div className="s-foreign-title">其他服务器后台运行中</div>
           {foreign.map((s) => (
-            <div key={s.id} className="session-item foreign" title="该服务器上仍在后台运行,点击切回查看"
+            <div key={s.id} className="session-item foreign" data-tip="该会话仍在原服务器后台运行"
               onClick={() => onSwitchForeign?.(s.id, s.connKey || '')}>
-              <span className="s-run" title="任务进行中">●</span>
+              <span className="s-run" data-tip="任务进行中">●</span>
               <span className="s-title">
                 {s.title || '新会话'}
                 <span className="s-foreign-badge">📡 {foreignLabel(s)}</span>

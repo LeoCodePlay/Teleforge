@@ -1,4 +1,4 @@
-// 全局指令注入文件管理(移植自 deepseek-harness 的 dsh-purge 插件):
+// 全局指令注入文件管理
 // 用户在设置面板维护一个 prompt-inject.md(全局自定义指令),系统提示词构建时
 // 自动把其内容作为强指令 section 注入到每次会话。参考 dsh-purge 的设计:
 // - 注入内容放在 systemPrompt 的高优先级 section(order 靠前)

@@ -73,7 +73,7 @@ export default function TodoPanel({ todos }: { todos: TodoItem[] }) {
         type="button"
         className="todo-header"
         aria-expanded={!collapsed}
-        title={collapsed ? '展开任务计划' : '收起任务计划'}
+        data-tip={collapsed ? '展开任务计划' : '收起任务计划'}
         onClick={() => setCollapsed((v) => !v)}
       >
         <span className="todo-left">

@@ -27,15 +27,16 @@ function tarHeader(relPath: string, { mode, size, mtimeSec, type, linkname = '' 
   buf.write(tarOctal(0), 116, 8, 'ascii');
   buf.write(tarOctal(size), 124, 8, 'ascii');
   buf.write(tarOctal(mtimeSec), 136, 8, 'ascii');
-  buf.fill(0x20, 148, 156); // checksum 先置空格
-  let sum = 0;
-  for (let i = 0; i < 512; i++) sum += buf[i];
-  buf.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'ascii');
   buf[156] = type.charCodeAt(0); // '0' 文件 '5' 目录 '2' 符号链接
   buf.write(linkname, 157, 100, 'utf8');
   buf.write('ustar\0', 257, 6, 'ascii');
   buf.write('00', 263, 2, 'ascii');
   buf.write(prefix, 345, 155, 'utf8');
+  // 校验和必须最后算:此时除校验和区(置空格)外全部字段已就绪,解包器才能通过校验
+  buf.fill(0x20, 148, 156);
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += buf[i];
+  buf.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'ascii');
   return buf;
 }
 // 递归收集一组远程路径(文件/目录)为 tar 条目;每个根路径映射到给定相对路径(rel)

@@ -62,6 +62,12 @@ export function registerRemote(rpc: RpcModule) {
     reply({ type: 'copied', ...r });
   });
 
+  rpc.register('rename', async (msg, { reply }) => {
+    if (!msg.src || !msg.dst) throw new Error('缺少 src 或 dst');
+    const r = await ssh.renamePath(msg.src, msg.dst);
+    reply({ type: 'renamed', ...r });
+  });
+
   rpc.register('set_workspace', async (msg, { reply, emitStatus }) => {
     // 原 ws.js set_workspace case(434-443)逐字复制
     const st = await ssh.stat(msg.path);

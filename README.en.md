@@ -211,6 +211,7 @@ Covers: SSH connect → platform detection → list directory → read file → 
 - Agent write/edit/delete is **restricted to the workspace directory** and refuses to delete the workspace root; commands run with timeouts and output caps.
 - Use a **dedicated low-privilege account with key auth** on the remote server, and be cautious about letting the agent run destructive commands.
 - Running with root privileges allows the tool to read any local file — a normal risk of any local tool.
+- All operations and data stay on the local machine and the connected SSH servers; nothing is uploaded to the internet or to the author's servers.
 
 ## Roadmap
 
