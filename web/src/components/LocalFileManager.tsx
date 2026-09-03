@@ -470,32 +470,31 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
               onClick={(ev) => handleRowClick(ev, e)}
               onDoubleClick={() => openEntry(e)}
               onContextMenu={(ev) => openMenu(ev, e)}>
-              {renaming === e.name
-                ? <input className="fm-rename" autoFocus value={renameDraft}
-                    spellCheck={false}
-                    onChange={(ev) => setRenameDraft(ev.target.value)}
-                    onFocus={(ev) => {
-                      // 默认选中不含扩展名的部分,方便直接输入新名
-                      const dot = ev.target.value.lastIndexOf('.');
-                      if (dot > 0) ev.target.setSelectionRange(0, dot);
-                      else ev.target.select();
-                    }}
-                    onClick={(ev) => ev.stopPropagation()}
-                    onDoubleClick={(ev) => ev.stopPropagation()}
-                    onContextMenu={(ev) => ev.preventDefault()}
-                    onKeyDown={(ev) => {
-                      ev.stopPropagation();
-                      // 中文等输入法组词中:Enter 是确认候选字,不在此提交重命名
-                      if (ev.nativeEvent.isComposing) return;
-                      if (ev.key === 'Enter') commitRename();
-                      else if (ev.key === 'Escape') { setRenaming(null); setRenameDraft(''); }
-                    }}
-                    onBlur={commitRename} />
-                : (<>
-                    <span className="fm-ico">{e.type === 'dir' ? '📁' : e.type === 'link' ? '🔗' : '📄'}</span>
-                    <span className="fm-name" data-tip={e.name} data-tip-ellipsis data-tip-follow>{e.name}</span>
-                  </>)}
-              {renaming !== e.name && (
+              <span className={`fm-ico${renaming === e.name ? ' fm-hide' : ''}`}>{e.type === 'dir' ? '📁' : e.type === 'link' ? '🔗' : '📄'}</span>
+              <span className={`fm-name${renaming === e.name ? ' fm-hide' : ''}`} data-tip={e.name} data-tip-ellipsis data-tip-follow>{e.name}</span>
+              {renaming === e.name ? (
+                // 重命名输入框:绝对定位覆盖整行(见 .fm-rename),不参与布局 → 行高不变
+                <input className="fm-rename" autoFocus value={renameDraft}
+                  spellCheck={false}
+                  onChange={(ev) => setRenameDraft(ev.target.value)}
+                  onFocus={(ev) => {
+                    // 默认选中不含扩展名的部分,方便直接输入新名
+                    const dot = ev.target.value.lastIndexOf('.');
+                    if (dot > 0) ev.target.setSelectionRange(0, dot);
+                    else ev.target.select();
+                  }}
+                  onClick={(ev) => ev.stopPropagation()}
+                  onDoubleClick={(ev) => ev.stopPropagation()}
+                  onContextMenu={(ev) => ev.preventDefault()}
+                  onKeyDown={(ev) => {
+                    ev.stopPropagation();
+                    // 中文等输入法组词中:Enter 是确认候选字,不在此提交重命名
+                    if (ev.nativeEvent.isComposing) return;
+                    if (ev.key === 'Enter') commitRename();
+                    else if (ev.key === 'Escape') { setRenaming(null); setRenameDraft(''); }
+                  }}
+                  onBlur={commitRename} />
+              ) : (
                 <>
                   <span className="fm-size">{e.type === 'dir' ? '—' : fmtSize(e.size)}</span>
                   <span className="fm-time">{fmtTime(e.mtime)}</span>
