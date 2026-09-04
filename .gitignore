@@ -22,4 +22,4 @@ dbg2.mjs
 
 # 运行时数据(会话历史持久化,含对话工具结果与连接配置缓存,不入库)
 data/
-server/data/
+server/data/  

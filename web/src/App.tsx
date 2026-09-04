@@ -6,7 +6,7 @@ import SessionPanel from './components/SessionPanel/SessionPanel';
 import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel';
 import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';
 import ConsolePanel from './components/ConsolePanel/ConsolePanel';
-import FileViewer from './components/FileViewer/FileViewer';
+import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
 import TooltipHost from './components/Tooltip/Tooltip';
 import { LlmProvider } from './context/llm-context';
@@ -20,9 +20,48 @@ const STATUS_LABEL: Record<string, string> = {
   disconnected: '未连接'
 };
 
-interface ViewerState {
-  path: string;
+type TabKind = 'agent' | 'console' | 'file';
+interface TabItem {
+  id: string;
+  kind: TabKind;
   name: string;
+  path?: string;
+  dirty?: boolean;
+}
+const PINNED_TABS: TabItem[] = [
+  { id: 'agent', kind: 'agent', name: 'AI 编程助手' },
+  { id: 'console', kind: 'console', name: '命令台' }
+];
+
+// 打开的文件标签持久化:刷新页面后恢复之前打开的文件(固定页不存)。
+// 只存 {id, kind, name, path},dirty 不存——刷新后内容重新加载,未保存修改自然丢弃。
+const FILE_TABS_KEY = 'sshai.fileTabs';
+const ACTIVE_TAB_KEY = 'sshai.activeTab';
+
+function loadSavedFileTabs(): TabItem[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FILE_TABS_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((t) => t && t.kind === 'file' && typeof t.id === 'string' && typeof t.name === 'string')
+      .map((t) => ({ id: t.id, kind: 'file' as const, name: t.name, path: typeof t.path === 'string' ? t.path : t.id, dirty: false }));
+  } catch { return []; }
+}
+
+function loadSavedActiveTab(): string {
+  try { return localStorage.getItem(ACTIVE_TAB_KEY) || 'agent'; }
+  catch { return 'agent'; }
+}
+
+// 文件标签图标按媒体类型区分,普通文件仍用 📄
+function tabIcon(name: string): string {
+  switch (mediaKindOf(name)) {
+    case 'image': return '🖼️';
+    case 'video': return '🎬';
+    case 'audio': return '🎵';
+    case 'pdf': return '📕';
+    default: return '📄';
+  }
 }
 
 // 本地面板起点:真实家目录来自服务端 status 事件(localHome = os.homedir())
@@ -32,8 +71,28 @@ export default function App() {
     status: 'disconnected', host: null, port: null, username: null,
     platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null
   });
-  const [activeTab, setActiveTab] = useState('agent');
-  const [viewer, setViewer] = useState<ViewerState | null>(null); // {path, name}
+  const [tabs, setTabs] = useState<TabItem[]>(() => [...PINNED_TABS, ...loadSavedFileTabs()]);
+  const [activeTabId, setActiveTabId] = useState(loadSavedActiveTab);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const dragTabIdRef = useRef<string | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  // 文件标签持久化:标签列表/激活标签变化即写入 localStorage(固定页不存);
+  // 恢复时若保存的激活标签已不存在(如远程标签被连接切换清理),回退到最后一个标签
+  useEffect(() => {
+    try {
+      const files = tabs
+        .filter((t) => t.kind === 'file')
+        .map((t) => ({ id: t.id, kind: t.kind, name: t.name, path: t.path }));
+      localStorage.setItem(FILE_TABS_KEY, JSON.stringify(files));
+    } catch {}
+    setActiveTabId((cur) => (tabs.some((t) => t.id === cur) ? cur : tabs[tabs.length - 1]?.id || 'agent'));
+  }, [tabs]);
+  useEffect(() => {
+    try { localStorage.setItem(ACTIVE_TAB_KEY, activeTabId); } catch {}
+  }, [activeTabId]);
   const [localCwd, setLocalCwd] = useState('');   // 本地面板当前目录
   const [remoteCwd, setRemoteCwd] = useState(''); // 远程面板当前目录
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -251,14 +310,22 @@ export default function App() {
     return () => { offStatus(); api.close(); };
   }, []);
 
-  // 活动连接变化(切换/断开)后,远程文件查看器已不属于当前服务器:
-  // 立即关闭,避免看到旧服务器内容或将编辑误保存到新服务器(本地文件不受影响)
-  const prevActiveRef = useRef<string | null>(null);
+  // 活动连接变化(切换/断开)后,远程文件标签页已不属于当前服务器:
+  // 立即关闭,避免看到旧服务器内容或将编辑误保存到新服务器(本地文件标签不受影响)。
+  // 首次状态快照(页面加载/刷新后收到第一条 status)不触发清理——
+  // 否则刷新时若已连上服务器,恢复的远程文件标签会被当成"连接切换"误删。
+  const prevActiveRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     const next = status.activeConn ?? null;
     if (prevActiveRef.current === next) return;
+    const first = prevActiveRef.current === undefined;
     prevActiveRef.current = next;
-    setViewer((v) => (v && !v.path.startsWith('local:') ? null : v));
+    if (first) return;
+    const cur = tabsRef.current;
+    const kept = cur.filter((t) => t.kind !== 'file' || (t.path || '').startsWith('local:'));
+    if (kept.length === cur.length) return;
+    setTabs(kept);
+    setActiveTabId((a) => (kept.some((t) => t.id === a) ? a : kept[kept.length - 1]?.id || 'agent'));
   }, [status.activeConn]);
 
   const connected = status.status === 'connected';
@@ -290,16 +357,133 @@ export default function App() {
   const busySessions = status.busySessions || [];
   const activeBusy = activeSessionId != null && busySessions.includes(activeSessionId);
 
+  // ---- 浏览器式标签页:打开文件 = 在固定页右侧追加标签(已存在则仅激活) ----
+  // 文件标签面板常驻挂载,切走仅 CSS 隐藏,未保存修改不丢失
+  const openFileTab = (path: string, name: string) => {
+    setTabs((prev) => (prev.some((t) => t.id === path)
+      ? prev
+      : [...prev, { id: path, kind: 'file' as const, name, path, dirty: false }]));
+    setActiveTabId(path);
+  };
+
   const handleOpenFile = (path: string) => {
-    const name = path.split('/').filter(Boolean).pop() || path;
-    setViewer({ path, name });
+    openFileTab(path, path.split('/').filter(Boolean).pop() || path);
   };
 
   // 本地文件用 local: 前缀区分,FileViewer 内按前缀分流读取/保存
   const handleOpenLocalFile = (path: string) => {
-    const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
-    setViewer({ path: `local:${path}`, name });
+    openFileTab(`local:${path}`, path.split(/[\\/]/).filter(Boolean).pop() || path);
   };
+
+  const updateTabDirty = (id: string, dirty: boolean) => {
+    setTabs((prev) => {
+      const cur = prev.find((t) => t.id === id);
+      if (!cur || cur.dirty === dirty) return prev;
+      return prev.map((t) => (t.id === id ? { ...t, dirty } : t));
+    });
+  };
+
+  // 关闭文件标签:有未保存修改先确认;关闭后激活相邻标签(优先右侧),固定页不可关
+  const closeTab = async (id: string) => {
+    const t = tabsRef.current.find((x) => x.id === id);
+    if (!t || t.kind !== 'file') return;
+    if (t.dirty) {
+      const ok = await confirm({
+        title: '关闭标签',
+        message: `「${t.name}」有未保存的修改,关闭后将丢失,确定关闭?`,
+        confirmLabel: '丢弃并关闭',
+        danger: true
+      });
+      if (!ok) return;
+    }
+    const idx = tabsRef.current.findIndex((x) => x.id === id);
+    const next = tabsRef.current.filter((x) => x.id !== id);
+    setTabs(next);
+    setActiveTabId((cur) => {
+      if (cur !== id) return cur;
+      const nb = next[idx] || next[idx - 1];
+      return nb ? nb.id : 'agent';
+    });
+  };
+
+  // 标签拖拽排序(仅文件页):按指针处于目标标签左/右半侧决定插入位,
+  // 插入下标始终钳制在固定页数量之后,保证固定页永远排最前
+  const onTabDragStart = (e: React.DragEvent, id: string) => {
+    dragTabIdRef.current = id;
+    setDraggingId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+  };
+  const onTabDragOver = (e: React.DragEvent, overId: string) => {
+    const dragId = dragTabIdRef.current;
+    if (!dragId || dragId === overId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const insertBefore = e.clientX < rect.left + rect.width / 2;
+    setTabs((prev) => {
+      const from = prev.findIndex((t) => t.id === dragId);
+      const to = prev.findIndex((t) => t.id === overId);
+      if (from < 0 || to < 0) return prev;
+      let at = insertBefore ? to : to + 1;
+      if (at > from) at -= 1; // 先移除拖动项,再换算成新数组里的插入下标
+      at = Math.max(prev.filter((t) => t.kind !== 'file').length, at);
+      if (at === from) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(at, 0, moved);
+      return next;
+    });
+  };
+  const onTabDragEnd = () => { dragTabIdRef.current = null; setDraggingId(null); };
+
+  // 单个标签渲染(固定页/文件页共用;固定页不可拖、无关闭钮)
+  const renderTab = (t: TabItem) => {
+    const pinned = t.kind !== 'file';
+    return (
+      <div
+        key={t.id}
+        data-tab-id={t.id}
+        className={`btab${activeTabId === t.id ? ' active' : ''}${pinned ? ' pinned' : ''}${draggingId === t.id ? ' dragging' : ''}${t.dirty ? ' dirty' : ''}`}
+        draggable={!pinned}
+        title={t.kind === 'file' ? t.path : `${t.name}(固定标签)`}
+        onDragStart={(e) => onTabDragStart(e, t.id)}
+        onDragOver={(e) => onTabDragOver(e, t.id)}
+        onDragEnd={onTabDragEnd}
+        onDrop={(e) => e.preventDefault()}
+        onClick={() => setActiveTabId(t.id)}
+        onAuxClick={(e) => { if (e.button === 1) closeTab(t.id); }}
+      >
+        <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : tabIcon(t.name)}</span>
+        <span className="btab-label">{t.name}</span>
+        {!pinned && (
+          <button
+            className="btab-close"
+            title={t.dirty ? '有未保存修改' : '关闭标签'}
+            onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
+          >
+            {t.dirty ? '●' : '✕'}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // 标签条溢出时滚轮横向滚动:直接用 React 合成 onWheel(挂在滚动容器上,
+  // 不依赖 useEffect/ref 时序,只要组件渲染必然生效);当前布局为 100vh 无
+  // 页面纵向滚动,passive 限制(不能 preventDefault)不影响功能
+  const onStripWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollWidth <= el.clientWidth + 1) return;
+    el.scrollLeft += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  };
+
+  // 激活标签自动滚入可视区(打开新标签/切换时)
+  useEffect(() => {
+    stripRef.current
+      ?.querySelector(`[data-tab-id="${CSS.escape(activeTabId)}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeTabId, tabs.length]);
 
   // ---- 按服务器保存的工作区历史:key = "host:port",每个服务器记住添加/打开过的工作区 ----
   const WS_KEY = 'sshai.wsByHost';
@@ -436,17 +620,23 @@ export default function App() {
         </aside>
 
         <main className="main">
-          <div className="tabs">
-            <button className={activeTab === 'agent' ? 'tab active' : 'tab'} onClick={() => setActiveTab('agent')}>
-              💬 AI 编程助手
-            </button>
-            <button className={activeTab === 'console' ? 'tab active' : 'tab'} onClick={() => setActiveTab('console')}>
-              ⌨️ 命令台
-            </button>
+          <div
+            className="tabstrip"
+            onDragOver={(e) => { if (dragTabIdRef.current) e.preventDefault(); }}
+            onDrop={(e) => e.preventDefault()}
+          >
+            {/* 固定段:AI 编程助手/命令台永远显示,不受文件标签多少与滚动影响 */}
+            <div className="tabstrip-pinned">
+              {tabs.filter((t) => t.kind !== 'file').map(renderTab)}
+            </div>
+            {/* 滚动段:文件标签可横向滚动(滚轮/拖拽到边缘);用项目悬浮滚动条引擎(不占布局,高度不变) */}
+            <div className="tabstrip-scroll" ref={stripRef} onWheel={onStripWheel}>
+              {tabs.filter((t) => t.kind === 'file').map(renderTab)}
+            </div>
           </div>
           <div className="tab-body">
-            {activeTab === 'agent' && (
-              <ChatPanel key="agent" connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
+            {activeTabId === 'agent' && (
+              <ChatPanel key="agent" connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
               localHome={status.localHome} savedLocalWs={localWs}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
@@ -454,14 +644,21 @@ export default function App() {
               onSessionCreated={handleSessionCreated} />
             )}
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
-            <div className={`tab-pane ${activeTab === 'console' ? '' : 'hide'}`}>
-              <ConsolePanel connected={connected} visible={activeTab === 'console'} activeConn={status.activeConn ?? null} hostIp={status.host} />
+            <div className={`tab-pane ${activeTabId === 'console' ? '' : 'hide'}`}>
+              <ConsolePanel connected={connected} visible={activeTabId === 'console'} activeConn={status.activeConn ?? null} hostIp={status.host} />
             </div>
+            {/* 文件标签页同样常驻挂载:切走仅隐藏,未保存的编辑内容不丢失 */}
+            {tabs.filter((t) => t.kind === 'file').map((t) => (
+              <div key={t.id} className={`tab-pane ${activeTabId === t.id ? '' : 'hide'}`}>
+                <FileViewer path={t.path || t.id} name={t.name}
+                  onDirtyChange={(d) => updateTabDirty(t.id, d)}
+                  onClose={() => closeTab(t.id)} />
+              </div>
+            ))}
           </div>
         </main>
       </div>
 
-      {viewer && <FileViewer path={viewer.path} name={viewer.name} onClose={() => setViewer(null)} />}
       {settingsOpen && <SettingsPanel connected={connected} onClose={() => setSettingsOpen(false)} />}
       {sshOpen && <SshConnectModal status={status} onClose={() => setSshOpen(false)} />}
       <TooltipHost />

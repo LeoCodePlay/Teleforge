@@ -563,7 +563,6 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
                   }}
                   onBlur={commitRename} />
               )}
-              <span className={`fm-size${renaming === e.name ? ' fm-hide' : ''}`}>{e.type === 'dir' ? '—' : fmtSize(e.size)}</span>
               <span className={`fm-time${renaming === e.name ? ' fm-hide' : ''}`}>{fmtTime(e.mtime)}</span>
               {renaming === e.name && renameBusy
                 ? <span className="fm-loading" data-tip="重命名中…" />

@@ -9,6 +9,7 @@ import { registerRemote } from '../server/api/rpc/remote.ts';
 import { registerTransfer } from '../server/api/rpc/transfer.ts';
 import { registerExec } from '../server/api/rpc/exec.ts';
 import { registerAskUser } from '../server/api/rpc/ask-user.ts';
+import { registerRef } from '../server/api/rpc/ref.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -36,7 +37,8 @@ const GOLDEN = {
   remote:   ['list_dir', 'read_file', 'write_file', 'create_dir', 'delete', 'copy', 'rename', 'set_workspace'],
   transfer: ['local_to_remote', 'remote_to_local'],
   exec:     ['run_command', 'stop_command'],
-  'ask-user': ['ask_user_answer', 'ask_user_cancel']
+  'ask-user': ['ask_user_answer', 'ask_user_cancel'],
+  ref:      ['ref_candidates']
 };
 
 // 各模块 golden:逐个注册到 scratch,类型清单一致
@@ -49,7 +51,8 @@ for (const [name, fn, types] of [
   ['remote', registerRemote, GOLDEN.remote],
   ['transfer', registerTransfer, GOLDEN.transfer],
   ['exec', registerExec, GOLDEN.exec],
-  ['ask-user', registerAskUser, GOLDEN['ask-user']]
+  ['ask-user', registerAskUser, GOLDEN['ask-user']],
+  ['ref', registerRef, GOLDEN.ref]
 ]) {
   const rpc = scratchRpc();
   fn(rpc);
@@ -64,7 +67,7 @@ const router = createRpcRouter({
   emitStatus() {},
   syncAgentScope() {}
 });
-check('router 注册全部 56 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
+check('router 注册全部 57 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
   `缺/多: ${sorted(router.types()).filter((t) => !ALL_TYPES.includes(t)).join(',') || '(无)'}`);
 
 // 重复注册被拒

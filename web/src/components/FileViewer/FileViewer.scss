@@ -1,7 +1,38 @@
-/* ---- FileViewer 独有样式:文件查看器弹窗 + 下载链接按钮 ---- */
-.modal.fviewer { width: 760px; height: 82vh; display: flex; flex-direction: column; }
-.modal.fviewer .modal-body { flex: 1; display: flex; flex-direction: column; padding: 0; }
-.modal.fviewer .modal-body textarea { flex: 1; }
+/* ---- FileViewer 独有样式:内嵌主区标签页的文件查看器(不再是弹窗) + 下载链接按钮 ---- */
+.fviewer { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* 头部固定高度:保存按钮/已保存提示随编辑状态出现消失时,不再造成高度变化与页面抖动 */
+.fviewer-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  height: 42px; padding: 0 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
+}
+.fviewer-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fviewer-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+/* 动作区元素统一高度并垂直居中,保证任意增删/文字变化头部高度恒定 */
+.fviewer-actions a.btn-link,
+.fviewer-actions button.sm {
+  height: 26px; padding-top: 0; padding-bottom: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.fviewer-actions .okline { margin: 0; height: 26px; display: inline-flex; align-items: center; }
+.fviewer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; }
+.fviewer-msg { padding: 16px; }
+.fviewer-foot { flex: none; padding: 6px 14px; border-top: 1px solid var(--line-soft); }
+
+/* 媒体预览:图片/视频/音频/PDF 内嵌展示 */
+.fviewer-body.media {
+  align-items: center; justify-content: center; padding: 16px; overflow: auto;
+  background: var(--code-bg-solid);
+}
+.fviewer-body.media.pdf-mode { padding: 0; align-items: stretch; }
+.fviewer-body.media img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  border-radius: var(--r-sm); box-shadow: 0 4px 24px var(--shadow-1);
+}
+.fviewer-body.media video { max-width: 100%; max-height: 100%; border-radius: var(--r-sm); box-shadow: 0 4px 24px var(--shadow-1); }
+.fviewer-body.media audio { width: min(480px, 90%); }
+.fviewer-body.media iframe { width: 100%; height: 100%; border: none; background: #fff; }
 
 /* 下载链接按钮样式 */
 a.btn-link {
@@ -12,3 +43,126 @@ a.btn-link {
   text-decoration: none; cursor: pointer; transition: all .18s;
 }
 a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-2); background: var(--glass-bg-hover); }
+
+/* ---- CodeMirror 编辑器(代码高亮 + 左侧行号)----
+   颜色一律取主题令牌(深色=白叠加系,浅色自动翻转),语法 token 挂 .cmx-* 类。 */
+.fviewer .codeedit { flex: 1; min-height: 0; overflow: hidden; position: relative; }
+/* 编辑器宿主:绝对定位填满容器,让 CodeMirror 拿到确定的尺寸 */
+.fviewer .codeedit-host { position: absolute; inset: 0; }
+.fviewer .cm-editor {
+  height: 100%;
+  background: var(--code-bg-solid);
+  color: var(--code-ink);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.fviewer .cm-editor.cm-focused { outline: none; }
+.fviewer .cm-scroller { line-height: 1.55; padding: 8px 0 20px; }
+.fviewer .cm-content { caret-color: var(--accent); }
+.fviewer .cm-line { padding: 0 12px; }
+
+/* 行号 gutter:最小宽度按总行数位数固定(--fviewer-digits),个位/两位切换不再抖动 */
+.fviewer .cm-gutters {
+  color: var(--text-faint);
+  border-right: 1px solid var(--line-soft); padding-right: 4px;
+  /* 行号列近实底(z-index 200 在代码之上):半透明表色叠加成近实底,遮挡横向滚动时穿行的代码 */
+  background-color: var(--code-bg-solid);
+  background-image: linear-gradient(var(--code-bg-solid), var(--code-bg-solid));
+}
+.fviewer .cm-lineNumbers .cm-gutterElement {
+  min-width: calc(var(--fviewer-digits, 2) * 1ch + 12px);
+  padding: 0 4px 0 8px;
+}
+.fviewer .cm-activeLineGutter { background: transparent; color: var(--accent-2); }
+.fviewer .cm-activeLine { background: var(--hover-bg); }
+
+/* 匹配括号:光标色由 .cm-content 的 caret-color 提供;选中文字走浏览器原生选区
+   (CodeEditor 未启用 drawSelection 自绘),与全应用其他文字选中同色,
+   由全局 ::selection(--sel-glow)统一控制,编辑器内不再单独定义选中色 */
+.fviewer .cm-matchingBracket { background: var(--accent-soft); outline: 1px solid var(--accent-border); }
+
+/* 编辑器右键菜单:复用全局 .ctxmenu 玻璃样式;快捷键提示右对齐 */
+.ctxmenu .ctx-key {
+  margin-left: auto; font-size: 11px; color: var(--text-faint);
+  opacity: .8; padding-left: 14px; letter-spacing: .3px; white-space: nowrap;
+}
+
+/* 折叠占位 */
+.fviewer .cm-foldPlaceholder {
+  background: var(--glass-bg); border: 1px solid var(--line-soft);
+  border-radius: var(--r-pill); color: var(--muted); padding: 0 4px;
+}
+
+/* 折叠箭头:不用默认字符,用 CSS 伪元素画 chevron,并垂直居中 */
+.fviewer .cm-foldGutter .cm-gutterElement {
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.fviewer .cm-foldGutter span {
+  position: relative; display: inline-block;
+  width: 14px; height: 14px; margin: 0; padding: 0;
+  border-radius: var(--r-pill); cursor: pointer;
+  transition: background .15s;
+}
+/* 未折叠(可折叠):向下 chevron ⌄ */
+.fviewer .cm-foldGutter span.fld-open::before,
+/* 已折叠:向右 chevron › */
+.fviewer .cm-foldGutter span.fld-closed::before {
+  content: '';
+  position: absolute; top: 50%; left: 50%;
+  width: 5px; height: 5px; margin: -3px 0 0 -3px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transition: border-color .15s, transform .15s;
+}
+/* fld-open:右+下边框旋转45° 构成指向下的角 */
+.fviewer .cm-foldGutter span.fld-open::before { transform: rotate(45deg); }
+/* fld-closed:右+下边框旋转-45° 构成指向右的角 */
+.fviewer .cm-foldGutter span.fld-closed::before { transform: rotate(-45deg); }
+.fviewer .cm-foldGutter span:hover { background: var(--glass-bg-hover); }
+.fviewer .cm-foldGutter span:hover::before { border-color: var(--accent-2); }
+
+/* 搜索面板 / 补全提示浮层 */
+.fviewer .cm-panels { background: var(--code-bg); color: var(--text); }
+.fviewer .cm-panels.cm-panels-top { border-bottom: 1px solid var(--line-soft); }
+.fviewer .cm-panels .cm-textfield {
+  background: var(--glass-bg-inset); color: var(--text);
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  padding: 3px 8px; font-size: 12px;
+}
+.fviewer .cm-panels button { padding: 3px 10px; font-size: 12px; border-radius: var(--r-sm); }
+.fviewer .cm-searchMatch { background: var(--warn-bg); outline: 1px solid var(--warn-border); }
+.fviewer .cm-searchMatch.cm-searchMatch-selected { background: var(--accent-soft); outline-color: var(--accent-border); }
+.fviewer .cm-tooltip {
+  background: var(--pop-bg); color: var(--text);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+}
+.fviewer .cm-tooltip-autocomplete ul li { padding: 2px 8px; }
+.fviewer .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent-soft); color: var(--accent-2); }
+.fviewer .cm-tooltip .cm-completionLabel { font-family: var(--mono); }
+.fviewer .cm-completionDetail { color: var(--muted); margin-left: 8px; }
+
+/* 语法 token 配色(全部来自主题令牌,深浅主题自动翻转) */
+.fviewer .cmx-key { color: var(--accent-2); font-weight: 600; }
+.fviewer .cmx-str { color: var(--green); }
+.fviewer .cmx-cmt { color: var(--muted); font-style: italic; }
+.fviewer .cmx-num { color: var(--amber); }
+.fviewer .cmx-fn { color: var(--violet); }
+.fviewer .cmx-type { color: var(--accent); }
+.fviewer .cmx-prop { color: var(--text-2); }
+.fviewer .cmx-tag { color: var(--red); }
+.fviewer .cmx-attr { color: var(--amber); }
+.fviewer .cmx-cons { color: var(--amber-bright); }
+.fviewer .cmx-head { color: var(--accent-2); font-weight: 700; }
+.fviewer .cmx-link { color: var(--accent-2); text-decoration: underline; }
+.fviewer .cmx-quote { color: var(--green); font-style: italic; }
+.fviewer .cmx-meta { color: var(--muted); }
+.fviewer .cmx-err { color: var(--red); text-decoration: underline wavy var(--red); }
+
+/* 编辑器内原生滚动条:全局隐藏过,这里给编辑器保留细窄可见的 */
+.fviewer .cm-scroller::-webkit-scrollbar { width: 6px; height: 6px; }
+.fviewer .cm-scroller::-webkit-scrollbar-track { background: transparent; }
+.fviewer .cm-scroller::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
+.fviewer .cm-scroller::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+.fviewer .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb-x) transparent; }

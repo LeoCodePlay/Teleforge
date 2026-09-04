@@ -30,8 +30,12 @@ export interface SlashMenuProps {
   onActiveChange: (i: number) => void;
 }
 
-/** 对齐 harness fuzzyCandidates:前缀匹配优先,其后按模糊顺序子序列评分排序 */
-export function rankSlashItems(items: SlashItem[], rawQuery: string): SlashItem[] {
+/**
+ * 对齐 harness fuzzyCandidates 的通用名称排序:前缀匹配最优先,其后按模糊顺序子序列
+ * 评分排序(连续/靠前加分;短的靠前)。作用于任意含 name 字段的对象,供 / 命令与 @ 文件
+ * 菜单复用。rawQuery 空时原样返回(列出全部)。
+ */
+export function rankByName<T extends { name: string }>(items: T[], rawQuery: string): T[] {
   const q = rawQuery.toLowerCase();
   if (!q) return items;
   const score = (name: string): number | null => {
@@ -49,12 +53,17 @@ export function rankSlashItems(items: SlashItem[], rawQuery: string): SlashItem[
     }
     return s - n.length * 0.1;
   };
-  const ranked: { item: SlashItem; s: number }[] = [];
+  const ranked: { item: T; s: number }[] = [];
   for (const it of items) {
     const s = score(it.name);
     if (s !== null) ranked.push({ item: it, s });
   }
   return ranked.sort((a, b) => b.s - a.s).map((r) => r.item);
+}
+
+/** / 命令菜单的名称排序:适配 SlashItem 的薄封装 */
+export function rankSlashItems(items: SlashItem[], rawQuery: string): SlashItem[] {
+  return rankByName(items, rawQuery);
 }
 
 export default function SlashMenu({ items, query, active, onPick, onClose, onActiveChange }: SlashMenuProps) {

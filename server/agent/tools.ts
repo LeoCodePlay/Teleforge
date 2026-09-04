@@ -67,14 +67,14 @@ const DEPTH_LIMIT = 4;
 // 旧实现:深度 4、不排除任何目录、safeJson 截 60k。实测一个普通前端工作区会产出
 // 8000+ 行(node_modules/.git 占 92%),截断后模型看到的只有 .git 对象哈希——
 // 纯 token 垃圾且毫无结构价值。故骨架改为:排除噪声目录 + 深度 2 + 条目上限。
-const TREE_EXCLUDE = new Set([
+export const TREE_EXCLUDE = new Set([
   '.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.nuxt',
   '.cache', '__pycache__', '.venv', 'venv', 'target', 'test-results',
   '.playwright-cli', '.trae', '.superpowers', '.idea', '.vscode'
 ]);
-const TREE_DEPTH = 2;
-const TREE_MAX_LINES = 160;   // 骨架总行数上限
-const TREE_PER_DIR = 40;      // 单目录条目上限,超出折叠为"(另有 N 项未列出)"
+export const TREE_DEPTH = 2;
+export const TREE_MAX_LINES = 160;   // 骨架总行数上限
+export const TREE_PER_DIR = 40;      // 单目录条目上限,超出折叠为"(另有 N 项未列出)"
 
 // 目录优先 + 名称排序后再截断:纯字母序截断时,几十个顶层文件会把 server/、web/ 这类
 // 结构性目录挤出上限,骨架就失去了"看结构"的价值。

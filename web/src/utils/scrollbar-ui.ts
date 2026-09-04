@@ -47,7 +47,9 @@ function isExcluded(el: HTMLElement): boolean {
   const tag = el.tagName;
   if (tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'INPUT' || tag === 'TABLE' || tag === 'IFRAME') return true;
   if ('obSkip' in el.dataset) return true; // 显式豁免:data-ob-skip
-  return el.closest('.xterm') !== null;    // xterm 终端自带滚动条
+  if (el.closest('.xterm') !== null) return true;    // xterm 终端自带滚动条
+  if (el.closest('.cm-editor') !== null) return true; // CodeMirror 编辑器自带滚动条
+  return false;
 }
 
 function isAxisScrollable(cs: CSSStyleDeclaration, axis: 'x' | 'y'): boolean {
@@ -217,7 +219,7 @@ function relayoutAll(): void {
 /* 定时清理已卸载容器的状态避免泄漏 */
 function prune(): void {
   for (const [el, s] of states) {
-    if (!el.isConnected || el.closest('.xterm')) {
+    if (!el.isConnected || isExcluded(el)) {
       s.v?.remove();
       s.h?.remove();
       states.delete(el);

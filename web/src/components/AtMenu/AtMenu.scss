@@ -1,0 +1,34 @@
+/* ---- AtMenu 独有样式: @ 文件/文件夹引用菜单(输入框上方浮层,与 / 命令菜单同款外观) ---- */
+.at-menu {
+  position: absolute; left: 12px; right: 12px; bottom: calc(100% + 6px);
+  max-height: 280px; overflow-y: auto;
+  background: var(--pop-bg-lo);
+  backdrop-filter: var(--blur-lg); -webkit-backdrop-filter: var(--blur-lg);
+  border: 1px solid var(--glass-border); border-radius: var(--r-md);
+  box-shadow: 0 12px 36px var(--shadow-2);
+  padding: 6px; z-index: 60;
+}
+.at-empty { padding: 12px; text-align: center; color: var(--muted); font-size: 12px; }
+.at-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; border-radius: 10px; text-align: left; cursor: pointer;
+  background: transparent; border: none; color: inherit;
+}
+.at-item:hover { background: var(--hover-bg); }
+.at-item.on { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-border); }
+.at-badge {
+  font-size: 10.5px; font-weight: 600; flex: none; white-space: nowrap;
+  border-radius: 5px; padding: 1px 5px; line-height: 1.5;
+}
+/* 来源标记:远程用 accent,本地用 green,一眼区分两台机器 */
+.at-badge.remote { color: var(--accent-2); background: var(--accent-fill); }
+.at-badge.local { color: var(--green); background: var(--ok-bg); }
+.at-name {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 12.5px; font-weight: 600; flex: none; white-space: nowrap; color: inherit;
+}
+.at-path {
+  font-size: 11px; color: var(--muted); line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}

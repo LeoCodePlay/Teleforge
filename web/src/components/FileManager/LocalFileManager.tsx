@@ -6,12 +6,6 @@ import { useHorizontalScroller } from '../../hooks/useHorizontalScroller';
 import type { DirEntry } from '../../types';
 import './fm.scss';
 
-function fmtSize(n: number | undefined | null) {
-  if (n == null) return '—';
-  if (n < 1024) return `${n}B`;
-  if (n < 1048576) return `${(n / 1024).toFixed(1)}KB`;
-  return `${(n / 1048576).toFixed(1)}MB`;
-}
 function fmtTime(ms: number | undefined) {
   if (!ms) return '';
   const d = new Date(ms);
@@ -497,7 +491,6 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
                   }}
                   onBlur={commitRename} />
               )}
-              <span className={`fm-size${renaming === e.name ? ' fm-hide' : ''}`}>{e.type === 'dir' ? '—' : fmtSize(e.size)}</span>
               <span className={`fm-time${renaming === e.name ? ' fm-hide' : ''}`}>{fmtTime(e.mtime)}</span>
               {renaming === e.name && renameBusy
                 ? <span className="fm-loading" data-tip="重命名中…" />

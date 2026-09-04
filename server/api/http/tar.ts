@@ -5,6 +5,7 @@ function tarOctal(n: number): string {
   const s = Math.floor(n).toString(8);
   return '0000000'.slice(s.length) + s + '\0'; // 7 位八进制 + NUL
 }
+
 function tarHeader(relPath: string, { mode, size, mtimeSec, type, linkname = '' }: { mode: number; size: number; mtimeSec: number; type: string; linkname?: string }): Buffer {
   const buf = Buffer.alloc(512);
   let name = relPath, prefix = '';

@@ -331,9 +331,10 @@ function deriveThemeVars(t: ThemeTokens): Record<string, string> {
     '--switch-track': dark ? 'rgba(255,255,255,.75)' : ov(0.18),
     '--switch-knob': '#ffffff',
 
-    /* 滚动条 */
-    '--scroll-thumb': dark ? 'rgba(255,255,255,.16)' : 'rgba(15,23,42,.25)',
-    '--scroll-thumb-x': 'rgba(255,255,255,.2)',   /* xterm 视口内固定亮色 */
+    /* 滚动条:常态须在玻璃浅底上清晰可辨(过淡会"看不见");hover 再提一档给拖拽反馈 */
+    '--scroll-thumb': dark ? 'rgba(255,255,255,.30)' : 'rgba(15,23,42,.38)',
+    '--scroll-thumb-hover': dark ? 'rgba(255,255,255,.46)' : 'rgba(15,23,42,.55)',
+    '--scroll-thumb-x': 'rgba(255,255,255,.34)',  /* xterm 视口内固定亮色 */
 
     /* 进度条轨道 / 遮罩 / 扫光 */
     '--progress-track': dark ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)',

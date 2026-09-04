@@ -50,13 +50,15 @@
 .fm-hide { visibility: hidden; }
 /* 文件名列:超长省略显示(悬停有完整名称 tooltip) */
 .fm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fm-size { flex: none; width: 62px; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .fm-time { flex: none; width: 108px; text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-/* 重命名输入框:绝对定位覆盖整行(从行左 padding 到右 padding,含图标/名称/大小/时间)。
-   各列仍以 fm-hide 留在文档流占位 → 行高/行宽与普通行完全一致,进出重命名零抖动 */
+/* 重命名输入框:绝对定位覆盖整行(从行左 padding 到右 padding,含图标/名称/时间)。
+   各列仍以 fm-hide 留在文档流占位 → 行高/行宽与普通行完全一致,进出重命名零抖动。
+   width:auto 必须显式覆盖全局 input{width:100%}:否则 abs-pos 同时给了 left/right 时
+   right 会被忽略、输入框按 100% 宽向右溢出列表约 10px,autoFocus 时浏览器为"完整露出"
+   输入框会把列表横向滚动 ~10px,导致整个目录列表的左边距消失(本地/远程列表共用本类) */
 .fm-rename {
   position: absolute; left: 10px; right: 10px; top: 50%; transform: translateY(-50%);
-  z-index: 1; box-sizing: border-box; height: 20px; padding: 0 6px;
+  width: auto; z-index: 1; box-sizing: border-box; height: 20px; padding: 0 6px;
   border: 1px solid var(--accent-border); border-radius: 5px;
   background: var(--code-bg-solid); color: var(--text); font-size: 12.5px; line-height: normal;
   outline: none; box-shadow: 0 0 0 2px var(--focus-ring);

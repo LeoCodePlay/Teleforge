@@ -447,7 +447,7 @@ textarea { scrollbar-width: auto; }
 .ob-thumb.ob-v { top: 0; right: 2px; width: 4px; }
 .ob-thumb.ob-h { left: 0; bottom: 2px; height: 4px; }
 .ob-thumb.ob-on { opacity: 1; pointer-events: auto; }
-.ob-thumb:hover, body.ob-dragging .ob-thumb { background: var(--hover-bg-hard); }
+.ob-thumb:hover, body.ob-dragging .ob-thumb { background: var(--scroll-thumb-hover); }
 body.ob-dragging { cursor: grabbing; user-select: none; }
 
 /* ---- 降级:不支持 backdrop-filter 的环境自动加深底色保证可读 ---- */

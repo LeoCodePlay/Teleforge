@@ -8,6 +8,7 @@ import { registerRemote } from './remote.ts';
 import { registerTransfer } from './transfer.ts';
 import { registerExec } from './exec.ts';
 import { registerAskUser } from './ask-user.ts';
+import { registerRef } from './ref.ts';
 
 export interface RpcCtx {
   send: (payload: any) => void;
@@ -39,11 +40,18 @@ export function createRpcRouter(ctx: RpcRouterCtx) {
   registerSsh(rpc); registerAgent(rpc); registerSkills(rpc);
   registerConfig(rpc); registerLocal(rpc); registerRemote(rpc);
   registerTransfer(rpc); registerExec(rpc); registerAskUser(rpc);
+  registerRef(rpc);
   return {
-    handle(msg: any): any {
+    // 多浏览器可同时在线:
+    // - reply(带 reqId 的最终应答)与带 reqId 的进度事件(delete_progress/transfer_progress 等)
+    //   定向回发起请求的那个连接,其他浏览器不受干扰;
+    // - 不带 reqId 的全局状态事件(sessions/agent 事件流等)保持广播,所有浏览器同步。
+    handle(msg: any, opts?: { send?: (p: any) => void }): any {
       const handler = handlers.get(msg.type);
       if (!handler) throw new Error(`未知消息类型: ${msg.type}`);
-      return handler(msg, { ...ctx, reply: (p: any) => ctx.send({ ...p, reqId: msg.reqId }) });
+      const direct = (p: any) => (opts?.send || ctx.send)(p);
+      const send = (p: any) => (p && p.reqId ? direct(p) : ctx.send(p));
+      return handler(msg, { ...ctx, send, reply: (p: any) => direct({ ...p, reqId: msg.reqId }) });
     },
     types(): string[] { return [...handlers.keys()]; },
     register

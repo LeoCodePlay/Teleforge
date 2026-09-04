@@ -41,12 +41,39 @@ export function setupWs(httpServer: Server) {
       socket.destroy();
     }
   });
-  let client: WebSocket | null = null; // 当前唯一前端(本地工具,单客户端)
+  // 多浏览器可同时在线:事件(status/agent/log)广播给全部连接;
+  // RPC 回复与请求期间的事件(进度等)定向回发起请求的那个连接(见下方 sendTo + router.handle)。
+  // 断线补偿:无任何连接期间 agent 产生的事件(尤其 done/status)按序缓存,
+  // 新连接建立后立即补发(flushPending),避免「后台已完成但前端永不解除 streaming」的界面卡死。
+  // 只缓存 type==='agent' 的事件:status/log/error 等重连后都会由 emitStatus/显式发送重新下发;
+  // 上限控制内存(长时间离线时丢最旧),正常断线窗口内的事件条数远小于该值。
+  const pendingEvents: any[] = [];
+  const PENDING_MAX = 1500;
 
   const send = (payload: any) => {
-    if (client && client.readyState === 1) {
-      try { client.send(JSON.stringify(payload)); } catch {}
+    const data = JSON.stringify(payload);
+    let delivered = false;
+    for (const c of wss.clients) {
+      if (c.readyState === 1) {
+        try { c.send(data); } catch {}
+        delivered = true;
+      }
     }
+    if (!delivered && payload && payload.type === 'agent') {
+      pendingEvents.push(payload);
+      if (pendingEvents.length > PENDING_MAX) pendingEvents.splice(0, pendingEvents.length - PENDING_MAX);
+    }
+  };
+
+  // 定向发送:只发给指定连接(某浏览器发起的 RPC 回复/进度事件)
+  const sendTo = (ws: WebSocket, payload: any) => {
+    if (ws.readyState === 1) { try { ws.send(JSON.stringify(payload)); } catch {} }
+  };
+
+  // 新连接就绪后按序补发断线期间缓存的 agent 事件(发送失败的最小概率事件会重新入队)
+  const flushPending = () => {
+    const evs = pendingEvents.splice(0);
+    for (const p of evs) send(p);
   };
 
   // Agent 事件 -> 前端(agent 的 'log' 是 3 参调用:event=log, level, message)
@@ -116,25 +143,31 @@ export function setupWs(httpServer: Server) {
   const router = createRpcRouter({ send, emitStatus, syncAgentScope });
 
   wss.on('connection', (ws: WebSocket) => {
-    client = ws;
+    // 心跳探活:连接必须响应服务端 ping,未应答的超时连接会被 terminate(见下方定时器),
+    // 使电脑休眠/网络抖动导致的"假死连接"被及时发现并触发前端自动重连
+    (ws as any).isAlive = true;
+    ws.on('pong', () => { (ws as any).isAlive = true; });
+    flushPending(); // 先补发断线期间缓存的 agent 事件,再下发状态,保证 UI 状态无缝衔接
     send({ type: 'log', level: 'info', message: '前端已连接' });
     syncAgentScope();
     emitStatus();
 
     ws.on('message', async (raw: any) => {
       let msg;
-      try { msg = JSON.parse(raw); } catch { return send({ type: 'error', error: '消息不是合法 JSON' }); }
+      try { msg = JSON.parse(raw); } catch { return sendTo(ws, { type: 'error', error: '消息不是合法 JSON' }); }
       try {
-        await router.handle(msg);
+        // 定向回复:该连接的请求与进度事件只回给它,其他浏览器不受干扰
+        await router.handle(msg, { send: (p) => sendTo(ws, p) });
       } catch (e: any) {
-        send({ type: 'error', error: e.message, reqId: msg.reqId, forType: msg.type });
+        sendTo(ws, { type: 'error', error: e.message, reqId: msg.reqId, forType: msg.type });
       }
     });
 
     ws.on('close', () => {
-      if (client === ws) client = null;
-      // 前端断开:正在等待用户回答的提问全部作废,对应工具返回结构化错误而不是挂死
-      rejectAllAskUser('前端连接已断开,提问已取消');
+      // 多浏览器可同时在线:只有全部连接都断开(最后一个前端离开)时,
+      // 才把正在等待用户回答的提问作废,避免 B 关掉页面把 A 的提问误杀
+      const stillAlive = [...wss.clients].some((c) => c !== ws && c.readyState === 1);
+      if (!stillAlive) rejectAllAskUser('前端连接已断开,提问已取消');
     });
     ws.on('error', () => {});
   });
@@ -145,6 +178,8 @@ export function setupWs(httpServer: Server) {
   // 文本帧(JSON):start {mode,cols,rows} / resize {cols,rows} / kill
   // 二进制帧:客户端键盘输入 -> shell;shell 输出 -> 客户端屏幕
   termWss.on('connection', (ws: WebSocket) => {
+    (ws as any).isAlive = true;
+    ws.on('pong', () => { (ws as any).isAlive = true; });
     let stream: ClientChannel | null = null; // 远程 PTY shell 通道
     let localPty: IPty | null = null;        // 本机 shell 进程(ConPTY 真终端)
     let closed = false;
@@ -247,6 +282,20 @@ export function setupWs(httpServer: Server) {
     ws.on('close', () => { closed = true; closeStream(); });
     ws.on('error', () => { closed = true; closeStream(); });
   });
+
+  // 心跳保活:每 30s 向全部连接发 ping,下一轮仍无 pong 的(假死/TCP 半开)直接 terminate,
+  // 让浏览器触发 onclose 走前端自动重连,而不是无声无息地双向都收不到数据。
+  // 浏览器 WebSocket 对 ping 控制帧自动回 pong,无需前端配合。
+  const HEARTBEAT_MS = 30_000;
+  const heartbeat = (server: WebSocketServer) => {
+    for (const ws of server.clients) {
+      if (!(ws as any).isAlive) { try { ws.terminate(); } catch {} continue; }
+      (ws as any).isAlive = false;
+      try { ws.ping(); } catch {}
+    }
+  };
+  const heartbeatTimer = setInterval(() => { heartbeat(wss); heartbeat(termWss); }, HEARTBEAT_MS);
+  httpServer.on('close', () => clearInterval(heartbeatTimer));
 
   return { wss, termWss };
 }

@@ -92,27 +92,68 @@ body.splitting { cursor: row-resize; user-select: none; }
 body.splitting * { cursor: row-resize !important; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
-/* ---- 标签页:发光玻璃胶囊 ---- */
-.tabs {
-  display: flex; gap: 6px; padding: 10px 14px 0;
+/* ---- 标签页条:浏览器式标签(左侧固定页:AI 编程助手/命令台;右侧文件页:可拖拽排序/关闭) ----
+   固定段与滚动段分离:固定页永远显示;文件页多时只滚动文件段。
+   滚动条用项目悬浮引擎(scrollbar-ui.ts):绝对定位悬浮,不占布局空间,标签条高度恒定;
+   原生滚动条彻底隐藏(不参与布局,高度绝不变化);悬浮拇指在下方覆写调细到 3px */
+.tabstrip {
+  display: flex; align-items: flex-end; gap: 2px;
+  flex: none; padding: 8px 10px 0;
   background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
   backdrop-filter: var(--blur-sm);
   -webkit-backdrop-filter: var(--blur-sm);
   border-bottom: 1px solid var(--line-soft);
 }
-.tab {
-  border: 1px solid transparent; border-radius: var(--r-sm) var(--r-sm) 0 0;
-  background: transparent; padding: 8px 16px; font-weight: 600;
-  box-shadow: none; color: var(--muted);
-  transition: all .18s;
+/* 固定段:不参与滚动,始终完整可见 */
+.tabstrip-pinned { display: flex; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
+/* 滚动段:文件标签横向滚动区域;原生滚动条隐藏(滚动能力保留,布局高度不变) */
+.tabstrip-scroll {
+  display: flex; align-items: flex-end; gap: 2px;
+  flex: 1 1 auto; min-width: 0;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;               /* Firefox:隐藏原生滚动条 */
 }
-.tab:hover:not(.active) { background: var(--glass-bg-hover); color: var(--text); transform: none; box-shadow: none; }
-.tab.active {
+.tabstrip-scroll::-webkit-scrollbar { display: none; }  /* Chrome/Safari/Edge:隐藏原生滚动条 */
+/* 悬浮滚动条引擎的拇指在本区调细:3px 高、贴底,比默认 4px 更纤细;
+   拇指绝对定位悬浮于容器底缘,不占布局空间,滚动时才出现 */
+.tabstrip-scroll .ob-thumb.ob-h { height: 3px; bottom: 0; }
+.tabstrip-scroll .ob-thumb.ob-h:hover { height: 4px; }
+.btab {
+  display: flex; align-items: center; gap: 6px;
+  flex: 0 0 auto; height: 32px; min-width: 0; max-width: 200px;
+  padding: 0 12px; overflow: hidden;
+  font-weight: 600; font-size: 12.5px; line-height: 1.2;
+  border: 1px solid transparent; border-bottom: none;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent; color: var(--muted); cursor: pointer;
+  user-select: none; white-space: nowrap;
+  transition: background .15s, color .15s;
+}
+.btab:hover:not(.active) { background: var(--glass-bg-hover); color: var(--text); }
+.btab.active {
   color: var(--accent-2); background: var(--accent-soft);
-  border-color: var(--accent-border); border-bottom-color: transparent;
+  border-color: var(--accent-border);
   box-shadow: inset 0 1px 0 var(--btn-sheen), 0 -2px 16px var(--accent-soft);
   text-shadow: 0 0 12px var(--accent-glow);
 }
+.btab.pinned { color: var(--text); }
+.btab-icon { flex: none; font-size: 12px; }
+.btab-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btab-close {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; margin: 0 -5px 0 -2px;
+  border: none; border-radius: var(--r-pill);
+  background: transparent; box-shadow: none;
+  font-size: 11px; line-height: 1; color: var(--muted); cursor: pointer;
+  opacity: 0; transition: opacity .12s, background .12s;
+}
+.btab:hover .btab-close, .btab.active .btab-close, .btab.dirty .btab-close { opacity: .8; }
+.btab .btab-close:hover {
+  opacity: 1; background: var(--glass-bg-hover); color: var(--text);
+  border-color: transparent; box-shadow: none; transform: none;
+}
+.btab.dirty .btab-close { color: var(--amber); }
+.btab.dragging { opacity: .35; }
 /* 对话主区域(聊天/控制台)的定位基准:供跳转点等贴左对齐 */
 .tab-body { flex: 1; min-height: 0; display: flex; position: relative; }
 

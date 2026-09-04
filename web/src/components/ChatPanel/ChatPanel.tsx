@@ -9,8 +9,10 @@ import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import ModelMenu from '../ModelMenu/ModelMenu';
 import ContextMeter from '../ContextMeter/ContextMeter';
 import TodoPanel from '../TodoPanel/TodoPanel';
-import SlashMenu, { rankSlashItems } from '../SlashMenu/SlashMenu';
+import SlashMenu, { rankSlashItems, rankByName } from '../SlashMenu/SlashMenu';
 import type { SlashItem } from '../SlashMenu/SlashMenu';
+import AtMenu from '../AtMenu/AtMenu';
+import type { AtCandidate } from '../AtMenu/AtMenu';
 import { useFeedback } from '../../context/feedback';
 import AskPanel from '../AskPanel/AskPanel';
 import QueuePanel, { QueueItem } from '../QueuePanel/QueuePanel';
@@ -308,21 +310,22 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
 // ---- 输入区:单一可编辑文本 + 高亮叠加层 ----
 // 不再用"冻结文本段 + 技能 tag"分段输入(会导致布局错乱且冻结文本不可编辑);
 // 输入框始终是普通 textarea,内容完整可编辑。叠加层按后端同款规则
-// (行首/空白后的 /word,其后跟空白或结尾)把 /技能名 高亮显示;
-// 退格时光标紧邻完整 /技能名 时整词删除(连同其后单个空格)。
-type OverlaySeg = { t: 'text' | 'skill'; v: string };
+// (行首/空白后的 /word 或 @word,其后跟空白或结尾)把 /技能名 与 @文件名 高亮显示;
+// 退格时光标紧邻完整 /技能名 或 @文件名 时整词删除(连同其后单个空格)。
+type OverlaySeg = { t: 'text' | 'skill' | 'mention'; v: string };
 
 function tokenizeInput(text: string): OverlaySeg[] {
   const out: OverlaySeg[] = [];
-  const re = /(?:^|\s)(\/[a-z0-9][a-z0-9-]*)(?=\s|$)/g;
+  // 同时识别 /技能 与 @文件名 两类 token;@ 是引用标记,与 / 共用词边界规则
+  const re = /(?:^|\s)((?:\/[a-z0-9][a-z0-9-]*)|(?:@[a-zA-Z0-9_.\-/\\]+))(?=\s|$)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) {
-      // 前导空白归入文本段(不高亮),只高亮 /word 本身
+      // 前导空白归入文本段(不高亮),只高亮 token 本身
       out.push({ t: 'text', v: text.slice(last, m.index + (m[0].length - m[1].length)) });
     }
-    out.push({ t: 'skill', v: m[1] });
+    out.push({ t: m[1].startsWith('/') ? 'skill' : 'mention', v: m[1] });
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push({ t: 'text', v: text.slice(last) });
@@ -334,6 +337,10 @@ interface ChatPanelProps {
   workspace: string | null;
   /** 本地工作区(未连接服务器时可据此在本地模式对话) */
   localWorkspace?: string | null;
+  /** 远程文件面板当前打开的目录:@ 引用候选以此(而非工作区根)为遍历起点 */
+  remoteCwd?: string;
+  /** 本地文件面板当前打开的目录:@ 引用候选以此(而非工作区根)为遍历起点 */
+  localCwd?: string;
   busy: boolean;
   sessionSeq?: number;
   sid?: string | null;
@@ -356,7 +363,7 @@ interface ChatPanelProps {
   onSessionCreated?: (r: any) => void;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -394,6 +401,21 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   const [slashQuery, setSlashQuery] = useState('');
   const [slashActive, setSlashActive] = useState(-1);
   const [slashSkills, setSlashSkills] = useState<SlashItem[]>([]);
+  // @ 引用菜单(与 / 并行):atOpen=true 时输入以 @ 开头(行首或空白后),
+  // atQuery 为 @ 后的过滤词;候选来自 ref_candidates(远程+本地工作区扁平化遍历)
+  const [atOpen, setAtOpen] = useState(false);
+  const [atQuery, setAtQuery] = useState('');
+  const [atActive, setAtActive] = useState(-1);
+  const [atCandidates, setAtCandidates] = useState<AtCandidate[]>([]);
+  // @ 候选拉取中(首次 @ 时异步加载,菜单显示"正在列出工作区文件…")
+  const [atLoading, setAtLoading] = useState(false);
+  // 名称 -> 引用解析:选中 @文件名 时记录其完整路径与来源,发送时据此替换为 @source:path。
+  // 文本区始终只显示 @名称(普通可编辑文本),路径不进入输入框。
+  const atMapRef = useRef<Map<string, { path: string; source: 'remote' | 'local' }>>(new Map());
+  // 候选只拉取一次(避免每次输入 @ 都请求;工作区切换后重新拉取)
+  const atLoadedRef = useRef(false);
+  // 候选拉取令牌:工作区切换时递增,使在途的旧工作区候选失效(避免晚到的响应覆盖新工作区)
+  const atFetchTokenRef = useRef(0);
   const [agentState, setAgentState] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   // 会话切换加载指示:切换期间保留上一会话内容 + 顶部提示,历史到达后再整体替换,避免空白闪烁
@@ -462,7 +484,29 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   };
   useEffect(() => { autoGrow(); syncOverlayScroll(); }, [input]);
 
+  // 工作区切换(远程或本地)后 @ 候选与解析失效:下次打开 @ 时重新拉取,
+  // 已记录的 @名称->路径 解析一并作废(路径可能已随工作区变化)
+  useEffect(() => {
+    atLoadedRef.current = false;
+    atFetchTokenRef.current += 1; // 使在途候选失效
+    atMapRef.current.clear();
+    setAtCandidates([]);
+  }, [workspace, localWorkspace]);
+
+  // 文件面板目录变化后 @ 候选失效:下次打开 @ 时按新目录重新拉取
+  // (@ 菜单跟随文件管理器当前打开的目录,而非工作区根)
+  useEffect(() => {
+    atLoadedRef.current = false;
+    atFetchTokenRef.current += 1; // 使在途候选失效
+    setAtCandidates([]);
+  }, [remoteCwd, localCwd]);
+
   const push = (fn: (m: ChatMessage[]) => ChatMessage[]) => setMessages(fn);
+  // 渲染期同步最新消息:供「WS 重连后状态校准」读取,避免 effect 闭包拿到过期数据
+  const msgRef = useRef(messages);
+  msgRef.current = messages;
+  // 首次连接(页面加载,历史尚在加载中)不做重连校准,已在线上线后才视为"重连"
+  const everConnectedRef = useRef(false);
 
   useEffect(() => {
     const subs = [
@@ -529,7 +573,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
             push((msgs) => {
               const copy = [...msgs];
               const last = copy[copy.length - 1];
-              if (last?.role === 'assistant') {
+              // 断线补偿(服务端补发)时同一 callId 可能已被实时事件渲染过,按 id 去重避免重复卡片
+              if (last?.role === 'assistant'
+                && !(last.segments || []).some((s) => s.kind === 'tools' && (s.tools || []).some((t) => t.id === m.callId))) {
                 appendTools(last, [{ id: m.callId, tool: m.tool, args: m.args, ok: undefined, ms: undefined, result: undefined }]);
               }
               return copy;
@@ -647,6 +693,32 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
       })
     ];
     return () => subs.forEach((off) => off());
+  }, []);
+
+  // WS 断线后状态补偿兜底:断线期间 agent 的 done/status 事件可能已丢失(缓冲补发覆盖不到的
+  // 场景,如服务端进程重启),若服务端判定当前会话已空闲、但本会话末条回复仍标记"流式中",
+  // 说明界面已进入永远等不到下一步的卡死态——整表校准解除 streaming 并补全最终内容。
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = api.on('open', () => {
+      if (!everConnectedRef.current) { everConnectedRef.current = true; return; } // 首次连接不校准
+      if (timer) clearTimeout(timer);
+      // 稍等片刻让服务端 flush 补发 + status 先落地,避免与已能正确解除 streaming 的场景冲突
+      timer = setTimeout(() => {
+        timer = null;
+        if (busyRef.current) return; // 该会话仍在运行:补发/实时事件会继续驱动流,无需校准
+        const last = msgRef.current[msgRef.current.length - 1];
+        if (!last || last.role !== 'assistant' || !last.streaming) return;
+        api.request('get_history', {}, 8000)
+          .then((h) => {
+            const sid = activeRef.current;
+            if (sid == null || sid === NEW_SESSION_ID) return;
+            applyTurns(h);
+          })
+          .catch(() => { /* 校准失败保持现状,后续事件流不受影响 */ });
+      }, 800);
+    });
+    return () => { if (timer) clearTimeout(timer); off(); };
   }, []);
 
   // 组件卸载(切走标签页/关闭)前立即落盘草稿,避免 400ms 防抖窗口内的输入丢失
@@ -788,6 +860,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     if (!ok) return;
     try {
       applyTurns(await api.request('message_rewind', { at: m.forkTail ?? i }, 8000));
+      // 回退后把该条消息回填输入框,便于修改后重新发起
+      updateInput(m.content || '');
+      requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
     } catch (e) { toast.error((e as Error).message); }
   };
 
@@ -895,10 +970,42 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   };
   const hideDotTip = () => setDotTip(null);
 
-  // 发送文本就是输入框原文(技能 /词 原样保留,后端按独立词解析注入)
-  const composedInput = input;
-  // 输入中是否已含完整 /技能名(用于占位提示与去重判断)
-  const hasSkillToken = /(?:^|\s)\/[a-z0-9][a-z0-9-]*(?=\s|$)/i.test(input);
+  // 发送时的 @ 引用替换:把输入中记录的 @名称 替换为 @source:完整路径
+  // (文本区只显示名称,AI 收到的是带来源标记的绝对路径)。
+  // 按名称长度降序替换避免 @server.ts 被 @server 抢先吃掉;未记录的 @词原样保留。
+  function composeMentionText(text: string): string {
+    const map = atMapRef.current;
+    if (map.size === 0) return text;
+    const names = [...map.keys()].sort((a, b) => b.length - a.length);
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+      const atStart = i === 0 || /\s/.test(text[i - 1]);
+      if (text[i] === '@' && atStart) {
+        let consumed = 0;
+        for (const name of names) {
+          if (text.startsWith(name, i + 1)) {
+            const after = text[i + 1 + name.length] ?? '';
+            if (after === '' || /\s/.test(after)) {
+              const rec = map.get(name)!;
+              out += `@${rec.source}:${rec.path}`;
+              consumed = 1 + name.length;
+              break;
+            }
+          }
+        }
+        if (consumed) { i += consumed; continue; }
+      }
+      out += text[i];
+      i += 1;
+    }
+    return out;
+  }
+
+  // 发送文本 = 输入框原文 + @引用替换(技能 /词 原样保留,后端按独立词解析注入)
+  const composedInput = composeMentionText(input);
+  // 输入中是否已含完整 /技能名 或 @引用(用于占位提示与去重判断)
+  const hasSkillToken = /(?:^|\s)(\/[a-z0-9][a-z0-9-]*|@[a-zA-Z0-9_.\-/\\]+)(?=\s|$)/i.test(input);
 
   const send = async () => {
     // 工作中仍可发送:服务端会把消息放入待执行队列(当前轮结束后按序自动执行,不打断回复);
@@ -1056,6 +1163,56 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     item.run?.(query);
   };
 
+  // ---- @ 引用菜单(与 / 命令并行的行内交互) ----
+  // 拉取候选(远程+本地工作区扁平化遍历);仅首次拉取,工作区切换后由 effect 重置再拉
+  const openAt = () => {
+    if (atLoadedRef.current) return;
+    setAtLoading(true);
+    const token = atFetchTokenRef.current; // 记录发起时的工作区/目录代际
+    // 以文件面板当前打开的目录为遍历起点(未设置时服务端回落到对应工作区)
+    api.request('ref_candidates', { remoteRoot: remoteCwd || '', localRoot: localCwd || '' }, 15000)
+      .then((r) => {
+        if (token !== atFetchTokenRef.current) return; // 期间工作区/目录已切换,丢弃旧候选
+        setAtCandidates(Array.isArray(r.entries) ? r.entries : []);
+        atLoadedRef.current = true;
+      })
+      .catch(() => { /* 拉取失败保留现状,下次输入 @ 时重试 */ })
+      .finally(() => { if (token === atFetchTokenRef.current) setAtLoading(false); });
+  };
+
+  // 输入 @ 唤醒菜单:行首 或 空白后 的 @ 且其后是词尾时开启(与 syncSlash 同构)
+  const syncAt = (text: string) => {
+    const m = /(?:^|\s)@([a-zA-Z0-9_.\-/\\]*)$/.exec(text);
+    if (m) {
+      setAtQuery(m[1] || '');
+      setAtOpen(true);
+      if (atActive < 0) setAtActive(0);
+      openAt();
+    } else {
+      setAtOpen(false);
+    }
+  };
+  const closeAt = () => { setAtOpen(false); setAtActive(-1); };
+
+  // 选中候选:把末尾刚输入的 @词 替换为 @名称 + 空格(路径不进输入框),
+  // 记录 名称 -> {路径,来源} 供发送时替换;同一名称已完整存在则不重复插入。
+  // 注意 already 需对 head(剥除当前 @词 尾部后的保留文本)判断:若对 input 判断,
+  // 刚输入的查询尾巴 @web 会被误判为"已存在",导致 @web 被清掉(引用"消失")。
+  const pickAt = (item: AtCandidate, _query: string) => {
+    const name = item.name;
+    const m = /(^|\s)@[a-zA-Z0-9_.\-/\\]*$/i.exec(input);
+    const head = m ? input.slice(0, m.index + m[1].length) : input;
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const already = new RegExp(`(?:^|\\s)@${esc}(?=\\s|$)`, 'i').test(head);
+    const next = already ? head : `${head}@${name} `;
+    atMapRef.current.set(name, { path: item.path, source: item.source });
+    updateInput(next);
+    syncAt(next);
+    setAtOpen(false);
+    setAtActive(-1);
+    requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
+  };
+
   const stop = () => api.send('stop_agent', {});
 
   // ---- 工作区切换(输入框下方):点击弹出下拉,切换/浏览选择工作区 ----
@@ -1210,22 +1367,36 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
               onClose={closeSlash}
             />
           )}
+          {/* @ 引用菜单:输入 @ 时浮在输入框上方,列出远程+本地工作区的文件/文件夹 */}
+          {atOpen && (
+            <AtMenu
+              items={atCandidates}
+              loading={atLoading}
+              query={atQuery}
+              active={atActive}
+              onActiveChange={setAtActive}
+              onPick={pickAt}
+              onClose={closeAt}
+            />
+          )}
           <div className="composer-input">
-            {/* 高亮叠加层:文字透明只露出 /技能名 高亮底;pointer-events 穿透,不挡输入 */}
+            {/* 高亮叠加层:文字透明只露出 /技能名 与 @文件名 高亮底;pointer-events 穿透,不挡输入 */}
             <div className="composer-overlay" ref={overlayRef} aria-hidden="true">
               {tokenizeInput(input).map((s, i) => s.t === 'skill'
                 ? <span className="composer-token" key={i}>{s.v}</span>
-                : <span key={i}>{s.v}</span>)}
+                : s.t === 'mention'
+                  ? <span className="composer-mention" key={i}>{s.v}</span>
+                  : <span key={i}>{s.v}</span>)}
               {input.endsWith('\n') && <span> </span>}
             </div>
             <textarea ref={taRef} rows={1} value={input}
-              onChange={(e) => { const v = e.target.value; updateInput(v); syncSlash(v); }}
+              onChange={(e) => { const v = e.target.value; updateInput(v); syncSlash(v); syncAt(v); }}
               onScroll={syncOverlayScroll}
               placeholder={!connected && !localWorkspace ? '未连接服务器 · 选择本地工作区后即可对话'
                 : connected && !workspace ? '请先选择远程工作区'
                 : askPending ? '请先在提问面板中作答或取消…'
                 : working ? 'Agent 工作中,发送后将进入队列等待执行…'
-                : hasSkillToken ? '输入需求…' : '输入 / 可唤起命令与技能菜单…'}
+                : hasSkillToken ? '输入需求…' : '输入 @ 引用文件、/ 唤起命令与技能菜单…'}
               disabled={!canSend}
               onKeyDown={(e) => {
                 // / 命令菜单打开时的键盘交互(对齐 harness):↑↓ 移动、Enter 选中、Esc 关闭、Tab 补全
@@ -1247,15 +1418,39 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                     return;
                   }
                 }
-                // 退格整词删除:光标紧邻完整 /技能名(行首/空白后、后跟空白或结尾)时,
+                // @ 引用菜单打开时的键盘交互(与 / 菜单同款):↑↓ 移动、Enter/Tab 选中、Esc 关闭
+                if (atOpen) {
+                  const list = rankByName(atCandidates, atQuery);
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setAtActive((i) => (list.length ? (i + 1) % list.length : -1)); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setAtActive((i) => (list.length ? (i - 1 + list.length) % list.length : -1)); return; }
+                  if (e.key === 'Escape') { e.preventDefault(); closeAt(); return; }
+                  if (e.key === 'Enter' && !e.shiftKey && list.length) {
+                    e.preventDefault();
+                    const it = list[atActive >= 0 ? atActive : 0];
+                    if (it) pickAt(it, atQuery);
+                    return;
+                  }
+                  if (e.key === 'Tab' && list.length) {
+                    e.preventDefault();
+                    const it = list[atActive >= 0 ? atActive : 0];
+                    if (it) pickAt(it, atQuery);
+                    return;
+                  }
+                }
+                // 退格整词删除:光标紧邻完整 /技能名 或 @文件名(行首/空白后、后跟空白或结尾)时,
                 // 一整个删除(连同其后单个空格,避免留下双空格)
-                if (!slashOpen && e.key === 'Backspace') {
+                if (!slashOpen && !atOpen && e.key === 'Backspace') {
                   const el = e.currentTarget as HTMLTextAreaElement;
                   if (el.selectionStart === el.selectionEnd) {
                     const pre = el.value.slice(0, el.selectionStart);
-                    const m = /(^|\s)(\/[a-z0-9][a-z0-9-]*[ \t]?)$/i.exec(pre);
+                    const m = /(^|\s)((?:\/[a-z0-9][a-z0-9-]*)|(?:@[a-zA-Z0-9_.\-/\\]+))[ \t]?$/i.exec(pre);
                     if (m) {
                       e.preventDefault();
+                      // 删除 @引用 时同步清理其 名称->路径 解析,避免残留脏引用
+                      const token = m[2].trim();
+                      if (token.startsWith('@') && atMapRef.current.has(token.slice(1))) {
+                        atMapRef.current.delete(token.slice(1));
+                      }
                       let end = el.selectionStart;
                       // m[2] 未带尾随空格且光标后紧跟一个空格时一并删掉,避免留下双空格
                       if (!/[ \t]$/.test(m[2]) && /[ \t]/.test(el.value[end] || '')) end += 1;
@@ -1263,6 +1458,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
                       const next = el.value.slice(0, start) + el.value.slice(end);
                       updateInput(next);
                       syncSlash(next);
+                      syncAt(next);
                       requestAnimationFrame(() => {
                         const t = taRef.current;
                         if (t) { t.setSelectionRange(start, start); t.focus(); }
