@@ -16,7 +16,8 @@ import AskPanel from '../AskPanel/AskPanel';
 import QueuePanel, { QueueItem } from '../QueuePanel/QueuePanel';
 import { ToolCallList } from '../ToolCallList/ToolCallList';
 import { ReasoningRow } from '../ReasoningRow/ReasoningRow';
-import { refreshOverlayScrollbar } from '../../utils/scrollbar-ui';
+import { CompactionRow } from './CompactionRow';
+import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import './ChatPanel.scss';
 
 // 新会话(尚未创建服务端会话)的前端占位 sid:用于"草稿式"新建——
@@ -268,7 +269,7 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
       continue; // tool 消息本身不渲染,只作为结果并入上游工具组
     }
     if (t.role === 'user') {
-      out.push({ role: 'user', content: t.content || '', forkTail: ti, time: t.time });
+      out.push({ role: 'user', content: t.content || '', forkTail: ti, time: t.time, ...(t.compaction ? { compaction: t.compaction } : {}) });
       continue;
     }
     if (t.role === 'assistant') {
@@ -394,7 +395,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   const [slashActive, setSlashActive] = useState(-1);
   const [slashSkills, setSlashSkills] = useState<SlashItem[]>([]);
   const [agentState, setAgentState] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
-  const [iter, setIter] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   // 会话切换加载指示:切换期间保留上一会话内容 + 顶部提示,历史到达后再整体替换,避免空白闪烁
   const [switching, setSwitching] = useState(false);
@@ -419,6 +419,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     return 'default';
   });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null); // chatwrap:聊天滚动条拇指的宿主(整列高度,含输入区区域)
   const taRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null); // 高亮叠加层(与 textarea 滚动同步)
   const userMsgRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -489,7 +490,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
             hasLive.current = true;
             // 本轮首条 user/message 计入分支点计数
             forkTurnRef.current += 1; lastIterRef.current = 0;
-            setAgentState('working'); setIter(0); setErrorMsg('');
+            setAgentState('working'); setErrorMsg('');
             setTodos([]); // 开启新一轮:上一轮的任务计划清空(对齐 harness 的 standing plan 语义)
             setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
             push((msgs) => [...msgs, { role: 'user', content: m.text, time: Date.now(), forkTail: forkTurnRef.current - 1 }]);
@@ -500,7 +501,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
             setTodos(Array.isArray(m.todos) ? m.todos : []);
             break;
           case 'iteration':
-            setIter(m.iter);
             // 每次迭代对应一条 assistant/message turn;truncate 重开会重复相同 iter,去重
             if (m.iter !== lastIterRef.current) {
               forkTurnRef.current += 1; lastIterRef.current = m.iter;
@@ -627,6 +627,22 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
               return c;
             });
             break;
+          case 'history_compacted':
+            // 手动压缩完成(/compact):后端已把早期消息替换为 compaction/done 摘要事件,
+            // 这里整体重拉历史——被压缩的早期消息从视图中消失,压缩摘要以折叠标记行呈现
+            // (样式参照 harness:CompactionItem 的标记行,而非用户气泡)。
+            api.request('get_history', {}, 8000)
+              .then((h) => {
+                const msgs = turnsToMessages(h.turns || []);
+                histCache.current.set(activeRef.current ?? '', { msgs, todos: Array.isArray(h.todos) ? h.todos : [] });
+                forkTurnRef.current = (h.turns || []).length; // 分支点/删除索引重新对齐压缩后的 turns
+                lastIterRef.current = 0;
+                setSuppressIn(true); // 整表替换:抑制入场动画,压缩瞬间画面保持静止
+                setMessages(msgs);
+                setTodos(Array.isArray(h.todos) ? h.todos : []);
+              })
+              .catch(() => { /* 拉取失败保留当前视图,下次会话切换时会重新载入 */ });
+            break;
         }
       })
     ];
@@ -668,7 +684,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     justSwitchedRef.current = true; // 切换会话:绘制后兜底重测滚底/拇指,见下方 [messages] 兜底 effect
     forkTurnRef.current = 0; lastIterRef.current = 0; // 分支点计数器随会话重置
     setTodos([]);
-    setAgentState('idle'); setIter(0); setErrorMsg('');
+    setAgentState('idle'); setErrorMsg('');
     setQueue([]); // 切会话先复位队列,避免串到上一会话;真实队列随 get_history 返回
 
     // 新会话草稿态(sid 为占位符):不请求历史,显示空对话;sid=null(App 初次加载尚未定向)
@@ -775,9 +791,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     } catch (e) { toast.error((e as Error).message); }
   };
 
-  // 用户消息索引(左侧跳转点数据源:每条用户消息对应一个点)
+  // 用户消息索引(左侧跳转点数据源:每条用户消息对应一个点;压缩标记行不算用户消息,跳过)
   const userMsgIndices = messages.reduce((acc: number[], m, i) => {
-    if (m.role === 'user') acc.push(i);
+    if (m.role === 'user' && !m.compaction) acc.push(i);
     return acc;
   }, []);
 
@@ -802,6 +818,39 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
     const top = el.scrollTop + node.getBoundingClientRect().top - el.getBoundingClientRect().top - 12;
     el.scrollTo({ top, behavior: 'smooth' });
   };
+
+  // 滚动条宿主 = tab-body(对话标签页整个区域):拇指从面板顶部铺到底部、贴最右侧。
+  // 消息区限宽居中(780px),两侧空白与输入面板不属于滚动区,原生滚轮落在其上
+  // 不会滚动对话——在宿主上监听 wheel,目标不在任何可滚动容器内时把滚动量
+  // 转发给聊天滚动区,让悬停在空白处也能滚动。声明在下方 [messages] 绘制 effect
+  // 之前,保证首帧绘制拇指时宿主已注册;卸载时解除注册并移除监听与拇指。
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const root = wrapRef.current;
+    const host = (root?.closest('.tab-body') as HTMLElement | null) ?? root?.parentElement ?? null;
+    if (!el || !host) return;
+    setScrollbarHost(el, host);
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) return; // Ctrl+滚轮 / 触控板捏合缩放:交给浏览器
+      // 自下而上检查目标到宿主的链路:命中聊天滚动区本身(原生滚动)或任何
+      // 真实可滚动的内部容器(工具卡片/提问面板/输入框等)时不转发,交给原生处理
+      for (let n = e.target as Element | null; n && n !== host; n = n.parentElement) {
+        if (n === el) return;
+        const oy = getComputedStyle(n).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 1) return;
+      }
+      e.preventDefault();
+      // deltaMode:1=行、2=页,换算为像素后直接滚动;程序化滚动同样触发 scroll 事件,
+      // 拇指重绘与跳转点激活态由既有 scroll 处理器照常完成
+      const dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaMode === 2 ? e.deltaY * el.clientHeight : e.deltaY;
+      el.scrollTop += dy;
+    };
+    host.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      host.removeEventListener('wheel', onWheel);
+      setScrollbarHost(el, null);
+    };
+  }, []);
 
   // 用 useLayoutEffect:在浏览器绘制前同步完成「清残留拇指 → 滚到底 → 重绘拇指」,
   // 保证会话切换/流式更新时滚动条与内容在同一帧就位。这里强制瞬时定位:
@@ -921,10 +970,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
         if (busy || agentState === 'working') { toast.warning('Agent 正在运行,请先停止或等待完成再压缩'); return true; }
         try {
           const r = await api.request('compact_now', {}, 120000);
-          if (r.compacted) setErrorMsg(`✔ 已压缩 ${r.dropCount} 条早期消息`);
-          else setErrorMsg('当前历史较短,无需压缩');
+          // 命令反馈走 toast(玻璃胶囊,自动消失),不用底部红色错误横幅:
+          // 压缩成功/无需压缩是信息而非错误,错误横幅只留给真正的失败
+          if (r.compacted) toast.success(`已压缩 ${r.dropCount} 条早期消息,上下文空间已释放`);
+          else toast.info('当前历史较短,无需压缩');
         } catch (e) {
-          setErrorMsg((e as Error).message);
+          toast.error((e as Error).message);
         }
         return true;
       }
@@ -938,7 +989,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
       name: 'fork', kind: 'command',
       description: '在当前会话基础上新建分支(保留原会话;不指定位置时从尾部开始)',
       run: () => {
-        if (!onFork) { setErrorMsg('分支功能不可用'); return true; }
+        if (!onFork) { toast.warning('分支功能不可用'); return true; }
         onFork(-1); return true; // /fork 从会话尾部整体分支
       }
     },
@@ -1072,16 +1123,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
   const canSend = (connected ? !!workspace : !!localWorkspace) && !askPending && !switching;
 
   return (
-    <div className={`chatwrap${askPending ? ' ask-focus' : ''}`}>
-      <div className="chat-head">
-        <span className="muted">
-          {switching ? '正在加载会话…' : askPending ? '等待你回答问题…' : working ? `Agent 工作中 · 迭代 #${iter}` : agentState === 'error' ? '出现错误' : agentState === 'done' ? '已完成' : '空闲'}
-        </span>
-        <span className="row gap">
-          {working && !askPending && <button className="ghost sm" onClick={stop}>⏹ 停止</button>}
-          {messages.length > 0 && !askPending && <button className="ghost sm" data-tip="清空对话历史(含服务端持久化)" onClick={clearAll}>🗑 清空</button>}
-        </span>
-      </div>
+    // 根为 fragment:跳转点(chat-dots)渲染在 chatwrap 之外,作为 tab-body 的子元素
+    // 始终锚定对话区最左侧,不随限宽列移动(见 chat-dots 样式注释)
+    <>
+    <div className={`chatwrap${askPending ? ' ask-focus' : ''}`} ref={wrapRef}>
       <div className="chat-scroll">
         <div className={`chat${suppressIn ? ' no-anim' : ''}`} ref={scrollRef} onScroll={() => { updateActiveDot(); hideDotTip(); }}>
           {messages.length === 0 && (
@@ -1092,9 +1137,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={`msg ${m.role}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
+            <div key={i} className={`msg ${m.role}${m.compaction ? ' compaction-msg' : ''}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
+              {m.compaction && (
+                // 上下文压缩标记行(手动/自动):折叠展示摘要,展开看正文(样式参照 harness CompactionItem)
+                <CompactionRow content={m.content || ''} dropCount={m.compaction.dropCount} manual={m.compaction.manual} />
+              )}
               {m.role === 'notice' && <div className={`bubble ${m.retryNotice ? 'retry-bubble' : 'notice-bubble'}`}>⚠ {m.content}</div>}
-              {m.role === 'user' && (
+              {m.role === 'user' && !m.compaction && (
                 <>
                   <div className="bubble user-bubble">{m.content}</div>
                   <div className="user-msg-foot">
@@ -1137,26 +1186,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
           ))}
         </div>
       </div>
-      {/* 用户消息跳转点:absolute 贴对话区(main 内、sidebar 右侧)最左侧,
-          不随限宽的聊天内容移动,也不钉在浏览器窗口最左 */}
-      {userMsgIndices.length > 1 && (
-        <nav className="chat-dots" aria-label="用户消息跳转">
-          {userMsgIndices.map((idx, d) => {
-            const t = (messages[idx]?.content || '').trim();
-            return (
-              <button
-                key={idx}
-                type="button"
-                className={`chat-dot${idx === activeDot ? ' on' : ''}`}
-                aria-label={`跳转到第 ${d + 1} 条用户消息`}
-                onClick={() => jumpToMsg(idx)}
-                onMouseEnter={(e) => showDotTip(e, t)}
-                onMouseLeave={hideDotTip}
-              />
-            );
-          })}
-        </nav>
-      )}
       {/* 跳转点悬停内容提示:fixed 定位防裁剪,两行截断 + 省略号 */}
       {dotTip && (
         <div className="dot-tip" style={{ top: dotTip.top, left: dotTip.left }}>{dotTip.text}</div>
@@ -1362,5 +1391,27 @@ export default function ChatPanel({ connected, workspace, localWorkspace, busy, 
         <LocalDirBrowser initial={localWorkspace || localHome || undefined} home={localHome} onClose={() => setLocalWsBrowserOpen(false)} onPick={setLocalWorkspace} />
       )}
     </div>
+    {/* 用户消息跳转点:absolute 贴对话区(main 内、sidebar 右侧)最左侧,
+        不随限宽的聊天内容移动,也不钉在浏览器窗口最左。渲染在 chatwrap 之外:
+        chatwrap 是滚动条拇指宿主、会被设为定位元素,放里面会被重新锚定到限宽列 */}
+    {userMsgIndices.length > 1 && (
+      <nav className="chat-dots" aria-label="用户消息跳转">
+        {userMsgIndices.map((idx, d) => {
+          const t = (messages[idx]?.content || '').trim();
+          return (
+            <button
+              key={idx}
+              type="button"
+              className={`chat-dot${idx === activeDot ? ' on' : ''}`}
+              aria-label={`跳转到第 ${d + 1} 条用户消息`}
+              onClick={() => jumpToMsg(idx)}
+              onMouseEnter={(e) => showDotTip(e, t)}
+              onMouseLeave={hideDotTip}
+            />
+          );
+        })}
+      </nav>
+    )}
+    </>
   );
 }

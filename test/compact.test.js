@@ -139,7 +139,7 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   const dropCount = 12; // 压缩前 3 组对话 = 12 条消息面事件(整组删除,保证保留区以 user 开头)
   const dropSeqs = trace.slice(0, dropCount).map((t) => t.seq);
   const anchorSeq = trace[dropCount] ? trace[dropCount].seq : null;
-  session.squash(dropSeqs, '【上下文已自动压缩】早期对话摘要内容', anchorSeq);
+  session.squash(dropSeqs, '【上下文已自动压缩】早期对话摘要内容', anchorSeq, { dropCount, manual: true });
 
   const msgs = session.deriveMessages({});
   check('squash 后消息数 = 保留4条 + 摘要1条', msgs.length === 16 - dropCount + 1, `got ${msgs.length}`);
@@ -147,6 +147,9 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   check('squash 后消息序列合法', assertValidApiSequence(msgs).length === 0);
   check('squash 后完整历史的最后一条不变', msgs[msgs.length - 1]?.content === '第3轮结论');
   check('squash 后 seq 连续单调', session.events.every((ev, i) => ev.seq === i));
+  // 压缩标记元数据落事件:dropCount/manual 供前端渲染「压缩标记行」
+  const done = session.events.find((ev) => ev.type === 'compaction/done');
+  check('squash 后 compaction/done 携带 dropCount+manual', done && done.data.dropCount === dropCount && done.data.manual === true);
 }
 
 // ---- 加载迁移日志后也能识别旧格式消息(不回归) ----

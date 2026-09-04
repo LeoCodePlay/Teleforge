@@ -164,6 +164,9 @@ export interface ChatMessage {
   time?: number;
   /** 请求失败进入重试的提示消息(role=notice),同一失败重试时原地更新不堆叠 */
   retryNotice?: boolean;
+  /** 上下文压缩标记(compaction/done 投影消息):dropCount=被压缩消息数,manual=手动压缩。
+      渲染为对话流中的折叠「压缩标记行」(样式参照 harness 的 CompactionItem) */
+  compaction?: { dropCount?: number; manual?: boolean };
 }
 
 /** 任务计划项(todo_write 工具维护,状态对齐 deepseek-harness) */

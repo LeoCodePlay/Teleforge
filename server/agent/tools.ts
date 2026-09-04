@@ -618,17 +618,26 @@ const localToolDefs: ToolDef[] = [
       const base = p || localFs.workspace || localFs.home || '.';
       const isWin = process.platform === 'win32';
       const probeRg = await execLocal(isWin ? 'where rg' : 'command -v rg', { cwd: localFs.home });
+      // 判断 base 是文件还是目录:文件时不能加 `\*` 通配,否则 findstr 会静默无匹配,
+      // 造成「明明有命中却返回 无匹配」的假空结果(此前对本会话的复现已确认)。
+      let isFile = false;
+      try {
+        isFile = !!p && fs.statSync(path.resolve(p)).isFile();
+      } catch { isFile = false; }
       let cmd;
       // 与远程 search_code 对齐:排除 .git/node_modules/dist 等噪声目录,
       // 避免工作区根搜索时海量库文件命中把结果撑爆(findstr 不支持排除,保持原样)
       const rgExcl = ['-g', '"!.git"', '-g', '"!node_modules"', '-g', '"!dist"', '-g', '"!test-results"'].join(' ');
       const grepExcl = '--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=test-results';
+      const pat = pattern.replace(/"/g, '\\"');
       if (probeRg.code === 0 && probeRg.stdout.trim()) {
-        cmd = `rg -n --no-heading ${rgExcl} ${include ? `-g "${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
+        cmd = `rg -n --no-heading ${rgExcl} ${include ? `-g "${include}"` : ''} "${pat}" "${base}"`;
       } else if (isWin) {
-        cmd = `findstr /s /n /c:"${pattern}" "${base}\\*"`;
+        // 文件时直接搜该文件,目录才加 \* 通配,避免 findstr 对「文件路径 + \*」静默无匹配
+        const target = isFile ? `"${base}"` : `"${base}\\*"`;
+        cmd = `findstr ${isFile ? '/n' : '/s /n'} /c:"${pat}" ${target}`;
       } else {
-        cmd = `grep -rn ${grepExcl} ${include ? `--include="${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
+        cmd = `grep -rn ${grepExcl} ${include ? `--include="${include}"` : ''} "${pat}" "${base}"`;
       }
       const r = await execLocal(cmd, { cwd: localFs.home });
       if (r.code !== 0 && !r.stdout) return `无匹配(退出码 ${r.code})`;

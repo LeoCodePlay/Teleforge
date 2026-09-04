@@ -126,8 +126,15 @@ export class LlmClient {
       body.reasoning_effort = map[reasoning] || 'high';
     }
     // 失败重试:最多重试 RETRY_TIMES 次,每次间隔 RETRY_DELAY_MS;
-    // 用户中止不重试;SSE 流已开始后再失败不重试(避免 onDelta 输出重复)
+    // 用户中止不重试;SSE 流已开始后若已吐过内容再失败不重试(避免 onDelta 输出重复),
+    // 但「流已建立却没吐出任何内容就中断」(terminated/socket hang up 等连接重置)与
+    // 连接层错误同等对待,进入统一重试,并统一转成友好中文错误(不再把底层英文原文抛给前端)。
     let lastErr: any;
+    let emittedChars = 0; // 本次请求已通过 onDelta 吐出的字符数(正文/思考/工具参数)
+    const trackedDelta = (d: { kind: string; text?: string; index?: number }) => {
+      if (d.text) emittedChars += d.text.length;
+      onDelta?.(d);
+    };
     for (let attempt = 0; attempt <= RETRY_TIMES; attempt++) {
       if (attempt > 0) {
         if (signal?.aborted) throw lastErr;
@@ -135,6 +142,7 @@ export class LlmClient {
         onRetry?.({ retry: attempt, maxRetries: RETRY_TIMES, delayMs: RETRY_DELAY_MS, error: String(lastErr?.message || lastErr) });
         await sleep(RETRY_DELAY_MS, signal);
       }
+      emittedChars = 0; // 每次尝试独立计数
       let res: Response;
       try {
         res = await fetch(url, {
@@ -160,14 +168,31 @@ export class LlmClient {
       }
       try {
         if (!res.body) throw new Error('LLM API 未返回响应流');
-        return await parseSse(res.body, { signal, onDelta });
+        return await parseSse(res.body, { signal, onDelta: trackedDelta });
       } catch (e) {
         if (signal?.aborted) throw e;
-        throw e; // 流中途失败,不重试
+        if (emittedChars === 0) {
+          lastErr = e; // 流未吐任何内容即中断(terminated/连接重置):等同连接层错误,进入重试
+          continue;
+        }
+        throw toFriendlyLlmError(e); // 已吐部分内容:重试会造成界面正文重复,直接给友好错误
       }
     }
-    throw lastErr;
+    throw toFriendlyLlmError(lastErr);
   }
+}
+
+// 把网络层/流层的原始英文错误(undici terminated、socket hang up、fetch failed、ECONNRESET 等)
+// 转成用户可读的中文提示;非网络类错误(如 API 业务错误)原样返回,保留真实信息
+function toFriendlyLlmError(e: any): Error {
+  const msg = e instanceof Error ? e.message : String(e);
+  const low = msg.toLowerCase();
+  const netRe = /terminated|socket hang up|fetch failed|econnreset|und_err_socket|conn(ection)? reset|connection (closed|refused|aborted)|network (error|unreachable)|broken pipe|keep.?alive|timed? ?out|timeout|aborted|deadline|read eof|eof/i;
+  if (netRe.test(low)) {
+    const hint = /terminated/i.test(low) ? '连接被服务端/网关中断' : '网络连接异常';
+    return new Error(`模型连接中断:${hint}(${msg})。已自动重试,请稍后再试;若持续出现可切换模型或检查网络`);
+  }
+  return e instanceof Error ? e : new Error(msg);
 }
 
 // 请求失败重试策略:最多重试 5 次,每次间隔 2s

@@ -153,8 +153,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
         document.body
       )}
 
-      {/* 重命名弹窗:复用全局 .modal 玻璃面板 */}
-      {rename && (
+      {/* 重命名弹窗:复用全局 .modal 玻璃面板;portal 到 body,避免被侧栏 backdrop-filter 的固定定位包含块裁剪 */}
+      {rename && createPortal(
         <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) cancelRename(); }}>
           <div className="modal s-rename-modal" role="dialog" aria-modal="true"
             onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); cancelRename(); } }}>
@@ -172,7 +172,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], sc
               <button type="button" className="primary grow" onClick={commitRename}>确定</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

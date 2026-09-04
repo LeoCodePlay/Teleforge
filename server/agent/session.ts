@@ -43,7 +43,7 @@ export interface SessionEventDataMap {
   'tool/call': { turn: number; step: number; callId: string; name: string; arguments: string };
   'tool/result': { turn: number; step: number; callId: string; name: string; isError: boolean; content: string; ms: number };
   'todo/write': { todos: Array<{ content: string; status: string }> };
-  'compaction/done': { summary: string };
+  'compaction/done': { summary: string; dropCount?: number; manual?: boolean };
 }
 
 export type SessionEventType = keyof SessionEventDataMap | string;
@@ -174,21 +174,24 @@ export class Session {
   /**
    * 行内压缩区间替换:把 dropSeqs 指定的早期消息事件从日志中移除,
    * 并在 anchorSeq(保留区第一条事件原 seq)位置插入一条 compaction/done 摘要事件。
+   * meta 可选:手动/自动调用方借此携带 dropCount、manual 标记,
+   * 前端据其渲染「压缩标记行」的标题与条数(样式参照 harness 的 CompactionItem)。
    * 被压缩的对话事实已沉淀进摘要,日志保持"模型可见即可回放"。
    */
-  squash(dropSeqs: number[] | string[], summary: string, anchorSeq: number | null): void {
+  squash(dropSeqs: number[] | string[], summary: string, anchorSeq: number | null, meta?: { dropCount?: number; manual?: boolean }): void {
     const drop = new Set(dropSeqs.map(Number).filter((n) => Number.isFinite(n)));
+    const data = { summary, ...(meta || {}) };
     const kept: any[] = [];
     let inserted = false;
     for (const ev of this.events) {
       if (drop.has(ev.seq)) continue;
       if (!inserted && anchorSeq != null && ev.seq >= anchorSeq) {
-        kept.push({ type: 'compaction/done', data: { summary } });
+        kept.push({ type: 'compaction/done', data });
         inserted = true;
       }
       kept.push(ev);
     }
-    if (!inserted) kept.push({ type: 'compaction/done', data: { summary } });
+    if (!inserted) kept.push({ type: 'compaction/done', data });
     // 重排 seq = 新数组下标,保持单调;time 缺失时补当前时间
     this.events = kept.map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
   }

@@ -149,7 +149,11 @@ function projectEvents(events) {
         ...(Array.isArray(d.skillsInjected) && d.skillsInjected.length ? { skillsInjected: d.skillsInjected } : {})
       });
     } else if (ev.type === 'compaction/done') {
-      out.push({ role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。', time: ev.time });
+      out.push({
+        role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。', time: ev.time,
+        // 压缩标记元数据:前端据此渲染「压缩标记行」(dropCount=被压缩消息数,manual=手动压缩)
+        compaction: { dropCount: typeof d.dropCount === 'number' ? d.dropCount : 0, manual: d.manual === true }
+      });
     } else if (ev.type === 'assistant/message') {
       const m = d.message || {};
       out.push({
@@ -516,7 +520,7 @@ export class Agent {
       : `【上下文已手动压缩】早期 ${dropMsgs.length} 条消息已省略。`;
     const dropSeqs = trace.slice(0, keep).map((t) => t.seq);
     const anchorSeq = trace[keep] ? trace[keep].seq : null;
-    session.squash(dropSeqs, summaryMsg, anchorSeq);
+    session.squash(dropSeqs, summaryMsg, anchorSeq, { dropCount: dropMsgs.length, manual: true });
     if (id != null) sessions.saveEvents(id, session.events); // 落盘,重启后可恢复
     this.emit('agent', { event: 'history_compacted', sid: id, dropCount: dropMsgs.length });
     return { compacted: true, dropCount: dropMsgs.length, summary: summaryMsg };
@@ -832,7 +836,7 @@ export class Agent {
           if (c.compacted) {
             const dropSeqs = trace.slice(0, c.dropCount).map((t) => t.seq);
             const anchorSeq = trace[c.dropCount] ? trace[c.dropCount].seq : null; // 保留区第一条消息的 seq
-            session.squash(dropSeqs, c.messages[0].content, anchorSeq);
+            session.squash(dropSeqs, c.messages[0].content, anchorSeq, { dropCount: c.dropCount, manual: false });
             historyMsgs = c.messages;
             console.log(`[agent] 上下文超限,已自动压缩早期 ${c.dropCount} 条消息(窗口 ${ctxWindow})`);
           }

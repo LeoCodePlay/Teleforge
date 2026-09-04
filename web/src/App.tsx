@@ -401,7 +401,7 @@ export default function App() {
 
       <div className="layout">
         <aside ref={leftRef} style={{ width: leftWidth }} className={`sidebar sidebar-left ${leftOpen ? '' : 'hidden'}`}>
-          <div className="resizer" data-tip="拖动调整宽度" onPointerDown={startResize} />
+          <div className="resizer" onPointerDown={startResize} />
           <div className="side-top" style={{ flexBasis: `${sideRatio * 100}%` }}>
             <SessionPanel
               sessions={sessions}
@@ -416,7 +416,7 @@ export default function App() {
               onDelete={deleteSession}
             />
           </div>
-          <div className="side-divider" data-tip="拖动调整上下区域" onPointerDown={startSideSplit} />
+          <div className="side-divider" onPointerDown={startSideSplit} />
           <div className="side-bottom">
             <WorkspacePanel
               connected={connected}

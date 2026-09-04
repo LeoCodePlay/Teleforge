@@ -1,0 +1,5 @@
+/* ---- CompactionRow 独有样式:上下文压缩标记行(样式参照 harness 的 CompactionItem) ----
+   整行占满对话宽度、低调不打扰:折叠态 24px 行高由 DisclosureRow 承载,
+   展开态正文缩进对齐前导槽(22px),灰色次要色、pre-wrap 保留摘要换行。 */
+.dsh-compaction { display: flex; flex-direction: column; width: 100%; margin: 4px 0; min-width: 0; }
+.dsh-compaction-body { padding: 4px 0 4px 22px; color: var(--muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }

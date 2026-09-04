@@ -3,7 +3,6 @@
 /* 聊天 */
 /* 会话区限宽居中(780px):消息输出与输入框整体不超过 780px,内容行不过长,两侧留白可承载其它面板 */
 .chatwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; max-width: 780px; width: 100%; margin: 0 auto; }
-.chat-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; color: var(--muted); font-size: 12px; }
 .chat-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 18px 16px; min-width: 0; }
 .empty { text-align: center; color: var(--muted); margin-top: 12vh; font-size: 14px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
@@ -23,6 +22,9 @@
 }
 .msg.user { justify-content: flex-end; flex-direction: column; align-items: flex-end; }
 .msg.assistant { justify-content: flex-start; }
+/* 上下文压缩标记行(CompactionRow):不是用户气泡,取消 .msg.user 的右对齐,
+   整行占满对话宽度、左对齐,低调不打扰对话流(样式参照 harness 的 CompactionItem) */
+.msg.compaction-msg { justify-content: flex-start; align-items: stretch; }
 .bubble { max-width: 78%; min-width: 0; padding: 10px 14px; border-radius: var(--r-md); line-height: 1.6; font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
 
 /* 用户气泡:深色玻璃 + 主色淡晕,不套磨砂避免每屏气泡数超 backdrop-filter 额度。
@@ -77,7 +79,8 @@
 
 /* ---- 用户消息跳转点:absolute 贴对话主区域最左侧 ----
    相对 .tab-body 对齐(main 内、sidebar 右侧),不随限宽聊天内容移动,
-   也不钉在浏览器窗口最左;垂直居中于对话区 */
+   也不钉在浏览器窗口最左;垂直居中于对话区。
+   注意:chat-dots 渲染在 chatwrap 之外(兄弟节点),与限宽列布局解耦 */
 .chat-dots {
   position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
   z-index: 3;
@@ -216,7 +219,8 @@
    对话区整体 inert(可滚动阅读上下文,但不许点选/操作),提问面板居中突出展示;
    作答或取消后提问结束,其余面板自动恢复。 */
 .chatwrap.ask-focus .chat-scroll { pointer-events: none; }
-.chatwrap.ask-focus .chat-dots,
+/* 跳转点在 chatwrap 之外(兄弟节点),用兄弟选择器隐藏 */
+.chatwrap.ask-focus ~ .chat-dots,
 .chatwrap.ask-focus .dot-tip,
 .chatwrap.ask-focus .todo-panel,
 .chatwrap.ask-focus .queue-panel,
@@ -378,9 +382,11 @@
 /* 历史记录删除按钮:常显灰字,悬停变红;无边框无阴影(去掉全局 button 的玻璃阴影) */
 .ws-pick-del {
   flex: none; background: transparent; border: none; box-shadow: none; cursor: pointer;
-  padding: 5px 9px; font-size: 12px; line-height: 1;
-  border-radius: var(--r-sm);
-  /* 颜色与 hover/active 反馈由 .action-icon(.danger) 统一提供 */
+  /* 删除按钮:加宽横向留白与最小宽度,保证足够大的可点击区域(避免过窄难点中);
+     图标垂直水平居中。颜色与 hover/active 反馈由 .action-icon(.danger) 统一提供 */
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 6px 13px; font-size: 13px; line-height: 1;
+  min-width: 36px; border-radius: var(--r-sm);
 }
 .ws-pick-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
 .ws-pick-cur { flex: none; color: var(--green); }
@@ -394,7 +400,6 @@
   .composer { margin: 0 8px 8px; padding: 10px 12px; }
 }
 @media (max-width: 560px) {
-  .chat-head { padding: 6px 10px; }
   .chat { padding: 6px 8px 12px; }
   .bubble { max-width: 88%; }
   .composer { margin: 0 6px 6px; padding: 8px 10px; border-radius: var(--r-md); }

@@ -20,9 +20,27 @@ interface ObState {
   v?: HTMLDivElement;   // 垂直拇指
   h?: HTMLDivElement;   // 水平拇指
   timer?: number;       // 淡出定时器
+  host?: HTMLElement;   // 拇指宿主(挂载与定位容器,缺省为滚动元素自身)
 }
 
 const states = new Map<HTMLElement, ObState>();
+
+/* ---------- 拇指宿主 ----------
+   默认拇指挂在滚动元素自身:绝对定位于其内容坐标系,随内容一起滚动,绘制时需加回 scrollTop。
+   通过 setScrollbarHost 可把拇指挂到外部宿主(如聊天面板整列容器):拇指不再随内容滚动,
+   轨道为宿主的完整可见高度——滚动条得以跨越滚动区之外的区域(如聊天输入区),视觉上铺满整列。 */
+const hosts = new WeakMap<HTMLElement, HTMLElement>();
+
+/** 为滚动元素指定外部拇指宿主(host 为 null 时解除,回落为挂载在滚动元素自身) */
+export function setScrollbarHost(el: HTMLElement, host: HTMLElement | null): void {
+  if (host) hosts.set(el, host); else hosts.delete(el);
+  const s = states.get(el);
+  if (s) { s.v?.remove(); s.h?.remove(); s.v = undefined; s.h = undefined; s.host = undefined; }
+}
+
+function getHost(el: HTMLElement): HTMLElement {
+  return hosts.get(el) || el;
+}
 
 /* ---------- 排除规则:这些元素保留原生滚动条 ---------- */
 function isExcluded(el: HTMLElement): boolean {
@@ -60,11 +78,11 @@ function ensureContainingBlock(el: HTMLElement): void {
   if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
 }
 
-function makeThumb(el: HTMLElement, axis: 'v' | 'h'): HTMLDivElement {
+function makeThumb(el: HTMLElement, host: HTMLElement, axis: 'v' | 'h'): HTMLDivElement {
   const div = document.createElement('div');
   div.className = axis === 'v' ? 'ob-thumb ob-v' : 'ob-thumb ob-h';
   div.setAttribute('aria-hidden', 'true');
-  el.appendChild(div);
+  host.appendChild(div);
   bindDrag(div, el, axis);
   return div;
 }
@@ -79,34 +97,40 @@ function makeThumb(el: HTMLElement, axis: 'v' | 'h'): HTMLDivElement {
    因此测量必须在同轴拇指隐藏后进行(隐藏拇指迫使布局重算,scrollTop 也随之
    钳制到真实底部),保证算出的拇指位置永远落在真实内容边界内。 */
 function paint(el: HTMLElement, s: ObState, cs: CSSStyleDeclaration, ov: { v: boolean; h: boolean }): void {
+  const host = s.host || el;
   if (ov.v) {
-    const thumb = s.v ?? (s.v = makeThumb(el, 'v'));
+    const thumb = s.v ?? (s.v = makeThumb(el, host, 'v'));
     thumb.style.display = 'none'; // 隐藏同轴拇指后再读,拿到不含拇指的真实高度
     const ch = el.clientHeight;
     const sh = el.scrollHeight;
     const maxV = Math.max(sh - ch, 1);
-    const th = Math.max(MIN_THUMB, Math.round((ch * ch) / sh));
-    const hPx = Math.min(Math.max(th, 16), ch - THUMB_GAP * 2);
-    const track = Math.max(ch - hPx - THUMB_GAP * 2, 1);
+    // 轨道高度:宿主模式下为宿主可见高度(拇指可跨越滚动区之外),否则为容器自身高度;
+    // 拇指长度按「可见内容占比 × 轨道」折算,宿主模式下即按整列轨道等比呈现
+    const trackH = host === el ? ch : host.clientHeight;
+    const th = Math.max(MIN_THUMB, Math.round((ch * trackH) / sh));
+    const hPx = Math.min(Math.max(th, 16), trackH - THUMB_GAP * 2);
+    const track = Math.max(trackH - hPx - THUMB_GAP * 2, 1);
     const ratio = Math.min(Math.max(el.scrollTop / maxV, 0), 1);
     thumb.style.height = `${hPx}px`;
-    thumb.style.top = `${THUMB_GAP + ratio * track + el.scrollTop}px`;
+    // 拇指在滚动元素自身坐标系内会随 scrollTop 一起滚动,需加回;宿主坐标系不滚动,不加
+    thumb.style.top = `${THUMB_GAP + ratio * track + (host === el ? el.scrollTop : 0)}px`;
     thumb.style.display = 'block';
   } else if (s.v) {
     s.v.style.display = 'none';
   }
   if (ov.h) {
-    const thumb = s.h ?? (s.h = makeThumb(el, 'h'));
+    const thumb = s.h ?? (s.h = makeThumb(el, host, 'h'));
     thumb.style.display = 'none'; // 同上:水平拇指会撑大 scrollWidth,隐藏后测真实宽度
     const cw = el.clientWidth;
     const sw = el.scrollWidth;
     const maxH = Math.max(sw - cw, 1);
-    const tw = Math.max(MIN_THUMB, Math.round((cw * cw) / sw));
-    const wPx = Math.min(Math.max(tw, 16), cw - THUMB_GAP * 2);
-    const track = Math.max(cw - wPx - THUMB_GAP * 2, 1);
+    const trackW = host === el ? cw : host.clientWidth;
+    const tw = Math.max(MIN_THUMB, Math.round((cw * trackW) / sw));
+    const wPx = Math.min(Math.max(tw, 16), trackW - THUMB_GAP * 2);
+    const track = Math.max(trackW - wPx - THUMB_GAP * 2, 1);
     const ratio = Math.min(Math.max(el.scrollLeft / maxH, 0), 1);
     thumb.style.width = `${wPx}px`;
-    thumb.style.left = `${THUMB_GAP + ratio * track + el.scrollLeft}px`;
+    thumb.style.left = `${THUMB_GAP + ratio * track + (host === el ? el.scrollLeft : 0)}px`;
     thumb.style.display = 'block';
   } else if (s.h) {
     s.h.style.display = 'none';
@@ -133,7 +157,13 @@ function flash(el: HTMLElement, idleMs: number, instant = false): void {
   if (!s) {
     s = {};
     states.set(el, s);
-    ensureContainingBlock(el);
+  }
+  // 宿主可能随时注册/更换:换宿主时丢弃旧拇指(旧坐标系作废),在新宿主上重建
+  const host = getHost(el);
+  if (s.host !== host) {
+    s.v?.remove(); s.h?.remove(); s.v = undefined; s.h = undefined;
+    s.host = host;
+    ensureContainingBlock(host); // 让宿主成为绝对定位拇指的包含块
   }
   if (instant) {
     s.v?.style.setProperty('transition', 'none');
