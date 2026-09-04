@@ -34,6 +34,21 @@ export const AGENT = {
   MAX_ITERS: 500,              // 单轮对话最大工具迭代次数(全局默认;前端不再单独编辑覆盖)
   TOOL_RESULT_MAX_CHARS: 60_000,
   HISTORY_BUDGET_CHARS: 180_000,
+  // 环境快照注入 system prompt 的字符预算(防 get_workspace_info/get_local_info 的大目录树撑爆提示词)
+  ENV_SNAPSHOT_MAX_CHARS: 6_000,
+  // 历史中旧工具结果的投影期折叠(参照 harness tool-result-pruner):
+  // 请求构造时把早期大体积工具结果替换为头尾摘要 + 回读指引;事件日志保持完整(可回放/分支)。
+  // 水位双触发:预估请求 token 超过可用窗口的 WATER_RATIO,或超过 ABS_FLOOR_TOKENS
+  // (声明窗口虚高/未配置时的绝对地板——否则 1M 窗口兜底会让裁剪永远不触发)。
+  TOOL_RESULT_PRUNE: {
+    ENABLED: true,
+    WATER_RATIO: 0.35,        // 预估请求 token(历史 + system + 工具 schema)超过可用窗口 35% 时启用
+    ABS_FLOOR_TOKENS: 60_000, // 绝对地板:无论窗口声明多大,超过 6 万 token 即启用
+    KEEP_RECENT: 6,           // 最近 6 条工具结果保持原样(模型正在分析的活跃上下文)
+    MIN_CHARS: 1_200,         // 只折叠超过该长度的结果
+    HEAD_CHARS: 900,
+    TAIL_CHARS: 300
+  },
   CONCURRENT_TOOL_CALLS: true,  // 并行执行工具调用( 的有界滚动池,设 false 回退串行)
   MAX_PARALLEL_TOOL_CALLS: 4,   // 并行工具调用并发上限(bounded rolling pool,串行模式忽略)
  

@@ -20,6 +20,12 @@ export interface ToolDef {
   run: (args: any, ctx: any) => any | Promise<any>;
   timeoutMs?: number;
   remote?: boolean;
+  /**
+   * 是否改变外部状态(写文件/建目录/删除等)。并行池里 mutating 调用必须独占执行,
+   * 与其它任何调用并发都可能产生 read-modify-write 竞态(如两条 edit_file 同文件,
+   * 后读的一方覆盖先写的一方的更新)。run_command 类有意不标:命令并发是既有特性。
+   */
+  mutating?: boolean;
   [k: string]: any;
 }
 
@@ -36,6 +42,9 @@ export interface ToolResult {
 export class ToolRegistry {
   tools: Map<string, ToolDef> = new Map();
   guards: GuardFn[] = [];
+  // schemas() 投影缓存:键 = 启用工具名集合 + localOnly。注册/注销/启停/模式切换
+  // 任一变化都会改变键,天然失效。省掉每步对 20+ 工具 schema 的深拷贝序列化。
+  private _schemasCache: { key: string; schemas: any[] } | null = null;
 
   /** 注册一个工具,返回卸载器(对齐 harness register 的 disposer 语义) */
   register(def: ToolDef): () => void {
@@ -67,13 +76,16 @@ export class ToolRegistry {
   }
 
   /**
-   * 模型可见的 ToolSchema 白名单投影(深拷贝,防调用方篡改定义);被禁用的工具不投影。
+   * 模型可见的 ToolSchema 白名单投影(结果缓存;被禁用的工具不投影)。
    * localOnly=true(未连接 SSH 的本地模式)时,带 remote 标记的工具一并剔除,
    * 模型只能看到本机工具与技能/任务清单等非远程工具,从源头避免触发"SSH 连接已断开"。
+   * 返回的是缓存对象,调用方不得原地修改(现有调用只读序列化进请求体)。
    */
   schemas({ localOnly = false }: { localOnly?: boolean } = {}): any[] {
-    return [...this.tools.values()]
-      .filter((t) => toolSettings.isEnabled(t.name))
+    const entries = [...this.tools.values()].filter((t) => toolSettings.isEnabled(t.name));
+    const key = entries.map((t) => t.name).join(',') + '|' + (localOnly ? 'L' : 'R');
+    if (this._schemasCache && this._schemasCache.key === key) return this._schemasCache.schemas;
+    const schemas = entries
       .filter((t) => !(localOnly && t.remote))
       .map((t) => ({
         type: 'function',
@@ -83,6 +95,13 @@ export class ToolRegistry {
           parameters: JSON.parse(JSON.stringify(t.parameters || { type: 'object', properties: {}, required: [] }))
         }
       }));
+    this._schemasCache = { key, schemas };
+    return schemas;
+  }
+
+  /** 该工具是否改变外部状态(并行池的互斥依据,见 ToolDef.mutating) */
+  isMutating(name: string): boolean {
+    return !!this.tools.get(name)?.mutating;
   }
 
   /**

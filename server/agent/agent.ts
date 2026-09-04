@@ -12,7 +12,7 @@
 //   各会话独立驱动互不阻塞;所有发给前端的事件都带 sid,前端按会话路由显示。
 import { AGENT } from '../config.ts';
 import { LlmClient } from './llm.ts';
-import { compactHistory, summarizeWithLlm, messageTokens, resolveCharBudget } from './compact.ts';
+import { compactHistory, summarizeWithLlm, messageTokens, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
 import { Session, foldTodos, trimMessagesByBudget } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
@@ -816,6 +816,10 @@ export class Agent {
         // (见 compact.js:早期对话组压缩成摘要并 squash 进日志,保留最近窗口)
         const systemText = this._systemPrompt(reasoning);
         const ctxWindow = (this.llm && this.llm.contextWindow) || 0;
+        const toolSchemas = useTools ? registry.schemas({ localOnly: !ssh.connected }) : [];
+        // 每次请求的固定开销(system 提示词 + 工具 schema)估算:压缩水位与投影裁剪都要扣除,
+        // 否则实际请求比水位估算大一个 system 的体量(实测偏差可达数万 token),触发严重偏晚
+        const reservedTokens = estimateTokens(systemText) + (toolSchemas.length ? estimateTokens(JSON.stringify(toolSchemas)) : 0);
         // 先用完整历史投影(不裁剪),让摘要压缩基于完整信息工作;
         // 字符兜底裁剪放到摘要之后(见下),且永不丢弃原始任务锚点。
         const trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
@@ -823,7 +827,7 @@ export class Agent {
         if (ctxWindow > 0 && historyMsgs.length > 2) {
           const c = await compactHistory({
             messages: historyMsgs, system: systemText, llm: this.llm, signal: signal.signal,
-            contextWindow: ctxWindow, maxTokens: this.llm.maxTokens
+            contextWindow: ctxWindow, maxTokens: this.llm.maxTokens, reservedTokens
           });
           if (c.compacted) {
             const dropSeqs = trace.slice(0, c.dropCount).map((t) => t.seq);
@@ -833,6 +837,10 @@ export class Agent {
             console.log(`[agent] 上下文超限,已自动压缩早期 ${c.dropCount} 条消息(窗口 ${ctxWindow})`);
           }
         }
+        // 投影期折叠早期大工具结果(参照 harness tool-result-pruner):单轮深工具任务只有
+        // 一组对话,组级压缩/裁剪永远够不着,这里是长会话 token 的最后一道防线。
+        // 日志不动,只裁模型当轮可见面;水位双触发(窗口占比 + 绝对地板,见 AGENT.TOOL_RESULT_PRUNE)。
+        historyMsgs = this._pruneHistoryToolResults(historyMsgs, ctxWindow, reservedTokens);
         // 兜底字符裁剪:摘要未触发/未配置窗口时仍按预算裁剪,但永不丢原始任务锚点。
         // 预算由输入窗口推导(未配置窗口回退固定默认),对齐前端仪表盘的 token 口径。
         historyMsgs = trimMessagesByBudget(historyMsgs, resolveCharBudget(ctxWindow));
@@ -844,7 +852,7 @@ export class Agent {
           stepPartialReasoning = '';
           res = await this.llm.chat({
             messages,
-            tools: useTools ? registry.schemas({ localOnly: !ssh.connected }) : [],
+            tools: toolSchemas,
             signal: signal.signal,
             reasoning,
             onDelta: (d) => {
@@ -1044,6 +1052,17 @@ export class Agent {
     let committed = 0;
     let turnConcluded = false;
 
+    // 读写分类互斥:mutating 调用(写文件/编辑/删除,见 ToolDef.mutating)必须独占执行——
+    // 与其它任何调用并发都可能产生 read-modify-write 竞态(如两条 edit_file 同文件,
+    // 后读的一方会把先写的一方的更新覆盖掉)。readonly 调用之间照常并行;
+    // 调用发起顺序仍严格保持模型顺序(只是相互等待),结果提交顺序语义不变。
+    const mutFlags = calls.map((c) => registry.isMutating(c.tc.name));
+    const barrierBlocks = (index: number) => {
+      if (inFlight.size === 0) return false;
+      if (mutFlags[index]) return true; // 自身是写:等在飞的全部排干
+      return [...inFlight.keys()].some((j) => mutFlags[j]); // 有写在飞:读也得等它落地
+    };
+
     const commitReady = () => {
       while (committed < calls.length) {
         const slot = slots[committed];
@@ -1064,7 +1083,7 @@ export class Agent {
     };
 
     const fillPool = async () => {
-      while (!signal.signal.aborted && nextToStart < calls.length && inFlight.size < maxParallel) {
+      while (!signal.signal.aborted && nextToStart < calls.length && inFlight.size < maxParallel && !barrierBlocks(nextToStart)) {
         const index = nextToStart++;
         const promise = startCall(index).then(
           () => { inFlight.delete(index); },
@@ -1122,6 +1141,31 @@ export class Agent {
         internal: true // 系统内部提醒:不会跨轮转成用户输入(见 _runTurnInner finally)
       });
     }
+  }
+
+  /**
+   * 投影期折叠历史中的旧工具结果(请求构造时调用,不动事件日志):
+   * 触发条件(满足其一):
+   * - 预估请求 token(历史 + system + 工具 schema)超过可用窗口的 WATER_RATIO;
+   * - 或超过绝对地板 ABS_FLOOR_TOKENS——声明窗口虚高(如前端 1M 兜底)时,
+   *   占比水位永远不会触发,绝对地板保证长会话仍被治理。
+   * 命中后:最近 KEEP_RECENT 条结果原样保留,更早的超长结果折叠为头尾摘要。
+   */
+  _pruneHistoryToolResults(historyMsgs: any[], ctxWindow: number, reservedTokens: number) {
+    const P = AGENT.TOOL_RESULT_PRUNE;
+    if (!P || !P.ENABLED) return historyMsgs;
+    const usable = ctxWindow > 0 ? Math.max(1, ctxWindow - ((this.llm && this.llm.maxTokens) || 8192)) : 0;
+    const projected = measureMessages(historyMsgs) + Math.max(0, reservedTokens);
+    const overRatio = usable > 0 && projected > usable * P.WATER_RATIO;
+    const overFloor = projected > P.ABS_FLOOR_TOKENS;
+    if (!overRatio && !overFloor) return historyMsgs;
+    const r = pruneToolResults(historyMsgs, {
+      keepRecent: P.KEEP_RECENT, minChars: P.MIN_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
+    });
+    if (r.pruned > 0) {
+      console.log(`[agent] 历史工具结果折叠:${r.pruned} 条,省约 ${r.charsSaved} 字符(预估请求 ${Math.round(projected)} token${overFloor && !overRatio ? ',命中绝对地板' : ''})`);
+    }
+    return r.messages;
   }
 
   _systemPrompt(reasoning = 'default') {
@@ -1194,16 +1238,17 @@ export class Agent {
       );
     }
     // 注入最近一次远程环境探测结果,让模型直接复用,避免每轮重复 get_workspace_info
+    // 快照带字符预算(AGENT.ENV_SNAPSHOT_MAX_CHARS):目录骨架再大也不允许撑爆 system prompt
     const env = getEnvInfo();
     if (env && env.workspace === ssh.workspace) {
       lines.push('', '已知环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_workspace_info):');
-      lines.push(env.summary);
+      lines.push(String(env.summary || '').slice(0, AGENT.ENV_SNAPSHOT_MAX_CHARS));
     }
     // 注入最近一次本地环境探测结果,让模型直接复用,避免每轮重复 get_local_info
     const lenv = getLocalEnvInfo();
     if (lenv && lenv.workspace === localFs.workspace) {
       lines.push('', '已知本地环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_local_info):');
-      lines.push(lenv.summary);
+      lines.push(String(lenv.summary || '').slice(0, AGENT.ENV_SNAPSHOT_MAX_CHARS));
     }
     return lines.join('\n');
   }

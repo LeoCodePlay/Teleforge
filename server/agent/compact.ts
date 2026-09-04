@@ -15,7 +15,8 @@ export const COMPACT = {
   SUMMARY_MAX_TOKENS: 8192,  // 摘要生成请求的输出上限(参照 harness 的 compaction maxTokens)
   MSG_OVERHEAD: 12,          // 每条消息 JSON 结构(role/键名/tool_calls)的近似 token 开销
   CHARS_PER_CJK_TOKEN: 1.6,  // 中文近似
-  CHARS_PER_ASCII_TOKEN: 4   // 英文/数字/符号近似
+  CHARS_PER_ASCII_TOKEN: 3   // 英文/代码/符号近似。4 偏乐观:代码/JSON 实测 ~2.8-3.2,
+                              // 十六进制哈希甚至 ~1.5;取 3 让水位判断偏保守(宁可早压不可爆窗)
 };
 
 /** 启发式估算一段文本的 token 数 */
@@ -110,11 +111,16 @@ export function compactionInstruction(): string {
  * 对消息历史执行上下文压缩:
  * 未配置 contextWindow 或未超阈值时原样返回;超阈值时选区间 -> 生成摘要(失败降级裁剪)
  * -> 返回 [摘要消息, ...保留区最近消息]。
+ * reservedTokens:每次请求的固定开销(system 提示词 + 工具 schema 的估算 token),
+ * 传入时从触发阈值里扣除——否则实际请求比水位估算大一截,压缩触发严重偏晚。
  */
-export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown }): Promise<{ messages: any[]; compacted: boolean; dropCount: number }> {
+export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0 }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number }): Promise<{ messages: any[]; compacted: boolean; dropCount: number }> {
   const spec = resolveCompactSpec(contextWindow, maxTokens);
   if (!spec.enabled) return { messages, compacted: false, dropCount: 0 };
-  if (measureMessages(messages) <= spec.thresholdTokens) return { messages, compacted: false, dropCount: 0 };
+  // 水位扣除固定开销(system + 工具 schema):真实请求 = 历史 + 固定开销,
+  // 只量历史会让触发点比真实爆窗点晚一个 system 的体量(实测偏差可达数万 token)
+  const thresholdTokens = Math.max(1, spec.thresholdTokens - Math.max(0, Math.floor(reservedTokens)));
+  if (measureMessages(messages) <= thresholdTokens) return { messages, compacted: false, dropCount: 0 };
 
   const range = selectCompactRange(messages, spec.retainTokens);
   if (!range) return { messages, compacted: false, dropCount: 0 };
@@ -122,7 +128,10 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
   let summary = '';
   if (llm && !llm.isMock) {
     try {
-      summary = await summarizeWithLlm({ llm, system, dropMsgs: range.drop, signal });
+      // 摘要请求防超窗:drop 区间可能比当前请求还大,先把其中大体积工具结果折叠成头尾,
+      // 再交给 LLM 汇总——否则摘要请求自己就会 400/被上游截断(摘要并不需要完整文件原文)
+      const prunedDrop = pruneToolResults(range.drop, { keepRecent: 0, minChars: 1200, headChars: 900, tailChars: 300 }).messages;
+      summary = await summarizeWithLlm({ llm, system, dropMsgs: prunedDrop, signal });
     } catch (e: any) {
       console.warn(`[compact] 摘要生成失败,降级为直接裁剪: ${e?.message || e}`);
     }
@@ -158,4 +167,48 @@ export async function summarizeWithLlm({ llm, system, dropMsgs, signal }: { llm:
   });
   const text = (res && (res.content || '')) || '';
   return text.trim().slice(0, AGENT.HISTORY_BUDGET_CHARS);
+}
+
+// ---- 历史中旧工具结果的投影期折叠(参照 harness compaction-tool-result-pruner) ----
+// 与 squash 摘要压缩互补:摘要压缩按"对话组"选区间,单轮深工具任务只有一组,永远够不着;
+// 这里在请求构造时把"早期的大体积工具结果"替换为头尾摘要 + 回读指引,补上这道防线。
+// 纯函数、不动事件日志:日志保持完整(可回放/分支),只裁模型当轮可见面。
+
+export interface ToolResultPruneSpec {
+  keepRecent: number;  // 最近 N 条工具结果保持原样(模型正在分析的活跃上下文)
+  minChars: number;    // 只折叠超过该长度的结果
+  headChars: number;
+  tailChars: number;
+}
+
+function pruneHint(omitted: number): string {
+  return `\n…[早期工具结果已折叠:省略中段 ${omitted} 字符。头尾已保留;需要完整内容可按原参数重新调用该工具,或用 read_file/read_local_file 的 offset 分段读取]…\n`;
+}
+
+/**
+ * 折叠消息历史中早期的大体积工具结果:
+ * - 只处理 role='tool' 的消息;最近 keepRecent 条不动(活跃上下文);
+ * - 其余超过 minChars 的替换为 head + 提示 + tail,消息结构(role/tool_call_id)原样保留,
+ *   序列合法性不受影响(只改 content 字符串);
+ * - 返回新数组与统计;输入不被修改。
+ */
+export function pruneToolResults(msgs: any[], spec: ToolResultPruneSpec): { messages: any[]; pruned: number; charsSaved: number } {
+  const toolIdx: number[] = [];
+  (msgs || []).forEach((m, i) => {
+    if (m && m.role === 'tool' && typeof m.content === 'string' && m.content.length > spec.minChars) toolIdx.push(i);
+  });
+  const keep = new Set(toolIdx.slice(-Math.max(0, spec.keepRecent)));
+  const out = (msgs || []).slice();
+  let pruned = 0;
+  let charsSaved = 0;
+  for (const i of toolIdx) {
+    if (keep.has(i)) continue;
+    const content = out[i].content;
+    const omitted = content.length - spec.headChars - spec.tailChars;
+    if (omitted <= 0) continue;
+    out[i] = { ...out[i], content: content.slice(0, spec.headChars) + pruneHint(omitted) + content.slice(content.length - spec.tailChars) };
+    pruned++;
+    charsSaved += omitted;
+  }
+  return { messages: out, pruned, charsSaved };
 }

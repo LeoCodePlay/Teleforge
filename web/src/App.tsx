@@ -61,6 +61,38 @@ export default function App() {
     document.addEventListener('pointerup', onUp);
   };
 
+  // ---- 侧栏上下分栏:历史会话区占比(0~1),localStorage 持久化,拖动分隔条实时更新 ----
+  const SPLIT_KEY = 'sshai.sideSplit';
+  const loadSideRatio = (): number => {
+    try {
+      const v = Number(localStorage.getItem(SPLIT_KEY));
+      if (Number.isFinite(v) && v > 0 && v < 1) return v;
+    } catch { /* 存储不可用时用默认值 */ }
+    return 0.42;
+  };
+  const [sideRatio, setSideRatio] = useState(loadSideRatio);
+  const sideRatioRef = useRef(sideRatio);
+  useEffect(() => { sideRatioRef.current = sideRatio; }, [sideRatio]);
+  const startSideSplit = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const rect = leftRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const onMove = (ev: PointerEvent) => {
+      const r = Math.min(Math.max((ev.clientY - rect.top) / rect.height, 0.18), 0.82);
+      sideRatioRef.current = r;
+      setSideRatio(r);
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.classList.remove('splitting');
+      try { localStorage.setItem(SPLIT_KEY, String(sideRatioRef.current)); } catch { /* 存储不可用忽略 */ }
+    };
+    document.body.classList.add('splitting');
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  };
+
   // ---- 历史会话状态 ----
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -370,32 +402,37 @@ export default function App() {
       <div className="layout">
         <aside ref={leftRef} style={{ width: leftWidth }} className={`sidebar sidebar-left ${leftOpen ? '' : 'hidden'}`}>
           <div className="resizer" data-tip="拖动调整宽度" onPointerDown={startResize} />
-          <SessionPanel
-            sessions={sessions}
-            activeId={activeSessionId}
-            busyIds={busySessions}
-            scopeLabel={scopeLabel}
-            scopeKey={scopeKey}
-            onNew={newSession}
-            onSwitch={switchSession}
-            onSwitchForeign={switchForeignSession}
-            onRename={renameSession}
-            onDelete={deleteSession}
-          />
-          <WorkspacePanel
-            connected={connected}
-            workspace={status.workspace}
-            home={status.home}
-            connId={status.activeConn ?? null}
-            localWorkspace={status.localWorkspace}
-            localHome={status.localHome}
-            localCwd={localCwd}
-            remoteCwd={remoteCwd}
-            onLocalCwdChange={setLocalCwd}
-            onRemoteCwdChange={setRemoteCwd}
-            onOpenFile={handleOpenFile}
-            onOpenLocalFile={handleOpenLocalFile}
-          />
+          <div className="side-top" style={{ flexBasis: `${sideRatio * 100}%` }}>
+            <SessionPanel
+              sessions={sessions}
+              activeId={activeSessionId}
+              busyIds={busySessions}
+              scopeLabel={scopeLabel}
+              scopeKey={scopeKey}
+              onNew={newSession}
+              onSwitch={switchSession}
+              onSwitchForeign={switchForeignSession}
+              onRename={renameSession}
+              onDelete={deleteSession}
+            />
+          </div>
+          <div className="side-divider" data-tip="拖动调整上下区域" onPointerDown={startSideSplit} />
+          <div className="side-bottom">
+            <WorkspacePanel
+              connected={connected}
+              workspace={status.workspace}
+              home={status.home}
+              connId={status.activeConn ?? null}
+              localWorkspace={status.localWorkspace}
+              localHome={status.localHome}
+              localCwd={localCwd}
+              remoteCwd={remoteCwd}
+              onLocalCwdChange={setLocalCwd}
+              onRemoteCwdChange={setRemoteCwd}
+              onOpenFile={handleOpenFile}
+              onOpenLocalFile={handleOpenLocalFile}
+            />
+          </div>
         </aside>
 
         <main className="main">

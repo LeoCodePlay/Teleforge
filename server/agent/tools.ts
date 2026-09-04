@@ -63,35 +63,70 @@ function shQuote(s: string): string { return ssh.platform === 'win32' ? shQuoteW
 // 深度可达目录数,避免探测目录结构时失控
 const DEPTH_LIMIT = 4;
 
-// 递归格式化目录树(限制深度,dir 后带 /),用于环境快照的目录骨架
-function treeLines(p: string, depth: number): string[] {
-  if (depth > DEPTH_LIMIT) return ['…(更深层略去)'];
+// ---- 环境快照目录骨架的整形预算 ----
+// 旧实现:深度 4、不排除任何目录、safeJson 截 60k。实测一个普通前端工作区会产出
+// 8000+ 行(node_modules/.git 占 92%),截断后模型看到的只有 .git 对象哈希——
+// 纯 token 垃圾且毫无结构价值。故骨架改为:排除噪声目录 + 深度 2 + 条目上限。
+const TREE_EXCLUDE = new Set([
+  '.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.nuxt',
+  '.cache', '__pycache__', '.venv', 'venv', 'target', 'test-results',
+  '.playwright-cli', '.trae', '.superpowers', '.idea', '.vscode'
+]);
+const TREE_DEPTH = 2;
+const TREE_MAX_LINES = 160;   // 骨架总行数上限
+const TREE_PER_DIR = 40;      // 单目录条目上限,超出折叠为"(另有 N 项未列出)"
+
+// 目录优先 + 名称排序后再截断:纯字母序截断时,几十个顶层文件会把 server/、web/ 这类
+// 结构性目录挤出上限,骨架就失去了"看结构"的价值。
+function dirFirstSort<T extends { name: string; isDir: boolean }>(entries: T[]): T[] {
+  const dirs = entries.filter((e) => e.isDir).sort((a, b) => a.name.localeCompare(b.name));
+  const files = entries.filter((e) => !e.isDir).sort((a, b) => a.name.localeCompare(b.name));
+  return [...dirs, ...files];
+}
+
+// 递归格式化远程目录树(限深度/条目,dir 后带 /),用于环境快照的目录骨架
+function treeLines(p: string, depth: number, acc: { lines: string[] }): void {
+  if (depth > TREE_DEPTH || acc.lines.length >= TREE_MAX_LINES) return;
   let entries;
   try {
     entries = (ssh as any).listDirSync ? (ssh as any).listDirSync(p) : null;
-  } catch { return ['(无法读取)']; }
-  if (!entries || entries.length === 0) return [];
-  const out = [];
-  for (const e of entries) {
-    if (e.type === 'dir') {
-      out.push(`${e.name}/`);
-      if (depth < DEPTH_LIMIT) out.push(...treeLines(`${p}/${e.name}`, depth + 1));
-    } else if (e.type === 'file') out.push(e.name);
+  } catch { return; }
+  if (!entries || entries.length === 0) return;
+  const shown = dirFirstSort(
+    (entries as Array<{ name: string; type?: string }>)
+      .filter((e) => !TREE_EXCLUDE.has(e.name))
+      .map((e) => ({ name: e.name, isDir: e.type === 'dir' }))
+  );
+  const overflow = shown.length - TREE_PER_DIR;
+  const list = overflow > 0 ? shown.slice(0, TREE_PER_DIR) : shown;
+  for (const e of list) {
+    if (acc.lines.length >= TREE_MAX_LINES) break;
+    if (e.isDir) {
+      acc.lines.push(`${e.name}/`);
+      treeLines(`${p}/${e.name}`, depth + 1, acc);
+    } else acc.lines.push(e.name);
   }
-  return out;
+  if (overflow > 0 && acc.lines.length < TREE_MAX_LINES) acc.lines.push(`…(另有 ${overflow} 项未列出)`);
 }
 
 // 递归格式化本地目录树(与 treeLines 同构,同步 fs 直读;本机环境快照用)
-function localTreeLines(p: string, depth: number): string[] {
-  if (depth > DEPTH_LIMIT) return ['…(更深层略去)'];
+function localTreeLines(p: string, depth: number, acc: { lines: string[] }): void {
+  if (depth > TREE_DEPTH || acc.lines.length >= TREE_MAX_LINES) return;
   let names;
-  try { names = fs.readdirSync(p, { withFileTypes: true }); } catch { return ['(无法读取)']; }
-  const out = [];
-  for (const d of names) {
-    if (d.isDirectory()) { out.push(`${d.name}/`); if (depth < DEPTH_LIMIT) out.push(...localTreeLines(path.join(p, d.name), depth + 1)); }
-    else if (d.isFile()) out.push(d.name);
+  try { names = fs.readdirSync(p, { withFileTypes: true }); } catch { return; }
+  const shown = dirFirstSort(
+    names
+      .filter((d) => !TREE_EXCLUDE.has(d.name))
+      .map((d) => ({ name: d.name, isDir: d.isDirectory() }))
+  );
+  const overflow = shown.length - TREE_PER_DIR;
+  const list = overflow > 0 ? shown.slice(0, TREE_PER_DIR) : shown;
+  for (const d of list) {
+    if (acc.lines.length >= TREE_MAX_LINES) break;
+    if (d.isDir) { acc.lines.push(`${d.name}/`); localTreeLines(path.join(p, d.name), depth + 1, acc); }
+    else acc.lines.push(d.name);
   }
-  return out;
+  if (overflow > 0 && acc.lines.length < TREE_MAX_LINES) acc.lines.push(`…(另有 ${overflow} 项未列出)`);
 }
 
 // 本地环境快照缓存(供 system prompt 注入,避免每轮重复 get_local_info 探测)
@@ -149,6 +184,7 @@ const toolDefs: ToolDef[] = [
   {
     name: 'write_file',
     description: '在远程工作区内创建或整体覆盖一个文本文件(自动创建父目录)',
+    mutating: true, // 并行池独占执行:防止与读/写并发产生 read-modify-write 竞态
     parameters: {
       type: 'object',
       properties: {
@@ -168,6 +204,7 @@ const toolDefs: ToolDef[] = [
   {
     name: 'edit_file',
     description: '在远程文件里做精确文本替换(old_string -> new_string);默认只替换首次出现,出现多次需 replace_all=true',
+    mutating: true, // read-modify-write:并行同文件会丢更新,必须独占
     parameters: {
       type: 'object',
       properties: {
@@ -229,6 +266,7 @@ const toolDefs: ToolDef[] = [
   {
     name: 'create_directory',
     description: '在工作区内递归创建目录',
+    mutating: true,
     parameters: {
       type: 'object',
       properties: { path: { type: 'string' } },
@@ -245,6 +283,7 @@ const toolDefs: ToolDef[] = [
   {
     name: 'delete_path',
     description: '删除工作区内的文件或目录(递归)。危险操作!绝不能删除工作区根目录',
+    mutating: true,
     parameters: {
       type: 'object',
       properties: {
@@ -399,6 +438,7 @@ const toolDefs: ToolDef[] = [
     // 内置技能只随工具分发(本地),复制后用户可编辑、可被子级/用户级覆盖
     name: 'skill_copy_builtin',
     description: 'Copy a builtin skill from the bundled skill library to a skill directory (local project, local user, local workspace, remote project or remote user), making it editable.',
+    mutating: true, // 复制落盘是写操作
     parameters: {
       type: 'object',
       properties: {
@@ -449,11 +489,13 @@ const toolDefs: ToolDef[] = [
         const fallback = await probe(ssh.platform === 'win32' ? 'ver' : 'uname -r');
         if (fallback) info.system = fallback;
       }
-      // 工作区目录骨架(带深度限制),让历史快照在第二轮开始立即可用,
+      // 工作区目录骨架(深度 2 + 排除噪声目录 + 条目上限),让历史快照在第二轮开始立即可用,
       // 避免模型为"看结构"而重复调用 list_directory。
       if (ssh.workspace) {
         try {
-          info.tree = treeLines(normalizeRemote(ssh.workspace), 0);
+          const acc = { lines: [] as string[] };
+          treeLines(normalizeRemote(ssh.workspace), 0, acc);
+          info.tree = acc.lines;
         } catch { /* 目录读取失败时省略骨架,不影响整体信息 */ }
       }
       const text = safeJson(info);
@@ -519,6 +561,7 @@ const localToolDefs: ToolDef[] = [
   {
     name: 'write_local_file',
     description: '在本机本地工作区内创建或覆盖文本文件(自动建父目录)',
+    mutating: true, // 并行池独占执行:防止与读/写并发产生 read-modify-write 竞态
     parameters: { type: 'object', properties: { path: { type: 'string', description: '本机路径(本地工作区内,支持相对路径)' }, content: { type: 'string' } }, required: ['path', 'content'] },
     async run({ path: p, content }) {
       const abs = resolveInLocalWorkspace(p);
@@ -530,6 +573,7 @@ const localToolDefs: ToolDef[] = [
   {
     name: 'edit_local_file',
     description: '在本机文件里做精确文本替换(old_string -> new_string);默认只替换首次,多次需 replace_all=true',
+    mutating: true, // read-modify-write:并行同文件会丢更新,必须独占
     parameters: { type: 'object', properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' } }, required: ['path', 'old_string', 'new_string'] },
     async run({ path: p, old_string, new_string, replace_all }) {
       const abs = resolveInLocalWorkspace(p);
@@ -547,12 +591,14 @@ const localToolDefs: ToolDef[] = [
   {
     name: 'create_local_dir',
     description: '在本机本地工作区内递归创建目录',
+    mutating: true,
     parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
     async run({ path: p }) { const abs = resolveInLocalWorkspace(p); await localFs.mkdirp(abs); return `目录已就绪: ${abs}`; }
   },
   {
     name: 'delete_local_path',
     description: '删除本机本地工作区内的文件或目录(递归)。危险!绝不能删除本地工作区根目录',
+    mutating: true,
     parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } }, required: ['path'] },
     async run({ path: p, recursive }) {
       const abs = resolveInLocalWorkspace(p);
@@ -573,12 +619,16 @@ const localToolDefs: ToolDef[] = [
       const isWin = process.platform === 'win32';
       const probeRg = await execLocal(isWin ? 'where rg' : 'command -v rg', { cwd: localFs.home });
       let cmd;
+      // 与远程 search_code 对齐:排除 .git/node_modules/dist 等噪声目录,
+      // 避免工作区根搜索时海量库文件命中把结果撑爆(findstr 不支持排除,保持原样)
+      const rgExcl = ['-g', '"!.git"', '-g', '"!node_modules"', '-g', '"!dist"', '-g', '"!test-results"'].join(' ');
+      const grepExcl = '--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=test-results';
       if (probeRg.code === 0 && probeRg.stdout.trim()) {
-        cmd = `rg -n --no-heading ${include ? `-g "${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
+        cmd = `rg -n --no-heading ${rgExcl} ${include ? `-g "${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
       } else if (isWin) {
         cmd = `findstr /s /n /c:"${pattern}" "${base}\\*"`;
       } else {
-        cmd = `grep -rn ${include ? `--include="${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
+        cmd = `grep -rn ${grepExcl} ${include ? `--include="${include}"` : ''} "${pattern.replace(/"/g, '\\"')}" "${base}"`;
       }
       const r = await execLocal(cmd, { cwd: localFs.home });
       if (r.code !== 0 && !r.stdout) return `无匹配(退出码 ${r.code})`;
@@ -613,7 +663,11 @@ const localToolDefs: ToolDef[] = [
       const [node, git] = await Promise.all([probe('node --version'), probe('git --version')]);
       info.toolVersions = { node, git };
       if (localFs.workspace) {
-        try { info.tree = localTreeLines(localFs.workspace, 0); } catch {}
+        try {
+          const acc = { lines: [] as string[] };
+          localTreeLines(localFs.workspace, 0, acc);
+          info.tree = acc.lines;
+        } catch {}
       }
       localEnvCache = { workspace: info.workspace, summary: safeJson(info) };
       return safeJson(info);
@@ -628,7 +682,7 @@ const localToolDefs: ToolDef[] = [
 const interactionToolDefs: ToolDef[] = [
   {
     name: 'ask_user_question',
-    description: '当你需要用户确认、在选项中做选择、或缺少关键信息才能继续时,向用户提出一个或多个问题并等待回答。每题可带候选选项(单选/多选),用户也可填写"其它"自定义答案;在你得到回答前会暂停等待。回答以 JSON 返回:{"answers":[{"id":"问题id","selected":["选中的选项label"],"custom":"自定义文本"}]}。只在确实需要用户决策时使用,不要在没有歧义时滥用。',
+    description: '当你需要用户确认、在选项中做选择、或缺少关键信息才能继续时,向用户提出一个或多个问题并等待回答。每题可带候选选项(单选/多选),用户也可填写"其它"自定义答案;在你得到回答前会暂停等待(上限约 10 分钟,超时自动取消并返回错误,可重问或改用合理默认继续)。回答以 JSON 返回:{"answers":[{"id":"问题id","selected":["选中的选项label"],"custom":"自定义文本"}]}。只在确实需要用户决策时使用,不要在没有歧义时滥用。',
     parameters: {
       type: 'object',
       properties: {

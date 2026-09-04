@@ -55,11 +55,10 @@
 
 /* ---- 左侧栏:大块磨砂玻璃面板 ---- */
 .sidebar {
-  min-width: 0; overflow-y: auto;
+  min-width: 0; display: flex; flex-direction: column; overflow: hidden;
   background: linear-gradient(160deg, var(--bar-tint-a), var(--bar-tint-b));
   backdrop-filter: var(--blur-md);
   -webkit-backdrop-filter: var(--blur-md);
-  padding-bottom: 40px;
 }
 .sidebar-left {
   position: relative; width: 320px; min-width: 220px;
@@ -67,10 +66,30 @@
   box-shadow: inset -1px 0 0 var(--ins-hl), 8px 0 32px var(--shadow-1);
 }
 .sidebar.hidden { display: none; }
-.resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 10; }
+.resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 10; }
 .resizer:hover { background: var(--accent-glow); box-shadow: 0 0 12px var(--accent-glow); }
 body.resizing { cursor: col-resize; user-select: none; }
 body.resizing * { cursor: col-resize !important; }
+
+/* ---- 侧栏上下分栏:历史会话(上) + 文件管理(下),各自内部滚动,中间分隔条可拖拽 ---- */
+.side-top { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.side-bottom { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.side-divider {
+  flex: none; height: 6px; cursor: row-resize; position: relative; z-index: 11;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, var(--bar-tint-b), var(--bar-tint-a));
+  border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
+}
+.side-divider::before {
+  content: ''; width: 32px; height: 3px; border-radius: var(--r-pill);
+  background: var(--glass-border);
+  transition: all .15s;
+}
+.side-divider:hover::before, body.splitting .side-divider::before {
+  background: var(--accent-2); box-shadow: 0 0 10px var(--accent-glow);
+}
+body.splitting { cursor: row-resize; user-select: none; }
+body.splitting * { cursor: row-resize !important; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
 /* ---- 标签页:发光玻璃胶囊 ---- */

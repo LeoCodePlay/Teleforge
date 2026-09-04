@@ -1,11 +1,15 @@
 /* ---- 会话侧栏独有样式:历史会话列表 + 跨服务器会话 ---- */
 
+/* 面板根节点:填满上分栏,标题/作用域固定,列表区独立滚动 */
+.s-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: none; }
+.s-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+
 /* ---- 历史会话列表 ---- */
 .sessions { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
 .s-scope { margin-top: 6px; font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-item {
   display: flex; align-items: center; gap: 6px; padding: 7px 10px;
-  height: 33px; box-sizing: border-box;   /* 固定行高:进入/退出重命名编辑时高度恒定,列表不伸缩抖动 */
+  height: 33px; box-sizing: border-box;   /* 固定行高:列表行距统一稳定 */
   border-radius: var(--r-md); border: 1px solid transparent;
   cursor: pointer; font-size: 12.5px; transition: all .18s ease;
 }
@@ -21,21 +25,21 @@
 .session-item .s-run { color: var(--green); font-size: 12px; flex: none; animation: s-run-pulse 1.2s ease-in-out infinite; text-shadow: 0 0 8px var(--ok-border); }
 @keyframes s-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .session-item .s-actions { display: flex; gap: 2px; }
-.session-item .s-actions button {
-  padding: 1px 6px; font-size: 11px; background: transparent; border-color: transparent;
-  box-shadow: none; border-radius: var(--r-sm);
-  /* 颜色与 hover/active 反馈由 .action-icon 统一提供 */
+/* 三点更多按钮:复用 .action-icon 的透明底/无边框/hover 反馈,仅调字号与留白 */
+.session-item .s-more { font-size: 15px; line-height: 1; padding: 0 5px; }
+/* 时间与三点操作按钮默认隐藏,悬停该行时才浮现(opacity 过渡,仍占位、行宽不变,避免抖动) */
+.session-item .s-meta,
+.session-item .s-actions {
+  opacity: 0;
+  transition: opacity .15s ease;
 }
-.session-item .s-actions button:disabled { opacity: .35; cursor: not-allowed; }
-/* 重命名输入框:纵向拉伸填满固定行高的内容区(box-sizing:border-box 内边距),
-   且 height:auto + align-self:stretch 使输入框高度与行高解耦——进入/退出编辑时
-   所在行的总高度由 .session-item 的固定 height 钉死,列表不会上下伸缩抖动。
-   文本在 input 内默认为垂直居中,无需额外 line-height。 */
-.s-edit {
-  align-self: stretch; height: auto;
-  padding: 0 6px; font-size: 12.5px; box-sizing: border-box;
-  border-radius: var(--r-sm);
+.session-item:hover .s-meta,
+.session-item:hover .s-actions {
+  opacity: 1;
 }
+
+/* 重命名弹窗:比全局 .modal(560px)更窄 */
+.s-rename-modal { width: 360px; }
 
 /* 其他服务器后台运行的会话(跨服务器可见,运行期间显示,点击切回该服务器) */
 .s-foreign { margin-top: 10px; border-top: 1px dashed var(--glass-border); padding-top: 8px; }

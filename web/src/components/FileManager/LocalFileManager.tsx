@@ -413,7 +413,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   return (
     <div className="fm">
       <div className="fm-toolbar row gap">
-        <div className="fm-crumbs" ref={crumbsRef}>
+        <div className="fm-crumbs" ref={crumbsRef} data-ob-skip>
           <span className={`crumb ${isRoot ? 'cur' : ''}`} onClick={() => load(rootPath())}>本机</span>
           {crumbs.map(({ c, p }) => (
             <span key={p} className="crumb-wrap">

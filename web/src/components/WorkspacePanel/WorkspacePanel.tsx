@@ -24,7 +24,7 @@ interface WorkspacePanelProps {
 export default function WorkspacePanel(props: WorkspacePanelProps) {
   const [tab, setTab] = useState<'local' | 'remote'>('remote');
   return (
-    <div className="panel">
+    <div className="panel ws-panel">
       <div className="panel-title row">
         <button className={`fm-tab ${tab === 'remote' ? 'on' : ''}`} onClick={() => setTab('remote')}>远程文件</button>
         <button className={`fm-tab ${tab === 'local' ? 'on' : ''}`} onClick={() => setTab('local')}>本地文件</button>

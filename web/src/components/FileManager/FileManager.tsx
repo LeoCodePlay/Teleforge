@@ -465,7 +465,7 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
     <div className="fm">
       <div className="fm-toolbar row gap">
         {home && <button className="ghost sm" onClick={() => load(home)} data-tip={`家目录 ${home}`}>🏠</button>}
-        <div className="fm-crumbs" ref={crumbsRef}>
+        <div className="fm-crumbs" ref={crumbsRef} data-ob-skip>
           <span className={`crumb ${path === '/' ? 'cur' : ''}`} onClick={() => load('/')}>/</span>
           {crumbs.map((c, i) => {
             const p = '/' + crumbs.slice(0, i + 1).join('/');

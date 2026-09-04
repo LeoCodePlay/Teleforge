@@ -18,15 +18,16 @@
 .crumb-sep { color: var(--muted); user-select: none; }
 .fm-addrbar { margin-top: 6px; }
 .fm-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 操作行(上级/刷新/上传/传到本地):原内联 margin-top 收敛到类上 */
-.fm-actions { margin-top: 8px; }
+/* 操作行(上级/刷新/上传/传到本地):原内联 margin-top 收敛到类上;
+   窄侧栏下允许换行,保证所有操作按钮完整可见 */
+.fm-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 8px; }
 /* 「上传」按钮:单个按钮,点击展开文件/文件夹选择菜单 */
 .fm-upload { position: relative; }
 .ctxmenu.fm-upload-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 220; min-width: 168px; }
 .fmlist {
   margin-top: 8px; border: 1px solid var(--glass-border); border-radius: var(--r-md);
   background: var(--row-hover);
-  overflow: hidden; max-height: 46vh; min-height: 72px; overflow-y: auto;
+  flex: 1; min-height: 72px; overflow-x: hidden; overflow-y: auto;
   box-shadow: inset 0 1px 0 var(--glass-hi);
 }
 .fmlist:focus { outline: none; }
