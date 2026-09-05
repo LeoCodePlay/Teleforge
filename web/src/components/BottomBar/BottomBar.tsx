@@ -1,9 +1,9 @@
-// 手机底部导航栏(仅 <768 渲染):💬 AI助手 / ⌨️ 命令台 / 📁 文件 / 🗂 会话
-// 高亮规则:view 由 App 传入;文件视图在「有文件打开」时同样点亮 📁(徽标显示标签数)。
+// 手机底部导航栏(仅 <768 渲染):💬 AI助手 / ⌨️ 终端 / 📁 文件
+// 会话不占底部栏:由顶栏 ≡ 唤出的会话抽屉承载(ChatGPT 式,任何页面可切会话并跳回对话)
 import React from 'react';
 import './BottomBar.scss';
 
-export type MobileView = 'agent' | 'console' | 'files' | 'sessions';
+export type MobileView = 'agent' | 'console' | 'files';
 
 interface BottomBarProps {
   view: MobileView;
@@ -17,7 +17,6 @@ export default function BottomBar({ view, fileTabCount, onSelect }: BottomBarPro
     { v: 'agent', icon: '💬', label: 'AI助手' },
     { v: 'console', icon: '⌨️', label: '终端' },
     { v: 'files', icon: '📁', label: '文件' },
-    { v: 'sessions', icon: '🗂', label: '会话' },
   ];
   return (
     <nav className="bottom-bar" aria-label="主导航">

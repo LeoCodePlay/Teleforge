@@ -1,5 +1,6 @@
 /* ---- 手机底部导航栏:液态玻璃 + 安全区 ----
-   选中态沿用 Liquid Glass 发光玻璃语言(accent 渐变填充 + 光晕文字),而非扁平下划线 */
+   选中态沿用 Liquid Glass 发光玻璃语言(accent 渐变填充 + 光晕文字),而非扁平下划线。
+   3 Tab 布局(AI助手/终端/文件),每格更宽,拇指容错更高 */
 .bottom-bar {
   flex: none; display: flex;
   height: calc(56px + env(safe-area-inset-bottom));
@@ -31,3 +32,4 @@
   background: var(--btn-a); color: #fff; font-size: 9px; line-height: 15px; text-align: center;
 }
 .bb-label { line-height: 1; }
+

@@ -361,9 +361,11 @@ interface ChatPanelProps {
   onFork?: (at: number) => void;
   /** 新会话草稿态发送首条消息:ChatPanel 先创建服务端会话,成功后回调让 App 刷新会话列表/active/sessionSeq */
   onSessionCreated?: (r: any) => void;
+  /** 移动端(手机)布局:Enter 改为换行(发送只点按钮),提示文案同步切换 */
+  compact?: boolean;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, compact = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -1484,12 +1486,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     }
                   }
                 }
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+                // 桌面:Enter 发送 / Shift+Enter 换行;手机(compact):Enter 换行,发送只走按钮(与 IM 习惯一致)
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !compact) { e.preventDefault(); send(); }
                 else if (e.key === 'Escape') updateInput('');
               }} />
           </div>
           <div className="composer-foot">
-            <span className="muted composer-tip">Enter 发送 · Shift+Enter 换行</span>
+            <span className="muted composer-tip">{compact ? '点 ➤ 发送 · 换行直接回车' : 'Enter 发送 · Shift+Enter 换行'}</span>
             <ContextMeter messages={messages} input={composedInput}
               contextWindow={llm.effModelContext?.contextWindow || 0} usage={ctxUsage} />
             {/* 工作中且输入框为空:显示停止按钮;有内容时变为发送按钮,

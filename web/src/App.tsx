@@ -125,20 +125,24 @@ export default function App() {
   const vkInset = useVisualViewportInset();
   // 平板抽屉:默认收起(桌面仍用 leftOpen;手机不渲染侧栏,此状态无意义但保持无害)
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // 手机会话抽屉(顶栏 ≡ 唤出):与平板抽屉共用 drawer-backdrop 视觉,但独立状态
+  const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
+  // 任意抽屉打开(手机会话抽屉 / 平板侧栏抽屉),统一控制遮罩与 body 状态
+  const anyDrawerOpen = isPhone ? sessionDrawerOpen : drawerOpen;
+  const closeDrawers = () => { setSessionDrawerOpen(false); setDrawerOpen(false); };
 
   // 手机当前视图:由 activeTabId 推导(files 视图 = 文件管理或正在查看的文件)
   const mobileView: MobileView =
-    activeTabId === SESSIONS_ID ? 'sessions'
-    : activeTabId === FILES_HOME_ID || tabs.some((t) => t.kind === 'file' && t.id === activeTabId) ? 'files'
+    activeTabId === FILES_HOME_ID || tabs.some((t) => t.kind === 'file' && t.id === activeTabId) ? 'files'
     : activeTabId === 'agent' ? 'agent' : 'console';
   // 桌面/平板不允许停留在哨兵视图(窗口从手机放大到更大尺寸时兜底回 agent)
   const effActiveTabId = (isDesktop || isTablet) && (activeTabId === SESSIONS_ID || activeTabId === FILES_HOME_ID)
     ? 'agent' : activeTabId;
 
   // 手机底部栏回调:选择视图。files 视图「有打开的文件回到上次查看的那个,
-  // 否则进文件管理」(浏览器式标签语义);agent/console/sessions 直接切到对应视图
+  // 否则进文件管理」(浏览器式标签语义);agent/console 直接切到对应视图
   const selectMobileView = (v: MobileView) => {
-    if (v === 'agent' || v === 'console' || v === 'sessions') { setActiveTabId(v); return; }
+    if (v === 'agent' || v === 'console') { setActiveTabId(v); return; }
     const files = tabsRef.current.filter((t) => t.kind === 'file');
     const activeFile = files.find((t) => t.id === activeTabId);
     setActiveTabId(activeFile ? activeFile.id : (files[files.length - 1]?.id ?? FILES_HOME_ID));
@@ -707,25 +711,39 @@ export default function App() {
     <div className="app" style={isPhone && vkInset > 0 ? { paddingBottom: vkInset } : undefined}>
       <header className="topbar">
         <div className="topbar-left">
-          {/* 手机:导航由底部栏承担,隐藏侧栏开关钮;平板:☰ 开抽屉;桌面:◀/▶ 收起侧栏 */}
-          {isPhone ? null : (
-            <button className="ghost edge-toggle" data-tip={isTablet ? '展开左侧栏' : (leftOpen ? '收起左侧栏' : '展开左侧栏')}
-              onClick={() => (isTablet ? setDrawerOpen((v) => !v) : setLeftOpen((v) => !v))}>
-              {isTablet ? '☰' : (leftOpen ? '◀' : '▶')}
-            </button>
+          {/* 手机:≡ 是唯一的会话抽屉入口;旁边仅展示品牌(不可点、无箭头) */}
+          {isPhone ? (
+            <>
+              {/* 开着再点一次 = 收起(与遮罩点击/Esc 同效) */}
+              <button className="ghost edge-toggle phone-menu-btn" aria-label="会话列表"
+                onClick={() => setSessionDrawerOpen((v) => !v)}>≡</button>
+              <div className="phone-brand">
+                <img className="brand-logo" src="/logo-64.png" alt="" />
+                <span>Teleforge</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <button className="ghost edge-toggle" data-tip={isTablet ? '展开左侧栏' : (leftOpen ? '收起左侧栏' : '展开左侧栏')}
+                onClick={() => (isTablet ? setDrawerOpen((v) => !v) : setLeftOpen((v) => !v))}>
+                {isTablet ? '☰' : (leftOpen ? '◀' : '▶')}
+              </button>
+              <div className="brand"><img className="brand-logo" src="/logo-64.png" alt="" /> Teleforge</div>
+            </>
           )}
-          <div className="brand"><img className="brand-logo" src="/logo-64.png" alt="" /> Teleforge</div>
         </div>
         <div className="topbar-right">
           <button
             className={`conn-chip ${connected ? 'ok' : status.status === 'disconnected' ? 'off' : 'warn'}`}
             onClick={() => setSshOpen(true)}
           >
-            {connected
-              ? `● 已连接 ${activeProfile?.name ? `${activeProfile.name} · ${status.host}` : status.host}${multiConn ? ` · 在线${connCount}台(点开可切换)` : ''}`
-              : status.status === 'disconnected'
-                ? '● 未连接 · 点击 SSH 连接'
-                : `● ${STATUS_LABEL[status.status] || status.status}`}
+            {isPhone
+              ? `● ${connected ? (activeProfile?.name || status.host || '已连接') : status.status === 'disconnected' ? '未连接' : (STATUS_LABEL[status.status] || status.status)}`
+              : connected
+                ? `● 已连接 ${activeProfile?.name ? `${activeProfile.name} · ${status.host}` : status.host}${multiConn ? ` · 在线${connCount}台(点开可切换)` : ''}`
+                : status.status === 'disconnected'
+                  ? '● 未连接 · 点击 SSH 连接'
+                  : `● ${STATUS_LABEL[status.status] || status.status}`}
           </button>
           <button className="ghost edge-toggle settings-btn" onClick={() => setSettingsOpen(true)}>⚙</button>
         </div>
@@ -776,6 +794,29 @@ export default function App() {
           </>
         )}
 
+        {/* 手机会话抽屉:顶栏 ≡ 唤出,覆盖式左滑抽屉(与平板抽屉同视觉,复用 SessionPanel);
+            选会话/新建后自动关闭并跳回 AI 对话 */}
+        {isPhone && sessionDrawerOpen && (
+          <>
+            <div className="drawer-backdrop" onClick={() => setSessionDrawerOpen(false)} />
+            <aside className={`sidebar sidebar-left drawer-open phone-session-drawer${vkInset > 0 ? ' vk-lift' : ''}`}>
+              <SessionPanel
+                sessions={sessions}
+                activeId={activeSessionId}
+                busyIds={busySessions}
+                askPendingIds={pendingAskIds}
+                scopeLabel={scopeLabel}
+                scopeKey={scopeKey}
+                onNew={() => { newSession(); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
+                onSwitch={(id) => { switchSession(id); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
+                onSwitchForeign={(id, key) => { switchForeignSession(id, key); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
+                onRename={renameSession}
+                onDelete={deleteSession}
+              />
+            </aside>
+          </>
+        )}
+
         <main className="main">
           <div
             className="tabstrip"
@@ -823,7 +864,7 @@ export default function App() {
           <div className="tab-body">
             {/* ChatPanel 常驻挂载:切走仅 CSS 隐藏(对齐终端/文件面板),手机端底部栏频繁切换不重载会话历史 */}
             <div className={`tab-pane ${effActiveTabId === 'agent' ? '' : 'hide'}`}>
-              <ChatPanel connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
+              <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
               localHome={status.localHome} savedLocalWs={localWs}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
@@ -834,24 +875,6 @@ export default function App() {
             <div className={`tab-pane ${effActiveTabId === 'console' ? '' : 'hide'}`}>
               <ConsolePanel connected={connected} visible={effActiveTabId === 'console'} activeConn={status.activeConn ?? null} hostIp={status.host} />
             </div>
-            {/* 手机:会话列表(底部栏「🗂 会话」) */}
-            {isPhone && mobileView === 'sessions' && (
-              <div className="tab-pane mobile-pane">
-                <SessionPanel
-                  sessions={sessions}
-                  activeId={activeSessionId}
-                  busyIds={busySessions}
-                  askPendingIds={pendingAskIds}
-                  scopeLabel={scopeLabel}
-                  scopeKey={scopeKey}
-                  onNew={() => { newSession(); setActiveTabId('agent'); }}
-                  onSwitch={(id) => { switchSession(id); setActiveTabId('agent'); }}
-                  onSwitchForeign={(id, key) => { switchForeignSession(id, key); setActiveTabId('agent'); }}
-                  onRename={renameSession}
-                  onDelete={deleteSession}
-                />
-              </div>
-            )}
             {/* 手机:文件管理(底部栏「📁 文件」且无文件打开时);打开文件后由文件标签页接管 */}
             {isPhone && mobileView === 'files' && effActiveTabId === FILES_HOME_ID && (
               <div className="tab-pane mobile-pane">
