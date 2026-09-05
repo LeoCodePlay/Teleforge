@@ -413,3 +413,15 @@
   .composer-box { padding: 8px 8px 4px 10px; border-radius: var(--r-md); }
   .wsbar-row { gap: 6px; }
 }
+
+/* ---- 触屏:消息操作栏/时间常显;hover 显现逻辑失效,跳转点改隐藏 ---- */
+@media (hover: none) and (pointer: coarse) {
+  .user-msg-foot { opacity: 1; }
+  .chat-dots { display: none; }                 /* 跳转点依赖 hover,触屏隐藏,腾出横向空间 */
+}
+@media (max-width: 767px) {
+  .composer { margin: 0 0 calc(8px + env(safe-area-inset-bottom)); padding: 8px 10px; }
+  .wsbar-row { flex-wrap: wrap; }               /* 两个工作区 chip + 模型菜单换行,不溢出 */
+  .wsbar-row .tb-model { min-width: 0; }
+  .bubble { max-width: 92%; }
+}

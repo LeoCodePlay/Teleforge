@@ -216,7 +216,7 @@ export default function CodeEditor({ fileName, path, initial, onEdit, onSave }: 
     closeMenu();
   };
   const onSelectAll = () => { const v = viewRef.current; if (v) { selectAll(v); v.focus(); } closeMenu(); };
-  const onSave = () => { cbRef.current.onSave?.(); closeMenu(); };
+  const onMenuSave = () => { cbRef.current.onSave?.(); closeMenu(); };
   const onCopyPath = () => {
     const real = path.startsWith('local:') ? path.slice('local:'.length) : path;
     void copyText(real);
@@ -234,17 +234,17 @@ export default function CodeEditor({ fileName, path, initial, onEdit, onSave }: 
           style={{ left: menu.x, top: menu.y }}
           onContextMenu={(e) => e.preventDefault()}
         >
-          <button onClick={onUndo} disabled={!menu.canUndo}>↺ 撤销<span className="ctx-key">Ctrl+Z</span></button>
-          <button onClick={onRedo} disabled={!menu.canRedo}>↻ 重做<span className="ctx-key">Ctrl+Y</span></button>
+          <button onClick={onUndo} disabled={!menu.canUndo}><span className="ctx-ico">↺</span>撤销<span className="ctx-key">Ctrl+Z</span></button>
+          <button onClick={onRedo} disabled={!menu.canRedo}><span className="ctx-ico">↻</span>重做<span className="ctx-key">Ctrl+Y</span></button>
           <div className="ctx-sep" />
-          <button onClick={onCut} disabled={!menu.hasSel}>✂ 剪切<span className="ctx-key">Ctrl+X</span></button>
-          <button onClick={onCopy} disabled={!menu.hasSel}>📋 复制<span className="ctx-key">Ctrl+C</span></button>
-          <button onClick={onPaste}>📥 粘贴<span className="ctx-key">Ctrl+V</span></button>
-          <button onClick={onSelectAll}>全选<span className="ctx-key">Ctrl+A</span></button>
-          <button onClick={onSave}>💾 保存<span className="ctx-key">Ctrl+S</span></button>
+          <button onClick={onCut} disabled={!menu.hasSel}><span className="ctx-ico">✂</span>剪切<span className="ctx-key">Ctrl+X</span></button>
+          <button onClick={onCopy} disabled={!menu.hasSel}><span className="ctx-ico">📋</span>复制<span className="ctx-key">Ctrl+C</span></button>
+          <button onClick={onPaste}><span className="ctx-ico">📥</span>粘贴<span className="ctx-key">Ctrl+V</span></button>
+          <button onClick={onSelectAll}><span className="ctx-ico">☑</span>全选<span className="ctx-key">Ctrl+A</span></button>
+          <button onClick={onMenuSave}><span className="ctx-ico">💾</span>保存<span className="ctx-key">Ctrl+S</span></button>
           <div className="ctx-sep" />
-          <button onClick={onCopyPath}>📄 复制文件路径</button>
-          <button onClick={onCopyName}>🏷 复制文件名</button>
+          <button onClick={onCopyPath}><span className="ctx-ico">📄</span>复制文件路径</button>
+          <button onClick={onCopyName}><span className="ctx-ico">🏷</span>复制文件名</button>
         </div>,
         document.body
       )}

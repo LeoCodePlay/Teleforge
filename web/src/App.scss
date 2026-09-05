@@ -160,3 +160,55 @@ body.splitting * { cursor: row-resize !important; }
 /* ---- 命令台(chat/console 切页容器):常驻挂载,隐藏时仅 display:none ---- */
 .tab-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .tab-pane.hide { display: none; }
+
+/* ============================================================
+   响应式三档:桌面 ≥1280(上方桌面样式原样)/ 平板 768-1279(侧栏抽屉化)
+   / 手机 <768(底部 Tab 单栏,侧栏内容由底部栏视图承载)
+   断点与 styles.scss、hooks/useMediaQuery.ts 保持一致。
+   所有规则包在媒体查询内,桌面布局不受影响。
+   ============================================================ */
+
+/* 抽屉/遮罩的定位包含块(仅 <1280 生效也行,无条件加不破坏桌面) */
+.layout { position: relative; }
+
+/* ---- 平板(<1280):左侧栏 → 覆盖式抽屉,主区全宽 ----
+   drawer 态由 App 加类:position 固定到 .layout,transform 滑入滑出;
+   桌面的 .sidebar.hidden 逻辑(display:none)在 drawer 态不参与 */
+@media (max-width: 1279px) {
+  .sidebar-left {
+    position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
+    width: min(320px, 84vw);
+    transform: translateX(-105%);
+    transition: transform .22s ease;
+    box-shadow: var(--glass-shadow-lg);
+  }
+  .sidebar-left.drawer-open { transform: none; }
+  .sidebar-left.drawer .resizer { display: none; }   /* <1280 隐藏侧栏宽度拖把 */
+  .drawer-backdrop {
+    position: absolute; inset: 0; z-index: 39;
+    background: var(--mask-bg);
+    animation: overlay-in .2s ease-out;
+  }
+}
+
+/* ---- 手机(<768):侧栏不渲染(内容由底部栏视图承载),另加一层保险 ----
+   导航交给底部栏;顶栏压缩;固定段标签不显示,文件标签段全宽横滚。
+   注意:不隐藏 .edge-toggle——右上角 ⚙ 设置按钮同挂该类,侧栏开关已由 React 按档移除 */
+@media (max-width: 767px) {
+  .sidebar-left { display: none; }
+  .topbar { height: 44px; padding: 0 10px; }
+  .brand-logo { width: 22px; height: 22px; }
+  .conn-chip { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+  .tabstrip { padding: 4px 6px 0; }
+  .tabstrip-pinned { display: none; }
+  /* 文件标签横滚条:解锁触屏横滑(iOS 对 overflow-x:auto+overflow-y:hidden 锁纵向轴) */
+  .tabstrip-scroll { touch-action: pan-x; -webkit-overflow-scrolling: touch; }
+  .btab { height: 34px; padding: 0 10px; max-width: 150px; }
+  .btab-close { opacity: .85; }            /* 触屏常显关闭钮(桌面仍是 hover 显现) */
+  .mobile-pane { padding: 0; }             /* 移动端全高面板(会话/文件管理) */
+}
+
+/* 触屏兜底:文件标签关闭钮、会话行时间/菜单常显(不依赖 hover) */
+@media (hover: none) and (pointer: coarse) {
+  .btab-close { opacity: .85; }
+}

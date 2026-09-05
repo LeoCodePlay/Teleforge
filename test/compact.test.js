@@ -49,7 +49,7 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   check('resolveCompactSpec 未配置窗口禁用', resolveCompactSpec(0, 8192).enabled === false);
 }
 
-// ---- selectCompactRange ----
+// ---- selectCompactRange(位置式:切点对齐工具配对边界,单组对话也可压缩) ----
 {
   const mk = (role, content, extra = {}) => ({ role, content, ...extra });
   const hist = [
@@ -60,16 +60,41 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   const range = selectCompactRange(hist, 4);
   check('selectCompactRange 有可压缩区间', range !== null);
   if (range) {
-    check('selectCompactRange 保留区以 user 开头', range.recent[0]?.role === 'user');
-    check('selectCompactRange 压缩区为空或含完整组', range.drop.length > 0);
-    check('selectCompactRange 首条 user 不被拆开', range.recent[0]?.content === 'q1' || range.recent[0]?.content === 'q2');
+    check('selectCompactRange 无消息丢失', range.drop.length + range.recent.length === hist.length);
+    // 切点处工具配对完整:把保留区拼在一条摘要 user 之后,序列必须合法
+    check('selectCompactRange 切点工具配对完整', assertValidApiSequence([mk('user', '摘要'), ...range.recent]).length === 0);
   }
   check('selectCompactRange 历史过短返回 null', selectCompactRange([mk('user', 'a'), mk('assistant', 'b')], 4) === null);
-  check('selectCompactRange 单组不可压返回 null', selectCompactRange([mk('user', 'a'), mk('assistant', 'b'), mk('user', 'c'), mk('assistant', 'd')].slice(0, 2), 999999) === null);
-  // 两组且保留预算巨大:保留最后一条 user 组
+  check('selectCompactRange 两条消息返回 null', selectCompactRange([mk('user', 'a'), mk('assistant', 'b'), mk('user', 'c'), mk('assistant', 'd')].slice(0, 2), 999999) === null);
+  // 保留水位覆盖全部历史:无需压缩(旧"退化保留最后一组"语义已并入 compactNow 的兜底分支)
   const two = [mk('user', 'q0'), mk('assistant', 'a0'), mk('user', 'q1'), mk('assistant', 'a1')];
-  const r2 = selectCompactRange(two, 999999);
-  check('selectCompactRange 两组时保留最后一组', r2 !== null && r2.recent[0]?.content === 'q1' && r2.drop.length === 2);
+  check('selectCompactRange 全在保留水位内返回 null', selectCompactRange(two, 999999) === null);
+
+  // 核心新能力:单组(单条 user 消息)深工具任务可以中途压缩
+  const single = [
+    mk('user', '任务'),
+    mk('assistant', '', { tool_calls: [{ id: 'c1', function: { name: 'read_file', arguments: '{}' } }] }), mk('tool', 'r1', { tool_call_id: 'c1' }), mk('assistant', '分析1'),
+    mk('assistant', '', { tool_calls: [{ id: 'c2', function: { name: 'edit_file', arguments: '{}' } }] }), mk('tool', 'r2', { tool_call_id: 'c2' }), mk('assistant', '结论')
+  ];
+  const sr = selectCompactRange(single, 4);
+  check('selectCompactRange 单组深任务可压缩', sr !== null);
+  if (sr) {
+    check('selectCompactRange 单组压缩切点配对完整', assertValidApiSequence([mk('user', '摘要'), ...sr.recent]).length === 0);
+    check('selectCompactRange 单组压缩保留尾部结论', sr.recent[sr.recent.length - 1]?.content === '结论');
+  }
+
+  // 切点对齐:retain=0 时切点必须回退过最后一对未消费的 tool_calls,保留完整的配对
+  const bigCalls = [mk('user', 'u'), mk('assistant', 'a')];
+  for (let i = 0; i < 5; i++) {
+    bigCalls.push(mk('assistant', '', { tool_calls: [{ id: `c${i}`, function: { name: 't', arguments: '{}' } }] }));
+    bigCalls.push(mk('tool', 'r', { tool_call_id: `c${i}` }));
+  }
+  bigCalls.push(mk('assistant', '', { tool_calls: [{ id: 'cLast', function: { name: 't', arguments: '{}' } }] }));
+  bigCalls.push(mk('tool', 'r', { tool_call_id: 'cLast' }));
+  const br = selectCompactRange(bigCalls, 0);
+  check('selectCompactRange retain=0 切点回退到配对完整处',
+    br !== null && br.recent.length === 2 && br.recent[0].role === 'assistant' && br.recent[1].role === 'tool'
+    && assertValidApiSequence([mk('user', '摘要'), ...br.recent]).length === 0);
   check('compactionInstruction 非空且含保留要求', compactionInstruction().includes('任务'));
 }
 
@@ -119,6 +144,24 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   }
 }
 
+// ---- compactHistory 单组深工具任务:超限也能压缩(此前组级压缩永远够不着,回归测试) ----
+{
+  const single = [{ role: 'user', content: '完成一个复杂任务,' + '需要读取大量文件并逐个修改。'.repeat(40) }];
+  for (let i = 0; i < 8; i++) {
+    single.push({ role: 'assistant', content: '', tool_calls: [{ id: `c${i}`, type: 'function', function: { name: 'read_file', arguments: '{}' } }] });
+    single.push({ role: 'tool', tool_call_id: `c${i}`, content: `文件内容 ${i}:` + 'x'.repeat(1500) });
+    single.push({ role: 'assistant', content: `第${i}步分析结论,` + '内容重复填充。'.repeat(40) });
+  }
+  const fakeLlm = {
+    isMock: false,
+    async chat({ messages, tools, reasoning }) { return { content: '这是自动生成的对话摘要。', toolCalls: [], reasoning: '' }; }
+  };
+  const c = await compactHistory({ messages: single, system: 'sys', llm: fakeLlm, signal: null, contextWindow: 6000, maxTokens: 1024 });
+  check('compactHistory 单组深任务超限可压缩', c.compacted === true && c.dropCount > 0, `compacted=${c.compacted} drop=${c.dropCount}`);
+  check('compactHistory 单组压缩后序列合法', assertValidApiSequence(c.messages).length === 0);
+  check('compactHistory 单组压缩保留尾部', c.messages[c.messages.length - 1] === single[single.length - 1]);
+}
+
 // ---- Session.squash 集成:压缩替换后投影仍合法 ----
 {
   const turns = [];
@@ -150,6 +193,60 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   // 压缩标记元数据落事件:dropCount/manual 供前端渲染「压缩标记行」
   const done = session.events.find((ev) => ev.type === 'compaction/done');
   check('squash 后 compaction/done 携带 dropCount+manual', done && done.data.dropCount === dropCount && done.data.manual === true);
+}
+
+// ---- squash 区间删除回归:被压区间内的 tool/call 结构事件一并移除,轮末自愈不产生孤儿 ----
+{
+  const turns = [];
+  for (let i = 0; i < 4; i++) {
+    turns.push({ role: 'user', content: `第${i}轮:检查目录` });
+    turns.push({ role: 'assistant', content: '', tool_calls: [{ id: `c${i}`, function: { name: 'list_directory', arguments: '{}' } }] });
+    turns.push({ role: 'tool', tool_call_id: `c${i}`, content: `目录内容 ${i}`, ok: true, ms: 5 });
+    turns.push({ role: 'assistant', content: `第${i}轮结论` });
+  }
+  const session = new Session();
+  for (const ev of eventsFromTurns(turns)) session.append(ev.type, ev.data);
+  const trace = session.deriveMessagesWithTrace();
+  const dropCount = 8; // 压掉前 2 组对话(8 条投影消息),其 tool/call 结构事件必须一并移除
+  const dropSeqs = trace.slice(0, dropCount).map((t) => t.seq);
+  const anchorSeq = trace[dropCount] ? trace[dropCount].seq : null;
+  session.squash(dropSeqs, '【上下文已自动压缩】摘要', anchorSeq, { dropCount, manual: false });
+  const remainingCalls = session.events.filter((ev) => ev.type === 'tool/call').length;
+  check('squash 区间删除后被压组 tool/call 一并移除', remainingCalls === 2, `got ${remainingCalls}`);
+  // 轮末自愈:遗留的 tool/call 会在这里补"中止"结果,产生无前置 assistant 的孤儿 tool 消息
+  const healed = session.pendingToolCalls();
+  check('squash 区间删除后轮末自愈无遗留', healed.length === 0, `遗留 ${healed.length} 个 tool/call`);
+  const msgs = session.deriveMessages({});
+  check('squash 区间删除后消息序列合法', assertValidApiSequence(msgs).length === 0);
+  check('squash 区间删除后消息数正确', msgs.length === 16 - dropCount + 1, `got ${msgs.length}`);
+}
+
+// ---- 孤儿工具事件自愈与投影过滤(旧版压缩 bug 遗留的损坏日志) ----
+{
+  const s = new Session();
+  s.append('user/message', { content: '任务', source: 'user' });
+  s.append('assistant/message', { turn: 1, step: 1, message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 't', arguments: '{}' } }] } });
+  s.append('tool/call', { turn: 1, step: 1, callId: 'c1', name: 't', arguments: '{}' });
+  s.append('tool/result', { turn: 1, step: 1, callId: 'c1', name: 't', isError: false, content: 'ok', ms: 0 });
+  // 旧版压缩遗留的孤儿对:assistant 已删,tool/call + 轮末自愈补的"中止"结果残留
+  s.append('tool/call', { turn: 1, step: 1, callId: 'orphan1', name: 't', arguments: '{}' });
+  s.append('tool/result', { turn: 1, step: 1, callId: 'orphan1', name: 't', isError: true, content: '工具执行中止(本轮已停止)', ms: 0 });
+  // 连 tool/call 都没有的纯孤儿结果
+  s.append('tool/result', { turn: 1, step: 1, callId: 'orphan2', name: 't', isError: true, content: '工具执行中止(本轮已停止)', ms: 0 });
+
+  const healed = new Session(s.events); // 构造载入 = 触发自愈
+  const toolEvents = healed.events.filter((ev) => ev.type === 'tool/call' || ev.type === 'tool/result').length;
+  check('载入自愈清除孤儿工具事件', toolEvents === 2, `got ${toolEvents}`);
+  const msgs = healed.deriveMessages({});
+  check('自愈后投影序列合法', assertValidApiSequence(msgs).length === 0);
+  check('自愈后消息数正确', msgs.length === 3, `got ${msgs.length}`);
+
+  // 投影过滤兜底:构造后手动 append 的孤儿(绕过 _heal,模拟运行中会话的驻内存损坏)不进投影
+  healed.append('tool/call', { turn: 2, step: 1, callId: 'orphan3', name: 't', arguments: '{}' });
+  healed.append('tool/result', { turn: 2, step: 1, callId: 'orphan3', name: 't', isError: true, content: '中止', ms: 0 });
+  const msgs2 = healed.deriveMessages({});
+  check('投影过滤跳过孤儿工具消息',
+    msgs2.every((m) => m.role !== 'tool' || m.tool_call_id === 'c1') && assertValidApiSequence(msgs2).length === 0);
 }
 
 // ---- 加载迁移日志后也能识别旧格式消息(不回归) ----

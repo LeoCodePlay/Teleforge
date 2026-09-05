@@ -1,9 +1,11 @@
 // 模型向用户提问面板(ask_user_question 工具):
-// 收到本会话的 agent 事件 ask_user 后,在会话页输入框上方以内联玻璃卡片展示(无遮罩)。
+// 收到 agent 事件 ask_user 后,在会话页输入框上方以内联玻璃卡片展示(无遮罩)。
 // 支持单选/多选/"其它"自定义,多道提问可"上一道/下一道"逐道作答,最后统一提交。
 // 提问挂起期间通过 onPendingChange 通知父组件锁定输入框与停止按钮(未作答前不能继续输入/暂停);
-// 取消/超时/停止 Agent 时自动关闭并恢复输入。切走会话时面板随会话隐藏,切回仍可见。
-import React, { useEffect, useState } from 'react';
+// 取消/超时/停止 Agent 时自动关闭并恢复输入。所有会话的提问都会入队(带 sid,
+// 不按当前会话过滤),切走会话时面板随会话隐藏、切回仍可见;背景会话提出的
+// 问题切回去也会重新展示,不会因事件被过滤而永久丢失。
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { AskAnswerItem, AskQuestion, AskRequest } from '../../types';
 import './AskPanel.scss';
@@ -22,6 +24,10 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
   const [customs, setCustoms] = useState<Record<string, string>>({});
 
+  // 当前显示会话的 ref(订阅只挂一次,事件按此判断"是否插到当前会话的第一道题")
+  const sidRef = useRef(sid);
+  sidRef.current = sid;
+
   // 只取属于当前会话的提问;切走会话(旧会话仍有挂起提问)时面板隐藏,切回仍可见
   const active: AskRequest | null = queue.find((x) => !sid || !x.sid || x.sid === sid) || null;
   const q: AskQuestion | null = active ? active.questions[qIndex] || null : null;
@@ -31,17 +37,24 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
   useEffect(() => { onPendingChange?.(pending); }, [pending, onPendingChange]);
 
   useEffect(() => {
+    // 订阅不过滤会话:所有会话的 ask_user 事件都入队(带 sid)——
+    // 否则切到别的会话时,原会话背景中提出的问题会被直接丢弃,
+    // 切回来时服务端又不会重发,提问面板永久缺失(agent 干等,界面看不到选项)。
+    // 是否显示由上方 active 按 sid 匹配,切回该会话即自动重新展示并锁定输入。
     const off = api.on('agent', (m: any) => {
-      if (m.sid && sid && m.sid !== sid) return; // 非本会话的提问不处理
       if (m.event === 'ask_user' && m.askId && Array.isArray(m.questions) && m.questions.length > 0) {
         setQueue((prev) => prev.some((x) => x.askId === m.askId) ? prev : [...prev, { askId: m.askId, questions: m.questions, sid: m.sid }]);
-        setQIndex(0); // 新一批提问从第一道开始
+        // 只有当前正在看的会话来了新一批提问,才把作答指针重置到第一道;
+        // 背景会话的提问只入队,不打扰正在显示的批次
+        const cur = sidRef.current;
+        if (!cur || !m.sid || m.sid === cur) setQIndex(0);
       } else if (m.event === 'ask_user_cancelled' && m.askId) {
+        // 作答/取消/超时/停止统一走该事件:从队列移除对应批次
         setQueue((prev) => prev.filter((x) => x.askId !== m.askId));
       }
     });
     return () => { off(); };
-  }, [sid]);
+  }, []);
 
   if (!active || !q) return null;
 

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../../api';
 import { useFeedback } from '../../context/feedback';
 import { useHorizontalScroller } from '../../hooks/useHorizontalScroller';
+import { useLongPress } from '../../hooks/useLongPress';
 import type { DirEntry } from '../../types';
 import './fm.scss';
 
@@ -22,6 +23,24 @@ function fmtTime(ms: number | undefined) {
 }
 const norm = (p: string | null | undefined) => { const s = String(p || '').replace(/\/+$/, ''); return s || '/'; };
 const baseName = (p: string) => (p || '').split('/').filter(Boolean).pop() || 'item';
+
+// 写剪贴板:优先 Clipboard API,非安全上下文降级为隐藏 textarea + execCommand
+const writeClipboard = async (text: string) => {
+  if (!text) return;
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; }
+  } catch {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  } catch {}
+};
 
 // 复制/粘贴专用错误标记(服务端在目标已存在且未允许覆盖时抛出)
 const ERR_EXISTS = '目标已存在';
@@ -58,6 +77,66 @@ interface WriteState {
   total: number;
 }
 
+// 文件列表单行:独立子组件以便在每行内调用 useLongPress(hook 不能在 map 循环中调用)。
+// 长按(触屏)与 onContextMenu(桌面右键)共用 onLongPress/onMenu 打开同一个菜单函数。
+interface FmRowProps {
+  entry: DirEntry;
+  selected: boolean;
+  navLoading: boolean;
+  renaming: boolean;
+  renameBusy: boolean;
+  renameDraft: string;
+  onRenameDraft: (v: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onRowClick: (ev: React.MouseEvent, entry: DirEntry) => void;
+  onOpen: (entry: DirEntry) => void;
+  onMenu: (ev: React.MouseEvent, entry: DirEntry) => void;
+  onLongPress: (x: number, y: number, entry: DirEntry) => void;
+}
+function FmRow({ entry, selected, navLoading, renaming, renameBusy, renameDraft,
+  onRenameDraft, onCommitRename, onCancelRename, onRowClick, onOpen, onMenu, onLongPress }: FmRowProps) {
+  const lp = useLongPress((x, y) => onLongPress(x, y, entry));
+  return (
+    <div className={`fmrow ${selected ? 'selected' : ''} ${navLoading ? 'nav-loading' : ''}`}
+      {...lp.bind}
+      onClick={(ev) => { if (lp.wasLongPress()) return; onRowClick(ev, entry); }}
+      onDoubleClick={() => onOpen(entry)}
+      onContextMenu={(ev) => onMenu(ev, entry)}>
+      <span className={`fm-ico${renaming ? ' fm-hide' : ''}`}>{entry.type === 'dir' ? '📁' : entry.type === 'link' ? '🔗' : '📄'}</span>
+      {/* 各列始终留在文档流(fm-hide 仅隐藏文字、保留占位),行高/行宽与普通行完全一致 */}
+      <span className={`fm-name${renaming ? ' fm-hide' : ''}`} data-tip={entry.name} data-tip-ellipsis data-tip-follow>{entry.name}</span>
+      {renaming && (
+        // 重命名输入框:绝对定位覆盖整行(见 .fm-rename),进出编辑零抖动
+        <input className="fm-rename" autoFocus value={renameDraft}
+          spellCheck={false}
+          onChange={(ev) => onRenameDraft(ev.target.value)}
+          onFocus={(ev) => {
+            // 默认选中不含扩展名的部分,方便直接输入新名
+            const dot = ev.target.value.lastIndexOf('.');
+            if (dot > 0) ev.target.setSelectionRange(0, dot);
+            else ev.target.select();
+          }}
+          onClick={(ev) => ev.stopPropagation()}
+          onDoubleClick={(ev) => ev.stopPropagation()}
+          onContextMenu={(ev) => ev.preventDefault()}
+          onKeyDown={(ev) => {
+            ev.stopPropagation();
+            // 中文等输入法组词中:Enter 是确认候选字,不在此提交重命名
+            if (ev.nativeEvent.isComposing) return;
+            if (ev.key === 'Enter') onCommitRename();
+            else if (ev.key === 'Escape') onCancelRename();
+          }}
+          onBlur={onCommitRename} />
+      )}
+      <span className={`fm-time${renaming ? ' fm-hide' : ''}`}>{fmtTime(entry.mtime)}</span>
+      {renaming && renameBusy
+        ? <span className="fm-loading" data-tip="重命名中…" />
+        : navLoading && <span className="fm-loading" data-tip="加载中…" />}
+    </div>
+  );
+}
+
 // 文件管理器:导航式浏览远程目录(进入目录即显示其内容)
 // 选中:单击单选 · Ctrl/Cmd+单击 多选切换 · Shift+单击 连选 · Ctrl+A 全选 · Delete 删除
 // 操作:双击打开/进入 · 右键对选区执行 打开/下载/复制/删除/粘贴
@@ -71,6 +150,7 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   const [error, setError] = useState('');
   const [selection, setSelection] = useState<Set<string>>(new Set()); // 选中的条目 name 集合
   const [anchor, setAnchor] = useState<string | null>(null); // shift 连选的锚点 name
+  const [selectMode, setSelectMode] = useState(false); // 多选模式:触屏无 Ctrl/Shift,进入后点按即切换选中
   const [menu, setMenu] = useState<CtxMenu | null>(null); // 右键菜单 {x, y, item|null}
   const [uploadMenu, setUploadMenu] = useState(false); // 「上传」按钮展开的选择菜单
   const [renaming, setRenaming] = useState<string | null>(null); // 正在重命名的条目 name
@@ -137,6 +217,15 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
 
   const clearSelection = () => { setSelection(new Set()); setAnchor(null); };
 
+  // 多选模式开关:退出时清空已选(避免残留高亮却无可见操作条)
+  const toggleSelectMode = () => {
+    setSelectMode((m) => {
+      const next = !m;
+      if (!next) clearSelection();
+      return next;
+    });
+  };
+
   const openEntry = (e: DirEntry) => {
     if (e.type === 'dir') load(entryPath(e.name), { itemPath: entryPath(e.name) });
     else onOpenFile(entryPath(e.name));
@@ -146,6 +235,16 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   const handleRowClick = (e: React.MouseEvent, entry: DirEntry) => {
     e.stopPropagation();
     listRef.current?.focus();
+    // 多选模式:点按切换选中(触屏无 Ctrl/Shift 时的多选入口)
+    if (selectMode) {
+      setSelection((prev) => {
+        const next = new Set(prev);
+        if (next.has(entry.name)) next.delete(entry.name); else next.add(entry.name);
+        return next;
+      });
+      setAnchor(entry.name);
+      return;
+    }
     if (e.shiftKey && anchor) {
       const ai = entries.findIndex((x) => x.name === anchor);
       const ci = entries.findIndex((x) => x.name === entry.name);
@@ -191,9 +290,8 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   const opCount = opPaths.length;
 
   // ---- 右键菜单 ----
-  const openMenu = (e: React.MouseEvent, item: DirEntry | null) => {
-    e.preventDefault();
-    e.stopPropagation();
+  // 坐标版:供 onContextMenu 与触屏长按共同调用(长按没有 DOM 事件)
+  const openMenuAt = (x: number, y: number, item: DirEntry | null) => {
     if (item) {
       if (!selection.has(item.name)) {
         setSelection(new Set([item.name]));
@@ -202,12 +300,17 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
     } else {
       clearSelection();
     }
-    const w = 200, h = 220;
+    const w = 200, h = 340;
     setMenu({
-      x: Math.max(0, Math.min(e.clientX, window.innerWidth - w - 8)),
-      y: Math.max(0, Math.min(e.clientY, window.innerHeight - h - 8)),
+      x: Math.max(0, Math.min(x, window.innerWidth - w - 8)),
+      y: Math.max(0, Math.min(y, window.innerHeight - h - 8)),
       item
     });
+  };
+  const openMenu = (e: React.MouseEvent, item: DirEntry | null) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openMenuAt(e.clientX, e.clientY, item);
   };
   const closeMenu = () => setMenu(null);
   useEffect(() => {
@@ -294,6 +397,19 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
     if (opCount === 0) return;
     setClipboard({ items: opPaths, op: 'copy' });
     flash(`已复制 ${opCount} 项`);
+  };
+  // 复制选中项完整路径到系统剪贴板(多选时逐行拼接)
+  const doCopyPath = async () => {
+    if (opCount === 0) return;
+    await writeClipboard(opPaths.join('\n'));
+    flash(opCount === 1 ? `已复制路径:${opPaths[0]}` : `已复制 ${opCount} 项路径`);
+  };
+  // 复制选中项文件名到系统剪贴板(多选时逐行拼接,不含目录)
+  const doCopyName = async () => {
+    if (opCount === 0) return;
+    const names = selectedEntries.map((e) => e.name).join('\n');
+    await writeClipboard(names);
+    flash(opCount === 1 ? `已复制文件名:${selectedEntries[0].name}` : `已复制 ${opCount} 个文件名`);
   };
   const doDownload = () => {
     if (opCount === 0) return;
@@ -489,13 +605,17 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
       <div className="row gap fm-actions">
         <button className="ghost sm" onClick={up} disabled={path === '/'}>⬆ 上级</button>
         <button className="ghost sm" onClick={refresh}>↻</button>
+        {/* 多选模式:触屏无 Ctrl/Shift,进入后点按切换选中,配合底部操作条批量操作 */}
+        <button className={`ghost sm${selectMode ? ' on' : ''}`} onClick={toggleSelectMode}>
+          {selectMode ? '✕ 退出多选' : '☑ 多选模式'}
+        </button>
         <div className="fm-upload">
           <button className="ghost sm" disabled={uploading}
             onClick={(e) => { e.stopPropagation(); setUploadMenu((v) => !v); }}>⬆ 上传 ▾</button>
           {uploadMenu && (
             <div className="ctxmenu fm-upload-menu" onContextMenu={(e) => e.preventDefault()}>
-              <button onClick={pickUpload('file')}>📄 上传文件</button>
-              <button onClick={pickUpload('dir')}>📁 上传文件夹</button>
+              <button onClick={pickUpload('file')}><span className="ctx-ico">📄</span>上传文件</button>
+              <button onClick={pickUpload('dir')}><span className="ctx-ico">📁</span>上传文件夹</button>
             </div>
           )}
         </div>
@@ -529,80 +649,74 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
         {/* 加载中且列表为空:在列表区明显显示加载中(避免状态文字不显眼/被挡住);进入子目录只行内转圈,不影响列表 */}
         {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
         {!loading && entries.length === 0 && <div className="muted fmph">(空目录)</div>}
-        {entries.map((e) => {
-          const sel = selection.has(e.name);
-          const navPath = entryPath(e.name);
-          return (
-            <div key={e.name} className={`fmrow ${sel ? 'selected' : ''} ${navPath === navLoading ? 'nav-loading' : ''}`}
-              onClick={(ev) => handleRowClick(ev, e)}
-              onDoubleClick={() => openEntry(e)}
-              onContextMenu={(ev) => openMenu(ev, e)}>
-              <span className={`fm-ico${renaming === e.name ? ' fm-hide' : ''}`}>{e.type === 'dir' ? '📁' : e.type === 'link' ? '🔗' : '📄'}</span>
-              {/* 各列始终留在文档流(fm-hide 仅隐藏文字、保留占位),行高/行宽与普通行完全一致 */}
-              <span className={`fm-name${renaming === e.name ? ' fm-hide' : ''}`} data-tip={e.name} data-tip-ellipsis data-tip-follow>{e.name}</span>
-              {renaming === e.name && (
-                // 重命名输入框:绝对定位覆盖整行(见 .fm-rename),进出编辑零抖动
-                <input className="fm-rename" autoFocus value={renameDraft}
-                  spellCheck={false}
-                  onChange={(ev) => setRenameDraft(ev.target.value)}
-                  onFocus={(ev) => {
-                    // 默认选中不含扩展名的部分,方便直接输入新名
-                    const dot = ev.target.value.lastIndexOf('.');
-                    if (dot > 0) ev.target.setSelectionRange(0, dot);
-                    else ev.target.select();
-                  }}
-                  onClick={(ev) => ev.stopPropagation()}
-                  onDoubleClick={(ev) => ev.stopPropagation()}
-                  onContextMenu={(ev) => ev.preventDefault()}
-                  onKeyDown={(ev) => {
-                    ev.stopPropagation();
-                    // 中文等输入法组词中:Enter 是确认候选字,不在此提交重命名
-                    if (ev.nativeEvent.isComposing) return;
-                    if (ev.key === 'Enter') commitRename();
-                    else if (ev.key === 'Escape') { setRenaming(null); setRenameDraft(''); }
-                  }}
-                  onBlur={commitRename} />
-              )}
-              <span className={`fm-time${renaming === e.name ? ' fm-hide' : ''}`}>{fmtTime(e.mtime)}</span>
-              {renaming === e.name && renameBusy
-                ? <span className="fm-loading" data-tip="重命名中…" />
-                : navPath === navLoading && <span className="fm-loading" data-tip="加载中…" />}
-            </div>
-          );
-        })}
+        {entries.map((e) => (
+          <FmRow
+            key={e.name}
+            entry={e}
+            selected={selection.has(e.name)}
+            navLoading={entryPath(e.name) === navLoading}
+            renaming={renaming === e.name}
+            renameBusy={renameBusy}
+            renameDraft={renameDraft}
+            onRenameDraft={setRenameDraft}
+            onCommitRename={commitRename}
+            onCancelRename={() => { setRenaming(null); setRenameDraft(''); }}
+            onRowClick={handleRowClick}
+            onOpen={openEntry}
+            onMenu={openMenu}
+            onLongPress={(x, y, item) => openMenuAt(x, y, item)}
+          />
+        ))}
       </div>
+
+      {/* 多选模式操作条:触屏批量操作入口(复制/传到本地/下载/删除) */}
+      {selectMode && selection.size > 0 && (
+        <div className="fm-selbar">
+          <span className="muted sm">已选 {selection.size} 项</span>
+          <button className="ghost sm" onClick={doCopy}>📋 复制</button>
+          <button className="ghost sm" disabled={transferring || !localCwd} onClick={doLocalTransfer}>⬇ 传到本地</button>
+          <button className="ghost sm" onClick={doDownload}>⬇ 下载</button>
+          <button className="danger sm" disabled={!!deleting} onClick={doDelete}>🗑 删除</button>
+        </div>
+      )}
 
       <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · F2 重命名 · 右键操作 · 上传到当前目录</div>
 
       {menu && createPortal(
         <div ref={menuRef} className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
           {menu.item && selection.size === 1 && menu.item.type === 'dir' && (
-            <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}>📂 打开</button>
+            <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}><span className="ctx-ico">📂</span>打开</button>
           )}
           {menu.item && selection.size === 1 && menu.item.type !== 'dir' && (
-            <button onClick={() => { closeMenu(); onOpenFile(entryPath(menu.item!.name)); }}>📄 打开</button>
+            <button onClick={() => { closeMenu(); onOpenFile(entryPath(menu.item!.name)); }}><span className="ctx-ico">📄</span>打开</button>
           )}
           {menu.item && (
-            <button onClick={() => { closeMenu(); doDownload(); }}>⬇ 下载{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button onClick={() => { closeMenu(); doDownload(); }}><span className="ctx-ico">⬇</span>下载{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button disabled={transferring || !localCwd} data-tip={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`} onClick={() => { closeMenu(); doLocalTransfer(); }}>⬇ 传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button disabled={transferring || !localCwd} data-tip={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`} onClick={() => { closeMenu(); doLocalTransfer(); }}><span className="ctx-ico">⬇</span>传到本地{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button onClick={() => { closeMenu(); doCopy(); }}>📋 复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button onClick={() => { closeMenu(); doCopy(); }}><span className="ctx-ico">📋</span>复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+          )}
+          {menu.item && (
+            <button onClick={() => { closeMenu(); doCopyPath(); }}><span className="ctx-ico">🔗</span>复制路径{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+          )}
+          {menu.item && (
+            <button onClick={() => { closeMenu(); doCopyName(); }}><span className="ctx-ico">📝</span>复制文件名{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && selection.size === 1 && !deleting && (
-            <button onClick={() => startRename(menu.item!.name)}>✏️ 重命名</button>
+            <button onClick={() => startRename(menu.item!.name)}><span className="ctx-ico">✏️</span>重命名</button>
           )}
           {clipboard ? (
-            <button onClick={() => { closeMenu(); pasteHere(path); }}>📥 粘贴到此处</button>
+            <button onClick={() => { closeMenu(); pasteHere(path); }}><span className="ctx-ico">📥</span>粘贴到此处</button>
           ) : (
-            <button disabled data-tip="先右键复制文件/文件夹,再到这里粘贴">📥 粘贴到此处</button>
+            <button disabled data-tip="先右键复制文件/文件夹,再到这里粘贴"><span className="ctx-ico">📥</span>粘贴到此处</button>
           )}
           {menu.item && (
             <>
               <div className="ctx-sep" />
-              <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}>🗑 删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+              <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}><span className="ctx-ico">🗑</span>删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
             </>
           )}
         </div>,

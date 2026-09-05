@@ -88,6 +88,9 @@ export function answerAskUser(askId: unknown, answers: any[]): boolean {
   if (p.timer) clearTimeout(p.timer);
   p.signal?.removeEventListener('abort', p.onAbort!);
   p.resolve(Array.isArray(answers) ? answers.filter((a) => a) : []);
+  // 作答完成同样广播移除事件(与取消/超时同一个事件):多窗口并行时,其他前端
+  // 据此关闭该批提问并清除"待用户操作"标记;作答方的本地队列也会被同款事件兜底清理
+  p.emit?.('agent', { event: 'ask_user_cancelled', askId, sid: p.sid });
   return true;
 }
 

@@ -23,6 +23,8 @@
 .session-item .s-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
 /* 会话运行中徽标(多会话并行:该会话有任务正在后台执行) */
 .session-item .s-run { color: var(--green); font-size: 12px; flex: none; animation: s-run-pulse 1.2s ease-in-out infinite; text-shadow: 0 0 8px var(--ok-border); }
+/* 待用户操作(模型提问挂起):运行点变黄,提示切回该会话作答/取消 */
+.session-item .s-run.warn { color: var(--amber); text-shadow: 0 0 8px var(--warn-border); }
 @keyframes s-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .session-item .s-actions { display: flex; gap: 2px; }
 /* 三点更多按钮:复用 .action-icon 的透明底/无边框/hover 反馈,仅调字号与留白 */
@@ -52,4 +54,15 @@
   background: var(--accent-fill); border: 1px solid var(--accent-border);
   border-radius: var(--r-sm); padding: 1px 5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px;
+}
+
+/* ---- 移动端(<768):触控行高加大 ---- */
+@media (max-width: 767px) {
+  .session-item { min-height: 46px; padding: 8px 12px; height: auto; }
+  .s-panel { padding: 10px 12px; }
+}
+/* 触屏设备:hover 不存在,时间与 ⋮ 操作常显(桌面仍是悬停浮现) */
+@media (hover: none) and (pointer: coarse) {
+  .session-item .s-meta,
+  .session-item .s-actions { opacity: 1; }
 }

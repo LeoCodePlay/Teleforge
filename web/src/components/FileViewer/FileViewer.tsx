@@ -40,9 +40,11 @@ interface FileViewerProps {
   name: string;
   onDirtyChange?: (dirty: boolean) => void;
   onClose: () => void;
+  /** 移动端「返回」按钮:回到文件管理视图(手机端打开文件时由 App 传入) */
+  onBack?: () => void;
 }
 
-export default function FileViewer({ path, name, onDirtyChange, onClose }: FileViewerProps) {
+export default function FileViewer({ path, name, onDirtyChange, onClose, onBack }: FileViewerProps) {
   const [content, setContent] = useState('');
   const [orig, setOrig] = useState('');
   const [meta, setMeta] = useState<FileMeta | null>(null);
@@ -105,6 +107,7 @@ export default function FileViewer({ path, name, onDirtyChange, onClose }: FileV
   return (
     <div className="fviewer">
       <div className="fviewer-head">
+        {onBack && <button className="ghost sm fviewer-back" onClick={onBack} title="返回文件管理">←</button>}
         <span className="fviewer-title" data-tip={path}>📄 {name} <span className="muted">{media
           ? MEDIA_KIND_LABEL[media]
           : meta && `${fmtSize(meta.size)}${meta.truncated ? ' (仅展示前部)' : ''}`}</span></span>

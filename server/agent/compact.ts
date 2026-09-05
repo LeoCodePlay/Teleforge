@@ -1,10 +1,11 @@
-// 上下文窗口自动压缩(设计 的 compaction-basic 子系统):
+// 上下文窗口自动压缩(设计参照 dsh 的 compaction-basic 子系统):
 // - 每个模型可在提供方配置里声明 contextWindow(输入上下文长度)与 maxTokens(单次输出上限)。
-// - 每次发请求前按"对话组"(一条 user 到下一条 user 之间)估算 token;
-//   超过阈值窗口(默认 contextWindow×80%,再扣除输出预留)时,把早期对话组压缩成
-//   一段摘要(调用 LLM,reasoning=off,不含工具),保留最近约 retainRatio(16%)的窗口。
-// - 摘要生成失败时降级为"直接裁剪"(丢弃早期对话组),保证对话永不因压缩失败中断。
-// - token 估算为启发式(中文约 1.6 字符/token、英文约 4 字符/token + 每条消息 JSON 结构开销),
+// - 每次发请求前估算 token;超过阈值窗口(默认 contextWindow×80%,再扣除输出预留)时,
+//   把早期区间压缩成一段摘要(调用 LLM,reasoning=off,不含工具),保留最近约 retainRatio(16%)的窗口。
+// - 区间选择按"位置"而非"对话组"(见 selectCompactRange):单条消息引发的深工具任务
+//   同样可以中途压缩;切点对齐工具配对边界,压缩后消息序列始终合法。
+// - 摘要生成失败时降级为"直接裁剪"(丢弃早期区间,保留任务锚点),保证对话永不因压缩失败中断。
+// - token 估算为启发式(中文约 1.6 字符/token、英文约 3 字符/token + 每条消息 JSON 结构开销),
 //   不引入 tokenizer 依赖,精确度足以做窗口水位判断。
 import { AGENT } from '../config.ts';
 import type { LlmClient } from './llm.ts';
@@ -66,29 +67,42 @@ export function resolveCharBudget(contextWindow: unknown): number {
 }
 
 /**
- * 选择可压缩区间:从头部整组丢弃,保留最近的 retainTokens 窗口(至少保留最后一条 user 组)。
- * 组边界保证:压缩掉的区间内部 user/assistant/tool 配对完整,
- * 保留区起点必然是 user 消息,因此压缩后历史始终以 user 开头、消息序列合法。
+ * 选择可压缩区间(参照 harness region.ts 的 selectCompactableRange,按位置而非对话组):
+ * - 从尾部向前按消息累积 token,直到达到保留水位,候选切点为 keep;
+ * - 再把切点向前对齐到"工具配对完整"的消息边界:assistant 的 tool_calls 与其
+ *   tool 结果绝不拆分,切点后的保留区可能以 user 或 assistant 开头
+ *   (压缩后由摘要 user 消息打头,序列依然合法);
+ * - 关键差异:不再要求 ≥2 条 user 消息——单条消息引发的深工具任务(只有一个
+ *   对话组)同样可以中途压缩,这是长任务上下文治理的核心防线;
+ * - 全部消息都在保留水位内时返回 null(无需压缩)。
  * @returns 无可压缩区间时返回 null
  */
 export function selectCompactRange(msgs: any[], retainTokens: number): { drop: any[]; recent: any[] } | null {
   if (!Array.isArray(msgs) || msgs.length < 3) return null;
-  const groupStarts: number[] = [];
-  msgs.forEach((m, i) => { if (m && m.role === 'user') groupStarts.push(i); });
-  if (groupStarts.length < 2) return null; // 只有一组对话,无可压缩的早期历史
 
-  // 从尾部向前累加"对话组"的 token,直到达到保留水位;keep 即保留区起点
+  // 从尾部倒着累加 token,找保留区起点候选
   let keep = msgs.length;
   let acc = 0;
-  for (let g = groupStarts.length - 1; g >= 0; g--) {
-    const s = groupStarts[g];
-    const part = msgs.slice(s, keep);
-    acc += measureMessages(part);
-    keep = s;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    acc += messageTokens(msgs[i]);
+    keep = i;
     if (acc >= retainTokens) break;
   }
-  // 全部组都在保留范围内(历史本身很小):退化为只保留最后一组
-  if (keep === 0) keep = groupStarts[groupStarts.length - 1];
+  if (keep <= 0 || keep >= msgs.length) return null;
+
+  // 切点对齐:valid[i] 表示"消息 0..i-1 的工具配对完整"(切在 i 处不拆散任何调用对);
+  // user 消息会作废尚未消费的调用 id(与 OpenAI 工具配对语义一致)
+  const valid = new Array(msgs.length + 1).fill(false);
+  let pending: Set<string> = new Set();
+  valid[0] = true;
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i] || {};
+    if (m.role === 'assistant') pending = new Set(((m.tool_calls || []) as any[]).map((t) => t.id));
+    else if (m.role === 'user') pending = new Set();
+    else if (m.role === 'tool' && m.tool_call_id) pending.delete(m.tool_call_id);
+    valid[i + 1] = pending.size === 0;
+  }
+  while (keep > 0 && !valid[keep]) keep--;
   if (keep <= 0 || keep >= msgs.length) return null;
   const drop = msgs.slice(0, keep);
   if (!drop.length) return null;
@@ -109,20 +123,25 @@ export function compactionInstruction(): string {
 
 /**
  * 对消息历史执行上下文压缩:
- * 未配置 contextWindow 或未超阈值时原样返回;超阈值时选区间 -> 生成摘要(失败降级裁剪)
- * -> 返回 [摘要消息, ...保留区最近消息]。
+ * 未配置 contextWindow 或未超阈值(force=false)时原样返回;超阈值时选区间 -> 生成摘要
+ * (失败降级裁剪)-> 返回 [摘要消息, ...保留区最近消息]。
  * reservedTokens:每次请求的固定开销(system 提示词 + 工具 schema 的估算 token),
  * 传入时从触发阈值里扣除——否则实际请求比水位估算大一截,压缩触发严重偏晚。
+ * force:跳过阈值检查强制执行(上下文爆窗恢复用);retainTokensOverride:覆盖保留水位
+ * (爆窗恢复传 0 = 只保留最后一个配对完整节点,最大力度压缩)。
  */
-export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0 }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number }): Promise<{ messages: any[]; compacted: boolean; dropCount: number }> {
+export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0, force = false, retainTokensOverride }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number; force?: boolean; retainTokensOverride?: number }): Promise<{ messages: any[]; compacted: boolean; dropCount: number }> {
   const spec = resolveCompactSpec(contextWindow, maxTokens);
   if (!spec.enabled) return { messages, compacted: false, dropCount: 0 };
   // 水位扣除固定开销(system + 工具 schema):真实请求 = 历史 + 固定开销,
-  // 只量历史会让触发点比真实爆窗点晚一个 system 的体量(实测偏差可达数万 token)
-  const thresholdTokens = Math.max(1, spec.thresholdTokens - Math.max(0, Math.floor(reservedTokens)));
-  if (measureMessages(messages) <= thresholdTokens) return { messages, compacted: false, dropCount: 0 };
+  // 只量历史会让触发点比真实爆窗点晚一个 system 的体量(实测偏差可达数万 token)。
+  // 地板:阈值必须大于保留水位(retainTokens+1),对齐 harness 的"retainTokens < thresholdTokens"校验,
+  // 防止固定开销异常巨大时阈值被扣到 0,导致每一步都触发压缩、保留区几乎为空
+  const thresholdTokens = Math.max(spec.retainTokens + 1, Math.max(1, spec.thresholdTokens - Math.max(0, Math.floor(reservedTokens))));
+  if (!force && measureMessages(messages) <= thresholdTokens) return { messages, compacted: false, dropCount: 0 };
 
-  const range = selectCompactRange(messages, spec.retainTokens);
+  const retainTokens = retainTokensOverride === undefined ? spec.retainTokens : Math.max(0, Math.floor(retainTokensOverride));
+  const range = selectCompactRange(messages, retainTokens);
   if (!range) return { messages, compacted: false, dropCount: 0 };
 
   let summary = '';
@@ -132,6 +151,12 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
       // 再交给 LLM 汇总——否则摘要请求自己就会 400/被上游截断(摘要并不需要完整文件原文)
       const prunedDrop = pruneToolResults(range.drop, { keepRecent: 0, minChars: 1200, headChars: 900, tailChars: 300 }).messages;
       summary = await summarizeWithLlm({ llm, system, dropMsgs: prunedDrop, signal });
+      // 提交前校验:摘要必须比被压缩区间更小(参照 harness 的 shrink 校验),
+      // 否则压缩无收益,降级为直接裁剪(只保留任务锚点)
+      if (estimateTokens(summary) >= measureMessages(range.drop)) {
+        console.warn(`[compact] 摘要(${Math.round(estimateTokens(summary))} token)不小于被压缩区间(${Math.round(measureMessages(range.drop))} token),降级为直接裁剪`);
+        summary = '';
+      }
     } catch (e: any) {
       console.warn(`[compact] 摘要生成失败,降级为直接裁剪: ${e?.message || e}`);
     }

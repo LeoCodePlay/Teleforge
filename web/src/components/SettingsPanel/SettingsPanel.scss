@@ -35,3 +35,25 @@
 .settings-menu button span { flex: none; }
 .settings-menu .menu-cat { font-size: 11px; color: var(--muted); padding: 10px 12px 2px; letter-spacing: .5px; }
 .settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px; }
+
+/* ---- 移动端(<768):设置全屏,左侧菜单变顶部横向滚动菜单 ---- */
+@media (max-width: 767px) {
+  .settings {
+    width: 100vw; max-width: none; height: 100dvh;
+    border-radius: 0; border: none;
+  }
+  .settings-body { flex-direction: column; }
+  .settings-menu {
+    width: 100%; flex-direction: row; align-items: center;
+    border-right: none; border-bottom: 1px solid var(--line-soft);
+    overflow-x: auto; overflow-y: hidden; padding: 6px 8px; gap: 4px;
+    /* 显式声明横向平移手势:iOS Safari 对 overflow-x:auto/overflow-y:hidden
+       的组合容器会把手势锁死在纵向轴,导致横滑完全失效;pan-x 解锁横向滑动 */
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;               /* 与全站一致:隐藏原生滚动条,触摸直滑 */
+  }
+  .settings-menu::-webkit-scrollbar { display: none; }
+  .settings-menu button { flex: none; min-height: 44px; white-space: nowrap; -webkit-user-select: none; user-select: none; }
+  .settings-content { padding: 12px 14px; }
+}

@@ -9,3 +9,6 @@
 .ws-panel .fm-pane.hide { display: none; }
 .ws-panel .fm { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ws-panel .fm > :not(.fmlist) { flex: none; }
+
+/* 移动端(<768):远程/本地 Tab 切换加大触控目标 */
+@media (max-width: 767px) { .fm-tab { min-height: 44px; padding: 8px 12px; } }

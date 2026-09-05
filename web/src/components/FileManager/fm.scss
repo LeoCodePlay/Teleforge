@@ -92,3 +92,23 @@
   from { background-position: 200% 0; }
   to   { background-position: -200% 0; }
 }
+
+/* ---- 移动端(<768):行加大触控目标,窄屏只留图标+文件名,多选操作条 ---- */
+@media (max-width: 767px) {
+  .fmrow { min-height: 44px; padding: 6px 12px; touch-action: manipulation; }
+  .fm-toolbar, .fm-actions { gap: 6px; }
+  .fm-actions button { min-height: 40px; }
+  .fm-size, .fm-time { display: none; }        /* 窄屏只留图标+文件名,行可点区域最大化 */
+  /* 面包屑横向行:解锁触屏横滑(iOS 对 overflow-x:auto+overflow-y:hidden 锁纵向轴) */
+  .fm-crumbs { touch-action: pan-x; -webkit-overflow-scrolling: touch; }
+  .fm-selbar {
+    flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 8px 10px; margin-top: 8px;
+    border: 1px solid var(--accent-border); border-radius: var(--r-md);
+    background: var(--accent-soft);
+  }
+  .fm-selbar button { min-height: 40px; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .fmrow { -webkit-touch-callout: none; }
+}

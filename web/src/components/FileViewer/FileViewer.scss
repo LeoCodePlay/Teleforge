@@ -47,8 +47,6 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 /* ---- CodeMirror 编辑器(代码高亮 + 左侧行号)----
    颜色一律取主题令牌(深色=白叠加系,浅色自动翻转),语法 token 挂 .cmx-* 类。 */
 .fviewer .codeedit { flex: 1; min-height: 0; overflow: hidden; position: relative; }
-/* 编辑器宿主:绝对定位填满容器,让 CodeMirror 拿到确定的尺寸 */
-.fviewer .codeedit-host { position: absolute; inset: 0; }
 .fviewer .cm-editor {
   height: 100%;
   background: var(--code-bg-solid);
@@ -166,3 +164,12 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cm-scroller::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
 .fviewer .cm-scroller::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
 .fviewer .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb-x) transparent; }
+
+/* ---- 移动端(<768):头部加高容纳返回钮,编辑器触控友好 ---- */
+@media (max-width: 767px) {
+  .fviewer-head { height: 44px; padding: 0 8px; }
+  .fviewer-foot { padding: 6px 10px; }
+  .fviewer-back { min-height: 36px; }
+  /* CodeMirror 触控:加大点击目标与字号(编辑器内部由 CM 自己处理触摸) */
+  .fviewer .cm-line { padding: 0 8px; }
+}

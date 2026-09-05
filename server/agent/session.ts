@@ -131,16 +131,22 @@ export class Session {
    */
   deriveMessagesWithTrace({ budgetChars = Infinity }: { budgetChars?: number } = {}): TracedMessage[] {
     const traced: TracedMessage[] = [];
+    // 待消费的 tool_call id(最近一条带 tool_calls 的 assistant 声明的,OpenAI 配对语义):
+    // 投影期过滤孤儿 tool/result——构造时自愈(_heal)能清掉落盘损坏,但运行中会话
+    // (旧版压缩产生的孤儿仍驻内存)也要保证投影序列永远合法,严格提供商会 400。
+    let pending = new Set<string>();
     for (const ev of this.events) {
       const d = ev.data || {};
       switch (ev.type) {
         case 'user/message':
+          pending = new Set(); // user 之后工具 id 失效
           traced.push({ seq: ev.seq, msg: { role: 'user', content: d.content } });
           break;
         case 'assistant/message': {
           const m = d.message || {};
           const hasCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
           if (!m.content && !hasCalls) break;
+          pending = new Set(hasCalls ? m.tool_calls.map((t: any) => t.id) : []);
           traced.push({
             seq: ev.seq,
             msg: {
@@ -153,9 +159,13 @@ export class Session {
           break;
         }
         case 'tool/result':
+          // 孤儿 tool/result(无前置 assistant tool_calls):跳过,不进入模型可见面
+          if (!pending.has(d.callId)) break;
+          pending.delete(d.callId);
           traced.push({ seq: ev.seq, msg: { role: 'tool', tool_call_id: d.callId, content: d.content } });
           break;
         case 'compaction/done':
+          pending = new Set(); // 压缩摘要 user 消息:工具 id 失效(与 user/message 同语义)
           traced.push({
             seq: ev.seq,
             msg: { role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。' }
@@ -172,19 +182,25 @@ export class Session {
   }
 
   /**
-   * 行内压缩区间替换:把 dropSeqs 指定的早期消息事件从日志中移除,
-   * 并在 anchorSeq(保留区第一条事件原 seq)位置插入一条 compaction/done 摘要事件。
+   * 行内压缩区间替换:把 [min(dropSeqs), anchorSeq) 区间内的**全部事件**从日志移除
+   * (包括 tool/call、step/* 等不投影的结构事件——它们属于被压缩的步骤,留着会在
+   * 轮末自愈时生成无前置 assistant 的孤儿 tool/result,破坏回放序列),
+   * 并在 anchorSeq 位置插入一条 compaction/done 摘要事件。
+   * dropSeqs 提供区间起点与合法性依据(必须是被压缩消息面的前缀 seq);
    * meta 可选:手动/自动调用方借此携带 dropCount、manual 标记,
    * 前端据其渲染「压缩标记行」的标题与条数(样式参照 harness 的 CompactionItem)。
    * 被压缩的对话事实已沉淀进摘要,日志保持"模型可见即可回放"。
    */
   squash(dropSeqs: number[] | string[], summary: string, anchorSeq: number | null, meta?: { dropCount?: number; manual?: boolean }): void {
-    const drop = new Set(dropSeqs.map(Number).filter((n) => Number.isFinite(n)));
+    const nums = dropSeqs.map(Number).filter((n) => Number.isFinite(n));
+    const rangeStart = nums.length ? Math.min(...nums) : null;
     const data = { summary, ...(meta || {}) };
     const kept: any[] = [];
     let inserted = false;
     for (const ev of this.events) {
-      if (drop.has(ev.seq)) continue;
+      // 区间删除:被压区间 [rangeStart, anchorSeq) 内的一切事件都移除;
+      // anchorSeq 为 null 表示压到末尾(保留区为空),删掉 rangeStart 起的全部
+      if (rangeStart != null && ev.seq >= rangeStart && (anchorSeq == null || ev.seq < anchorSeq)) continue;
       if (!inserted && anchorSeq != null && ev.seq >= anchorSeq) {
         kept.push({ type: 'compaction/done', data });
         inserted = true;
@@ -196,8 +212,34 @@ export class Session {
     this.events = kept.map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
   }
 
-  /** 给构造载入时仍未闭合的工具调用补一条"中止"结果(进程崩溃/被杀的遗留) */
+  /**
+   * 构造载入时的日志自愈:
+   * 1) 移除"孤儿工具事件"——无前置 assistant tool_calls 声明的 tool/call 与 tool/result。
+   *    旧版行内压缩(squash)只删投影事件、漏删 tool/call 结构事件,轮末自愈又为残留的
+   *    tool/call 补了"中止"结果,落盘后就形成这类孤儿;它们投影出"无前置 assistant 的
+   *    tool 消息",严格提供商会 400。此处一次性清掉,保证日志永远可安全回放。
+   * 2) 仍未闭合的工具调用(进程崩溃/被杀的遗留)补一条"中止"结果。
+   */
   _heal(): void {
+    const alive = new Set<string>(); // 当前由 assistant tool_calls 声明的存活调用 id
+    const kept: SessionEvent[] = [];
+    for (const ev of this.events) {
+      if (ev.type === 'user/message' || ev.type === 'compaction/done') {
+        alive.clear(); // user 之后工具 id 失效(与 OpenAI 配对语义一致)
+      }
+      if (ev.type === 'assistant/message') {
+        alive.clear();
+        for (const t of ((ev.data && ev.data.message && ev.data.message.tool_calls) || [])) alive.add(t.id);
+      }
+      if ((ev.type === 'tool/call' || ev.type === 'tool/result') && !alive.has(ev.data.callId)) {
+        continue; // 孤儿工具事件:移除
+      }
+      if (ev.type === 'tool/result' && alive.has(ev.data.callId)) alive.delete(ev.data.callId); // 一个 id 只消费一次
+      kept.push(ev);
+    }
+    if (kept.length !== this.events.length) {
+      this.events = kept.map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
+    }
     for (const c of this.pendingToolCalls()) {
       this.append('tool/result', {
         turn: c.turn, step: c.step, callId: c.callId, name: c.name,

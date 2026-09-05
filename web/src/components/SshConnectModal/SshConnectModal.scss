@@ -35,3 +35,9 @@
 }
 .ssh-save-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .ssh-save-check { margin: 0; white-space: nowrap; }
+
+/* ---- 移动端(<768):连接列表项加大触控目标(全屏化由全局 .modal 规则覆盖) ---- */
+@media (max-width: 767px) {
+  .ssh-item { padding: 6px; }
+  .ssh-item-main { min-height: 44px; padding: 8px 10px; }
+}

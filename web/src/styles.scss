@@ -273,6 +273,10 @@ button.sm { padding: 4px 11px; font-size: 12px; }
 .ctxmenu button:disabled { opacity: .4; cursor: default; }
 .ctxmenu button.danger:hover:not(:disabled) { color: var(--red); background: var(--danger-soft); }
 .ctx-sep { height: 1px; background: var(--line-soft); margin: 3px 5px; }
+/* 图标列固定宽度,统一的文字起点(编辑器/文件管理器右键菜单共用) */
+.ctxmenu .ctx-ico {
+  flex: none; width: 18px; text-align: center; margin-right: 2px;
+}
 
 /* ---- 弹窗:毛玻璃遮罩 + 厚玻璃面板 ---- */
 .modal-overlay {
@@ -457,4 +461,48 @@ body.ob-dragging { cursor: grabbing; user-select: none; }
   }
   .toast { background: var(--code-bg-solid); }
   .gselect-menu { background: var(--code-bg-solid); }
+}
+
+/* ============================================================
+   移动端基础(断点与 App.scss 保持一致:<768 phone / 768-1279 tablet / ≥1280 desktop)
+   所有规则包在媒体查询内,不影响桌面布局。
+   ============================================================ */
+
+/* 手机浏览器地址栏收起/键盘场景:优先使用动态视口单位(100dvh),
+   键盘弹出时布局视口随 interactive-widget=resizes-content 收缩,
+   配合 App 层的 visualViewport 内边距(见 useVisualViewport.ts),输入区不被遮挡 */
+.app { height: 100vh; }
+@supports (height: 100dvh) { .app { height: 100dvh; } }
+
+@media (max-width: 767px) {
+  /* 弹窗全屏化:所有 .modal(SSH 连接/目录浏览/确认框/重命名)与 .settings 统一收编。
+     全屏玻璃面板 + 安全区留白,不再居中悬浮 */
+  .modal-overlay { align-items: stretch; }
+  .modal {
+    width: 100vw; max-width: none; height: 100dvh;
+    border-radius: 0; border: none;
+  }
+  .modal-head, .modal-body, .modal-foot {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .modal-foot { padding-bottom: max(13px, env(safe-area-inset-bottom)); }
+  /* 刘海屏:弹窗头部避开状态栏/刘海 */
+  .modal-head { padding-top: max(13px, env(safe-area-inset-top)); }
+  /* 全屏弹窗没有遮罩可点,头部 ✕ 是唯一关闭途径:加大到 44px 触控目标,
+     防止"看得见点不中/点不着"(也覆盖设置面板头部的 ✕) */
+  .modal-head button,
+  .settings-head button {
+    min-width: 44px; min-height: 44px; flex: none;
+    font-size: 16px; line-height: 1;
+  }
+  .settings-head { padding-top: max(13px, env(safe-area-inset-top)); }
+}
+
+/* 触屏设备:hover 态不存在,凡靠 hover 显现/操作的元素改为常显 + 加大触控目标。
+   鼠标设备(sourceCapabilities.firesTouchEvents=false)不受影响 */
+@media (hover: none) and (pointer: coarse) {
+  .ctxmenu button { min-height: 44px; }       /* 右键/长按菜单触控目标 */
+  .dirlink { min-height: 44px; }
+  .provider-card { min-height: 44px; }
 }

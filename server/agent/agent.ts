@@ -11,8 +11,8 @@
 // - 多会话并行:每个会话一个运行时(事件日志 + inbox/steer/signal/busy,见 newRuntime),
 //   各会话独立驱动互不阻塞;所有发给前端的事件都带 sid,前端按会话路由显示。
 import { AGENT } from '../config.ts';
-import { LlmClient } from './llm.ts';
-import { compactHistory, summarizeWithLlm, messageTokens, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
+import { LlmClient, isContextOverflowError } from './llm.ts';
+import { compactHistory, summarizeWithLlm, selectCompactRange, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
 import { Session, foldTodos, trimMessagesByBudget } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
@@ -124,22 +124,28 @@ function newRuntime(session) {
     boundConn: null, // 当前轮绑定的 SSH 连接(切走活动连接后工具仍操作它)
     goalBlocked: 0,  // 连续"模型宣称完成但任务计划仍有未完成项"的次数(自动续推防死循环门槛)
     lastCallKey: null, // 上一次工具调用的规范化键(工具名+参数),repeat-tool-reminder 追踪用
-    lastCallCount: 0   // 连续相同调用次数
+    lastCallCount: 0,  // 连续相同调用次数
+    lastPruneCount: 0, // 本轮上次打印折叠日志时的折叠条数(只在条数增长时打印,避免每步刷屏)
+    overflowRecoveries: 0 // 本轮上下文爆窗恢复次数(达到上限后不再重试,防死循环)
   };
 }
 
 // 兜底空日志:活跃会话运行时缺失(恢复失败)时投影为空
 const EMPTY_SESSION = new Session();
 
-// 事件日志 -> 前端消息数组投影(getHistory 的实现,与具体会话无关)
+// 事件日志 -> 前端消息数组投影(getHistory 的实现,与具体会话无关)。
+// 与 deriveMessages 同款配对过滤:无前置 assistant tool_calls 的孤儿 tool/result
+// (旧版压缩 bug 遗留 + 轮末自愈补的"中止"结果)不投影,避免前端渲染游离工具卡片。
 function projectEvents(events) {
   const out = [];
   const calls = new Map();
+  let alive = new Set(); // 最近一条 assistant 声明的存活 tool_call id(OpenAI 配对语义)
   for (const ev of events) {
     const d = ev.data || {};
     if (ev.type === 'tool/call') {
       calls.set(d.callId, d);
     } else if (ev.type === 'user/message') {
+      alive = new Set(); // user 之后工具 id 失效
       out.push({
         // 前端显示用户原文;带注入技能时它携纯原文(display),模型历史才用注入后的 content
         role: 'user', content: d.display ?? d.content,
@@ -149,6 +155,7 @@ function projectEvents(events) {
         ...(Array.isArray(d.skillsInjected) && d.skillsInjected.length ? { skillsInjected: d.skillsInjected } : {})
       });
     } else if (ev.type === 'compaction/done') {
+      alive = new Set();
       out.push({
         role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。', time: ev.time,
         // 压缩标记元数据:前端据此渲染「压缩标记行」(dropCount=被压缩消息数,manual=手动压缩)
@@ -156,6 +163,7 @@ function projectEvents(events) {
       });
     } else if (ev.type === 'assistant/message') {
       const m = d.message || {};
+      alive = new Set((Array.isArray(m.tool_calls) ? m.tool_calls : []).map((t: any) => t.id));
       out.push({
         role: 'assistant',
         content: m.content || '',
@@ -163,6 +171,8 @@ function projectEvents(events) {
         ...(m.reasoning_content ? { reasoning_content: m.reasoning_content } : {})
       });
     } else if (ev.type === 'tool/result') {
+      if (!alive.has(d.callId)) continue; // 孤儿工具结果:不投影
+      alive.delete(d.callId);
       const c = calls.get(d.callId) || {};
       out.push({
         role: 'tool', tool_call_id: d.callId, content: d.content,
@@ -468,8 +478,9 @@ export class Agent {
   }
 
   // 手动压缩当前会话上下文(/compact 命令,移植自 harness 的 command-compact):
-  // 无条件把早期对话组压缩成一段摘要并 squash 进日志,不依赖自动压缩的阈值水位;
-  // 保留最近一段(最高 contextWindow×16%,至少最后一组对话),与自动压缩同款范围选择。
+  // 无条件把早期区间压缩成一段摘要并 squash 进日志,不依赖自动压缩的阈值水位;
+  // 保留最近一段(最高 contextWindow×16%,多组对话时至少保留最后一组),区间选择
+  // 与自动压缩同款(位置式 selectCompactRange);单条消息的深任务现在也能手动压缩。
   // 运行中的会话禁止压缩(等待 idle),压缩完成后广播 history_compacted 事件供前端刷新。
   /**
    * @param {string} [id] 会话 id,默认当前活跃会话
@@ -485,22 +496,28 @@ export class Agent {
     const msgs = trace.map((t) => t.msg);
     if (msgs.length < 3) return { compacted: false, dropCount: 0 };
 
-    // 手动压缩保留最近一段(比自动压缩更克制:保留完整最近一组对话兜底)
+    // 手动压缩保留最近一段(比自动压缩更克制:多组对话时至少保留完整最后一组)
     const ctxWindow = this.llm.contextWindow || 128000;
     const retainTokens = Math.max(Math.floor(ctxWindow * 0.16), 4000);
-    // 至少保留最后一组对话(retainTokens 足够大时 selectCompactRange 退化为只保留首组)
-    const groupStarts = [];
-    msgs.forEach((m, i) => { if (m.role === 'user') groupStarts.push(i); });
-    if (groupStarts.length < 2) return { compacted: false, dropCount: 0 };
-    let keep = msgs.length;
-    let acc = 0;
-    for (let g = groupStarts.length - 1; g >= 0; g--) {
-      const part = msgs.slice(groupStarts[g], keep);
-      acc += part.reduce((n, m) => n + messageTokens(m), 0);
-      keep = groupStarts[g];
-      if (acc >= retainTokens) break;
+    let range = selectCompactRange(msgs, retainTokens);
+    if (!range) {
+      // 位置式选择无可压缩区间(历史很小,全在保留水位内):旧语义兜底——
+      // 至少把除最后一组外的早期对话全部压缩掉,保证 /compact 在小组会话上仍有收益
+      const groupStarts: number[] = [];
+      msgs.forEach((m, i) => { if (m.role === 'user') groupStarts.push(i); });
+      if (groupStarts.length >= 2) {
+        const cut = groupStarts[groupStarts.length - 1];
+        if (cut > 0) range = { drop: msgs.slice(0, cut), recent: msgs.slice(cut) };
+      }
     }
-    if (keep === 0) keep = groupStarts[groupStarts.length - 1];
+    if (!range) return { compacted: false, dropCount: 0 };
+    // 多组对话:切点不越过最后一组起点(至少保留完整最后一组);
+    // 单组对话(单消息深任务):直接用位置式切点,允许压缩组内早期步骤
+    const firstUserIdx = msgs.findIndex((m) => m.role === 'user');
+    const lastUserIdx = msgs.map((m, i) => (m.role === 'user' ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+    const keep = firstUserIdx >= 0 && firstUserIdx === lastUserIdx
+      ? range.drop.length
+      : Math.min(range.drop.length, lastUserIdx);
     if (keep <= 0 || keep >= msgs.length) return { compacted: false, dropCount: 0 };
     const dropMsgs = msgs.slice(0, keep);
     if (!dropMsgs.length) return { compacted: false, dropCount: 0 };
@@ -764,6 +781,8 @@ export class Agent {
 
     const turnStartSeq = session.seq;
     const turn = session.nextTurn();
+    rt.overflowRecoveries = 0; // 新一轮:爆窗恢复次数清零
+    rt.lastPruneCount = 0;     // 新一轮:折叠日志去重计数清零
     let turnOpened = false;
     let useTools = !this._chatOnly;
     // 当前模型若单独配置了迭代上限则优先使用,否则回退全局默认(AGENT.MAX_ITERS)
@@ -815,19 +834,26 @@ export class Agent {
         stepsUsed = step;
         this.emit('agent', { event: 'iteration', iter: step, sid: runSessionId });
 
-        // 模型请求 = system(提示词组装) + 事件日志投影出的派生历史
-        // 若模型配置了声明的输入上下文窗口(>0),超过阈值水位时先自动压缩早期历史
-        // (见 compact.js:早期对话组压缩成摘要并 squash 进日志,保留最近窗口)
+        // 模型请求 = system(提示词组装) + 事件日志投影出的派生历史。
+        // 治理顺序(对齐 harness compactIfNeeded:先无模型裁剪,再按"模型可见面"决定是否压缩):
+        // 1) 投影期折叠早期大工具结果(不动日志,只裁模型当轮可见面;水位双触发);
+        // 2) 摘要压缩——阈值按折叠后的量计量,单消息深任务同样可中途压缩(位置式区间);
+        // 3) 字符预算兜底裁剪。
         const systemText = this._systemPrompt(reasoning);
         const ctxWindow = (this.llm && this.llm.contextWindow) || 0;
         const toolSchemas = useTools ? registry.schemas({ localOnly: !ssh.connected }) : [];
         // 每次请求的固定开销(system 提示词 + 工具 schema)估算:压缩水位与投影裁剪都要扣除,
         // 否则实际请求比水位估算大一个 system 的体量(实测偏差可达数万 token),触发严重偏晚
         const reservedTokens = estimateTokens(systemText) + (toolSchemas.length ? estimateTokens(JSON.stringify(toolSchemas)) : 0);
-        // 先用完整历史投影(不裁剪),让摘要压缩基于完整信息工作;
-        // 字符兜底裁剪放到摘要之后(见下),且永不丢弃原始任务锚点。
+        // 先用完整历史投影(不裁剪);折叠/压缩/裁剪都发生在投影副本上,
+        // trace 与消息一一对应,供压缩落盘时把消息下标映射回事件 seq。
         const trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
         let historyMsgs = trace.map((t) => t.msg);
+        // 1) 投影期折叠早期大工具结果(参照 harness tool-result-pruner):日志不动,
+        //    只裁模型当轮可见面;水位双触发(窗口占比 + 绝对地板,见 AGENT.TOOL_RESULT_PRUNE)。
+        historyMsgs = this._pruneHistoryToolResults(historyMsgs, ctxWindow, reservedTokens, rt).messages;
+        // 2) 摘要压缩:阈值按折叠后的"模型可见面"计量,与上面折叠共用同一口径;
+        //    单轮深工具任务(只有一组对话)现在也能中途压缩(selectCompactRange 按位置选区间)。
         if (ctxWindow > 0 && historyMsgs.length > 2) {
           const c = await compactHistory({
             messages: historyMsgs, system: systemText, llm: this.llm, signal: signal.signal,
@@ -841,12 +867,8 @@ export class Agent {
             console.log(`[agent] 上下文超限,已自动压缩早期 ${c.dropCount} 条消息(窗口 ${ctxWindow})`);
           }
         }
-        // 投影期折叠早期大工具结果(参照 harness tool-result-pruner):单轮深工具任务只有
-        // 一组对话,组级压缩/裁剪永远够不着,这里是长会话 token 的最后一道防线。
-        // 日志不动,只裁模型当轮可见面;水位双触发(窗口占比 + 绝对地板,见 AGENT.TOOL_RESULT_PRUNE)。
-        historyMsgs = this._pruneHistoryToolResults(historyMsgs, ctxWindow, reservedTokens);
-        // 兜底字符裁剪:摘要未触发/未配置窗口时仍按预算裁剪,但永不丢原始任务锚点。
-        // 预算由输入窗口推导(未配置窗口回退固定默认),对齐前端仪表盘的 token 口径。
+        // 3) 兜底字符裁剪:摘要未触发/未配置窗口时仍按预算裁剪,但永不丢原始任务锚点。
+        //    预算由输入窗口推导(未配置窗口回退固定默认),对齐前端仪表盘的 token 口径。
         historyMsgs = trimMessagesByBudget(historyMsgs, resolveCharBudget(ctxWindow));
         const messages = [{ role: 'system', content: systemText }, ...historyMsgs];
 
@@ -874,6 +896,39 @@ export class Agent {
             }
           });
         } catch (e) {
+          // 上下文爆窗恢复(对齐 harness agent/request-error + compactIfNeeded 的
+          // context-overflow 分支):强力折叠(最近 0 条保留)+ 最大力度摘要压缩
+          // (retainTokensOverride=0,只留最后一个配对完整节点)后重试本步,
+          // 最多 MAX_OVERFLOW_RECOVERIES 次。只在请求还没流出任何内容时恢复,
+          // 避免把已展示的增量重复一遍(爆窗 400 发生在流建立之前,天然满足)。
+          if (isContextOverflowError(e) && ctxWindow > 0 && this.llm && !signal.signal.aborted
+            && rt.overflowRecoveries < AGENT.MAX_OVERFLOW_RECOVERIES
+            && !stepPartial && !stepPartialReasoning) {
+            rt.overflowRecoveries++;
+            const llm = this.llm;
+            this.emit('agent', {
+              event: 'notice', sid: runSessionId,
+              text: `请求超出模型上下文窗口,已自动折叠并压缩历史后重试(第 ${rt.overflowRecoveries} 次)。原始错误: ${String((e as any)?.message || e).slice(0, 160)}`
+            });
+            const P = AGENT.TOOL_RESULT_PRUNE;
+            historyMsgs = pruneToolResults(historyMsgs, {
+              keepRecent: 0, minChars: P.MIN_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
+            }).messages;
+            const c = await compactHistory({
+              messages: historyMsgs, system: systemText, llm, signal: signal.signal,
+              contextWindow: ctxWindow, maxTokens: llm.maxTokens, reservedTokens,
+              force: true, retainTokensOverride: 0
+            });
+            if (c.compacted) {
+              const dropSeqs = trace.slice(0, c.dropCount).map((t: any) => t.seq);
+              const anchorSeq = trace[c.dropCount] ? trace[c.dropCount].seq : null;
+              session.squash(dropSeqs, c.messages[0].content, anchorSeq, { dropCount: c.dropCount, manual: false });
+              historyMsgs = c.messages;
+              console.log(`[agent] 爆窗恢复:已折叠并压缩早期 ${c.dropCount} 条消息后重试本步`);
+            }
+            step--; // 重试本步(for 循环 step++ 会把它加回原值)
+            continue;
+          }
           // 模型/上游不支持工具调用(如推理模型):回滚本轮已写事件,降级为纯对话重开。
           // 这是配置级失败而非对话事实,清掉重试比把失败轮留在历史里更干净。
           if (useTools && step === 1 && !signal.signal.aborted && isToolUnsupportedError(e)) {
@@ -896,6 +951,20 @@ export class Agent {
 
         // 累计本轮收到的思考字符
         reasoningChars += (res.reasoning || '').length;
+
+        // 上下文用量广播:estimated = 本次实际发送请求(含 system,折叠后)的启发式估算,
+        // actual = 提供方上报的真实 prompt_tokens(网关不报则为 null)。
+        // 前端仪表盘改为显示这个口径,不再按"渲染历史"估算——两个口径可差几十万 token。
+        const reqTokens = measureMessages(messages);
+        const usage = res.usage || null;
+        this.emit('agent', {
+          event: 'context_usage', sid: runSessionId,
+          estimated: reqTokens,
+          actual: usage && typeof usage.promptTokens === 'number' ? usage.promptTokens : null,
+          output: usage && typeof usage.completionTokens === 'number' ? usage.completionTokens : null,
+          window: ctxWindow || 0
+        });
+        console.log(`[agent] 请求 ${(this.llm && this.llm.model) || ''}:预估输入 ${Math.round(reqTokens)}${usage && typeof usage.promptTokens === 'number' ? ` / 实际 ${usage.promptTokens}` : ''}${usage && typeof usage.completionTokens === 'number' ? ` / 输出 ${usage.completionTokens}` : ''} token(窗口 ${ctxWindow || '未配置'})`);
 
         // 记录本步 assistant 消息(工具调用参数需以 JSON 字符串回传;
         // DeepSeek v4 思考模式下,reasoning_content 必须随历史原样回传,否则 400)
@@ -1151,25 +1220,30 @@ export class Agent {
    * 投影期折叠历史中的旧工具结果(请求构造时调用,不动事件日志):
    * 触发条件(满足其一):
    * - 预估请求 token(历史 + system + 工具 schema)超过可用窗口的 WATER_RATIO;
-   * - 或超过绝对地板 ABS_FLOOR_TOKENS——声明窗口虚高(如前端 1M 兜底)时,
-   *   占比水位永远不会触发,绝对地板保证长会话仍被治理。
+   * - 或超过绝对地板 ABS_FLOOR_TOKENS——声明窗口虚高时占比水位永远不会触发,
+   *   绝对地板保证长会话仍被治理。
    * 命中后:最近 KEEP_RECENT 条结果原样保留,更早的超长结果折叠为头尾摘要。
+   * 返回 { messages, stats }:折叠后消息 + 统计(供日志与 context_usage 用"折叠后的
+   * 模型可见面"计量,消灭"触发指标与实际发送量脱节"的口径问题)。
    */
-  _pruneHistoryToolResults(historyMsgs: any[], ctxWindow: number, reservedTokens: number) {
+  _pruneHistoryToolResults(historyMsgs: any[], ctxWindow: number, reservedTokens: number, rt?: any): { messages: any[]; stats: { pruned: number; charsSaved: number; preTokens: number; postTokens: number } } {
     const P = AGENT.TOOL_RESULT_PRUNE;
-    if (!P || !P.ENABLED) return historyMsgs;
+    const empty = { messages: historyMsgs, stats: { pruned: 0, charsSaved: 0, preTokens: 0, postTokens: 0 } };
+    if (!P || !P.ENABLED) return empty;
     const usable = ctxWindow > 0 ? Math.max(1, ctxWindow - ((this.llm && this.llm.maxTokens) || 8192)) : 0;
     const projected = measureMessages(historyMsgs) + Math.max(0, reservedTokens);
     const overRatio = usable > 0 && projected > usable * P.WATER_RATIO;
     const overFloor = projected > P.ABS_FLOOR_TOKENS;
-    if (!overRatio && !overFloor) return historyMsgs;
+    if (!overRatio && !overFloor) return empty;
     const r = pruneToolResults(historyMsgs, {
       keepRecent: P.KEEP_RECENT, minChars: P.MIN_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
     });
-    if (r.pruned > 0) {
-      console.log(`[agent] 历史工具结果折叠:${r.pruned} 条,省约 ${r.charsSaved} 字符(预估请求 ${Math.round(projected)} token${overFloor && !overRatio ? ',命中绝对地板' : ''})`);
+    const postTokens = measureMessages(r.messages) + Math.max(0, reservedTokens);
+    if (r.pruned > 0 && (!rt || r.pruned > rt.lastPruneCount)) {
+      if (rt) rt.lastPruneCount = r.pruned;
+      console.log(`[agent] 历史工具结果折叠:${r.pruned} 条,省约 ${r.charsSaved} 字符(预估请求 ${Math.round(projected)}→${Math.round(postTokens)} token${overFloor && !overRatio ? ',命中绝对地板' : ''})`);
     }
-    return r.messages;
+    return { messages: r.messages, stats: { pruned: r.pruned, charsSaved: r.charsSaved, preTokens: projected, postTokens } };
   }
 
   _systemPrompt(reasoning = 'default') {

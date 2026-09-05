@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { useCoarsePointer } from '../../hooks/useMediaQuery';
 import '@xterm/xterm/css/xterm.css';
 import './ConsolePanel.scss';
 
@@ -121,6 +122,12 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
   const listMenuRef = useRef<HTMLDivElement>(null);
   const [editId, setEditId] = useState<number | null>(null);
   const [editText, setEditText] = useState('');
+
+  // 触摸优先设备:右侧 200px 终端列表在手机上隐藏,改用工具栏切换器
+  const coarse = useCoarsePointer();
+  // 移动端终端切换器(粗指针才渲染):点击 ⌨ 终端 ▾ 弹出列表
+  const [termMenuOpen, setTermMenuOpen] = useState(false);
+  const termMenuRef = useRef<HTMLDivElement>(null);
 
   // 列表拖拽排序状态
   const [drag, setDrag] = useState<{ id: number; over: number; pos: 'before' | 'after' } | null>(null);
@@ -457,18 +464,19 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
     });
   };
 
-  // 右键菜单(终端区 & 列表项):点击菜单外 / Esc 关闭
+  // 右键菜单(终端区 & 列表项)与移动端终端切换器:点击菜单外 / Esc 关闭
   useEffect(() => {
-    if (!menu && !listMenu) return;
+    if (!menu && !listMenu && !termMenuOpen) return;
     const onDown = (e: MouseEvent) => {
       if (menu && menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
       if (listMenu && listMenuRef.current && !listMenuRef.current.contains(e.target as Node)) setListMenu(null);
+      if (termMenuOpen && termMenuRef.current && !termMenuRef.current.contains(e.target as Node)) setTermMenuOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setMenu(null); setListMenu(null); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setMenu(null); setListMenu(null); setTermMenuOpen(false); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
-  }, [menu, listMenu]);
+  }, [menu, listMenu, termMenuOpen]);
 
   if (!activeDesc) return null;
 
@@ -548,6 +556,31 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
             ))}
           </div>
           <div className="grow" />
+          {/* 触屏设备:右侧终端列表在手机上隐藏,这里提供终端切换器(桌面鼠标无此控件) */}
+          {coarse && (
+            <div className="term-switch" ref={termMenuRef}>
+              <button className="chip-btn" onClick={() => setTermMenuOpen((v) => !v)}>
+                ⌨ 终端 ({descs.length}) ▾
+              </button>
+              {termMenuOpen && (
+                <div className="term-mobile-list">
+                  {descs.map((d) => (
+                    <div key={d.id}
+                      className={`term-mobile-item${d.id === visibleDescId ? ' active' : ''}`}
+                      onClick={() => { setActiveId(d.id); setTermMenuOpen(false); }}>
+                      <i className={`term-dot ${dotClass(d.state)}`} />
+                      <span>{d.mode === 'remote' ? '🌐 ' : '💻 '}{dispName(d)}</span>
+                    </div>
+                  ))}
+                  <div className="ctx-sep" />
+                  <div className="term-mobile-add">
+                    <button className="chip-btn" onClick={() => addTerminal('remote')}>＋远程</button>
+                    <button className="chip-btn" onClick={() => addTerminal('local')}>＋本地</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <button className="chip-btn" onClick={clearActive}>清屏</button>
           <button className="chip-btn" disabled={(activeDesc.mode === 'remote' && !connected) || st === 'starting'} onClick={restartActive}>
             {st === 'running' ? '重启终端' : '重新打开'}

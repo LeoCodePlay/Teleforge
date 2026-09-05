@@ -113,3 +113,28 @@
 .term-menu-item:hover:not(:disabled) { background: var(--glass-bg-hover); }
 .term-menu-item:disabled { opacity: .4; cursor: default; }
 .term-menu-key { font-size: 10.5px; color: var(--muted); letter-spacing: .3px; }
+
+/* ---- 移动端(<768):右侧终端列表隐藏,终端主体全宽 ----
+   切换由 term-bar 的 ⌨ 终端 ▾ 切换器(仅触屏渲染)承担 */
+@media (max-width: 767px) {
+  .term-list { display: none; }                 /* 右侧 200px 列表不占宽度 */
+  .consolewrap { width: 100%; }
+  .term-bar { padding: 6px 10px; }
+  .quick { display: none; }                     /* 快捷命令按钮在窄屏省略(空间优先给状态与切换) */
+  .term-switch { position: relative; }
+  .term-mobile-list {
+    position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 220;
+    min-width: 200px; max-height: 45vh; overflow-y: auto;
+    background: var(--pop-bg-lo);
+    backdrop-filter: var(--blur-lg); -webkit-backdrop-filter: var(--blur-lg);
+    border: 1px solid var(--glass-border); border-radius: var(--r-md);
+    box-shadow: var(--glass-shadow-lg);
+    padding: 6px;
+  }
+  .term-mobile-item {
+    display: flex; align-items: center; gap: 8px; min-height: 44px;
+    padding: 8px 10px; border-radius: var(--r-sm); cursor: pointer;
+  }
+  .term-mobile-item.active { background: var(--accent-soft); color: var(--accent-2); }
+  .term-mobile-add { display: flex; gap: 6px; padding: 4px 6px; }
+}

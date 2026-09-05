@@ -33,12 +33,16 @@ export function useHorizontalScroller(ref: RefObject<HTMLElement | null>): void 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       if (!canScrollX()) return;
+      // 触屏:不 preventDefault——保留浏览器原生的触摸横滑(惯性滚动),
+      // pointermove 兜底仅对鼠标生效(pointerType==='touch' 交给浏览器,避免双重滚动)
+      if (e.pointerType === 'touch') return;
       e.preventDefault(); // 阻止拖拽时选中文字
       pid = e.pointerId;
       startX = e.clientX;
       startLeft = el.scrollLeft;
     };
     const onPointerMove = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return; // 触屏滑动交给浏览器原生滚动(见 onPointerDown)
       if (pid !== e.pointerId) return;
       if (!dragging && Math.abs(e.clientX - startX) < DRAG_THRESHOLD) return;
       if (!dragging) {

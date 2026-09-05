@@ -106,6 +106,10 @@ export default function TooltipHost() {
     let moveThrottle = 0; // follow 模式实时重定位的节流阈值(毫秒)
 
     const onOver = (e: MouseEvent) => {
+      // 触屏上点按会合成 mouseover 事件,会误弹气泡:由触摸产生的事件直接忽略
+      // (sourceCapabilities 为 Chrome 扩展字段,非标准 DOM 类型,运行时安全探测)
+      const caps = (e as MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } }).sourceCapabilities;
+      if (caps?.firesTouchEvents) { hide(); return; }
       const t = e.target as Element | null;
       const el = t ? t.closest('[data-tip]') : null;
       if (el === ar.current.el) { lastMouse.current = { x: e.clientX, y: e.clientY }; return; } // 同一目标内移动,不重启计时

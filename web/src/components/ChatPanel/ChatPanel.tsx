@@ -7,7 +7,7 @@ import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem } from '../../type
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import ModelMenu from '../ModelMenu/ModelMenu';
-import ContextMeter from '../ContextMeter/ContextMeter';
+import ContextMeter, { type ContextUsage } from '../ContextMeter/ContextMeter';
 import TodoPanel from '../TodoPanel/TodoPanel';
 import SlashMenu, { rankSlashItems, rankByName } from '../SlashMenu/SlashMenu';
 import type { SlashItem } from '../SlashMenu/SlashMenu';
@@ -432,6 +432,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const skipHistoryOnceRef = useRef(false);
   // 待执行消息队列(工作中发送的消息,显示在输入框上方,当前轮结束后按 FIFO 自动执行)
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  // 服务端 context_usage 事件:实际请求 token(provider 上报)/ 折叠后预估 / 窗口。
+  // 仪表盘优先显示该口径;切换会话后清空,回退到前端估算直到下一个事件到达。
+  const [ctxUsage, setCtxUsage] = useState<ContextUsage | null>(null);
   const [reasoning, setReasoning] = useState(() => {
     // 迁移旧设置:以前独立存的 thinkingMode=off 等价于现在的推理等级 off;其余回落到 high/默认
     const tm = localStorage.getItem('sshai.thinkingMode');
@@ -540,6 +543,15 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             push((msgs) => [...msgs, { role: 'user', content: m.text, time: Date.now(), forkTail: forkTurnRef.current - 1 }]);
             push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: forkTurnRef.current - 1 }]);
             break;
+          case 'context_usage':
+            // 服务端每步请求后广播的上下文用量(实际/预估/窗口):仪表盘权威口径
+            setCtxUsage({
+              estimated: Number(m.estimated) || 0,
+              actual: typeof m.actual === 'number' ? m.actual : null,
+              output: typeof m.output === 'number' ? m.output : null,
+              window: Number(m.window) || 0
+            });
+            break;
           case 'todo_update':
             // todo_write 工具写入的任务计划整表快照
             setTodos(Array.isArray(m.todos) ? m.todos : []);
@@ -611,7 +623,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 // (如达到最大迭代次数后追加的提示),避免重复
                 const cur = segText(last);
                 const doneText = m.text || '';
-                const suffix = doneText.startsWith(cur) ? doneText.slice(cur.length) : doneText;
+                // 只在 done 文本是「当前正文 + 未流出后缀」的顺延补差时才追加;
+                // 服务端多步模式下 done.text 可能是最后一步正文(非当前正文前缀),
+                // 整段追加会把已流式拼好的收尾重复一遍——宁可丢弃也不要重复
+                const suffix = doneText.startsWith(cur) ? doneText.slice(cur.length) : '';
                 if (suffix) appendText(last, suffix);
               }
               return copy;
@@ -732,6 +747,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     const target = sid; // 本次要加载的会话 id(防止异步响应串到别的会话)
     const skipHistory = skipHistoryOnceRef.current; // 新会话草稿态刚创建并发送:消息由事件流渲染
     skipHistoryOnceRef.current = false;
+    // 切换会话:清空上一会话的 context_usage,仪表盘回退到前端估算,直到本会话的下一步请求上报
+    setCtxUsage(null);
 
     // ---- 输入草稿:离开旧会话前保存输入,进入新会话后恢复其草稿 ----
     // 草稿键 = 目标会话的真实 sid(草稿态为 __new__);target=null(App 初次加载未定向)不算切换,不读写草稿
@@ -1474,7 +1491,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           <div className="composer-foot">
             <span className="muted composer-tip">Enter 发送 · Shift+Enter 换行</span>
             <ContextMeter messages={messages} input={composedInput}
-              contextWindow={llm.effModelContext?.contextWindow || 0} />
+              contextWindow={llm.effModelContext?.contextWindow || 0} usage={ctxUsage} />
             {/* 工作中且输入框为空:显示停止按钮;有内容时变为发送按钮,
                 发送后默认进入待执行队列等待执行 */}
             {working && !askPending && !input.trim()

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from './api';
 import type { ServerStatus, Session, SshProfileInfo } from './types';
 import SshConnectModal from './components/SshConnectModal/SshConnectModal';
@@ -9,6 +10,9 @@ import ConsolePanel from './components/ConsolePanel/ConsolePanel';
 import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
 import TooltipHost from './components/Tooltip/Tooltip';
+import BottomBar, { type MobileView } from './components/BottomBar/BottomBar';
+import { useIsPhone, useIsTablet, useIsDesktop } from './hooks/useMediaQuery';
+import { useVisualViewportInset } from './hooks/useVisualViewport';
 import { LlmProvider } from './context/llm-context';
 import { useFeedback } from './context/feedback';
 import './App.scss';
@@ -27,11 +31,21 @@ interface TabItem {
   name: string;
   path?: string;
   dirty?: boolean;
+  /** 文件标签手动置顶:进入固定段不随滚动(命令台同款);最多 TAB_PIN_LIMIT 个 */
+  pinnedFile?: boolean;
 }
+/** 文件标签可置顶的最大数量 */
+const TAB_PIN_LIMIT = 3;
 const PINNED_TABS: TabItem[] = [
   { id: 'agent', kind: 'agent', name: 'AI 编程助手' },
-  { id: 'console', kind: 'console', name: '命令台' }
+  { id: 'console', kind: 'console', name: '终端' }
 ];
+
+// 手机底部标签栏的「伪标签」:文件管理(无文件打开时)与会话列表不是真实标签,
+// 用两个哨兵 id 存进 activeTabId 以复用现有持久化(localStorage 'sshai.activeTab')。
+// 哨兵值在桌面/平板端由 effActiveTabId 兜底为 agent,不会渲染空白。
+const FILES_HOME_ID = 'files';
+const SESSIONS_ID = 'sessions';
 
 // 打开的文件标签持久化:刷新页面后恢复之前打开的文件(固定页不存)。
 // 只存 {id, kind, name, path},dirty 不存——刷新后内容重新加载,未保存修改自然丢弃。
@@ -44,7 +58,7 @@ function loadSavedFileTabs(): TabItem[] {
     if (!Array.isArray(raw)) return [];
     return raw
       .filter((t) => t && t.kind === 'file' && typeof t.id === 'string' && typeof t.name === 'string')
-      .map((t) => ({ id: t.id, kind: 'file' as const, name: t.name, path: typeof t.path === 'string' ? t.path : t.id, dirty: false }));
+      .map((t) => ({ id: t.id, kind: 'file' as const, name: t.name, path: typeof t.path === 'string' ? t.path : t.id, dirty: false, pinnedFile: !!t.pinnedFile }));
   } catch { return []; }
 }
 
@@ -85,10 +99,11 @@ export default function App() {
     try {
       const files = tabs
         .filter((t) => t.kind === 'file')
-        .map((t) => ({ id: t.id, kind: t.kind, name: t.name, path: t.path }));
+        .map((t) => ({ id: t.id, kind: t.kind, name: t.name, path: t.path, pinnedFile: !!t.pinnedFile }));
       localStorage.setItem(FILE_TABS_KEY, JSON.stringify(files));
     } catch {}
-    setActiveTabId((cur) => (tabs.some((t) => t.id === cur) ? cur : tabs[tabs.length - 1]?.id || 'agent'));
+    setActiveTabId((cur) => (tabs.some((t) => t.id === cur) ? cur
+      : (cur === SESSIONS_ID || cur === FILES_HOME_ID ? cur : tabs[tabs.length - 1]?.id || 'agent')));
   }, [tabs]);
   useEffect(() => {
     try { localStorage.setItem(ACTIVE_TAB_KEY, activeTabId); } catch {}
@@ -100,6 +115,34 @@ export default function App() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [leftWidth, setLeftWidth] = useState(320);
   const leftRef = useRef<HTMLElement>(null);
+
+  // ---- 响应式断点(与 App.scss/styles.scss 的 @media 数值一一对应) ----
+  // <768 手机(底部 Tab 单栏)/ 768-1279 平板(侧栏抽屉化)/ ≥1280 桌面(三栏原样)
+  const isPhone = useIsPhone();
+  const isTablet = useIsTablet();
+  const isDesktop = useIsDesktop();
+  // 虚拟键盘遮挡高度(仅 phone 生效):键盘弹出时把 .app 底部顶上去,输入区不被遮挡
+  const vkInset = useVisualViewportInset();
+  // 平板抽屉:默认收起(桌面仍用 leftOpen;手机不渲染侧栏,此状态无意义但保持无害)
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // 手机当前视图:由 activeTabId 推导(files 视图 = 文件管理或正在查看的文件)
+  const mobileView: MobileView =
+    activeTabId === SESSIONS_ID ? 'sessions'
+    : activeTabId === FILES_HOME_ID || tabs.some((t) => t.kind === 'file' && t.id === activeTabId) ? 'files'
+    : activeTabId === 'agent' ? 'agent' : 'console';
+  // 桌面/平板不允许停留在哨兵视图(窗口从手机放大到更大尺寸时兜底回 agent)
+  const effActiveTabId = (isDesktop || isTablet) && (activeTabId === SESSIONS_ID || activeTabId === FILES_HOME_ID)
+    ? 'agent' : activeTabId;
+
+  // 手机底部栏回调:选择视图。files 视图「有打开的文件回到上次查看的那个,
+  // 否则进文件管理」(浏览器式标签语义);agent/console/sessions 直接切到对应视图
+  const selectMobileView = (v: MobileView) => {
+    if (v === 'agent' || v === 'console' || v === 'sessions') { setActiveTabId(v); return; }
+    const files = tabsRef.current.filter((t) => t.kind === 'file');
+    const activeFile = files.find((t) => t.id === activeTabId);
+    setActiveTabId(activeFile ? activeFile.id : (files[files.length - 1]?.id ?? FILES_HOME_ID));
+  };
 
   // 左侧边栏拖拽调整宽度
   const startResize = (e: React.PointerEvent) => {
@@ -156,6 +199,10 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionSeq, setSessionSeq] = useState(0); // 会话切换/新建后自增,触发 ChatPanel 重载
+  // 模型提问挂起的会话集合(ask_user_question):会话在后台提问、用户不在当前会话时,
+  // 会话列表的运行点显示为黄色"待用户操作";切回后提问面板展示并可作答。
+  // 完全由 agent 事件驱动(ask_user 加入 / ask_user_cancelled 移除),与服务端挂起提问一致
+  const [pendingAskIds, setPendingAskIds] = useState<string[]>([]);
   // 新建会话草稿态:点击「新建」时先不创建服务端会话(sid=占位符),输入内容按固定键缓存;
   // 发送首条消息时由 ChatPanel 真正 session_create 并通过 onSessionCreated 回调刷新。
   const pendingNewRef = useRef(false);
@@ -221,6 +268,16 @@ export default function App() {
         })
         .catch(() => {});
     });
+    // 全局跟踪"有待作答提问"的会话(不按当前会话过滤):会话在后台提问时,
+    // 会话列表的运行点由绿变黄提示等待用户操作;作答/取消/超时统一走 ask_user_cancelled 移除
+    const offAsk = api.on('agent', (m: any) => {
+      if (!m || typeof m.event !== 'string') return;
+      if (m.event === 'ask_user' && m.sid) {
+        setPendingAskIds((prev) => (prev.includes(m.sid) ? prev : [...prev, m.sid]));
+      } else if (m.event === 'ask_user_cancelled' && m.sid) {
+        setPendingAskIds((prev) => (prev.length ? prev.filter((x) => x !== m.sid) : prev));
+      }
+    });
     // 后端重启/WS 断线重连后:后端会话状态(列表/活跃会话)已按磁盘恢复,与前端内存可能脱节。
     // 重连成功后重新拉取对齐;期间用户已新建/切换过会话(草稿态)则保持不动,避免打断当前操作。
     const offOpen = api.on('open', () => {
@@ -238,7 +295,7 @@ export default function App() {
     const offErr = api.on('server_error', (m: any) => {
       toast.error(m?.error || '服务器错误');
     });
-    return () => { off(); offChanged(); offOpen(); offErr(); };
+    return () => { off(); offChanged(); offAsk(); offOpen(); offErr(); };
   }, []);
 
   const refreshSessions = (r: any, opts?: { forceActive?: boolean }) => {
@@ -325,7 +382,8 @@ export default function App() {
     const kept = cur.filter((t) => t.kind !== 'file' || (t.path || '').startsWith('local:'));
     if (kept.length === cur.length) return;
     setTabs(kept);
-    setActiveTabId((a) => (kept.some((t) => t.id === a) ? a : kept[kept.length - 1]?.id || 'agent'));
+    setActiveTabId((a) => (kept.some((t) => t.id === a) ? a
+      : (a === SESSIONS_ID || a === FILES_HOME_ID ? a : kept[kept.length - 1]?.id || 'agent')));
   }, [status.activeConn]);
 
   const connected = status.status === 'connected';
@@ -402,7 +460,9 @@ export default function App() {
     setActiveTabId((cur) => {
       if (cur !== id) return cur;
       const nb = next[idx] || next[idx - 1];
-      return nb ? nb.id : 'agent';
+      // 手机端关闭最后一个文件后回到文件管理(桌面维持回 AI 助手)
+      if (nb) return nb.id;
+      return isPhone ? FILES_HOME_ID : 'agent';
     });
   };
 
@@ -437,9 +497,90 @@ export default function App() {
   };
   const onTabDragEnd = () => { dragTabIdRef.current = null; setDraggingId(null); };
 
-  // 单个标签渲染(固定页/文件页共用;固定页不可拖、无关闭钮)
+  // ---- 标签右键菜单:置顶/取消置顶 + 关闭全部/关闭当前(文件标签) ----
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tab: TabItem } | null>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
+  const openTabMenu = (e: React.MouseEvent, tab: TabItem) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setTabMenu({
+      x: Math.max(0, Math.min(e.clientX, window.innerWidth - 190 - 8)),
+      y: Math.max(0, Math.min(e.clientY, window.innerHeight - 170 - 8)),
+      tab
+    });
+  };
+  useEffect(() => {
+    if (!tabMenu) return;
+    const closeMenu = () => setTabMenu(null);
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (tabMenuRef.current && tabMenuRef.current.contains(t)) return;
+      setTabMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setTabMenu(null); };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', closeMenu, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', closeMenu, true);
+    };
+  }, [tabMenu]);
+
+  // 当前已置顶的文件标签数(上限 TAB_PIN_LIMIT)
+  const pinnedFileCount = tabs.filter((t) => t.kind === 'file' && t.pinnedFile).length;
+
+  // 置顶/取消置顶文件标签
+  const togglePinTab = (id: string) => {
+    setTabs((prev) => {
+      const t = prev.find((x) => x.id === id);
+      if (t?.kind !== 'file') return prev;
+      if (!t.pinnedFile && prev.filter((x) => x.kind === 'file' && x.pinnedFile).length >= TAB_PIN_LIMIT) return prev;
+      return prev.map((x) => (x.id === id ? { ...x, pinnedFile: !x.pinnedFile } : x));
+    });
+    setTabMenu(null);
+  };
+
+  // 关闭全部文件标签:有未保存修改先统一确认一次
+  const closeAllTabs = async () => {
+    const dirtyFiles = tabs.filter((t) => t.kind === 'file' && t.dirty);
+    if (dirtyFiles.length > 0) {
+      const ok = await confirm({
+        title: '关闭全部标签',
+        message: `有 ${dirtyFiles.length} 个标签存在未保存的修改,全部关闭后将丢失,确定关闭?`,
+        confirmLabel: '全部关闭',
+        danger: true
+      });
+      if (!ok) { setTabMenu(null); return; }
+    }
+    setTabs((prev) => prev.filter((t) => t.kind !== 'file'));
+    setActiveTabId((cur) => (cur !== 'agent' && cur !== 'console' ? (isPhone ? FILES_HOME_ID : 'agent') : cur));
+    setTabMenu(null);
+  };
+
+  // 关闭除指定标签外的其它文件标签(右键选中的标签保留):有未保存修改先统一确认一次
+  const closeOtherTabs = async (keepId: string) => {
+    const dirtyFiles = tabs.filter((t) => t.kind === 'file' && t.dirty && t.id !== keepId);
+    if (dirtyFiles.length > 0) {
+      const ok = await confirm({
+        title: '关闭其它标签',
+        message: `有 ${dirtyFiles.length} 个标签存在未保存的修改,关闭后将丢失,确定关闭?`,
+        confirmLabel: '全部关闭',
+        danger: true
+      });
+      if (!ok) { setTabMenu(null); return; }
+    }
+    setTabs((prev) => prev.filter((t) => t.kind !== 'file' || t.id === keepId));
+    // 若当前激活的是被关闭的标签,切到保留的标签;固定页/保留标签保持不变
+    setActiveTabId((cur) => (cur === keepId || cur === 'agent' || cur === 'console' ? cur : keepId));
+    setTabMenu(null);
+  };
+
+  // 单个标签渲染(固定页/文件页共用;固定页不可拖、无关闭钮;置顶文件不可拖但有关闭钮)
   const renderTab = (t: TabItem) => {
-    const pinned = t.kind !== 'file';
+    const fixed = t.kind !== 'file';          // 内置固定页(AI 助手/命令台)
+    const pinned = fixed || !!t.pinnedFile;   // 不参与滚动:pinned 区
     return (
       <div
         key={t.id}
@@ -453,10 +594,11 @@ export default function App() {
         onDrop={(e) => e.preventDefault()}
         onClick={() => setActiveTabId(t.id)}
         onAuxClick={(e) => { if (e.button === 1) closeTab(t.id); }}
+        onContextMenu={(e) => { if (t.kind === 'file') openTabMenu(e, t); }}
       >
         <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : tabIcon(t.name)}</span>
         <span className="btab-label">{t.name}</span>
-        {!pinned && (
+        {!fixed && (
           <button
             className="btab-close"
             title={t.dirty ? '有未保存修改' : '关闭标签'}
@@ -562,10 +704,16 @@ export default function App() {
 
   return (
     <LlmProvider>
-    <div className="app">
+    <div className="app" style={isPhone && vkInset > 0 ? { paddingBottom: vkInset } : undefined}>
       <header className="topbar">
         <div className="topbar-left">
-          <button className="ghost edge-toggle" data-tip={leftOpen ? '收起左侧栏' : '展开左侧栏'} onClick={() => setLeftOpen((v) => !v)}>{leftOpen ? '◀' : '▶'}</button>
+          {/* 手机:导航由底部栏承担,隐藏侧栏开关钮;平板:☰ 开抽屉;桌面:◀/▶ 收起侧栏 */}
+          {isPhone ? null : (
+            <button className="ghost edge-toggle" data-tip={isTablet ? '展开左侧栏' : (leftOpen ? '收起左侧栏' : '展开左侧栏')}
+              onClick={() => (isTablet ? setDrawerOpen((v) => !v) : setLeftOpen((v) => !v))}>
+              {isTablet ? '☰' : (leftOpen ? '◀' : '▶')}
+            </button>
+          )}
           <div className="brand"><img className="brand-logo" src="/logo-64.png" alt="" /> Teleforge</div>
         </div>
         <div className="topbar-right">
@@ -584,40 +732,49 @@ export default function App() {
       </header>
 
       <div className="layout">
-        <aside ref={leftRef} style={{ width: leftWidth }} className={`sidebar sidebar-left ${leftOpen ? '' : 'hidden'}`}>
-          <div className="resizer" onPointerDown={startResize} />
-          <div className="side-top" style={{ flexBasis: `${sideRatio * 100}%` }}>
-            <SessionPanel
-              sessions={sessions}
-              activeId={activeSessionId}
-              busyIds={busySessions}
-              scopeLabel={scopeLabel}
-              scopeKey={scopeKey}
-              onNew={newSession}
-              onSwitch={switchSession}
-              onSwitchForeign={switchForeignSession}
-              onRename={renameSession}
-              onDelete={deleteSession}
-            />
-          </div>
-          <div className="side-divider" onPointerDown={startSideSplit} />
-          <div className="side-bottom">
-            <WorkspacePanel
-              connected={connected}
-              workspace={status.workspace}
-              home={status.home}
-              connId={status.activeConn ?? null}
-              localWorkspace={status.localWorkspace}
-              localHome={status.localHome}
-              localCwd={localCwd}
-              remoteCwd={remoteCwd}
-              onLocalCwdChange={setLocalCwd}
-              onRemoteCwdChange={setRemoteCwd}
-              onOpenFile={handleOpenFile}
-              onOpenLocalFile={handleOpenLocalFile}
-            />
-          </div>
-        </aside>
+        {/* 侧栏:桌面=常驻三栏;平板=覆盖式抽屉(☰ 开、遮罩关);手机=不渲染,内容由底部栏视图承载 */}
+        {!isPhone && (
+          <>
+          <aside ref={leftRef}
+            style={isTablet ? undefined : { width: leftWidth }}
+            className={`sidebar sidebar-left${isTablet ? (drawerOpen ? ' drawer-open' : ' drawer') : (leftOpen ? '' : ' hidden')}`}>
+            {!isTablet && <div className="resizer" onPointerDown={startResize} />}
+            <div className="side-top" style={{ flexBasis: `${sideRatio * 100}%` }}>
+              <SessionPanel
+                sessions={sessions}
+                activeId={activeSessionId}
+                busyIds={busySessions}
+                askPendingIds={pendingAskIds}
+                scopeLabel={scopeLabel}
+                scopeKey={scopeKey}
+                onNew={newSession}
+                onSwitch={(id) => { switchSession(id); setDrawerOpen(false); }}
+                onSwitchForeign={(id, key) => { switchForeignSession(id, key); setDrawerOpen(false); }}
+                onRename={renameSession}
+                onDelete={deleteSession}
+              />
+            </div>
+            <div className="side-divider" onPointerDown={startSideSplit} />
+            <div className="side-bottom">
+              <WorkspacePanel
+                connected={connected}
+                workspace={status.workspace}
+                home={status.home}
+                connId={status.activeConn ?? null}
+                localWorkspace={status.localWorkspace}
+                localHome={status.localHome}
+                localCwd={localCwd}
+                remoteCwd={remoteCwd}
+                onLocalCwdChange={setLocalCwd}
+                onRemoteCwdChange={setRemoteCwd}
+                onOpenFile={(p) => { handleOpenFile(p); setDrawerOpen(false); }}
+                onOpenLocalFile={(p) => { handleOpenLocalFile(p); setDrawerOpen(false); }}
+              />
+            </div>
+          </aside>
+          {isTablet && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
+          </>
+        )}
 
         <main className="main">
           <div
@@ -625,39 +782,116 @@ export default function App() {
             onDragOver={(e) => { if (dragTabIdRef.current) e.preventDefault(); }}
             onDrop={(e) => e.preventDefault()}
           >
-            {/* 固定段:AI 编程助手/命令台永远显示,不受文件标签多少与滚动影响 */}
+            {/* 固定段:AI 编程助手/命令台永远显示;置顶的文件标签同样固定于此,不受文件标签滚动影响 */}
             <div className="tabstrip-pinned">
-              {tabs.filter((t) => t.kind !== 'file').map(renderTab)}
+              {tabs.filter((t) => t.kind !== 'file' || t.pinnedFile).map(renderTab)}
             </div>
-            {/* 滚动段:文件标签可横向滚动(滚轮/拖拽到边缘);用项目悬浮滚动条引擎(不占布局,高度不变) */}
+            {/* 滚动段:普通文件标签可横向滚动(滚轮/拖拽到边缘);用项目悬浮滚动条引擎(不占布局,高度不变)。
+               手机端 pinned 段被 CSS 隐藏(见 App.scss),置顶文件也放滚动段保证可见 */}
             <div className="tabstrip-scroll" ref={stripRef} onWheel={onStripWheel}>
-              {tabs.filter((t) => t.kind === 'file').map(renderTab)}
+              {tabs.filter((t) => t.kind === 'file' && (!t.pinnedFile || isPhone)).map(renderTab)}
             </div>
           </div>
+          {tabMenu && createPortal(
+            <div
+              ref={tabMenuRef}
+              className="ctxmenu"
+              style={{ left: tabMenu.x, top: tabMenu.y }}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              {tabMenu.tab.pinnedFile ? (
+                <button onClick={() => togglePinTab(tabMenu.tab.id)}><span className="ctx-ico">📌</span>取消置顶</button>
+              ) : (
+                <button
+                  disabled={pinnedFileCount >= TAB_PIN_LIMIT}
+                  data-tip={pinnedFileCount >= TAB_PIN_LIMIT ? `最多置顶 ${TAB_PIN_LIMIT} 个标签` : '置顶后固定在顶部,不随标签滚动'}
+                  onClick={() => togglePinTab(tabMenu.tab.id)}
+                >
+                  <span className="ctx-ico">📌</span>置顶标签
+                </button>
+              )}
+              <div className="ctx-sep" />
+              <button onClick={() => { closeTab(tabMenu.tab.id); setTabMenu(null); }}><span className="ctx-ico">✕</span>关闭当前标签</button>
+              <button
+                disabled={tabs.filter((t) => t.kind === 'file' && t.id !== tabMenu.tab.id).length === 0}
+                onClick={() => void closeOtherTabs(tabMenu.tab.id)}
+              ><span className="ctx-ico">🗂</span>关闭其它标签</button>
+              <button className="danger" onClick={() => void closeAllTabs()}><span className="ctx-ico">🗑</span>关闭全部标签</button>
+            </div>,
+            document.body
+          )}
           <div className="tab-body">
-            {activeTabId === 'agent' && (
-              <ChatPanel key="agent" connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
+            {/* ChatPanel 常驻挂载:切走仅 CSS 隐藏(对齐终端/文件面板),手机端底部栏频繁切换不重载会话历史 */}
+            <div className={`tab-pane ${effActiveTabId === 'agent' ? '' : 'hide'}`}>
+              <ChatPanel connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
               localHome={status.localHome} savedLocalWs={localWs}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
               onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}
               onSessionCreated={handleSessionCreated} />
-            )}
-            {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
-            <div className={`tab-pane ${activeTabId === 'console' ? '' : 'hide'}`}>
-              <ConsolePanel connected={connected} visible={activeTabId === 'console'} activeConn={status.activeConn ?? null} hostIp={status.host} />
             </div>
+            {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
+            <div className={`tab-pane ${effActiveTabId === 'console' ? '' : 'hide'}`}>
+              <ConsolePanel connected={connected} visible={effActiveTabId === 'console'} activeConn={status.activeConn ?? null} hostIp={status.host} />
+            </div>
+            {/* 手机:会话列表(底部栏「🗂 会话」) */}
+            {isPhone && mobileView === 'sessions' && (
+              <div className="tab-pane mobile-pane">
+                <SessionPanel
+                  sessions={sessions}
+                  activeId={activeSessionId}
+                  busyIds={busySessions}
+                  askPendingIds={pendingAskIds}
+                  scopeLabel={scopeLabel}
+                  scopeKey={scopeKey}
+                  onNew={() => { newSession(); setActiveTabId('agent'); }}
+                  onSwitch={(id) => { switchSession(id); setActiveTabId('agent'); }}
+                  onSwitchForeign={(id, key) => { switchForeignSession(id, key); setActiveTabId('agent'); }}
+                  onRename={renameSession}
+                  onDelete={deleteSession}
+                />
+              </div>
+            )}
+            {/* 手机:文件管理(底部栏「📁 文件」且无文件打开时);打开文件后由文件标签页接管 */}
+            {isPhone && mobileView === 'files' && effActiveTabId === FILES_HOME_ID && (
+              <div className="tab-pane mobile-pane">
+                <WorkspacePanel
+                  connected={connected}
+                  workspace={status.workspace}
+                  home={status.home}
+                  connId={status.activeConn ?? null}
+                  localWorkspace={status.localWorkspace}
+                  localHome={status.localHome}
+                  localCwd={localCwd}
+                  remoteCwd={remoteCwd}
+                  onLocalCwdChange={setLocalCwd}
+                  onRemoteCwdChange={setRemoteCwd}
+                  onOpenFile={handleOpenFile}
+                  onOpenLocalFile={handleOpenLocalFile}
+                />
+              </div>
+            )}
             {/* 文件标签页同样常驻挂载:切走仅隐藏,未保存的编辑内容不丢失 */}
             {tabs.filter((t) => t.kind === 'file').map((t) => (
-              <div key={t.id} className={`tab-pane ${activeTabId === t.id ? '' : 'hide'}`}>
+              <div key={t.id} className={`tab-pane ${effActiveTabId === t.id ? '' : 'hide'}`}>
                 <FileViewer path={t.path || t.id} name={t.name}
                   onDirtyChange={(d) => updateTabDirty(t.id, d)}
-                  onClose={() => closeTab(t.id)} />
+                  onClose={() => closeTab(t.id)}
+                  onBack={isPhone ? () => setActiveTabId(FILES_HOME_ID) : undefined} />
               </div>
             ))}
           </div>
         </main>
       </div>
+
+      {/* 手机底部导航栏:仅 <768 渲染,视图切换 */}
+      {isPhone && (
+        <BottomBar
+          view={mobileView}
+          fileTabCount={tabs.filter((t) => t.kind === 'file').length}
+          onSelect={selectMobileView}
+        />
+      )}
 
       {settingsOpen && <SettingsPanel connected={connected} onClose={() => setSettingsOpen(false)} />}
       {sshOpen && <SshConnectModal status={status} onClose={() => setSshOpen(false)} />}

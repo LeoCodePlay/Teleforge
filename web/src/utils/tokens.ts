@@ -1,8 +1,10 @@
 // 上下文用量估算(启发式,与后端 server/agent/compact.js 的算法保持一致):
-// 中文约 1.6 字符/token、英文约 4 字符/token + 每条消息 JSON 结构开销。
+// 中文约 1.6 字符/token、英文约 3 字符/token + 每条消息 JSON 结构开销。
 // 不做 tokenizer 依赖,精度足以支撑「已用上下文」水位显示。
+// 注:这只是后端未上报真实用量时的兜底口径;仪表盘优先显示服务端 context_usage
+// 事件里的"实际请求 token"(provider 上报)与"折叠后预估"。
 const CHARS_PER_CJK = 1.6;
-const CHARS_PER_ASCII = 4;
+const CHARS_PER_ASCII = 3;
 const MSG_OVERHEAD = 12;
 
 /** 估算一段文本的 token 数 */

@@ -14,6 +14,8 @@ export interface ChatResult {
   toolCalls: ToolCallSpec[];
   reasoning?: string;
   finishReason?: string;
+  /** 提供方在上游流中上报的用量(有则取最后一次非空);网关不报则为 null */
+  usage?: { promptTokens?: number; completionTokens?: number } | null;
 }
 
 export interface LlmOptions {
@@ -250,6 +252,7 @@ async function parseSse(stream: ReadableStream, { signal, onDelta }: { signal?: 
   let content = '';
   let reasoning = ''; // 思考通道输出(DeepSeek/GLM/Qwen 等推理模型);回传规则见 chat() 的 passback
   let finishReason = ''; // 最后一个非空 finish_reason(stop/length/tool_calls 等)
+  let lastUsage: { prompt_tokens?: number; completion_tokens?: number } | null = null; // 提供方上报用量(通常在流末尾)
   const toolAcc = new Map(); // index -> {id,name,args}
   let toolSeq: any[] = [];
 
@@ -301,6 +304,10 @@ async function parseSse(stream: ReadableStream, { signal, onDelta }: { signal?: 
           if (choice && typeof choice.finish_reason === 'string' && choice.finish_reason) {
             finishReason = choice.finish_reason;
           }
+          // 用量上报:部分网关在流末尾带 usage(顶层或 choice 内),取最后一次非空;
+          // 不强制 stream_options(部分聚合网关不支持该参数)
+          const u = j.usage && typeof j.usage.prompt_tokens === 'number' ? j.usage : (choice?.usage && typeof choice.usage.prompt_tokens === 'number' ? choice.usage : null);
+          if (u) lastUsage = u;
         } catch { /* 忽略无法解析的行 */ }
       }
     }
@@ -317,9 +324,23 @@ async function parseSse(stream: ReadableStream, { signal, onDelta }: { signal?: 
         name: v.name,
         arguments: v.args
       }));
-    return { content, toolCalls, reasoning, finishReason };
+    const usage = lastUsage
+      ? { promptTokens: lastUsage.prompt_tokens, completionTokens: lastUsage.completion_tokens }
+      : null;
+    return { content, toolCalls, reasoning, finishReason, usage };
   }
   return finish();
+}
+
+/**
+ * 判断错误是否为"请求超出模型上下文窗口"(provider/网关文案各异,枚举常见模式),
+ * 供 agent 触发爆窗恢复(折叠 + 压缩 + 重试)。必须先排除限流/配额类错误,避免误触发。
+ */
+export function isContextOverflowError(e: any): boolean {
+  const s = String(e?.message || '');
+  if (!s) return false;
+  if (/rate.?limit|quota|429|too many requests|请求过于频繁|限流/i.test(s)) return false;
+  return /maximum context|context[_ ]?length|context_window_exceeded|CONTEXT_WINDOW_EXCEEDED|input.{0,30}too long|prompt.{0,30}too long|token.{0,20}(exceed|overflow|limit reached)|上下文.{0,12}(超|溢出|过长|上限)|超过.{0,12}(上下文|长度|token)|maximum token/i.test(s);
 }
 
 // ---------------- mock 模式:离线联调,按固定脚本走完整的工具循环 ----------------
