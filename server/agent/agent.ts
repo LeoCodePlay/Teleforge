@@ -380,13 +380,15 @@ export class Agent {
     this.emit('agent', { event: 'session_switched', id });
   }
 
-  // 删除会话(禁止删除当前活跃会话与运行中的会话)
+  // 删除会话:允许删除当前活跃会话(删除后活跃收敛到本作用域最近剩余会话,
+  // 无剩余则自动新建空会话接住,前端在草稿态不会采纳该收敛结果);
+  // 运行中的会话禁止删除(防破坏进行中的事件写入)。
   deleteSession(id) {
-    if (id === this.sessionId) throw new Error('不能删除当前正在使用的会话');
     const rt = this._runtimes.get(id);
     if (rt?.busy) throw new Error('会话任务进行中,请先停止再删除');
     this._runtimes.delete(id);
     sessions.remove(id);
+    if (id === this.sessionId) this._settleActive();
     this.emit('agent', { event: 'sessions_changed' });
   }
 

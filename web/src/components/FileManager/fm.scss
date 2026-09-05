@@ -93,6 +93,12 @@
   to   { background-position: -200% 0; }
 }
 
+/* 多选模式开关:仅触屏设备显示(桌面有 Ctrl/Shift 多选,按钮不渲染出来占位置) */
+.fm-select-toggle { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .fm-select-toggle { display: inline-block; }
+}
+
 /* ---- 移动端(<768):行加大触控目标,窄屏只留图标+文件名,多选操作条 ---- */
 @media (max-width: 767px) {
   .fmrow { min-height: 44px; padding: 6px 12px; touch-action: manipulation; }

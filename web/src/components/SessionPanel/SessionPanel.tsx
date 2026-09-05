@@ -185,8 +185,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
         <div ref={menuRef} className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
           <button onClick={() => openRename(menu.session)}>重命名</button>
           <div className="ctx-sep" />
-          <button className="danger" data-tip={busyIds.includes(menu.session.id) ? '任务进行中,不能删除' : menu.session.id === activeId ? '当前会话不能删除' : undefined}
-            disabled={busyIds.includes(menu.session.id) || menu.session.id === activeId}
+          <button className="danger" data-tip={busyIds.includes(menu.session.id) ? '任务进行中,不能删除' : undefined}
+            disabled={busyIds.includes(menu.session.id)}
             onClick={() => { closeMenu(); onDelete(menu.session.id); }}>删除</button>
         </div>,
         document.body

@@ -350,7 +350,6 @@ export default function App() {
     refreshSessions(r, { forceActive: true });
   };
   const deleteSession = async (id: string) => {
-    if (id === activeSessionId) return;
     const ok = await confirm({
       title: '删除会话',
       message: '删除该会话?其对话记录将被永久删除,不可恢复',
@@ -358,8 +357,18 @@ export default function App() {
       danger: true
     });
     if (!ok) return;
+    // 删除正打开的会话:先进入新会话草稿态清空聊天视图(删除成功后默认停在新会话,
+    // 不采纳服务端收敛出的活跃会话);删除失败(如任务刚启动)则切回原会话恢复视图
+    const wasActive = id === activeSessionId;
+    if (wasActive) newSession();
     bumpOp();
-    api.request('session_delete', { id }, 8000).then(refreshSessions).catch(() => {});
+    try {
+      const r = await api.request('session_delete', { id }, 8000);
+      refreshSessions(r); // 草稿态下 refreshSessions 只刷新列表,不会拉回服务端收敛的会话
+    } catch (e) {
+      if (wasActive) switchSession(id);
+      toast.error(`删除会话失败: ${(e as Error).message}`);
+    }
   };
 
   const statusRef = useRef(status);

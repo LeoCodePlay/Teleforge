@@ -605,8 +605,8 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
       <div className="row gap fm-actions">
         <button className="ghost sm" onClick={up} disabled={path === '/'}>⬆ 上级</button>
         <button className="ghost sm" onClick={refresh}>↻</button>
-        {/* 多选模式:触屏无 Ctrl/Shift,进入后点按切换选中,配合底部操作条批量操作 */}
-        <button className={`ghost sm${selectMode ? ' on' : ''}`} onClick={toggleSelectMode}>
+        {/* 多选模式:仅触屏设备渲染(桌面有 Ctrl/Shift 多选,不需要) */}
+        <button className={`ghost sm fm-select-toggle${selectMode ? ' on' : ''}`} onClick={toggleSelectMode}>
           {selectMode ? '✕ 退出多选' : '☑ 多选模式'}
         </button>
         <div className="fm-upload">
