@@ -99,8 +99,8 @@
 /* 终端右键菜单(液态玻璃) */
 .term-menu {
   position: fixed; z-index: 200; min-width: 150px; padding: 6px;
-  background: var(--pop-bg-lo);
-  backdrop-filter: var(--blur-lg); -webkit-backdrop-filter: var(--blur-lg);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border); border-radius: 12px;
   box-shadow: 0 12px 36px var(--shadow-2), inset 0 1px 0 var(--glass-hi);
 }
@@ -125,8 +125,8 @@
   .term-mobile-list {
     position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 220;
     min-width: 200px; max-height: 45vh; overflow-y: auto;
-    background: var(--pop-bg-lo);
-    backdrop-filter: var(--blur-lg); -webkit-backdrop-filter: var(--blur-lg);
+    background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+    backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
     border: 1px solid var(--glass-border); border-radius: var(--r-md);
     box-shadow: var(--glass-shadow-lg);
     padding: 6px;

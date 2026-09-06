@@ -1,6 +1,6 @@
 /* ---- AskPanel 独有样式:模型提问面板(ask_user_question 工具),内联显示在输入框上方,无遮罩 ---- */
 .ask-panel {
-  background: linear-gradient(150deg, var(--pop-bg), var(--pop-bg-lo));
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
   backdrop-filter: var(--blur-md);
   -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--accent-border);

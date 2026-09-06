@@ -5,6 +5,8 @@
 //
 // 命令模型(对齐 harness CommandDescriptor):name(不含斜杠) + description 摘要。
 // 系统命令由宿主注册;技能命令来自技能目录(模型可调用者注入,与 harness skill trigger 一致)。
+import type { RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import './SlashMenu.scss';
 
 export interface SlashItem {
@@ -28,6 +30,8 @@ export interface SlashMenuProps {
   /** Esc 关闭或外部点击 */
   onClose: () => void;
   onActiveChange: (i: number) => void;
+  /** 输入卡锚点(composer-box):portal 到 body 后按其位置做 fixed 定位 */
+  anchorRef: RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -66,11 +70,15 @@ export function rankSlashItems(items: SlashItem[], rawQuery: string): SlashItem[
   return rankByName(items, rawQuery);
 }
 
-export default function SlashMenu({ items, query, active, onPick, onClose, onActiveChange }: SlashMenuProps) {
+export default function SlashMenu({ items, query, active, onPick, onClose, onActiveChange, anchorRef }: SlashMenuProps) {
   const list = rankSlashItems(items, query);
   const shown = list.slice(0, 50); // 候选行上限,避免超长目录压垮菜单
-  return (
-    <div className="slash-menu" role="listbox" aria-label="命令菜单">
+  // portal 到 body:嵌在 composer-box(backdrop-filter)内时 Chromium 不应用 backdrop-filter,玻璃模糊失效;
+  // 坐标按输入卡位置计算(左右各缩进 12px,悬于输入卡上方 6px),每次渲染重算以跟随输入卡尺寸变化
+  const r = anchorRef.current?.getBoundingClientRect();
+  const pos = r ? { left: r.left + 12, width: r.width - 24, top: r.top - 6 } : undefined;
+  return createPortal(
+    <div className="slash-menu" role="listbox" aria-label="命令菜单" style={pos}>
       {shown.length === 0 ? (
         <div className="slash-empty">没有匹配的命令或技能 · Esc 关闭</div>
       ) : shown.map((it, i) => (
@@ -87,6 +95,7 @@ export default function SlashMenu({ items, query, active, onPick, onClose, onAct
           <span className="slash-desc">{it.description || (it.kind === 'skill' ? '技能' : '命令')}</span>
         </button>
       ))}
-    </div>
+    </div>,
+    document.body
   );
 }

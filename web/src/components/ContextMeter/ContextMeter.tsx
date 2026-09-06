@@ -7,7 +7,8 @@
 //   才回退到前端对渲染历史的估算(该口径会把 UI 展示用的长结果/思考全算进去,
 //   比真实请求明显偏大,仅作参考)。
 // contextWindow <= 0(模型未配置)时不渲染。
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { estimateMessages, estimateBreakdown, estimateTokens, SYSTEM_EST, formatTokens } from '../../utils/tokens';
 import type { ChatMessage } from '../../types';
 import './ContextMeter.scss';
@@ -36,6 +37,16 @@ const CIRC = 2 * Math.PI * R;
 
 export default function ContextMeter({ messages, input, contextWindow, usage }: Props) {
   const [show, setShow] = useState(false);
+  const meterRef = useRef<HTMLDivElement>(null);
+  // 弹窗坐标(fixed):本组件位于 composer-box(backdrop-filter)内部,就地渲染时
+  // Chromium 不会对其后代应用 backdrop-filter,玻璃模糊失效;故 portal 到 body。
+  // 坐标按进度环位置计算:向上弹出、右对齐,与旧 absolute 版视觉一致
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const openPop = () => {
+    const r = meterRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.top - 10, right: window.innerWidth - r.right });
+    setShow(true);
+  };
   const serverWin = Number(usage?.window) || 0;
   const win = serverWin > 0 ? serverWin : (Number(contextWindow) || 0);
   if (win <= 0) return null;
@@ -54,8 +65,8 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
   const offset = CIRC * (1 - ringPct);
 
   return (
-    <div className={`ctx-meter${level}`}
-      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
+    <div ref={meterRef} className={`ctx-meter${level}`}
+      onMouseEnter={openPop} onMouseLeave={() => setShow(false)}>
       <span className="ctx-ring">
         <svg viewBox="0 0 30 30" width="30" height="30" aria-hidden="true">
           <circle className="ctx-ring-track" cx="15" cy="15" r={R} />
@@ -65,8 +76,8 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
         <span className="ctx-ring-pct">{pct}%</span>
       </span>
 
-      {show && (
-        <div className="ctx-pop">
+      {show && pos && createPortal(
+        <div className="ctx-pop" style={pos}>
           <div className="ctx-pop-nums">
             ≈ {formatTokens(used)} <span className="muted">/ {formatTokens(win)}</span>
             <span className="ctx-pop-pct">({pct}%)</span>
@@ -90,7 +101,8 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
               </>}
           </div>
           <div className="ctx-pop-hint">达到 80% 水位时自动压缩早期对话</div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

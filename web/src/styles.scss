@@ -249,9 +249,9 @@ button.sm { padding: 4px 11px; font-size: 12px; }
 /* ---- 右键菜单:悬浮厚玻璃 ---- */
 .ctxmenu {
   position: fixed; z-index: 200; min-width: 175px;
-  background: linear-gradient(135deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-lg);
-  -webkit-backdrop-filter: var(--blur-lg);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
   padding: 5px; box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
   display: flex; flex-direction: column; gap: 2px;
@@ -290,9 +290,9 @@ button.sm { padding: 4px 11px; font-size: 12px; }
 @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
 .modal {
   width: 560px; max-width: 92vw;
-  background: linear-gradient(150deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-lg);
-  -webkit-backdrop-filter: var(--blur-lg);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-hover); border-radius: var(--r-lg);
   overflow: hidden;
   box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow-lg);
@@ -364,9 +364,9 @@ pre code { background: none !important; }
 .wsbar-row input.tb-model:hover { border-color: var(--glass-border-hover); }
 .wsbar-row input.tb-model:focus { outline: none; border-color: var(--accent-border); }
 
-/* 下拉弹出列表:深色玻璃背景,避免系统默认配色与深色主题冲突 */
+/* 下拉弹出列表:原生控件弹出层用近实色表面(半透明玻璃令牌会在系统弹层里失真/串色) */
 select option { background: var(--code-bg-solid); color: var(--text); }
-select optgroup { background: var(--pop-bg-lo); color: var(--muted); }
+select optgroup { background: var(--code-bg-solid); color: var(--muted); }
 select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 
 /* 状态徽标(连接/模型/主题等处共用) */
@@ -454,13 +454,14 @@ textarea { scrollbar-width: auto; }
 .ob-thumb:hover, body.ob-dragging .ob-thumb { background: var(--scroll-thumb-hover); }
 body.ob-dragging { cursor: grabbing; user-select: none; }
 
-/* ---- 降级:不支持 backdrop-filter 的环境自动加深底色保证可读 ---- */
+/* ---- 降级:不支持 backdrop-filter 的环境自动加深底色保证可读 ----
+   弹窗/菜单/浮层类一律退回近实色表面(--pop-* 为半透明磨砂,若无法模糊会直接透底) */
 @supports not (backdrop-filter: blur(1px)) {
-  .topbar, .sidebar, .modal, .settings, .ctxmenu, .ws-pick, .composer-box, .composer::before {
+  .topbar, .sidebar, .modal, .settings, .ctxmenu, .ws-pick, .composer-box, .composer::before,
+  .ask-panel, .queue-panel, .toast, .gselect-menu, .msm-menu, .ctx-pop, .slash-menu, .at-menu,
+  .term-menu, .term-mobile-list, .tip-host, .fviewer .cm-tooltip {
     background: var(--code-bg-solid);
   }
-  .toast { background: var(--code-bg-solid); }
-  .gselect-menu { background: var(--code-bg-solid); }
 }
 
 /* ============================================================

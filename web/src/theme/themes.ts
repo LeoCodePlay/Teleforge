@@ -266,10 +266,11 @@ function deriveThemeVars(t: ThemeTokens): Record<string, string> {
     '--line-strong': dark ? ov(0.18) : ov(0.18),
     '--line-dash': dark ? ov(0.18) : ov(0.24),
 
-    /* 实体表面(弹窗/下拉/右键菜单/Toast) */
-    '--pop-bg': dark ? 'rgba(30,38,58,.92)' : 'rgba(255,255,255,.97)',
-    '--pop-bg-lo': dark ? 'rgba(18,23,38,.86)' : 'rgba(248,250,253,.94)',
-    '--pop-bg-strong': dark ? 'rgba(20,26,42,.94)' : 'rgba(255,255,255,.98)',
+    /* 实体表面(弹窗/下拉/右键菜单/Toast):与侧边栏 --bar-tint-* 同款玻璃参数,
+       保证全站悬浮层与侧栏观感完全一致(深色为白色叠加/浅色为白色磨砂) */
+    '--pop-bg': dark ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.52)',
+    '--pop-bg-lo': dark ? 'rgba(255,255,255,.03)' : 'rgba(255,255,255,.30)',
+    '--pop-bg-strong': dark ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.62)',
 
     /* 代码类表面(代码块/工具卡片/编辑器) */
     '--code-bg': dark ? 'rgba(5,8,16,.82)' : 'rgba(255,255,255,.74)',

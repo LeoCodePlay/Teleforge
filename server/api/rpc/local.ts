@@ -1,5 +1,6 @@
 // 本地文件操作消息:list_local_dir / read_local_file / write_local_file / create_local_dir /
 //                  local_delete / local_copy / set_local_workspace
+import path from 'node:path';
 import { localFs } from '../../core/local-fs.ts';
 import { clearLocalEnvInfo } from '../../agent/tools.ts';
 import type { RpcModule } from './router.ts';
@@ -54,8 +55,26 @@ export function registerLocal(rpc: RpcModule) {
 
   rpc.register('local_rename', async (msg, { reply }) => {
     if (!msg.src || !msg.dst) throw new Error('缺少 src 或 dst');
-    const r = await localFs.renamePath(msg.src, msg.dst);
-    reply({ type: 'local_renamed', ...r });
+    try {
+      const r = await localFs.renamePath(msg.src, msg.dst);
+      reply({ type: 'local_renamed', ...r });
+    } catch (e: any) {
+      // Windows 下目录被占用(终端/资源管理器停在其中)rename 会报 EBUSY/EPERM,翻成人话并给出解除建议;
+      // 若占用者可能就是本应用自己的本地终端(启动 cwd 在该目录内),给专项提示
+      if (e && (e.code === 'EBUSY' || e.code === 'EPERM')) {
+        const name = path.basename(String(msg.src));
+        const norm = (p: string) => String(p).toLowerCase().replace(/[\\/]+$/, '');
+        const dir = norm(msg.src);
+        const termInside = [...localFs.localTermCwds].some((t) => {
+          const nt = norm(t);
+          return nt === dir || nt.startsWith(dir + '\\') || nt.startsWith(dir + '/');
+        });
+        throw new Error(termInside
+          ? `「${name}」正被本应用的本地终端占用(终端当前停在该文件夹内)。在终端里 cd 到其他目录、或点终端面板的「重启终端」后,点错误条上的「重试」即可`
+          : `「${name}」正被其他程序占用,无法重命名(常见:资源管理器窗口停在该文件夹内、其他终端/编辑器以它为当前目录)。关闭占用它的程序后,点错误条上的「重试」即可`);
+      }
+      throw e;
+    }
   });
 
   rpc.register('set_local_workspace', async (msg, { reply, emitStatus }) => {

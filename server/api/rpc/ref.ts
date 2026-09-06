@@ -1,7 +1,8 @@
 // @ 引用候选:ref_candidates —— 供聊天输入框的 @ 文件/文件夹菜单使用。
-// 复用环境快照的"有界深度扁平化"策略(排除噪声目录 + 深度 2 + 单目录条目上限),
-// 一次返回远程与本地两个工作区的扁平候选条目;条目带 source 前缀标记
-// (remote:/ 与 local:),发送给 AI 时据此区分用哪套工具读取。
+// 远程只平铺"当前目录一层"(只列直属条目,不递归):此前递归深度 2 需串行发起上千次
+// SFTP readdir(每次一拍网络往返),远超前端 15s 超时,导致菜单迟迟不出现且结果为空;
+// 改为一层后单次 listDir 即可返回,子目录本身作为可选项 @ 选中。本地保留轻量递归。
+// 条目带 source 前缀标记(remote:/ 与 local:),发送给 AI 时据此区分用哪套工具读取。
 import { sshManager as ssh } from '../../core/ssh-manager.ts';
 import { localFs } from '../../core/local-fs.ts';
 import type { FsEntry } from '../../core/local-fs.ts';
@@ -15,7 +16,8 @@ export interface RefCandidate {
   source: 'remote' | 'local';
 }
 
-const TOTAL_CAP = TREE_MAX_LINES;   // 单工作区候选总上限(与环境快照一致,避免菜单被撑爆)
+const TOTAL_CAP = TREE_MAX_LINES;   // 本地候选总上限(与环境快照一致,避免菜单被撑爆)
+const REMOTE_CAP = 300;             // 远程一层平铺的单目录条目上限(菜单可过滤,放宽比 160 更好用)
 
 function dirFirst<T extends { name: string; type: string }>(entries: T[]): T[] {
   const dirs = entries.filter((e) => e.type === 'dir').sort((a, b) => a.name.localeCompare(b.name));
@@ -23,21 +25,19 @@ function dirFirst<T extends { name: string; type: string }>(entries: T[]): T[] {
   return [...dirs, ...files];
 }
 
-// 远程工作区扁平化遍历:与 treeLines 同策略(排除噪声目录、限深度、单目录条目上限、总上限),
-// 但产出带完整路径的扁平候选。遍历途中每层截断,不足继续向下层补——与"骨架"视角一致。
-async function walkRemote(root: string, acc: RefCandidate[], depth = 0): Promise<void> {
-  if (depth > TREE_DEPTH || acc.length >= TOTAL_CAP) return;
+// 远程工作区一层平铺:仅列当前目录直属条目(排除噪声目录),不递归进子目录。
+// 一次 listDir 即完成,响应快且不怕超大目录塞爆菜单(按条目数截断)。
+async function walkRemote(root: string, acc: RefCandidate[]): Promise<void> {
   let entries: FsEntry[] = [];
   try { entries = await ssh.listDir(root); } catch { return; }
   const shown = dirFirst(
     entries.filter((e) => !TREE_EXCLUDE.has(e.name))
       .map((e) => ({ name: e.name, type: e.type }))
-  ).slice(0, TREE_PER_DIR);
+  );
   for (const e of shown) {
-    if (acc.length >= TOTAL_CAP) return;
+    if (acc.length >= REMOTE_CAP) return;
     const p = root === '/' ? `/${e.name}` : `${root}/${e.name}`;
     acc.push({ name: e.name, path: p, type: e.type, source: 'remote' });
-    if (e.type === 'dir') await walkRemote(p, acc, depth + 1);
   }
 }
 

@@ -34,17 +34,23 @@
 .ctx-meter.danger .ctx-ring-fill { stroke: var(--red); }
 .ctx-meter.danger .ctx-ring-pct { color: var(--red); }
 
-/* 悬浮面板:数字 + 横向进度条 + 三行分项(向上弹出) */
+/* 悬浮面板:portal 到 body 以 fixed 定位渲染 — 原嵌套在 composer-box(backdrop-filter)内
+   会导致 Chromium 不对其应用 backdrop-filter;坐标由组件按进度环位置计算,
+   translateY(-100%) 使面板底缘贴进度环上方 10px(与旧 absolute 版视觉一致) */
 .ctx-pop {
-  position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 130;
+  position: fixed; transform: translateY(-100%); z-index: 130;
   width: 268px; padding: 11px 13px;
-  background: linear-gradient(135deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-lg);
-  -webkit-backdrop-filter: var(--blur-lg);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
   box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
-  animation: glass-pop .16s ease-out;
+  animation: ctx-pop-in .16s ease-out;
   display: flex; flex-direction: column; gap: 7px;
+}
+@keyframes ctx-pop-in {
+  from { opacity: 0; transform: translateY(-100%) scale(.96); }
+  to   { opacity: 1; transform: translateY(-100%); }
 }
 .ctx-pop-nums { font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .ctx-pop-pct { color: var(--accent-2); margin-left: 4px; font-variant-numeric: tabular-nums; }

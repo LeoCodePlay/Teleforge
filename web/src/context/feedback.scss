@@ -23,9 +23,9 @@
   max-width: min(520px, 92vw);
   padding: 9px 15px; border-radius: var(--r-md);
   font-size: 12.5px; line-height: 1.55; color: var(--text);
-  background: linear-gradient(150deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-lg);
-  -webkit-backdrop-filter: var(--blur-lg);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-hover);
   box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
   animation: toast-in .22s cubic-bezier(.2, .9, .3, 1.2);

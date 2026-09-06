@@ -110,11 +110,12 @@ function FmRow({ entry, selected, navLoading, renaming, renameBusy, renameDraft,
       onClick={(ev) => { if (lp.wasLongPress()) return; onRowClick(ev, entry); }}
       onDoubleClick={() => onOpen(entry)}
       onContextMenu={(ev) => onMenu(ev, entry)}>
-      <span className={`fm-ico${renaming ? ' fm-hide' : ''}`}>{entry.type === 'dir' ? '📁' : entry.type === 'link' ? '🔗' : '📄'}</span>
-      {/* 各列始终留在文档流(fm-hide 仅隐藏文字、保留占位),行高/行宽与普通行完全一致 */}
+      {/* 图标在重命名时保留可见,便于分辨编辑的是文件还是文件夹 */}
+      <span className="fm-ico">{entry.type === 'dir' ? '📁' : entry.type === 'link' ? '🔗' : '📄'}</span>
+      {/* 名称/时间列留在文档流(fm-hide 仅隐藏文字、保留占位),行高/行宽与普通行完全一致 */}
       <span className={`fm-name${renaming ? ' fm-hide' : ''}`} data-tip={entry.name} data-tip-ellipsis data-tip-follow>{entry.name}</span>
       {renaming && (
-        // 重命名输入框:绝对定位覆盖整行(见 .fm-rename),进出编辑零抖动
+        // 重命名输入框:绝对定位覆盖名称/时间区(图标保留可见,见 .fm-rename),进出编辑零抖动
         <input className="fm-rename" autoFocus value={renameDraft}
           spellCheck={false}
           onChange={(ev) => onRenameDraft(ev.target.value)}
@@ -162,7 +163,11 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   const [renaming, setRenaming] = useState<string | null>(null); // 正在重命名的条目 name
   const [renameDraft, setRenameDraft] = useState('');
   const [renameBusy, setRenameBusy] = useState(false); // 正在真正下发重命名:行右侧显示加载圈
+  const [renameRetry, setRenameRetry] = useState<{ oldName: string; newName: string } | null>(null); // 重命名失败后的重试目标:错误条「↻ 重试」一键重发
   const renameSubmitting = useRef(false); // 防 Enter 与 blur 双触发重复提交
+  const [creating, setCreating] = useState<'file' | 'dir' | null>(null); // 新建输入行:file=新建文件 / dir=新建文件夹
+  const [createDraft, setCreateDraft] = useState('');
+  const createSubmitting = useRef(false); // 防 Enter 与 blur 双触发重复创建
   const [clipboard, setClipboard] = useState<Clipboard | null>(null);
   const [msg, setMsg] = useState('');
   const [deleting, setDeleting] = useState<DeletingInfo | null>(null);
@@ -188,6 +193,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     if (opts.itemPath) { setNavLoading(opts.itemPath); }
     else { setLoading(true); }
     setError('');
+    setRenameRetry(null); // 目录已切换,旧的重试目标失效
     try {
       const r = await api.request('list_local_dir', { path: target }, 20000);
       if (seq !== seqRef.current) return;
@@ -306,7 +312,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     } else {
       clearSelection();
     }
-    const w = 200, h = 340;
+    const w = 200, h = 420;
     setMenu({
       x: Math.max(0, Math.min(x, window.innerWidth - w - 8)),
       y: Math.max(0, Math.min(y, window.innerHeight - h - 8)),
@@ -458,6 +464,29 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     setRenaming(name);
     setRenameDraft(name);
   };
+  const performRename = async (oldName: string, newName: string) => {
+    renameSubmitting.current = true;
+    setRenameBusy(true); // 请求进行中:行右侧显示加载圈(复用 fm-loading)
+    try {
+      await api.request('local_rename', { src: entryPath(oldName), dst: entryPath(newName) }, 30000, 'local_renamed');
+      setRenameRetry(null); // 成功:清除重试目标
+      refresh();
+      flash(`✏️ 已重命名为 ${newName}`);
+    } catch (e) {
+      // 失败(Windows 上多为目录被占用 EBUSY:资源管理器窗口/终端/编辑器停在该文件夹内)。
+      // 这里绝不能 refresh():load() 开头会 setError(''),把刚设置的错误提示立刻清掉,
+      // 界面就成了「输入框挂着却没有任何解释」;失败时列表本就未变,退出编辑+显示原因即可。
+      const raw = (e as Error).message || String(e);
+      setError(/EBUSY|EPERM|busy or locked/i.test(raw)
+        ? `「${oldName}」正被其他程序占用,无法重命名(常见:资源管理器窗口停在该文件夹内、终端/编辑器以它为当前目录)。关闭占用它的程序后,点错误条上的「重试」即可`
+        : raw);
+      setRenameRetry({ oldName, newName }); // 记录重试目标:错误条「↻ 重试」一键重发,免去重新输入名字
+    } finally {
+      renameSubmitting.current = false;
+      setRenameBusy(false);
+      setRenaming(null); setRenameDraft(''); // 无论成败都退出编辑:失败靠错误条说明原因,绝不让输入框无提示地挂着
+    }
+  };
   const commitRename = async () => {
     if (renameSubmitting.current || !renaming) return;
     const oldName = renaming;
@@ -465,18 +494,33 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     // 名称未变化或为空:不真正重命名,直接退出编辑
     if (!newName || newName === oldName) { setRenaming(null); setRenameDraft(''); return; }
     if (newName.includes('/') || newName.includes('\\')) { setError('名称不能包含 / 或 \\'); setRenaming(null); setRenameDraft(''); return; }
-    renameSubmitting.current = true;
-    setRenameBusy(true); // 请求进行中:行右侧显示加载圈(复用 fm-loading)
+    // 预检重名(排除自身):与新建一致的友好提示,避免提交后被服务器以「目标已存在」打回
+    if (entries.some((e) => e.name !== oldName && e.name === newName)) { setError(`已存在同名「${newName}」`); setRenaming(null); setRenameDraft(''); return; }
+    await performRename(oldName, newName);
+  };
+
+  // ---- 新建文件/文件夹:在列表末尾出现一行输入,Enter 提交 / Esc 取消 / blur 提交 ----
+  const startCreate = (kind: 'file' | 'dir') => {
+    setMenu(null);
+    setCreating(kind);
+    setCreateDraft(kind === 'dir' ? '新建文件夹' : '新建文件.txt');
+  };
+  const cancelCreate = () => { setCreating(null); setCreateDraft(''); };
+  const commitCreate = async () => {
+    if (createSubmitting.current || !creating) return;
+    const name = createDraft.trim();
+    if (!name) { cancelCreate(); return; }
+    if (name.includes('/') || name.includes('\\')) { setError('名称不能包含 / 或 \\'); cancelCreate(); return; }
+    if (entries.some((e) => e.name === name)) { setError(`已存在同名「${name}」`); cancelCreate(); return; }
+    createSubmitting.current = true;
     try {
-      await api.request('local_rename', { src: entryPath(oldName), dst: entryPath(newName) }, 30000, 'local_renamed');
+      const p = entryPath(name);
+      if (creating === 'dir') await api.request('create_local_dir', { path: p }, 30000, 'local_dir_created');
+      else await api.request('write_local_file', { path: p, content: '' }, 30000, 'local_file_saved');
       refresh();
-      flash(`✏️ 已重命名为 ${newName}`);
+      flash(creating === 'dir' ? `📁 已创建文件夹 ${name}` : `📄 已创建文件 ${name}`);
     } catch (e) { setError((e as Error).message); refresh(); }
-    finally {
-      renameSubmitting.current = false;
-      setRenameBusy(false);
-      setRenaming(null); setRenameDraft('');
-    }
+    finally { createSubmitting.current = false; cancelCreate(); }
   };
 
   // 把选中项传到远程当前目录(local_to_remote):先确认(同名覆盖),再发请求,进度走 transfer_progress
@@ -569,14 +613,23 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
               : '100%' }} />
         </div>
       )}
-      {error && <div className="error" onClick={() => setError('')}>✕ {error}</div>}
+      {error && (
+        <div className="error" onClick={() => { setError(''); setRenameRetry(null); }}>
+          {renameRetry && (
+            <button className="ghost sm" style={{ marginRight: 8 }}
+              onClick={(ev) => { ev.stopPropagation(); performRename(renameRetry.oldName, renameRetry.newName); }}
+              data-tip="已关闭占用程序?点此用原名/新名重新尝试">↻ 重试</button>
+          )}
+          ✕ {error}
+        </div>
+      )}
 
       <div className="fmlist" ref={listRef} tabIndex={-1}
         onClick={(e) => { if (e.target === e.currentTarget) { clearSelection(); e.currentTarget.focus(); } }}
         onKeyDown={handleListKey}
         onContextMenu={(e) => openMenu(e, null)}>
         {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
-        {!loading && entries.length === 0 && <div className="muted fmph">(空目录)</div>}
+        {!loading && entries.length === 0 && !creating && <div className="muted fmph">(空目录)</div>}
         {entries.map((e) => (
           <FmRow
             key={e.name}
@@ -595,6 +648,32 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
             onLongPress={(x, y, item) => openMenuAt(x, y, item)}
           />
         ))}
+        {creating && (
+          <div className="fmrow">
+            <span className="fm-ico">{creating === 'dir' ? '📁' : '📄'}</span>
+            <span className="fm-name fm-hide" />
+            <span className="fm-time fm-hide" />
+            <input className="fm-rename" autoFocus value={createDraft}
+              spellCheck={false}
+              onChange={(ev) => setCreateDraft(ev.target.value)}
+              onFocus={(ev) => {
+                // 默认选中不含扩展名的部分,方便直接输入新名
+                const dot = ev.target.value.lastIndexOf('.');
+                if (dot > 0) ev.target.setSelectionRange(0, dot);
+                else ev.target.select();
+              }}
+              onClick={(ev) => ev.stopPropagation()}
+              onDoubleClick={(ev) => ev.stopPropagation()}
+              onContextMenu={(ev) => ev.preventDefault()}
+              onKeyDown={(ev) => {
+                ev.stopPropagation();
+                if (ev.nativeEvent.isComposing) return;
+                if (ev.key === 'Enter') commitCreate();
+                else if (ev.key === 'Escape') cancelCreate();
+              }}
+              onBlur={commitCreate} />
+          </div>
+        )}
       </div>
 
       {/* 多选模式操作条:触屏批量操作入口(复制/传到远程/删除) */}
@@ -641,6 +720,9 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
             <>
               <div className="ctx-sep" />
               <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}><span className="ctx-ico">🗑</span>删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+              <div className="ctx-sep" />
+              <button onClick={() => startCreate('file')}><span className="ctx-ico">📄</span>新建文件</button>
+              <button onClick={() => startCreate('dir')}><span className="ctx-ico">📁</span>新建文件夹</button>
             </>
           )}
         </div>,

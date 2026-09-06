@@ -1,9 +1,10 @@
-/* ---- AtMenu 独有样式: @ 文件/文件夹引用菜单(输入框上方浮层,与 / 命令菜单同款外观) ---- */
+/* ---- AtMenu 独有样式: @ 文件/文件夹引用菜单(portal 到 body,fixed 定位,与 / 命令菜单同款) ----
+   原嵌套在 composer-box(backdrop-filter)内时 Chromium 不应用 backdrop-filter,玻璃模糊失效 */
 .at-menu {
-  position: absolute; left: 12px; right: 12px; bottom: calc(100% + 6px);
+  position: fixed; transform: translateY(-100%);   /* top=输入卡顶-6px,自身整体上移 */
   max-height: 280px; overflow-y: auto;
-  background: var(--pop-bg-lo);
-  backdrop-filter: var(--blur-lg); -webkit-backdrop-filter: var(--blur-lg);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border); border-radius: var(--r-md);
   box-shadow: 0 12px 36px var(--shadow-2);
   padding: 6px; z-index: 60;

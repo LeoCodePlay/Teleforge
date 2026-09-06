@@ -457,7 +457,10 @@ export class SshConnection extends EventEmitter {
       ? `rmdir /s /q "${p.replace(/"/g, '""')}"`
       : `rm -rf -- '${p.replace(/'/g, `'\\''`)}'`;
     const r = await this._execRaw(cmd, { timeout: EXEC.MAX_TIMEOUT_MS });
-    if (r && r.code === 0 && !r.timedOut) return true;
+    // 以"目录确实已不存在"为成功判据,而非仅看退出码:
+    // 部分服务器/受限 shell 不返回 exit-status(code 缺失)、或命令被超时截断时,
+    // rm -rf 可能已把整棵树删净,此时再回退 SFTP 会因路径消失而报 No such file。
+    if ((r && r.code === 0 && !r.timedOut) || (await this.atype(p)) === null) return true;
     this.emit('log', 'warn', `shell 删除未生效(code=${r?.code}),回退 SFTP 逐项删除: ${p}${r?.stderr ? ` → ${r.stderr}` : ''}`);
     return false;
   }
@@ -479,7 +482,15 @@ export class SshConnection extends EventEmitter {
       onProgress?.(p);
       return;
     }
-    const list = await this.listDir(p);
+    let list: FsEntry[];
+    try {
+      list = await this.listDir(p);
+    } catch (err: any) {
+      // 竞态容错:shell 命令已把目录删净但返回值判定失败(code 缺失/非 0/超时截断)时,
+      // 回退到这里目录已不存在,readdir 报 No such file;视为删除成功。
+      if (err.code === 2 || err.message?.includes('No such file')) return;
+      throw err;
+    }
     const failures: string[] = [];
     for (const e of list) {
       try {
@@ -493,6 +504,8 @@ export class SshConnection extends EventEmitter {
       await call((cb) => this.sftp!.rmdir(p, cb));
       onProgress?.(p);
     } catch (err: any) {
+      // 同上:rmdir 时目录可能已被并发删掉,视为已删除
+      if (err.code === 2 || err.message?.includes('No such file')) { onProgress?.(p); return; }
       if (failures.length) throw new Error(`目录非空,${failures.length} 项未删净(${failures.slice(0, 3).join('; ')})`);
       throw new Error(`目录删除失败: ${err.message}`);
     }

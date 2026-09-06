@@ -126,7 +126,8 @@ function newRuntime(session) {
     lastCallKey: null, // 上一次工具调用的规范化键(工具名+参数),repeat-tool-reminder 追踪用
     lastCallCount: 0,  // 连续相同调用次数
     lastPruneCount: 0, // 本轮上次打印折叠日志时的折叠条数(只在条数增长时打印,避免每步刷屏)
-    overflowRecoveries: 0 // 本轮上下文爆窗恢复次数(达到上限后不再重试,防死循环)
+    overflowRecoveries: 0, // 本轮上下文爆窗恢复次数(达到上限后不再重试,防死循环)
+    live: null as null | { content: string; reasoning: string } // 当前步已流式收到、尚未落盘的回复半成品(供 getHistory 投影,见 onDelta)
   };
 }
 
@@ -270,11 +271,22 @@ export class Agent {
   }
 
   // 前端渲染投影:事件日志 -> 消息数组(工具消息附带 tool_name/tool_args/ok/ms)
-  // 运行中的会话直接取其内存日志(含未落盘的进行中事件),空闲会话从磁盘载入
+  // 运行中的会话直接取其内存日志(含未落盘的进行中事件),空闲会话从磁盘载入。
+  // 运行中且模型正在流式输出时,当前步的回复尚未写成 assistant/message 事件
+  // (只在 onDelta 推给前端),这里从 runtime 的 live 半成品缓冲补一条合成消息,
+  // 否则切回运行中的会话时整表替换会把"正在生成的部分内容"从视图上弄丢。
   getHistory(id = this.sessionId) {
     const rt = id != null ? this._runtimes.get(id) : null;
     const events = rt ? rt.session.events : (id != null ? sessions.loadEvents(id) : []);
-    return projectEvents(events);
+    const turns = projectEvents(events);
+    if (rt?.busy && rt.live && (rt.live.content || rt.live.reasoning)) {
+      turns.push({
+        role: 'assistant',
+        content: rt.live.content || '',
+        ...(rt.live.reasoning ? { reasoning_content: rt.live.reasoning } : {})
+      });
+    }
+    return turns;
   }
 
   // 当前任务计划(todo/write 投影):最新整表,turn/start 清空(见 foldTodos)
@@ -878,6 +890,7 @@ export class Agent {
         try {
           stepPartial = '';
           stepPartialReasoning = '';
+          rt.live = null; // 新一步开始:上一半成品已随 assistant/message 落盘(或被回滚),清掉投影缓冲
           res = await this.llm.chat({
             messages,
             tools: toolSchemas,
@@ -891,6 +904,9 @@ export class Agent {
                 stepPartialReasoning += d.text;
                 this.emit('agent', { event: 'reasoning_delta', text: d.text, sid: runSessionId });
               }
+              // 镜像进 runtime:get_history 需要投影"正在生成、尚未落盘"的部分内容,
+              // 否则切回运行中会话时前端整表替换会丢掉已流出的回复(见 getHistory)
+              rt.live = { content: stepPartial, reasoning: stepPartialReasoning };
             },
             // 请求失败进入重试:把「重试第几次」推给前端显示(对齐 harness llm-retry 的 retry 事件语义)
             onRetry: (r) => {
@@ -983,6 +999,7 @@ export class Agent {
         // 该步完整落盘,部分内容缓冲区清空:之后一旦中止(如工具执行期间),不会重复抢救
         stepPartial = '';
         stepPartialReasoning = '';
+        rt.live = null; // 已落盘:get_history 从事件日志投影,不再需要 live 半成品(防重复投影)
 
         // 模型不再请求工具:先做"完成前二次校验"(移植 harness goal-round-driver)——
         // 输出被截断(max_tokens)或任务计划仍有未完成项时注入续推消息继续循环,
@@ -1074,6 +1091,7 @@ export class Agent {
         this.emit('agent', { event: 'error', message: e.message, sid: runSessionId });
       }
     } finally {
+      rt.live = null; // 本轮收尾(含中止抢救:半成品已落成真实 assistant/message):live 投影缓冲必须清空
       // 自愈:给中止时未闭合的工具调用补结果,保证日志重放出的消息序列永远合法
       for (const c of session.pendingToolCalls()) {
         session.append('tool/result', {

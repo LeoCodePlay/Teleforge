@@ -227,8 +227,9 @@ export function setupWs(httpServer: Server) {
         });
       } catch (e: any) { sendJson({ type: 'error', error: `打开本地终端失败: ${e.message}` }); return; }
       localPty = term;
+      localFs.localTermCwds.add(cwd); // 记录终端启动目录:重命名该目录(或其祖先)报 EBUSY 时提示终端占用
       term.onData((d: string) => { if (ws.readyState === 1) { try { ws.send(Buffer.from(d)); } catch {} } });
-      term.onExit(() => { if (localPty === term) { localPty = null; sendJson({ type: 'exit' }); } });
+      term.onExit(() => { if (localPty === term) { localPty = null; sendJson({ type: 'exit' }); } localFs.localTermCwds.delete(cwd); });
       sendJson({ type: 'ready' });
     };
 

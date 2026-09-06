@@ -22,6 +22,8 @@ export interface ChunkReadResult {
 export class LocalFs {
   workspace: string | null = null; // 用户选择的本地工作区绝对路径(可空)
   get home() { return os.homedir(); }
+  // 各本地终端会话的启动 cwd:重命名目录报 EBUSY 时,若占用者可能是自家终端(停在该目录内),可给出针对性提示
+  readonly localTermCwds = new Set<string>();
 
   async listDir(p: string): Promise<FsEntry[]> {
     // 空串/root: 表示"我的电脑"根视图(Windows 列出盘符,POSIX 列出根)

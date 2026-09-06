@@ -103,11 +103,12 @@ function FmRow({ entry, selected, navLoading, renaming, renameBusy, renameDraft,
       onClick={(ev) => { if (lp.wasLongPress()) return; onRowClick(ev, entry); }}
       onDoubleClick={() => onOpen(entry)}
       onContextMenu={(ev) => onMenu(ev, entry)}>
-      <span className={`fm-ico${renaming ? ' fm-hide' : ''}`}>{entry.type === 'dir' ? '📁' : entry.type === 'link' ? '🔗' : '📄'}</span>
-      {/* 各列始终留在文档流(fm-hide 仅隐藏文字、保留占位),行高/行宽与普通行完全一致 */}
+      {/* 图标在重命名时保留可见,便于分辨编辑的是文件还是文件夹 */}
+      <span className="fm-ico">{entry.type === 'dir' ? '📁' : entry.type === 'link' ? '🔗' : '📄'}</span>
+      {/* 名称/时间列留在文档流(fm-hide 仅隐藏文字、保留占位),行高/行宽与普通行完全一致 */}
       <span className={`fm-name${renaming ? ' fm-hide' : ''}`} data-tip={entry.name} data-tip-ellipsis data-tip-follow>{entry.name}</span>
       {renaming && (
-        // 重命名输入框:绝对定位覆盖整行(见 .fm-rename),进出编辑零抖动
+        // 重命名输入框:绝对定位覆盖名称/时间区(图标保留可见,见 .fm-rename),进出编辑零抖动
         <input className="fm-rename" autoFocus value={renameDraft}
           spellCheck={false}
           onChange={(ev) => onRenameDraft(ev.target.value)}
@@ -152,11 +153,17 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   const [anchor, setAnchor] = useState<string | null>(null); // shift 连选的锚点 name
   const [selectMode, setSelectMode] = useState(false); // 多选模式:触屏无 Ctrl/Shift,进入后点按即切换选中
   const [menu, setMenu] = useState<CtxMenu | null>(null); // 右键菜单 {x, y, item|null}
-  const [uploadMenu, setUploadMenu] = useState(false); // 「上传」按钮展开的选择菜单
+  // 「上传」按钮展开的选择菜单:portal 到 body 渲染(嵌在侧栏内 backdrop-filter 会失效),存按钮坐标用于 fixed 定位
+  const [uploadMenu, setUploadMenu] = useState<{ x: number; y: number } | null>(null);
+  const uploadBtnRef = useRef<HTMLButtonElement>(null);   // 外点关闭检测:排除按钮自身(点击走 toggle)
+  const uploadMenuRef = useRef<HTMLDivElement>(null);     // 外点关闭检测:排除菜单内部(菜单项自行关闭)
   const [renaming, setRenaming] = useState<string | null>(null); // 正在重命名的条目 name
   const [renameDraft, setRenameDraft] = useState('');
   const [renameBusy, setRenameBusy] = useState(false); // 正在真正下发重命名:行右侧显示加载圈
   const renameSubmitting = useRef(false); // 防 Enter 与 blur 双触发重复提交
+  const [creating, setCreating] = useState<'file' | 'dir' | null>(null); // 新建输入行:file=新建文件 / dir=新建文件夹
+  const [createDraft, setCreateDraft] = useState('');
+  const createSubmitting = useRef(false); // 防 Enter 与 blur 双触发重复创建
   const [clipboard, setClipboard] = useState<Clipboard | null>(null); // {items: [path], op}
   const [msg, setMsg] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -300,7 +307,7 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
     } else {
       clearSelection();
     }
-    const w = 200, h = 340;
+    const w = 200, h = 420;
     setMenu({
       x: Math.max(0, Math.min(x, window.innerWidth - w - 8)),
       y: Math.max(0, Math.min(y, window.innerHeight - h - 8)),
@@ -334,14 +341,27 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
     };
   }, [menu]);
 
-  // 「上传」菜单:点击外部或 Esc 时收起
+  // 「上传」菜单:在菜单外部按下(pointerdown)/ Esc / 滚动时收起。
+  // 用 pointerdown 而非 click:文件行的 click 被 stopPropagation 拦截(见 handleRowClick),
+  // 按下事件仍会冒泡到 window;上传按钮与菜单内部不视为"外部"(按钮交给 toggle,菜单项自行关闭)
   useEffect(() => {
     if (!uploadMenu) return;
-    const close = () => setUploadMenu(false);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setUploadMenu(false); };
-    window.addEventListener('click', close);
+    const close = () => setUploadMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setUploadMenu(null); };
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (uploadBtnRef.current?.contains(t)) return;
+      if (uploadMenuRef.current?.contains(t)) return;
+      setUploadMenu(null);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('click', close); window.removeEventListener('keydown', onKey); };
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+    };
   }, [uploadMenu]);
 
   // 订阅服务端删除进度事件(单次删除只有一条在跑,直接合并到当前 deleting)
@@ -534,7 +554,7 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
 
   // 「上传」按钮:一个按钮同时支持选文件/选文件夹(浏览器单个 file input 只能二选一,故点击弹菜单)
   const pickUpload = (kind: 'file' | 'dir') => () => {
-    setUploadMenu(false);
+    setUploadMenu(null);
     if (kind === 'dir') dirInputRef.current?.click();
     else fileInputRef.current?.click();
   };
@@ -558,12 +578,39 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
       await api.request('rename', { src: entryPath(oldName), dst: entryPath(newName) }, 30000, 'renamed');
       refresh();
       flash(`✏️ 已重命名为 ${newName}`);
-    } catch (e) { setError((e as Error).message); refresh(); }
-    finally {
+    } catch (e) {
+      // 失败:绝不能在这里 refresh()(load() 开头会 setError('') 把错误条立刻清掉);
+      // 失败时列表未变,退出编辑并显示原因即可(与本地管理器行为一致)
+      setError((e as Error).message || String(e));
+    } finally {
       renameSubmitting.current = false;
       setRenameBusy(false);
-      setRenaming(null); setRenameDraft('');
+      setRenaming(null); setRenameDraft(''); // 无论成败都退出编辑:失败靠错误条说明原因
     }
+  };
+
+  // ---- 新建文件/文件夹:在列表末尾出现一行输入,Enter 提交 / Esc 取消 / blur 提交 ----
+  const startCreate = (kind: 'file' | 'dir') => {
+    setMenu(null);
+    setCreating(kind);
+    setCreateDraft(kind === 'dir' ? '新建文件夹' : '新建文件.txt');
+  };
+  const cancelCreate = () => { setCreating(null); setCreateDraft(''); };
+  const commitCreate = async () => {
+    if (createSubmitting.current || !creating) return;
+    const name = createDraft.trim();
+    if (!name) { cancelCreate(); return; }
+    if (name.includes('/') || name.includes('\\')) { setError('名称不能包含 / 或 \\'); cancelCreate(); return; }
+    if (entries.some((e) => e.name === name)) { setError(`已存在同名「${name}」`); cancelCreate(); return; }
+    createSubmitting.current = true;
+    try {
+      const p = entryPath(name);
+      if (creating === 'dir') await api.request('create_dir', { path: p }, 30000, 'dir_created');
+      else await api.request('write_file', { path: p, content: '' }, 30000, 'file_saved');
+      refresh();
+      flash(creating === 'dir' ? `📁 已创建文件夹 ${name}` : `📄 已创建文件 ${name}`);
+    } catch (e) { setError((e as Error).message); refresh(); }
+    finally { createSubmitting.current = false; cancelCreate(); }
   };
 
   // 面包屑
@@ -610,13 +657,19 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
           {selectMode ? '✕ 退出多选' : '☑ 多选模式'}
         </button>
         <div className="fm-upload">
-          <button className="ghost sm" disabled={uploading}
-            onClick={(e) => { e.stopPropagation(); setUploadMenu((v) => !v); }}>⬆ 上传 ▾</button>
-          {uploadMenu && (
-            <div className="ctxmenu fm-upload-menu" onContextMenu={(e) => e.preventDefault()}>
+          <button ref={uploadBtnRef} className="ghost sm" disabled={uploading}
+            onClick={(e) => {
+              e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              setUploadMenu((v) => v ? null : { x: r.left, y: r.bottom + 4 });
+            }}>⬆ 上传 ▾</button>
+          {uploadMenu && createPortal(
+            /* portal 到 body:嵌在侧栏(backdrop-filter)内时 Chromium 不对其后代应用 backdrop-filter,玻璃模糊失效 */
+            <div ref={uploadMenuRef} className="ctxmenu fm-upload-menu" style={{ left: uploadMenu.x, top: uploadMenu.y }} onContextMenu={(e) => e.preventDefault()}>
               <button onClick={pickUpload('file')}><span className="ctx-ico">📄</span>上传文件</button>
               <button onClick={pickUpload('dir')}><span className="ctx-ico">📁</span>上传文件夹</button>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
         <button className="ghost sm" disabled={transferring || opCount === 0 || !localCwd}
@@ -648,7 +701,7 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
         onContextMenu={(e) => openMenu(e, null)}>
         {/* 加载中且列表为空:在列表区明显显示加载中(避免状态文字不显眼/被挡住);进入子目录只行内转圈,不影响列表 */}
         {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
-        {!loading && entries.length === 0 && <div className="muted fmph">(空目录)</div>}
+        {!loading && entries.length === 0 && !creating && <div className="muted fmph">(空目录)</div>}
         {entries.map((e) => (
           <FmRow
             key={e.name}
@@ -667,6 +720,32 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
             onLongPress={(x, y, item) => openMenuAt(x, y, item)}
           />
         ))}
+        {creating && (
+          <div className="fmrow">
+            <span className="fm-ico">{creating === 'dir' ? '📁' : '📄'}</span>
+            <span className="fm-name fm-hide" />
+            <span className="fm-time fm-hide" />
+            <input className="fm-rename" autoFocus value={createDraft}
+              spellCheck={false}
+              onChange={(ev) => setCreateDraft(ev.target.value)}
+              onFocus={(ev) => {
+                // 默认选中不含扩展名的部分,方便直接输入新名
+                const dot = ev.target.value.lastIndexOf('.');
+                if (dot > 0) ev.target.setSelectionRange(0, dot);
+                else ev.target.select();
+              }}
+              onClick={(ev) => ev.stopPropagation()}
+              onDoubleClick={(ev) => ev.stopPropagation()}
+              onContextMenu={(ev) => ev.preventDefault()}
+              onKeyDown={(ev) => {
+                ev.stopPropagation();
+                if (ev.nativeEvent.isComposing) return;
+                if (ev.key === 'Enter') commitCreate();
+                else if (ev.key === 'Escape') cancelCreate();
+              }}
+              onBlur={commitCreate} />
+          </div>
+        )}
       </div>
 
       {/* 多选模式操作条:触屏批量操作入口(复制/传到本地/下载/删除) */}
@@ -717,6 +796,9 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
             <>
               <div className="ctx-sep" />
               <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}><span className="ctx-ico">🗑</span>删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+              <div className="ctx-sep" />
+              <button onClick={() => startCreate('file')}><span className="ctx-ico">📄</span>新建文件</button>
+              <button onClick={() => startCreate('dir')}><span className="ctx-ico">📁</span>新建文件夹</button>
             </>
           )}
         </div>,

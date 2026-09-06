@@ -115,7 +115,7 @@
   border-radius: var(--r-sm);
   font-size: 11.5px; line-height: 1.5;
   color: var(--text);
-  background: var(--pop-bg-strong);
+  background: var(--code-bg-solid);
   border: 1px solid var(--glass-border-hover);
   box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), 0 4px 14px var(--shadow-1);
   display: -webkit-box;
@@ -250,9 +250,10 @@
    任务计划面板(TodoPanel)渲染在本面板之外,不被包进玻璃底 */
 .composer {
   position: relative;
-  margin: 12px; /* 四周留缝一致:上边距与左右/下相同,圆角悬浮感可见 */
+  margin: 12px;
+  margin-top: 0;
   border-radius: var(--r-lg);
-  padding: 16px; /* 内边距上下左右一致 */
+  padding: 12px; /* 内边距上下左右一致 */
   display: flex; flex-direction: column; gap: 8px;
 }
 /* 子元素高于 ::before 背景层:树序在后即可,不借助 z-index/isolation,
@@ -361,9 +362,9 @@
 .ws-pick {
   position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 120;
   min-width: 280px; max-width: min(560px, 92vw);
-  background: linear-gradient(135deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-lg);
-  -webkit-backdrop-filter: var(--blur-lg);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-hover); border-radius: var(--r-md); padding: 5px;
   box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
   display: flex; flex-direction: column; gap: 2px;

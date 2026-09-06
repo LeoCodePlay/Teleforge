@@ -132,7 +132,9 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cm-searchMatch { background: var(--warn-bg); outline: 1px solid var(--warn-border); }
 .fviewer .cm-searchMatch.cm-searchMatch-selected { background: var(--accent-soft); outline-color: var(--accent-border); }
 .fviewer .cm-tooltip {
-  background: var(--pop-bg); color: var(--text);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo)); color: var(--text);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-hover); border-radius: var(--r-sm);
   box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
 }

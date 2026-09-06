@@ -449,6 +449,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const wrapRef = useRef<HTMLDivElement>(null); // chatwrap:聊天滚动条拇指的宿主(整列高度,含输入区区域)
   const taRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null); // 高亮叠加层(与 textarea 滚动同步)
+  const composerBoxRef = useRef<HTMLDivElement>(null); // 输入卡锚点:供 Slash/At 菜单 portal 到 body 后做 fixed 定位
   const userMsgRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [activeDot, setActiveDot] = useState(-1);
   // 悬停跳转点时的自定义内容提示(不用原生 title,支持两行截断省略)
@@ -804,10 +805,15 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         // 历史 turns 长度即该会话已累计的消息面 turn 数,作为后续流式递增的基准
         forkTurnRef.current = (r.turns || []).length;
         const msgs = turnsToMessages(r.turns || []);
-        // 切回一个仍在运行中的会话:末条回复标记为流式中,继续接收后续增量事件
+        // 切回一个仍在运行中的会话:末条回复标记为流式中,继续接收后续增量事件。
+        // 历史末尾不是 assistant(本轮模型尚未流出任何内容/纯工具调用步骤)时补一个
+        // 流式占位气泡:后续 text/reasoning/tool 事件只认"末尾 assistant",
+        // 没有它整轮增量都会被静默丢弃,直到下一轮 start 才恢复——正是"切回后
+        // 正在思考的回复消失"的另一半根因
         if (busyRef.current) {
           const last = msgs[msgs.length - 1];
           if (last?.role === 'assistant') last.streaming = true;
+          else msgs.push({ role: 'assistant', segments: [], streaming: true });
         }
         histCache.current.set(target ?? '', { msgs, todos: Array.isArray(r.todos) ? r.todos : [] });
         setSuppressIn(true); // 历史整表替换:抑制最新一条的入场动画,切换画面保持静止
@@ -1374,7 +1380,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         <AskPanel sid={sid} onPendingChange={setAskPending} />
         {/* 待执行消息队列:对话进行中发送的消息在此排队等待,当前轮结束后按 FIFO 自动执行 */}
         <QueuePanel queue={queue} onRunNow={runQueueNow} onEdit={editQueueItem} onDelete={deleteQueueItem} />
-        <div className="composer-box">
+        <div className="composer-box" ref={composerBoxRef}>
           {/* / 命令菜单:输入 / (行首或空格后)时浮在输入框上方,前缀优先+模糊匹配过滤 */}
           {slashOpen && (
             <SlashMenu
@@ -1384,6 +1390,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               onActiveChange={setSlashActive}
               onPick={pickSlash}
               onClose={closeSlash}
+              anchorRef={composerBoxRef}
             />
           )}
           {/* @ 引用菜单:输入 @ 时浮在输入框上方,列出远程+本地工作区的文件/文件夹 */}
@@ -1396,6 +1403,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               onActiveChange={setAtActive}
               onPick={pickAt}
               onClose={closeAt}
+              anchorRef={composerBoxRef}
             />
           )}
           <div className="composer-input">

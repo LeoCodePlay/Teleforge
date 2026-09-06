@@ -3,6 +3,8 @@
 // - 继续输入字母做即时过滤:复用 / 菜单同款名称排序(前缀优先 + 模糊子序列评分)
 // - ↑↓ 移动高亮、Enter/Tab 选中、Esc 关闭
 // 选中条目在输入框显示为 @文件名/文件夹名;发送时由 ChatPanel 替换为 @source:完整路径。
+import type { RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { rankByName } from '../SlashMenu/SlashMenu';
 import './AtMenu.scss';
 
@@ -25,15 +27,20 @@ export interface AtMenuProps {
   onPick: (item: AtCandidate, query: string) => void;
   onClose: () => void;
   onActiveChange: (i: number) => void;
+  /** 输入卡锚点(composer-box):portal 到 body 后按其位置做 fixed 定位 */
+  anchorRef: RefObject<HTMLDivElement | null>;
 }
 
 const MAX_SHOWN = 60; // 候选行上限,避免超长目录压垮菜单
 
-export default function AtMenu({ items, query, active, loading = false, onPick, onClose, onActiveChange }: AtMenuProps) {
+export default function AtMenu({ items, query, active, loading = false, onPick, onClose, onActiveChange, anchorRef }: AtMenuProps) {
   const list = rankByName(items, query);
   const shown = list.slice(0, MAX_SHOWN);
-  return (
-    <div className="at-menu" role="listbox" aria-label="文件引用菜单">
+  // portal 到 body:嵌在 composer-box(backdrop-filter)内时 Chromium 不应用 backdrop-filter,玻璃模糊失效
+  const r = anchorRef.current?.getBoundingClientRect();
+  const pos = r ? { left: r.left + 12, width: r.width - 24, top: r.top - 6 } : undefined;
+  return createPortal(
+    <div className="at-menu" role="listbox" aria-label="文件引用菜单" style={pos}>
       {loading ? (
         <div className="at-empty">正在列出目录文件…</div>
       ) : items.length === 0 ? (
@@ -55,6 +62,7 @@ export default function AtMenu({ items, query, active, loading = false, onPick, 
           <span className="at-path">{it.path}</span>
         </button>
       ))}
-    </div>
+    </div>,
+    document.body
   );
 }
