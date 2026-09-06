@@ -432,6 +432,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const histCache = useRef(new Map<string, { msgs: ChatMessage[]; todos: TodoItem[] }>());
   // 模型提问挂起(ask_user_question):未作答前锁定输入框与停止按钮
   const [askPending, setAskPending] = useState(false);
+  // 启动检查期(刷新后 AskPanel 拉取挂起提问期间):期间输入区先不渲染,
+  // 避免有挂起提问时"输入框先出现、面板恢复后再整体替换"的一瞬间抖动
+  const [askChecking, setAskChecking] = useState(true);
   // 新会话草稿态发送成功后:跳过随后 sid 变化触发的历史回载(首条消息由事件流渲染)
   const skipHistoryOnceRef = useRef(false);
   // 待执行消息队列(工作中发送的消息,显示在输入框上方,当前轮结束后按 FIFO 自动执行)
@@ -1358,7 +1361,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     // 根为 fragment:跳转点(chat-dots)渲染在 chatwrap 之外,作为 tab-body 的子元素
     // 始终锚定对话区最左侧,不随限宽列移动(见 chat-dots 样式注释)
     <>
-    <div className={`chatwrap${askPending ? ' ask-focus' : ''}`} ref={wrapRef}>
+    <div className={`chatwrap${askPending ? ' ask-focus' : askChecking ? ' ask-boot' : ''}`} ref={wrapRef}>
       <div className="chat-scroll">
         <div className={`chat${suppressIn ? ' no-anim' : ''}`} ref={scrollRef} onScroll={onChatScroll}>
           {messages.length === 0 && (
@@ -1419,7 +1422,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {/* 运行中指示行:agent 工作期间挂在消息列表末尾(StateDot ongoing 像素追光)。
               长耗时步骤(如大文件写入/命令执行)没有文本增量流出,此行让"仍在运行"
               可见,避免误以为卡死;提问挂起时 agent 在等用户作答,不算运行中 */}
-          {working && !askPending && (
+          {working && !askPending && !askChecking && (
             <div className="running-row" role="status" aria-live="polite">
               <StateDot state="ongoing" size={12} />
               <span className="running-text">Agent 正在运行…</span>
@@ -1442,8 +1445,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       {/* 任务计划面板:输入区玻璃面板之外,独立玻璃卡片悬浮(默认折叠,无计划时隐藏) */}
       <TodoPanel todos={todos} />
       <div className="composer">
-        {/* 模型提问面板(ask_user_question):内联显示在输入框上方,无遮罩;作答/取消前锁定输入 */}
-        <AskPanel sid={sid} onPendingChange={setAskPending} />
+        {/* 模型提问面板(ask_user_question):内联显示在输入框上方,无遮罩;作答/取消前锁定输入。
+            onBootChange:刷新后拉取挂起提问期间扣住输入区,防止"输入框→面板"闪跳 */}
+        <AskPanel sid={sid} onPendingChange={setAskPending} onBootChange={setAskChecking} />
         {/* 待执行消息队列:对话进行中发送的消息在此排队等待,当前轮结束后按 FIFO 自动执行 */}
         <QueuePanel queue={queue} onRunNow={runQueueNow} onEdit={editQueueItem} onDelete={deleteQueueItem} />
         <div className="composer-box" ref={composerBoxRef}>

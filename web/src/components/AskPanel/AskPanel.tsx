@@ -17,26 +17,38 @@ interface AskPanelProps {
   sid: string | null;
   /** 提问挂起状态变化(父组件据此禁用输入框与停止按钮) */
   onPendingChange?: (pending: boolean) => void;
+  /** 启动检查期变化:刷新后拉取挂起提问期间为 true。父组件据此暂不渲染输入区,
+   *  避免"输入框先出现、面板恢复后再整体替换"的一瞬间布局抖动 */
+  onBootChange?: (checking: boolean) => void;
 }
 
-export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
+export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPanelProps) {
   const [queue, setQueue] = useState<AskRequest[]>([]);
   const [qIndex, setQIndex] = useState(0);
   // 每题的选择:questionId -> 已选 option label;自定义文本:questionId -> 输入
   const [selections, setSelections] = useState<Record<string, string[]>>({});
   const [customs, setCustoms] = useState<Record<string, string>>({});
+  // 启动检查期:挂载后向服务端确认有无挂起提问,期间父组件先扣住输入区不渲染
+  const [checking, setChecking] = useState(true);
 
   // 当前显示会话的 ref(订阅只挂一次,事件按此判断"是否插到当前会话的第一道题")
   const sidRef = useRef(sid);
   sidRef.current = sid;
 
-  // 只取属于当前会话的提问;切走会话(旧会话仍有挂起提问)时面板隐藏,切回仍可见
-  const active: AskRequest | null = queue.find((x) => !sid || !x.sid || x.sid === sid) || null;
+  // 只取属于当前会话的提问;切走会话(旧会话仍有挂起提问)时面板隐藏,切回仍可见。
+  // 检查期内要求 sid 已恢复且能对上号才显示(sid 刚刷新时还是 null,宽松匹配会让
+  // 他席提问先闪现、sid 恢复后面板又消失,造成二次抖动);检查期结束回到宽松匹配
+  const active: AskRequest | null = queue.find((x) => {
+    if (checking) return sid != null && (!x.sid || x.sid === sid);
+    return !sid || !x.sid || x.sid === sid;
+  }) || null;
   const q: AskQuestion | null = active ? active.questions[qIndex] || null : null;
   const pending = !!active;
 
   // 挂起状态上抛:父组件据此禁用输入框/发送/停止按钮
   useEffect(() => { onPendingChange?.(pending); }, [pending, onPendingChange]);
+  // 检查期状态上抛:父组件据此在检查完成前先不渲染输入区(防抖动)
+  useEffect(() => { onBootChange?.(checking); }, [checking, onBootChange]);
 
   useEffect(() => {
     // 订阅不过滤会话:所有会话的 ask_user 事件都入队(带 sid)——
@@ -61,8 +73,10 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
   useEffect(() => {
     // 刷新/重连后恢复挂起提问:ask_user 事件只在提出时广播一次,刷新后组件重建、
     // 事件不会再来,而 agent 仍在阻塞等回答。挂载时向服务端拉一次全量挂起列表
-    // (含所有会话,展示仍由 active 按 sid 过滤),切会话/切回的逻辑不受影响。
+    // (含所有会话,展示仍由上方 active 按 sid 过滤),切会话/切回的逻辑不受影响。
     let alive = true;
+    // 兜底时限:WS 迟迟未连通/服务端过旧不识别 ask_user_list 时,输入区不被无限期扣住
+    const cap = setTimeout(() => { if (alive) setChecking(false); }, 400);
     api.request('ask_user_list', {}).then((r: any) => {
       if (!alive || !Array.isArray(r?.asks)) return;
       setQueue((prev) => {
@@ -74,8 +88,11 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
         }
         return merged;
       });
-    }).catch(() => { /* 服务端暂不可用:下次事件仍会正常入队 */ });
-    return () => { alive = false; };
+    }).catch(() => { /* 服务端暂不可用:下次事件仍会正常入队 */ }).finally(() => {
+      clearTimeout(cap);
+      if (alive) setChecking(false);
+    });
+    return () => { alive = false; clearTimeout(cap); };
   }, []);
 
   if (!active || !q) return null;
@@ -138,14 +155,18 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
           {total > 1 && (
             <div className="ask-steps" role="group" aria-label="题目进度,点击跳转">
               {active.questions.map((qn, i) => (
-                <button
+                /* 进度段不用 <button>:全局按钮样式的投影/hover 会一层层渗进来,
+                   div + cursor:pointer 一劳永逸;键盘可达性用 role + 回车/空格补齐 */
+                <div
                   key={qn.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   className={`ask-step ${i === qIndex ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`}
                   aria-label={`第 ${i + 1} 题,${answered(qn) ? '已作答' : '未作答'}`}
                   aria-current={i === qIndex ? 'step' : undefined}
                   title={`第 ${i + 1} 题 · ${answered(qn) ? '已作答' : '未作答'}`}
                   onClick={() => setQIndex(i)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setQIndex(i); } }}
                 />
               ))}
             </div>

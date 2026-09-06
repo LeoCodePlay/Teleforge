@@ -46,11 +46,11 @@
 .ask-head-side { display: flex; align-items: center; gap: 10px; flex: none; }
 .ask-close { flex: none; }
 
-/* 进度段:每道题一节胶囊,绿=已答 / 冰蓝=当前 / 灰=未答,点击可跳题 */
+/* 进度段:每道题一节胶囊,绿=已答 / 冰蓝=当前 / 灰=未答,点击可跳题。
+   用 div 而非 button:全局按钮样式的投影/hover 规则不会再渗进来 */
 .ask-steps { display: flex; align-items: center; gap: 4px; }
 .ask-step {
-  appearance: none; width: 20px; height: 16px; padding: 0; border: none;
-  background: transparent; cursor: pointer;
+  width: 20px; height: 16px; cursor: pointer;
   display: inline-flex; align-items: center;
 }
 .ask-step::before {

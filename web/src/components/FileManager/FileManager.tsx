@@ -141,6 +141,15 @@ function FmRow({ entry, selected, navLoading, renaming, renameBusy, renameDraft,
 // 文件管理器:导航式浏览远程目录(进入目录即显示其内容)
 // 选中:单击单选 · Ctrl/Cmd+单击 多选切换 · Shift+单击 连选 · Ctrl+A 全选 · Delete 删除
 // 操作:双击打开/进入 · 右键对选区执行 打开/下载/复制/删除/粘贴
+// 固定定位的右键菜单只在"面板内容会移动"的滚动时才需要关闭:滚动元素在面板内(列表/面包屑自滚)
+// 或包含面板(外层容器滚动)会让菜单与行错位;聊天流式吸底、编辑器等无关区域的滚动不打断菜单
+function scrollMovesPanel(root: HTMLElement | null, e: Event): boolean {
+  if (!root) return true;
+  const el = e.target instanceof Document ? e.target.documentElement : e.target as Node | null;
+  if (!el) return true;
+  return root.contains(el) || el.contains(root);
+}
+
 export default function FileManager({ workspace, home, connId, localCwd, onCwdChange, onOpenFile }: FileManagerProps) {
   const { confirm } = useFeedback();
   const [path, setPath] = useState(() => norm(workspace || home || '/'));
@@ -176,6 +185,7 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   const listRef = useRef<HTMLDivElement>(null);
   const crumbsRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);           // 面板根节点:滚动关闭时判定菜单是否会错位
   const seqRef = useRef(0);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useHorizontalScroller(crumbsRef);
@@ -322,7 +332,6 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   const closeMenu = () => setMenu(null);
   useEffect(() => {
     if (!menu) return;
-    const close = () => setMenu(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
     // 用 pointerdown 而非 click 监听关闭:文件行的 click 被 stopPropagation 拦截(见 handleRowClick),
     // 但按下事件仍会冒泡到 window;点在菜单内部则忽略,保证菜单项的 click 能被正常触发
@@ -331,13 +340,14 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
       if (menuRef.current && menuRef.current.contains(t)) return;
       setMenu(null);
     };
+    const onScroll = (e: Event) => { if (scrollMovesPanel(rootRef.current, e)) setMenu(null); };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [menu]);
 
@@ -346,7 +356,6 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   // 按下事件仍会冒泡到 window;上传按钮与菜单内部不视为"外部"(按钮交给 toggle,菜单项自行关闭)
   useEffect(() => {
     if (!uploadMenu) return;
-    const close = () => setUploadMenu(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setUploadMenu(null); };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
@@ -354,13 +363,14 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
       if (uploadMenuRef.current?.contains(t)) return;
       setUploadMenu(null);
     };
+    const onScroll = (e: Event) => { if (scrollMovesPanel(rootRef.current, e)) setUploadMenu(null); };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [uploadMenu]);
 
@@ -625,7 +635,7 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
             : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
 
   return (
-    <div className="fm">
+    <div className="fm" ref={rootRef}>
       <div className="fm-toolbar row gap">
         {home && <button className="ghost sm" onClick={() => load(home)} data-tip={`家目录 ${home}`}>🏠</button>}
         <div className="fm-crumbs" ref={crumbsRef} data-ob-skip>

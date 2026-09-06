@@ -274,6 +274,22 @@
 }
 .chatwrap.ask-focus .ask-body { max-height: 54vh; }
 
+/* ---- 启动检查期(ask-boot):刷新后 AskPanel 先向服务端确认有无挂起提问。
+   期间隐藏会被提问面板替换的输入区部件(输入框/工具栏/队列/工作区条),
+   且 composer 的玻璃底垫与 ask-focus 同款隐藏——否则会先闪现一个空玻璃框、
+   面板出现后框又消失,仍是两次布局变化。检查期与挂起态的 composer 外形完全一致,
+   "面板直接出现"或"无提问时输入区直接出现",都只发生一次视觉变化 ---- */
+.chatwrap.ask-boot .composer-box,
+.chatwrap.ask-boot .composer-toolbar,
+.chatwrap.ask-boot .queue-panel,
+.chatwrap.ask-boot .wsbar-row { display: none; }
+.chatwrap.ask-boot .composer { padding: 6px 14px 10px; margin: 2px 12px 12px; gap: 0; }
+.chatwrap.ask-boot .composer::before { display: none; }
+.chatwrap.ask-boot .ask-panel {
+  max-width: 560px; width: 100%; margin: 0 auto;
+}
+.chatwrap.ask-boot .ask-body { max-height: 54vh; }
+
 /* 命令台容器:左侧终端主体 + 右侧终端列表 —— 布局在 console.scss,此处仅输入区 */
 
 /* 输入区:液态玻璃停靠面板(半透明 + 仅背景模糊)——
