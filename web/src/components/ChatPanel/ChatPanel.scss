@@ -5,6 +5,25 @@
 .chatwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; max-width: 780px; width: 100%; margin: 0 auto; }
 .chat-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 18px 16px; min-width: 0; }
+/* 回到底部悬浮按钮:用户上滑离开底部时出现在对话区右下角(流式期间不自动拉回,
+   方便回看上下文,一键返回最新消息)。液态玻璃圆钮,与 composer 玻璃语言一致;
+   挂在 .chat-scroll(定位宿主)内,不随消息滚动 */
+.jump-bottom {
+  position: absolute; right: 18px; bottom: 12px; z-index: 6;
+  width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text);
+  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 18px var(--shadow-1);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  cursor: pointer;
+  animation: msg-in .18s ease-out;
+  transition: border-color .15s ease, color .15s ease;
+}
+.jump-bottom:hover { border-color: var(--glass-border-hover); color: var(--accent-2); }
+.jump-bottom:active { transform: translateY(1px); }
 .empty { text-align: center; color: var(--muted); margin-top: 12vh; font-size: 14px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .empty-logo { width: 72px; height: 72px; opacity: .9; margin-bottom: 6px; user-select: none; -webkit-user-drag: none; }
 .msg { margin-bottom: 14px; display: flex; }
@@ -172,6 +191,18 @@
 .cursor { display: inline-block; width: 2px; height: 1.05em; background: var(--accent-2); vertical-align: text-bottom; border-radius: 1px; animation: blink 1s infinite; box-shadow: 0 0 6px var(--accent-glow); }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* 运行中指示行:agent 工作期间挂在消息列表末尾,StateDot ongoing 像素追光 +
+   灰字提示。长耗时步骤(大文件写入/命令执行)没有文本增量流出时,让"仍在
+   运行"可见,避免误以为卡死。随消息滚动,吸附触底时始终在视口内 */
+.running-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 14px; color: var(--muted); font-size: 12.5px;
+  animation: msg-in .25s ease-out;
+}
+.running-text { user-select: none; }
+/* 历史整表载入时与消息一致不播入场动画 */
+.chat.no-anim .running-row { animation: none; }
+
 /* 工具调用:单条回复内按组折叠为一条,展开才显示各卡片 */
 .toolrun { margin-top: 8px; min-width: 0; }
 .toolrun-head {
@@ -227,7 +258,8 @@
 .chatwrap.ask-focus .composer-box,
 .chatwrap.ask-focus .composer-toolbar,
 .chatwrap.ask-focus .wsbar-row,
-.chatwrap.ask-focus .msg-actions { display: none; }
+.chatwrap.ask-focus .msg-actions,
+.chatwrap.ask-focus .jump-bottom { display: none; }
 /* 用户消息下的操作栏(复制/删除/回退)同为操作入口,一并隐藏 */
 .chatwrap.ask-focus .user-msg-foot { opacity: 0; }
 /* 收起 composer 玻璃底垫,让提问面板以独立卡片呈现并居中 */
@@ -413,6 +445,7 @@
   .composer { margin: 6px; padding: 8px; border-radius: var(--r-md); }
   .composer-box { padding: 8px; border-radius: var(--r-md); }
   .wsbar-row { gap: 6px; }
+  .jump-bottom { right: 10px; bottom: 8px; width: 30px; height: 30px; }
 }
 
 /* ---- 触屏:消息操作栏/时间常显;hover 显现逻辑失效,跳转点改隐藏 ---- */

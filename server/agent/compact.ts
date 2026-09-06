@@ -41,18 +41,17 @@ export function measureMessages(msgs: any[]): number {
 }
 
 /**
- * 由模型的 contextWindow/maxTokens 推导压缩水位:
- * - thresholdTokens:触发压缩的阈值(可用的输入预算×80%)
- * - retainTokens:压缩后希望保留的最近窗口
+ * 由模型的 contextWindow/maxTokens 推导压缩水位(照搬 harness compaction-basic 的
+ * thresholdRatio/retainRatio):
+ * - thresholdTokens:触发压缩的阈值 = 窗口 × 80%(测量口径含固定信封,见 compactHistory);
+ * - retainTokens:压缩后保留的最近窗口 = 窗口 × 16%
  */
 export function resolveCompactSpec(contextWindow: unknown, maxTokens: unknown): { enabled: boolean; thresholdTokens: number; retainTokens: number } {
   const win = Number(contextWindow) || 0;
   if (win <= 0) return { enabled: false, thresholdTokens: 0, retainTokens: 0 };
-  const out = Math.max(1, Number(maxTokens) || COMPACT.SUMMARY_MAX_TOKENS);
-  const usable = Math.max(1, win - out); // 输入侧可用预算
   return {
     enabled: true,
-    thresholdTokens: Math.floor(usable * COMPACT.THRESHOLD_RATIO),
+    thresholdTokens: Math.floor(win * COMPACT.THRESHOLD_RATIO),
     retainTokens: Math.floor(win * COMPACT.RETAIN_RATIO)
   };
 }
@@ -122,27 +121,44 @@ export function compactionInstruction(): string {
 }
 
 /**
- * 对消息历史执行上下文压缩:
- * 未配置 contextWindow 或未超阈值(force=false)时原样返回;超阈值时选区间 -> 生成摘要
- * (失败降级裁剪)-> 返回 [摘要消息, ...保留区最近消息]。
- * reservedTokens:每次请求的固定开销(system 提示词 + 工具 schema 的估算 token),
- * 传入时从触发阈值里扣除——否则实际请求比水位估算大一截,压缩触发严重偏晚。
+ * 对消息历史执行上下文压缩(照搬 harness compaction-basic 的 compactIfNeeded 顺序):
+ * 1) 测量:整次请求 = surface 消息 + 固定信封(reservedTokens = system + 工具 schema 的估算);
+ * 2) 未超窗口 80% 水位(且非 force)时原样返回;
+ * 3) 超水位:先跑无模型免费裁剪——pruner 把 surface 上所有超过 8192 字符的工具结果
+ *    折叠为头尾摘要(照搬 harness compaction-tool-result-pruner,不保留最近几条),
+ *    重测后回到水位内则只返回折叠结果(compacted=false,pruned=N,日志不动);
+ * 4) 仍超:选区间 -> 生成摘要(失败降级裁剪)-> 返回 [摘要消息, ...保留区最近消息]。
  * force:跳过阈值检查强制执行(上下文爆窗恢复用);retainTokensOverride:覆盖保留水位
  * (爆窗恢复传 0 = 只保留最后一个配对完整节点,最大力度压缩)。
  */
-export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0, force = false, retainTokensOverride }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number; force?: boolean; retainTokensOverride?: number }): Promise<{ messages: any[]; compacted: boolean; dropCount: number }> {
+export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0, force = false, retainTokensOverride }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number; force?: boolean; retainTokensOverride?: number }): Promise<{ messages: any[]; compacted: boolean; dropCount: number; pruned: number }> {
   const spec = resolveCompactSpec(contextWindow, maxTokens);
-  if (!spec.enabled) return { messages, compacted: false, dropCount: 0 };
-  // 水位扣除固定开销(system + 工具 schema):真实请求 = 历史 + 固定开销,
-  // 只量历史会让触发点比真实爆窗点晚一个 system 的体量(实测偏差可达数万 token)。
-  // 地板:阈值必须大于保留水位(retainTokens+1),对齐 harness 的"retainTokens < thresholdTokens"校验,
-  // 防止固定开销异常巨大时阈值被扣到 0,导致每一步都触发压缩、保留区几乎为空
-  const thresholdTokens = Math.max(spec.retainTokens + 1, Math.max(1, spec.thresholdTokens - Math.max(0, Math.floor(reservedTokens))));
-  if (!force && measureMessages(messages) <= thresholdTokens) return { messages, compacted: false, dropCount: 0 };
+  if (!spec.enabled) return { messages, compacted: false, dropCount: 0, pruned: 0 };
+  // 水位(照搬 harness):threshold = 窗口×80%,且必须大于保留水位(对齐 harness 的
+  // "retainTokens < thresholdTokens" 校验,防异常配置导致每步都压缩、保留区几乎为空)
+  const thresholdTokens = Math.max(spec.retainTokens + 1, spec.thresholdTokens);
+  const reserved = Math.max(0, Math.floor(reservedTokens));
+  // 测量口径 = surface + 固定信封:真实请求 = 历史 + system + 工具 schema,
+  // 只量历史会让触发点比真实水位晚一个信封的体量(实测偏差可达数万 token)。
+  if (!force && measureMessages(messages) + reserved <= thresholdTokens) {
+    return { messages, compacted: false, dropCount: 0, pruned: 0 };
+  }
+
+  // 第一遍:无模型免费裁剪(照搬 harness compaction-tool-result-pruner 默认值:
+  // 8192/4096/1024,对 surface 上所有超限结果生效,不保留最近几条)
+  const P = AGENT.TOOL_RESULT_PRUNE;
+  const prunedRes = pruneToolResults(messages, {
+    keepRecent: 0, minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
+  });
+  let msgs = prunedRes.messages;
+  if (!force && measureMessages(msgs) + reserved <= thresholdTokens) {
+    // 折叠后已回到水位内:无需摘要压缩,折叠只作用于投影(事件日志保持完整)
+    return { messages: msgs, compacted: false, dropCount: 0, pruned: prunedRes.pruned };
+  }
 
   const retainTokens = retainTokensOverride === undefined ? spec.retainTokens : Math.max(0, Math.floor(retainTokensOverride));
-  const range = selectCompactRange(messages, retainTokens);
-  if (!range) return { messages, compacted: false, dropCount: 0 };
+  const range = selectCompactRange(msgs, retainTokens);
+  if (!range) return { messages: msgs, compacted: false, dropCount: 0, pruned: prunedRes.pruned };
 
   let summary = '';
   if (llm && !llm.isMock) {
@@ -168,7 +184,7 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
       ? `【上下文已自动压缩】为节省上下文窗口,早期对话被压缩为以下摘要(如需细节请让助手展开):\n${summary}`
       : `【上下文已自动压缩】早期 ${range.drop.length} 条消息因超出上下文窗口已省略。${preserveOriginalTask(range.drop)}`
   };
-  return { messages: [summaryMsg, ...range.recent], compacted: true, dropCount: range.drop.length };
+  return { messages: [summaryMsg, ...range.recent], compacted: true, dropCount: range.drop.length, pruned: prunedRes.pruned };
 }
 
 /** 摘要生成失败降级裁剪时,至少保留被裁区间的原始任务锚点(第一条 user 消息),避免模型"失忆" */

@@ -15,13 +15,16 @@ const { AGENT } = await import('../server/config.ts');
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n} ${e}`); } };
 
-// 并发观测:test_slow 工具启动/结束时更新共享计数,记录最大并发数
+// 并发观测:test_slow 工具启动/结束时更新共享计数,记录最大并发数。
+// concurrencySafe 需显式声明(harness 语义:未声明一律按不安全处理,独占执行)。
 let running = 0, maxRunning = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const registerSlowTool = () => toolRegistry.register({
+const registerSlowTool = (extra = {}) => toolRegistry.register({
   name: 'test_slow',
   description: 'test',
   parameters: { type: 'object', properties: { name: { type: 'string' }, ms: { type: 'integer' } }, required: ['name', 'ms'] },
+  concurrencySafe: true,
+  ...extra,
   async run({ name, ms }) {
     running++; maxRunning = Math.max(maxRunning, running);
     await sleep(ms);
@@ -109,6 +112,34 @@ async function main() {
     check('场景C: 结果仍按模型顺序提交(X,Y,Z)', JSON.stringify(tools.map((m) => String(m.content))) === JSON.stringify(['done-X', 'done-Y', 'done-Z']), JSON.stringify(tools.map((m) => m.content)));
     unregister();
     AGENT.CONCURRENT_TOOL_CALLS = oldFlag;
+  }
+
+  // ---- 场景 D:fail-closed——未声明 concurrencySafe 的工具独占执行(harness 语义) ----
+  {
+    running = 0; maxRunning = 0;
+    const unregister = registerSlowTool();
+    const unregisterUnsafe = toolRegistry.register({
+      name: 'test_unsafe',
+      description: 'test',
+      parameters: { type: 'object', properties: { name: { type: 'string' }, ms: { type: 'integer' } }, required: ['name', 'ms'] },
+      // 未声明 concurrencySafe:未知/未声明一律按不安全处理,必须独占执行
+      async run({ name, ms }) {
+        running++; maxRunning = Math.max(maxRunning, running);
+        await sleep(ms);
+        running--;
+        return `done-${name}`;
+      }
+    });
+    const a = makeAgent();
+    a.llm = makeFakeLlm([
+      { id: 's1', name: 'test_slow', arguments: JSON.stringify({ name: 'S1', ms: 40 }) },
+      { id: 'u1', name: 'test_unsafe', arguments: JSON.stringify({ name: 'U1', ms: 10 }) },
+      { id: 's2', name: 'test_slow', arguments: JSON.stringify({ name: 'S2', ms: 10 }) }
+    ]);
+    const tools = await runAndToolMsgs(a, '安全与不安全混合调用');
+    check('场景D: 未声明并发安全的工具独占执行(maxRunning=1)', maxRunning === 1, `实际 maxRunning=${maxRunning}`);
+    check('场景D: 结果仍按模型顺序提交', JSON.stringify(tools.map((m) => String(m.content))) === JSON.stringify(['done-S1', 'done-U1', 'done-S2']), JSON.stringify(tools.map((m) => m.content)));
+    unregister(); unregisterUnsafe();
   }
 
   console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);

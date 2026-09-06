@@ -27,49 +27,10 @@ registerTools(registry);
 // 供 ws 层列出/开关工具插件(设置 → 工具插件)
 export { registry as toolRegistry };
 
-// 工具结果入日志的裁剪预算(head + marker + tail,参照 harness pruner 思路):
-// 保留头尾而非丢弃,保证跨轮对话模型能复用已有探索结果,
-// 避免每轮重复 get_workspace_info / list_directory 探测环境。
-const STORE_HEAD = 4000;
-const STORE_TAIL = 1000;
-const NO_MIDDLE_TRIM_TOOLS = new Set(['read_file', 'read_local_file', 'search_code', 'search_local_code']);
-function storeCap(s: string, toolName?: string) {
-  if (!s) return s;
-  if (toolName && NO_MIDDLE_TRIM_TOOLS.has(toolName)) return s;
-  if (s.length <= STORE_HEAD + STORE_TAIL) return s;
-  const omitted = s.length - STORE_HEAD - STORE_TAIL;
-  return s.slice(0, STORE_HEAD) + `\n…[工具结果过长,历史中省略中间 ${omitted} 字符]…\n` + s.slice(s.length - STORE_TAIL);
-}
-
 // ---- 自动续推
-// 完成判定不再只是"模型返回 0 个 tool_calls":任务计划(todo/write 投影)仍有未完成项时,
-// 注入一条 source='goal_round' 的续推 user 消息并继续循环,强制模型在同一会话推进到真正完成。
-// hasIncompleteTodos:计划中存在未完成(pending/in_progress)项
-function hasIncompleteTodos(todos) {
-  return Array.isArray(todos) && todos.some((t) => t && typeof t.status === 'string' && t.status !== 'completed');
-}
-
-// 续推文案(中文化自 harness renderGoalRoundPrompt:继续推进、把工作区/工具结果/持久状态当权威、
-// 宣称完成前收集整个目标已实现的证据、有活保持 active 进下一轮)
-function renderContinuation(todos, round) {
-  const pending = (todos || []).filter((t) => t && t.status !== 'completed');
-  const list = pending.map((t, i) => `${i + 1}. [${t.status || 'pending'}] ${String(t.content || '').slice(0, 200)}`).join('\n');
-  return [
-    '<goal_round>',
-    `Round: ${round}`,
-    '',
-    '你的任务计划仍有未完成项。继续在同一会话推进目标,把当前工作区、工具结果和持久状态当作权威,直接检查它们,而不是假设之前的叙述仍然准确。',
-    '做出实质进展并验证结果。宣称完成前,收集证据(读文件/跑命令/查看输出)证明整个任务目标已达成,而不是只做了第一步。',
-    '每完成一项,立即用 todo_write 把对应项标记为 completed;全部完成后给出最终总结。若确有无法推进的硬性障碍,说明原因并结束。',
-    '',
-    '当前未完成任务:',
-    list,
-    '</goal_round>'
-  ].join('\n');
-}
-
-// 输出因 max_tokens 被截断时的续推文案(截断 ≠ 完成,不算"卡住")
-const TRUNCATED_CONTINUE_TEXT = '你的上一条回复因达到输出上限被截断,可能没有完成。请从截断处继续,不要重复已完成的内容。';
+// 完成判定对齐 harness agent-loop:模型返回 0 个 tool_calls 即本轮结束(completed),
+// 不再注入 goal_round 续推消息。任务计划(todo)只作为前端进度面板展示,
+// 由系统提示词的规则约束模型"清空计划前不得停止",而不是由宿主强行续跑。
 
 // ---- repeat-tool-reminder(移植自 harness guard/repeat-tool-reminder)----
 // 连续相同工具+参数调用达到阈值时在下一步注入提醒(advisory,不拦截调用),防模型原地打转。
@@ -110,6 +71,16 @@ export function isToolUnsupportedError(e) {
   return TOOL_UNSUPPORTED_RES.some((re) => re.test(s));
 }
 
+// 会话日志中最后一条"运行时上下文"快照的内容(供运行时恢复 lastContextText,
+// 避免服务重启/会话切回后对未变化的快照重复追加 user 消息)
+function lastRuntimeContextText(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev?.type === 'user/message' && ev.data?.source === 'runtime') return String(ev.data.content || '');
+  }
+  return null;
+}
+
 // 会话运行时:每个会话独立持有事件日志与驱动状态,多会话可并行运行互不阻塞
 function newRuntime(session) {
   return {
@@ -122,10 +93,11 @@ function newRuntime(session) {
     queueSeq: 0,   // 待执行队列项的自增 id(供前端按 id 做立即执行/删除等操作)
     driving: null, // 进行中的 driver promise(同会话并发提交复用同一驱动)
     boundConn: null, // 当前轮绑定的 SSH 连接(切走活动连接后工具仍操作它)
-    goalBlocked: 0,  // 连续"模型宣称完成但任务计划仍有未完成项"的次数(自动续推防死循环门槛)
+    // 最近一次发给模型的"运行时上下文"快照文本(变化才发新消息,见 _buildRuntimeContext);
+    // 从日志恢复,重启/切回会话后不会对未变化的快照重复注入
+    lastContextText: lastRuntimeContextText(session.events),
     lastCallKey: null, // 上一次工具调用的规范化键(工具名+参数),repeat-tool-reminder 追踪用
     lastCallCount: 0,  // 连续相同调用次数
-    lastPruneCount: 0, // 本轮上次打印折叠日志时的折叠条数(只在条数增长时打印,避免每步刷屏)
     overflowRecoveries: 0, // 本轮上下文爆窗恢复次数(达到上限后不再重试,防死循环)
     live: null as null | { content: string; reasoning: string } // 当前步已流式收到、尚未落盘的回复半成品(供 getHistory 投影,见 onDelta)
   };
@@ -796,15 +768,11 @@ export class Agent {
     const turnStartSeq = session.seq;
     const turn = session.nextTurn();
     rt.overflowRecoveries = 0; // 新一轮:爆窗恢复次数清零
-    rt.lastPruneCount = 0;     // 新一轮:折叠日志去重计数清零
     let turnOpened = false;
     let useTools = !this._chatOnly;
-    // 当前模型若单独配置了迭代上限则优先使用,否则回退全局默认(AGENT.MAX_ITERS)
-    const maxIters = (this.llm && this.llm.maxIters) || AGENT.MAX_ITERS;
     let finalText = '';
     let reasoningChars = 0; // 本轮累计收到的思考字符(供 turn 结束的"零思考"提示判断)
     let stepsUsed = 0;
-    let continueRounds = 0; // 本轮累计自动续推次数(上限 AGENT.GOAL_ROUND_MAX,防失控)
     let endReason: { kind: string; error?: any } = { kind: 'completed' };
     let stepPartial = '';         // 当前步已流式收到的正文(中止时抢救落盘,保住"正在回答的部分")
     let stepPartialReasoning = '';
@@ -824,7 +792,9 @@ export class Agent {
       }
       // 工具调用上下文:todo_write 等需要写会话事件日志的工具从这里拿到所属会话
       const invokeCtx = { sid: runSessionId, session, emit: this.emit };
-      for (let step = 1; step <= maxIters; step++) {
+      // 对齐 harness agent-loop:轮内步数没有上限,循环由"模型不再发起工具调用"自然收敛;
+      // 上下文水位由压缩治理,失控时用户可随时手动停止。
+      for (let step = 1; ; step++) {
         if (signal.signal.aborted) throw new Error('已停止');
         if (!turnOpened) {
           session.append('turn/start', { turn }); turnOpened = true;
@@ -840,34 +810,40 @@ export class Agent {
           ...(injectedSkills.length > 0 ? { skillsInjected: injectedSkills } : {})
         });
 
-        // 收件箱:领取运行中注入(steer),作为本步的追加 user 消息
+        // 收件箱:领取运行中注入(steer),作为本步的追加 user 消息;
+        // 真实用户输入到达时重置 repeat-tool-reminder 计数(对齐 harness guard 的 reset 语义)
         for (const s of rt.steer.splice(0)) {
           session.append('user/message', { content: s.text, source: 'steer' });
+          if (!s.internal) { rt.lastCallKey = null; rt.lastCallCount = 0; }
+        }
+
+        // 运行时上下文快照(对齐 harness runtime-context 投影):工作区/技能目录/环境探测
+        // 等动态信息不进 system prompt,而是作为 user 消息进入历史;文本变化才追加新快照。
+        // system 因此保持逐字节稳定,提供方/网关的前缀缓存不会中途失效。
+        const contextText = this._buildRuntimeContext();
+        if (contextText !== rt.lastContextText) {
+          session.append('user/message', { content: contextText, source: 'runtime', display: '⚙ 运行时上下文已更新' });
+          rt.lastContextText = contextText;
         }
 
         stepsUsed = step;
         this.emit('agent', { event: 'iteration', iter: step, sid: runSessionId });
 
-        // 模型请求 = system(提示词组装) + 事件日志投影出的派生历史。
-        // 治理顺序(对齐 harness compactIfNeeded:先无模型裁剪,再按"模型可见面"决定是否压缩):
-        // 1) 投影期折叠早期大工具结果(不动日志,只裁模型当轮可见面;水位双触发);
-        // 2) 摘要压缩——阈值按折叠后的量计量,单消息深任务同样可中途压缩(位置式区间);
-        // 3) 字符预算兜底裁剪。
+        // 模型请求 = system(静态提示词) + 事件日志投影出的派生历史 + 全量工具 schema。
+        // 治理顺序(对齐 harness compactIfNeeded):测量口径 = surface 消息 + 固定信封
+        // (system + 工具 schema);超过窗口 80% 水位时先跑无模型裁剪(pruner 折叠大工具
+        // 结果),仍超再做摘要压缩;窗口未配置时由字符预算兜底裁剪承担最后防线
+        // (差异:harness 总能拿到模型窗口,本工具需兼容窗口未配置的提供方)。
         const systemText = this._systemPrompt(reasoning);
         const ctxWindow = (this.llm && this.llm.contextWindow) || 0;
         const toolSchemas = useTools ? registry.schemas({ localOnly: !ssh.connected }) : [];
-        // 每次请求的固定开销(system 提示词 + 工具 schema)估算:压缩水位与投影裁剪都要扣除,
-        // 否则实际请求比水位估算大一个 system 的体量(实测偏差可达数万 token),触发严重偏晚
+        // 每次请求的固定开销(system 提示词 + 工具 schema)估算:压缩水位按"整次请求"计量,
+        // 只量历史会让触发点比真实水位晚一个信封的体量(实测偏差可达数万 token)。
         const reservedTokens = estimateTokens(systemText) + (toolSchemas.length ? estimateTokens(JSON.stringify(toolSchemas)) : 0);
         // 先用完整历史投影(不裁剪);折叠/压缩/裁剪都发生在投影副本上,
         // trace 与消息一一对应,供压缩落盘时把消息下标映射回事件 seq。
-        const trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
+        let trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
         let historyMsgs = trace.map((t) => t.msg);
-        // 1) 投影期折叠早期大工具结果(参照 harness tool-result-pruner):日志不动,
-        //    只裁模型当轮可见面;水位双触发(窗口占比 + 绝对地板,见 AGENT.TOOL_RESULT_PRUNE)。
-        historyMsgs = this._pruneHistoryToolResults(historyMsgs, ctxWindow, reservedTokens, rt).messages;
-        // 2) 摘要压缩:阈值按折叠后的"模型可见面"计量,与上面折叠共用同一口径;
-        //    单轮深工具任务(只有一组对话)现在也能中途压缩(selectCompactRange 按位置选区间)。
         if (ctxWindow > 0 && historyMsgs.length > 2) {
           const c = await compactHistory({
             messages: historyMsgs, system: systemText, llm: this.llm, signal: signal.signal,
@@ -877,12 +853,16 @@ export class Agent {
             const dropSeqs = trace.slice(0, c.dropCount).map((t) => t.seq);
             const anchorSeq = trace[c.dropCount] ? trace[c.dropCount].seq : null; // 保留区第一条消息的 seq
             session.squash(dropSeqs, c.messages[0].content, anchorSeq, { dropCount: c.dropCount, manual: false });
-            historyMsgs = c.messages;
-            console.log(`[agent] 上下文超限,已自动压缩早期 ${c.dropCount} 条消息(窗口 ${ctxWindow})`);
+            // 日志已被 squash 改写:重新投影,保证后续爆窗恢复的事件 seq 映射仍然有效
+            trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
+            historyMsgs = trace.map((t) => t.msg);
+            console.log(`[agent] 上下文超水位,已自动压缩早期 ${c.dropCount} 条消息${c.pruned ? `(此前折叠 ${c.pruned} 条大工具结果)` : ''}(窗口 ${ctxWindow})`);
+          } else if (c.pruned > 0) {
+            historyMsgs = c.messages; // pruner 折叠生效(只裁模型当轮可见面,日志不动)
+            console.log(`[agent] 上下文超水位,已折叠 ${c.pruned} 条大工具结果(未触发摘要压缩,窗口 ${ctxWindow})`);
           }
         }
-        // 3) 兜底字符裁剪:摘要未触发/未配置窗口时仍按预算裁剪,但永不丢原始任务锚点。
-        //    预算由输入窗口推导(未配置窗口回退固定默认),对齐前端仪表盘的 token 口径。
+        // 兜底字符裁剪:窗口未配置/摘要未触发时按预算裁剪,但永不丢原始任务锚点。
         historyMsgs = trimMessagesByBudget(historyMsgs, resolveCharBudget(ctxWindow));
         const messages = [{ role: 'system', content: systemText }, ...historyMsgs];
 
@@ -930,7 +910,7 @@ export class Agent {
             });
             const P = AGENT.TOOL_RESULT_PRUNE;
             historyMsgs = pruneToolResults(historyMsgs, {
-              keepRecent: 0, minChars: P.MIN_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
+              keepRecent: 0, minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
             }).messages;
             const c = await compactHistory({
               messages: historyMsgs, system: systemText, llm, signal: signal.signal,
@@ -1001,58 +981,25 @@ export class Agent {
         stepPartialReasoning = '';
         rt.live = null; // 已落盘:get_history 从事件日志投影,不再需要 live 半成品(防重复投影)
 
-        // 模型不再请求工具:先做"完成前二次校验"(移植 harness goal-round-driver)——
-        // 输出被截断(max_tokens)或任务计划仍有未完成项时注入续推消息继续循环,
-        // 而不是无条件宣告完成。这是修复"复杂任务只做第一步就显示就绪"的核心。
+        // 停止条件(对齐 harness agent-loop step()):模型不再发起工具调用即本轮结束(completed)。
+        // 输出因 max_tokens 被截断时同样结束,结束原因记为 max-tokens(harness 的粘性语义:
+        // 截断的步骤不得被当作正常完成),是否继续由用户决定,而不是宿主替模型续跑。
         if (!res.toolCalls || res.toolCalls.length === 0) {
           finalText = res.content || '';
           session.append('step/end', { turn, step });
-          // 1) 输出因 max_tokens 被截断:截断 ≠ 完成,续推继续(不算"卡住")
-          const truncated = !!res.finishReason && String(res.finishReason).toLowerCase() === 'length';
-          if (truncated && AGENT.CONTINUE_TRUNCATED) {
-            this.emit('agent', { event: 'notice', sid: runSessionId, text: '上一条回复因达到输出上限被截断,已自动续推继续完成' });
-            session.append('user/message', { content: TRUNCATED_CONTINUE_TEXT, source: 'goal_round', display: '↻ 上一条回复因达到输出上限被截断,自动续推' });
-            continue;
-          }
-          // 2) 任务计划仍有未完成项:自动续推,受连续次数门槛(GOAL_BLOCKED_AFTER)
-          //    与总次数上限(GOAL_ROUND_MAX)双重约束,防止无限循环
-          const todos = foldTodos(session.events);
-          if (hasIncompleteTodos(todos)) {
-            rt.goalBlocked++;
-            continueRounds++;
-            const pendingCount = todos.filter((t) => t.status !== 'completed').length;
-            if (rt.goalBlocked <= AGENT.GOAL_BLOCKED_AFTER && continueRounds <= AGENT.GOAL_ROUND_MAX) {
-              this.emit('agent', { event: 'notice', sid: runSessionId, text: `任务计划仍有 ${pendingCount} 项未完成,自动续推继续执行(第 ${continueRounds} 次)` });
-              session.append('user/message', {
-                content: renderContinuation(todos, continueRounds),
-                source: 'goal_round',
-                display: `↻ 自动续推:任务计划仍有 ${pendingCount} 项未完成`
-              });
-              continue;
-            }
-            // 连续多次宣称完成但计划未清空:停止续推,明确告知,避免无限循环
-            this.emit('agent', {
-              event: 'notice', sid: runSessionId,
-              text: rt.goalBlocked > AGENT.GOAL_BLOCKED_AFTER
-                ? `任务疑似卡住:连续 ${AGENT.GOAL_BLOCKED_AFTER} 次宣称完成但任务计划仍有 ${pendingCount} 项未完成,已停止自动续推。请检查模型是否已实际完成,或把任务拆小后重试。`
-                : `自动续推已达上限(${AGENT.GOAL_ROUND_MAX} 次)但任务计划仍有 ${pendingCount} 项未完成,已停止。请把任务拆小后重试。`
-            });
+          if (String(res.finishReason || '').toLowerCase() === 'length') {
+            endReason = { kind: 'max-tokens' };
+            this.emit('agent', { event: 'notice', sid: runSessionId, text: '上一条回复因达到输出上限被截断,本轮已结束;发送"继续"可让模型接着输出。' });
           }
           break;
         }
 
-        // 执行本步全部工具调用(串行或并行见 _runToolCalls;并行
-        // 的有界滚动池 runGroup:并发发起、结果按模型请求顺序提交)。
-        // 执行任何工具都说明模型在实质工作,重置"卡住"计数
-        rt.goalBlocked = 0;
+        // 执行本步全部工具调用(并发安全判定 + 有界滚动池见 _runToolCalls:
+        // 并发发起、结果按模型请求顺序提交)。
         const { turnConcluded } = await this._runToolCalls(rt, session, runSessionId, signal, turn, step, res.toolCalls, invokeCtx);
 
         session.append('step/end', { turn, step });
         if (turnConcluded) break; // 工具显式收尾:本轮到此为止,不再请求模型
-        if (step === maxIters) {
-          endReason = { kind: 'max-iters' };
-          this.emit('agent', { event: 'notice', text: `已达单轮最大工具迭代次数(${maxIters}),请把任务拆小继续`, sid: runSessionId });
-        }
       }
 
       this.emit('agent', { event: 'done', text: finalText, iters: stepsUsed, sid: runSessionId });
@@ -1145,15 +1092,16 @@ export class Agent {
     let committed = 0;
     let turnConcluded = false;
 
-    // 读写分类互斥:mutating 调用(写文件/编辑/删除,见 ToolDef.mutating)必须独占执行——
+    // 并发安全互斥(对齐 harness tool-calls 的 executionMode):isConcurrencySafe=true 的调用
+    // 之间才并行;不安全(mutating 写文件/编辑/删除、交互等待等)的调用必须独占执行——
     // 与其它任何调用并发都可能产生 read-modify-write 竞态(如两条 edit_file 同文件,
-    // 后读的一方会把先写的一方的更新覆盖掉)。readonly 调用之间照常并行;
+    // 后读的一方会把先写的一方的更新覆盖掉)。未知/判定异常一律按不安全处理(fail-closed)。
     // 调用发起顺序仍严格保持模型顺序(只是相互等待),结果提交顺序语义不变。
-    const mutFlags = calls.map((c) => registry.isMutating(c.tc.name));
+    const safeFlags = calls.map((c) => registry.isConcurrencySafe(c.tc.name));
     const barrierBlocks = (index: number) => {
       if (inFlight.size === 0) return false;
-      if (mutFlags[index]) return true; // 自身是写:等在飞的全部排干
-      return [...inFlight.keys()].some((j) => mutFlags[j]); // 有写在飞:读也得等它落地
+      if (!safeFlags[index]) return true; // 自身不安全:等在飞的全部排干(独占执行)
+      return [...inFlight.keys()].some((j) => !safeFlags[j]); // 有不安全调用在飞:其余也得等它落地
     };
 
     const commitReady = () => {
@@ -1208,9 +1156,11 @@ export class Agent {
 
   /** 提交单个工具结果:落盘 tool/result + 向前端发 tool_result(与工具执行解耦,供并行按序调用) */
   _emitToolResult(session: Session, runSessionId: string | null, turn: number, step: number, tc: any, r: ToolResult) {
+    // 结果全量入日志(体量上限由工具层输出 cap 与注册表 spill 策略保证);
+    // 早期大结果由压缩水位的 pruner 折叠(harness 语义),不再在落盘时截断。
     session.append('tool/result', {
       turn, step, callId: tc.id, name: tc.name,
-      isError: r.isError, content: storeCap(r.content, tc.name), ms: r.ms,
+      isError: r.isError, content: r.content, ms: r.ms,
       ...(r.meta !== undefined ? { meta: r.meta } : {}) // 结构化 UI 数据(终端卡 exitCode/cwd 等)
     });
     const short = r.content.length > 4000 ? r.content.slice(0, 4000) + `\n…[结果较多,已折叠展示 ${r.content.length} 字符]…` : r.content;
@@ -1237,41 +1187,49 @@ export class Agent {
   }
 
   /**
-   * 投影期折叠历史中的旧工具结果(请求构造时调用,不动事件日志):
-   * 触发条件(满足其一):
-   * - 预估请求 token(历史 + system + 工具 schema)超过可用窗口的 WATER_RATIO;
-   * - 或超过绝对地板 ABS_FLOOR_TOKENS——声明窗口虚高时占比水位永远不会触发,
-   *   绝对地板保证长会话仍被治理。
-   * 命中后:最近 KEEP_RECENT 条结果原样保留,更早的超长结果折叠为头尾摘要。
-   * 返回 { messages, stats }:折叠后消息 + 统计(供日志与 context_usage 用"折叠后的
-   * 模型可见面"计量,消灭"触发指标与实际发送量脱节"的口径问题)。
+   * 运行时上下文快照(对齐 harness 的 runtime-context / system-prompt context 注册项):
+   * 工作区、平台、技能目录与最近一次环境探测结果拼成一段文本,由调用方在 pre-step
+   * 作为 user 消息追加进历史——文本与上次不同才追加(变化才发,新快照取代旧快照)。
+   * 环境段带字符预算(AGENT.ENV_SNAPSHOT_MAX_CHARS),目录树再大也不允许撑爆历史。
    */
-  _pruneHistoryToolResults(historyMsgs: any[], ctxWindow: number, reservedTokens: number, rt?: any): { messages: any[]; stats: { pruned: number; charsSaved: number; preTokens: number; postTokens: number } } {
-    const P = AGENT.TOOL_RESULT_PRUNE;
-    const empty = { messages: historyMsgs, stats: { pruned: 0, charsSaved: 0, preTokens: 0, postTokens: 0 } };
-    if (!P || !P.ENABLED) return empty;
-    const usable = ctxWindow > 0 ? Math.max(1, ctxWindow - ((this.llm && this.llm.maxTokens) || 8192)) : 0;
-    const projected = measureMessages(historyMsgs) + Math.max(0, reservedTokens);
-    const overRatio = usable > 0 && projected > usable * P.WATER_RATIO;
-    const overFloor = projected > P.ABS_FLOOR_TOKENS;
-    if (!overRatio && !overFloor) return empty;
-    const r = pruneToolResults(historyMsgs, {
-      keepRecent: P.KEEP_RECENT, minChars: P.MIN_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
-    });
-    const postTokens = measureMessages(r.messages) + Math.max(0, reservedTokens);
-    if (r.pruned > 0 && (!rt || r.pruned > rt.lastPruneCount)) {
-      if (rt) rt.lastPruneCount = r.pruned;
-      console.log(`[agent] 历史工具结果折叠:${r.pruned} 条,省约 ${r.charsSaved} 字符(预估请求 ${Math.round(projected)}→${Math.round(postTokens)} token${overFloor && !overRatio ? ',命中绝对地板' : ''})`);
-    }
-    return { messages: r.messages, stats: { pruned: r.pruned, charsSaved: r.charsSaved, preTokens: projected, postTokens } };
-  }
-
-  _systemPrompt(reasoning = 'default') {
-    // 本地模式 = 未连接 SSH:所有文件/命令/技能都只在本机本地工作区运作,
-    // 远程工具已从可见工具集剔除,提示词也不再引导模型去调用它们
+  _buildRuntimeContext(): string {
     const localMode = !ssh.connected;
     const ws = ssh.workspace || '(未设置,请提示用户在界面中选择工作区)';
     const lws = localFs.workspace || '(未设置,请提示用户在界面中选择本地工作区)';
+    const sections: string[] = [];
+    // 工作区说明:本地模式下只讲本机工作区,不提"可操作远程"
+    if (localMode) {
+      sections.push(`本地平台: ${process.platform}`, `本地工作区: ${lws}`);
+    } else {
+      sections.push(`远程平台: ${ssh.platform || '未知'}`, `远程工作区: ${ws}`, `本地平台: ${process.platform}`, `本地工作区: ${lws}`);
+    }
+    // 技能目录(照搬 harness tool-skill 的 catalog 注入):有可用技能时提示模型按需加载
+    const skillCatalog = renderSkillCatalog(getSkillsCatalog());
+    if (skillCatalog) sections.push(skillCatalog);
+    // 最近一次远程环境探测结果:让模型直接复用,避免每轮重复 get_workspace_info
+    const env = getEnvInfo();
+    if (env && env.workspace === ssh.workspace) {
+      sections.push(`已知远程环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_workspace_info):\n${String(env.summary || '').slice(0, AGENT.ENV_SNAPSHOT_MAX_CHARS)}`);
+    }
+    // 最近一次本地环境探测结果:让模型直接复用,避免每轮重复 get_local_info
+    const lenv = getLocalEnvInfo();
+    if (lenv && lenv.workspace === localFs.workspace) {
+      sections.push(`已知本地环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_local_info):\n${String(lenv.summary || '').slice(0, AGENT.ENV_SNAPSHOT_MAX_CHARS)}`);
+    }
+    return [
+      '<runtime_context>',
+      'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.',
+      '(当前运行时上下文快照,取代此前所有快照;其中未变化的信息直接复用,不要重复探测)',
+      '',
+      ...sections,
+      '</runtime_context>'
+    ].join('\n');
+  }
+
+  _systemPrompt(reasoning = 'default') {
+    // system 只保留静态内容:身份 + 工具指引 + 规则 + 用户自定义注入。
+    // 动态信息(工作区/环境快照/技能目录)一律走 _buildRuntimeContext 的 user 快照消息,
+    // 保证 system 逐字节稳定(harness 语义:system 不携带运行时状态,前缀缓存不失效)。
     // 推理等级:off 关闭思考(直答);xhigh/max 深度推理;其余按默认格式输出
     // off 档不再是"直接给结论"而是"直接行动":先调用工具完成任务后再给结论,避免模型只描述不执行
     const thinkingRule = reasoning === 'off'
@@ -1279,22 +1237,8 @@ export class Agent {
       : (reasoning === 'xhigh' || reasoning === 'max')
         ? '11. 输出格式:先在 ```thinking(...```) 代码块中进行充分、系统的深度推理(允许较长,逐步分析再下结论),再在正文给出结论与操作;复杂任务务必先想清楚再动手。'
         : '11. 输出格式:任何推理过程请放在 ```thinking(...```) 代码块中(前端会折叠),不要污染正文;正文只给结论与操作。';
-    // 工作区说明:本地模式下只讲本机工作区,不提"可操作远程"
-    const workspaceIntro = localMode
-      ? [
-          '你是 AI 编程助手。当前**未连接远程 SSH 服务器**,处于**本地模式**:所有文件读写、命令执行与技能使用都只在本机(本地工作区)进行,不涉及任何远程服务器。',
-          `本地平台: ${process.platform}`,
-          `本地工作区: ${lws}`,
-        ]
-      : [
-          '你是 AI 编程助手,可同时操作两台"工作区":远程 ssh 服务器与本机(本地)。',
-          `远程平台: ${ssh.platform || '未知'}`,
-          `远程工作区: ${ws}`,
-          `本地平台: ${process.platform}`,
-          `本地工作区: ${lws}`,
-        ];
     // 工具选择规则:本地模式下远程工具已剔除,只提示用 *_local 工具
-    const toolRule = localMode
+    const toolRule = !ssh.connected
       ? '2. 所有文件读写、命令执行一律用 `*_local` 工具(read_local_file/write_local_file/edit_local_file/run_local_command/list_local_dir/search_local_code/get_local_info/...),只在本机本地工作区操作;远程工具(read_file/write_file/run_command 等)当前不可用,不要调用。'
       : '2. 操作**远程**文件/命令用原工具(read_file/write_file/run_command/...);操作**本机**文件/命令用 `*_local` 工具(read_local_file/write_local_file/run_local_command/...)。不要在本地工具里传远程路径,反之亦然。';
     const lines = [
@@ -1305,15 +1249,13 @@ export class Agent {
       'Use the write tool to create files or completely replace file contents. Existing files are overwritten, so read an existing file first and prefer edit for targeted changes.',
       'Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must be unique.',
       '',
-      ...workspaceIntro,
-      '',
       '规则:',
       '1. 所有文件读写、命令执行都必须通过工具完成,严禁编造内容或输出;看不到的结果就再查。',
       toolRule,
       '3. 命令默认在对应工作区目录下执行;若需切换目录,请在命令开头显式写 cd。',
-      '4. 大文件用 read_file/read_local_file 的 offset/maxBytes 分片;修改文件优先 edit_file/edit_local_file 精确替换。',
+      '4. 大文件用 read_file/read_local_file 的 offset/limit 按行分页(结果带行号,默认最多 2000 行);修改文件优先 edit_file/edit_local_file 精确替换。',
       '5. 写/改/删仅限对应工作区内;绝不能删除工作区根目录;破坏性命令(rm -rf、drop table 等)必须三思。',
-      '6. 重要:对话历史里已有的环境信息与目录结构可直接复用,不要重复探测;只有任务涉及变化时才重新调用。',
+      '6. 重要:<runtime_context> 快照与对话历史里已有的环境信息、目录结构和工具结果可直接复用,不要重复探测;只有任务涉及变化时才重新调用。',
       '7. 回答使用用户的提问语言(默认中文)。',
       '8. 任务规划(强制):复杂多步任务必须先调用 todo_write 建立完整计划(每项一个具体步骤),每完成一项立即标记 completed,允许且只允许一项 in_progress。任务计划全部 completed 之前,不得以文字回复代替执行——必须继续调用工具直到整张清单完成,或你已用工具验证整个目标确实达成。简单单步任务可跳过计划,但同样必须真正执行而不是只描述。',
       '9. 完成判定:宣称完成前,收集证据(读取文件、查看命令输出、检查修改结果)证明整个任务目标已达成,而不是只做了第一步就下结论。若发现遗漏或失败,继续修复直到证据确凿;无法推进时再调用 ask_user_question 或说明原因。',
@@ -1322,9 +1264,6 @@ export class Agent {
       '',
       '当用户指令不明确、或工作区缺乏必要信息时,主动调用工具检查,而不是猜测。'
     ];
-    // 技能目录(照搬 harness 的 skill catalog 注入):有可用技能时提示模型按需加载
-    const skillCatalog = renderSkillCatalog(getSkillsCatalog());
-    if (skillCatalog) lines.push('', skillCatalog);
     // 全局指令注入(移植自 dsh-purge):用户自定义的 prompt-inject.md 作为强指令注入
     const inject = renderPromptInjectSection();
     if (inject) lines.push(inject);
@@ -1334,19 +1273,6 @@ export class Agent {
         '注意:当前模型不支持工具调用(纯对话模式)。你无法实际读写远程文件或执行命令,',
         '也不要声称执行了任何操作;请基于已有信息给出文字回答,并提醒用户换支持工具的模型来获得完整能力。'
       );
-    }
-    // 注入最近一次远程环境探测结果,让模型直接复用,避免每轮重复 get_workspace_info
-    // 快照带字符预算(AGENT.ENV_SNAPSHOT_MAX_CHARS):目录骨架再大也不允许撑爆 system prompt
-    const env = getEnvInfo();
-    if (env && env.workspace === ssh.workspace) {
-      lines.push('', '已知环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_workspace_info):');
-      lines.push(String(env.summary || '').slice(0, AGENT.ENV_SNAPSHOT_MAX_CHARS));
-    }
-    // 注入最近一次本地环境探测结果,让模型直接复用,避免每轮重复 get_local_info
-    const lenv = getLocalEnvInfo();
-    if (lenv && lenv.workspace === localFs.workspace) {
-      lines.push('', '已知本地环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_local_info):');
-      lines.push(String(lenv.summary || '').slice(0, AGENT.ENV_SNAPSHOT_MAX_CHARS));
     }
     return lines.join('\n');
   }

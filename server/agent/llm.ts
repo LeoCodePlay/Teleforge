@@ -56,7 +56,8 @@ export class LlmClient {
   maxTokens: number;
   // 输入上下文窗口(token):>0 时启用对话历史自动压缩(见 compact.js);未配置则沿用字符预算裁剪
   contextWindow: number;
-  // 该模型单独的单轮最大工具迭代次数;<=0 表示未配置,由 agent 回退到全局默认(AGENT.MAX_ITERS)
+  /** @deprecated harness 的 agent-loop 没有迭代上限(循环由"无 tool_calls"收敛,水位靠压缩治理);
+   *  字段仅为兼容旧的提供方配置保留,agent 主循环不再读取 */
   maxIters: number;
 
   constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters }: LlmOptions) {
@@ -78,17 +79,11 @@ export class LlmClient {
    */
   async chat({ messages, tools, signal, onDelta, onRetry, reasoning = 'default' }: ChatOptions): Promise<ChatResult> {
     if (this.isMock) return mockChat({ messages, tools, signal, onDelta });
-    const deepseekV4 = isDeepSeekV4(this.model);
-    // 历史 assistant 消息中的 reasoning_content 处理(DeepSeek thinking 模式的 passback 规则):
-    // - 非 DeepSeek v4 模型:整体剥离(从 v4 切到其他模型/网关时,该字段可能不被上游接受导致 400)
-    // - DeepSeek v4 思考开启(reasoning != 'off'):所有 assistant 消息的 reasoning_content 必须
-    //   原样回传,无论是否带 tool_calls。一旦剥离纯文本轮的 reasoning_content,上游会 400
-    //   (The reasoning_content in the thinking mode must be passed back to the API)
-    // - DeepSeek v4 关闭思考(reasoning === 'off'):剥离 reasoning_content,与 thinking.type=disabled 一致
-    let requestMessages = messages;
-    if (!deepseekV4 || reasoning === 'off') {
-      requestMessages = messages.map(stripReasoning);
-    }
+    // 历史 assistant 消息中的 reasoning_content 处理(照搬 harness llm-deepseek serialize 的
+    // passback 规则,DeepSeek thinking_mode 官方规则):reasoning_content 只在带 tool_calls 的
+    // assistant 消息上回传(工具调用轮次模型需要延续思考链);纯文本轮次的 reasoning 会被
+    // 上游忽略,直接剥离省 token。所有模型统一适用。
+    const requestMessages = messages.map(stripReasoningForWire);
     validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
     const url = `${this.baseUrl}/chat/completions`;
     // 最小兼容请求体:不加 stream_options(部分聚合网关不支持),tools 时显式 tool_choice
@@ -110,6 +105,7 @@ export class LlmClient {
     //   (GLM-4.5+ 默认开思考;glm-4v 等老模型可能不认该参数,默认档保持不发,避免 400)
     // - Qwen 系列(通义兼容模式):off → enable_thinking=false,显式选档 → true;default 不传
     // - 其他推理模型(OpenAI o 系列 / gpt-5 / grok 等):reasoning_effort 仅 low/high 合法,off/xhigh/max 就近映射
+    const deepseekV4 = isDeepSeekV4(this.model);
     if (deepseekV4) {
       if (reasoning === 'off') {
         body.thinking = { type: 'disabled' };
@@ -211,13 +207,15 @@ const QWEN_RE = /^qwen/i;
 // 支持 reasoning_effort 参数的其他推理模型(OpenAI o 系列 / gpt-5 / grok-3-mini 等);其余模型不透传
 const REASONING_EFFORT_RE = /^(o[134](-|$)|gpt-5|grok-3-mini|grok-4)/i;
 
-// 剥离消息里的 reasoning_content 字段(passback 规则见 chat())
-function stripReasoning(m: any): any {
-  if (m && typeof m === 'object' && 'reasoning_content' in m) {
-    const { reasoning_content, ...rest } = m;
-    return rest;
-  }
-  return m;
+// 发送前的 reasoning_content passback 处理(照搬 harness llm-deepseek serialize.ts):
+// 带 tool_calls 的 assistant 消息保留 reasoning_content(thinking-mode 工具调用轮次要求回传);
+// 其余消息(纯文本 assistant、user/tool)一律剥离——纯文本轮的 reasoning 会被上游忽略,剥离省 token。
+function stripReasoningForWire(m: any): any {
+  if (!m || typeof m !== 'object') return m;
+  if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return m;
+  if (!('reasoning_content' in m)) return m;
+  const { reasoning_content, ...rest } = m;
+  return rest;
 }
 
 // 发送前校验 messages 结构,尽早暴露问题而不是收到 400
@@ -388,11 +386,12 @@ async function mockChat({ messages, tools, signal, onDelta }: { messages: any[];
 }
 
 function extractWorkspace(messages: any[]): string {
-  for (const m of messages) {
-    if (m.role === 'system' && m.content?.includes('工作区')) {
-      const mm = m.content.match(/工作区: ([^\n]+)/);
-      if (mm) return mm[1].trim();
-    }
+  // 工作区信息随"运行时上下文"快照进入历史(user 消息),不再固定在 system prompt;
+  // 因此这里扫描全部消息(优先 system)。
+  const ordered = [...messages.filter((m) => m.role === 'system'), ...messages.filter((m) => m.role !== 'system')];
+  for (const m of ordered) {
+    const mm = m.content?.match?.(/工作区: ([^\n]+)/);
+    if (mm) return mm[1].trim();
   }
   return '';
 }

@@ -1,12 +1,14 @@
-// 工具注册表与执行管线(设计 的 tools 子系统):
+// 工具注册表与执行管线(设计参照 deepseek-harness 的 tools 子系统):
 // - register/get/schemas:schemas() 只向模型投影 name/description/parameters 三个
 //   白名单字段,执行函数、超时等宿主元数据绝不进入模型请求。
 // - guard:pre-execute 单调守卫——只能拒绝(返回理由),不能推翻其他守卫的拒绝;
 //   返回 undefined 表示不干预。
-// - execute() 管线:查找 -> 参数解析 -> 守卫 -> 带超时执行 -> 结果规范化。
+// - execute() 管线:查找 -> 参数解析 -> 守卫 -> 带超时执行 -> spill 整形 -> 结果规范化。
 //   未知工具、非法参数、守卫拒绝、超时与异常一律变成结构化错误结果(isError)
 //   而不是抛异常:单个工具调用失败只影响它自己,绝不终结整轮
 //   (参照 harness:the call fails without ending the turn)。
+// - spill 策略(照搬 harness spill-policy):纯文本结果超过 SPILL_MAX_BYTES 时,
+//   入历史前替换为头尾对半预览 + 省略提示;read 工具豁免(防 read→spill→read 循环)。
 import { AGENT } from '../config.ts';
 import { toolSettings } from './tool-settings.ts';
 
@@ -21,11 +23,17 @@ export interface ToolDef {
   timeoutMs?: number;
   remote?: boolean;
   /**
-   * 是否改变外部状态(写文件/建目录/删除等)。并行池里 mutating 调用必须独占执行,
+   * 是否改变外部状态(写文件/建目录/删除等)。mutating 调用在并行池里必须独占执行,
    * 与其它任何调用并发都可能产生 read-modify-write 竞态(如两条 edit_file 同文件,
-   * 后读的一方覆盖先写的一方的更新)。run_command 类有意不标:命令并发是既有特性。
+   * 后读的一方覆盖先写的一方的更新)。
    */
   mutating?: boolean;
+  /**
+   * 是否并发安全(对齐 harness ToolDef.isConcurrencySafe):并行池里只有显式声明
+   * concurrencySafe=true 的工具(只读探测/命令执行)之间才并行;未声明一律按不安全
+   * 处理(fail-closed,与 mutating 同样独占)。
+   */
+  concurrencySafe?: boolean;
   [k: string]: any;
 }
 
@@ -99,9 +107,11 @@ export class ToolRegistry {
     return schemas;
   }
 
-  /** 该工具是否改变外部状态(并行池的互斥依据,见 ToolDef.mutating) */
-  isMutating(name: string): boolean {
-    return !!this.tools.get(name)?.mutating;
+  /** 是否并发安全(并行池互斥依据,见 ToolDef.concurrencySafe):未知工具/未声明一律不安全(fail-closed) */
+  isConcurrencySafe(name: string): boolean {
+    const def = this.tools.get(name);
+    if (!def || def.mutating) return false;
+    return def.concurrencySafe === true;
   }
 
   /**
@@ -146,7 +156,7 @@ export class ToolRegistry {
       const concludesTurn = !!(rawResult && typeof rawResult === 'object' && rawResult.concludesTurn === true);
       const meta = rawResult && typeof rawResult === 'object' ? rawResult.meta : undefined;
       return {
-        isError: false, content: capResult(content), ms: Date.now() - started,
+        isError: false, content: spillResult(content, name), ms: Date.now() - started,
         ...(concludesTurn ? { concludesTurn: true } : {}),
         ...(meta !== undefined ? { meta } : {})
       };
@@ -168,15 +178,30 @@ function runWithTimeout(p: any, ms: number, signal?: AbortSignal): Promise<any> 
   });
 }
 
-// 结果截断:保留头尾、折叠中段(与工具内部整形独立的双保险);
-// 截断时追加 retrievalHint,提示模型中段/尾部可分段再取(对齐 harness spill 思路),
-// 避免模型拿不到关键信息而反复做同样的探测调用。
-const TRUNCATION_HINT = '\n[结果过长已截断:中段内容被省略。若需中段/尾部细节,可用 read_file(offset/limit) 或 run_command 缩小范围再取,不要重复相同调用]';
-function capResult(s: string, max: number = AGENT.TOOL_RESULT_MAX_CHARS): string {
-  if (!s) return '';
-  if (s.length <= max) return s;
-  return s.slice(0, Math.floor(max * 0.6))
-    + `\n…[结果过长,已截断,剩余 ${s.length - max} 字符]…\n`
-    + s.slice(s.length - Math.floor(max * 0.4))
-    + TRUNCATION_HINT;
+// ---- spill 策略(照搬 harness spill-policy,tools/post-execute 位置的通用兜底) ----
+// 纯文本结果超过 SPILL_MAX_BYTES 时,替换为头尾对半预览 + 省略提示(通知不计入预算,
+// 保证替换结果永不超 cap);read 工具豁免——读取本身就是"回看完整内容"的手段,
+// 再把读到的内容折叠掉会造成 read→spill→read 的空转循环。
+const SPILL_SKIP_TOOLS = new Set(['read_file', 'read_local_file']);
+
+// 从尾部修剪悬空的 UTF-8 多字节序列(截断点落在字符中间时丢弃半个字符)
+function trimUtf8Tail(buf: Buffer): Buffer {
+  let end = buf.length;
+  while (end > 0 && (buf[end - 1] & 0xC0) === 0x80) end--;
+  if (end > 0 && (buf[end - 1] & 0x80) !== 0) end--; // 再去掉多字节序列的起始字节
+  return buf.subarray(0, end);
+}
+
+function spillResult(content: string, toolName: string): string {
+  if (!content) return content;
+  if (SPILL_SKIP_TOOLS.has(toolName)) return content;
+  const buf = Buffer.from(content, 'utf8');
+  if (buf.length <= AGENT.SPILL_MAX_BYTES) return content;
+  const half = Math.floor(AGENT.SPILL_MAX_BYTES / 2);
+  const head = trimUtf8Tail(buf.subarray(0, half)).toString('utf8');
+  const tail = trimUtf8Tail(buf.subarray(buf.length - half)).toString('utf8');
+  const omitted = buf.length - Buffer.byteLength(head, 'utf8') - Buffer.byteLength(tail, 'utf8');
+  return head
+    + `\n\n[${Math.round(omitted / 1024)}KB 已省略。以上为结果的头尾摘录;如需中段细节,请用更精确的参数重新调用该工具(缩小搜索范围/分段读取/提高过滤条件)]\n\n`
+    + tail;
 }

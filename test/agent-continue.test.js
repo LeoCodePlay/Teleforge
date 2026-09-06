@@ -1,10 +1,14 @@
-// 验证"自动续推"的三条路径:
-// 1. 模型建了 todo 计划但有未完成项就宣称完成 -> 系统自动注入 goal_round 续推消息并继续循环,
-//    而不是无条件 break 显示就绪(修复"复杂任务只做第一步就停")。
-// 2. 模型连续多次宣称完成但计划未清空 -> 达到 GOAL_BLOCKED_AFTER 门槛后停止续推并提示"卡住"。
-// 3. 模型输出因 max_tokens 被截断(finishReason='length')-> 即使无 todo 计划也自动续推。
-// 同时验证 todo 全部 completed 后正常结束(不误续推)。
-// 注意:本测试写会话历史,需在临时 DATA_DIR 里隔离运行。
+// 验证对话循环的停止语义(照搬 deepseek-harness agent-loop):
+// 1. 模型返回 0 个 tool_calls 即本轮结束(completed)——即使 todo 计划仍有未完成项,
+//    宿主也不再注入 goal_round 续推消息(任务推进由提示词规则约束,不由宿主强跑)。
+// 2. 输出因 max_tokens 被截断(finishReason='length')-> 本轮结束,结束原因为 max-tokens
+//    (harness 粘性语义:截断步骤不得被当作正常完成),是否继续由用户决定。
+// 3. todo 全部 completed -> 正常结束。
+// 4. 运行时上下文快照:首轮请求前历史含 <runtime_context> user 消息,内容未变化时不重复追加。
+// 5. repeat-tool-reminder:连续相同工具+参数调用达到阈值时注入提醒。
+// 6. concludesTurn:工具显式宣告本轮结束(注册表层透传)。
+// 注意:本测试写会话历史并覆盖 <data>/sessions.json,需在临时目录里隔离运行
+// 说明:ESM 静态 import 先于代码执行,故用顶层 await 在导入 agent 前设置 DATA_DIR
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,76 +45,46 @@ const doneText = (events) => {
   const d = events.find(([e, p]) => e === 'agent' && p && p.event === 'done');
   return d ? d[1].text : '';
 };
+const lastTurnEndReason = (agent) => {
+  const ends = agent.session.events.filter((e) => e.type === 'turn/end');
+  return ends.length ? ends[ends.length - 1].data.reason : null;
+};
 
 async function main() {
   setupSsh();
 
-  // ---- 场景 1:todo 未完成即宣称完成 -> 自动续推直到 todo 全 completed ----
-  console.log('\n[场景 1] todo 未完成即宣称完成,应自动续推');
+  // ---- 场景 1:模型宣称完成但 todo 未完成 -> 本轮直接结束(不自动续推,对齐 harness) ----
+  console.log('\n[场景 1] todo 未完成即宣称完成,应直接结束而不续推');
   {
     const { agent, events } = makeAgent();
     let calls = 0;
     const plan = [
-      { content: '第一步:读取 README', status: 'pending' },
-      { content: '第二步:写入 notes', status: 'pending' }
+      { content: '步骤一', status: 'completed' },
+      { content: '步骤二', status: 'pending' }
     ];
     agent.llm = {
       isMock: false,
       async chat({ messages }) {
         calls += 1;
-        // 第 1 次:建计划(全部 pending)
         if (calls === 1) {
           return { content: '', toolCalls: [{ id: 't1', name: 'todo_write', arguments: JSON.stringify({ todos: plan }) }] };
         }
-        // 第 2 次:模型"偷懒",只给文字不调工具(此时 todo 仍全 pending) -> 应触发续推
-        if (calls === 2) {
-          const hasGoalRound = messages.some((m) => m.role === 'user' && String(m.content).includes('<goal_round>'));
-          return { content: '好的,第一步看过了' + (hasGoalRound ? '(续推)' : ''), toolCalls: [] };
-        }
-        // 第 3 次:完成全部计划
-        if (calls === 3) {
-          return { content: '', toolCalls: [{ id: 't2', name: 'todo_write', arguments: JSON.stringify({ todos: plan.map((t) => ({ ...t, status: 'completed' })) }) }] };
-        }
-        // 第 4 次:全部 completed,正常收尾
-        return { content: '全部完成', toolCalls: [] };
+        // 模型"偷懒"只给文字:宿主不注入续推,本轮就此结束
+        const hasGoalRound = messages.some((m) => m.role === 'user' && String(m.content).includes('<goal_round>'));
+        check('场景1: 请求中从未出现 goal_round 注入', !hasGoalRound);
+        return { content: '第一步看过了', toolCalls: [] };
       }
     };
     await agent.run('帮我完成一个多步任务');
-    check('场景1: 发生自动续推(第 2 次模型回复前注入了 goal_round 消息)', calls >= 4, `实际调用 ${calls} 次`);
-    check('场景1: 未提前 done(最终 done 的 iters 在最后一步之后)', doneIters(events) >= 4, `iters=${doneIters(events)}`);
-    check('场景1: 事件日志含 goal_round 续推 notice', sawAgent(events, 'notice', (p) => /自动续推/.test(p.text || '')), '');
-    const goalRound = agent.getHistory().some((m) => m.role === 'user' && /↻ 自动续推/.test(m.content || ''));
-    check('场景1: 前端投影可见续推标记(display)', goalRound);
-    check('场景1: 最终文本为末轮正文', doneText(events) === '全部完成');
+    check('场景1: 无续推,模型只被请求 2 次', calls === 2, `实际调用 ${calls} 次`);
+    check('场景1: 正常 done(iters=2)', sawAgent(events, 'done') && doneIters(events) === 2, `iters=${doneIters(events)}`);
+    check('场景1: 无自动续推 notice', !sawAgent(events, 'notice', (p) => /自动续推/.test(p.text || '')));
+    check('场景1: 结束原因为 completed', lastTurnEndReason(agent)?.kind === 'completed', JSON.stringify(lastTurnEndReason(agent)));
+    check('场景1: 最终文本为末轮正文', doneText(events) === '第一步看过了');
   }
 
-  // ---- 场景 2:连续宣称完成但计划未清空 -> GOAL_BLOCKED_AFTER 后停止并提示卡住 ----
-  console.log('\n[场景 2] 连续宣称完成但计划未清空,应达到门槛后停止续推');
-  {
-    const { agent, events } = makeAgent();
-    let calls = 0;
-    const incomplete = [{ content: '任务 X', status: 'in_progress' }];
-    agent.llm = {
-      isMock: false,
-      async chat() {
-        calls += 1;
-        if (calls === 1) {
-          return { content: '', toolCalls: [{ id: 't1', name: 'todo_write', arguments: JSON.stringify({ todos: incomplete }) }] };
-        }
-        // 之后每次都宣称完成但从不标记 completed -> 续推 3 次后应停止
-        return { content: `第 ${calls} 次宣称完成`, toolCalls: [] };
-      }
-    };
-    await agent.run('做一件事');
-    const stuck = sawAgent(events, 'notice', (p) => /疑似卡住/.test(p.text || ''));
-    check('场景2: 提示了"疑似卡住"', stuck);
-    // GOAL_BLOCKED_AFTER=3,故最大调用 = 1(todo) + 1(首次宣称) + 3(续推) = 5,不超过该值
-    check('场景2: 续推次数受门槛约束(未无限循环)', calls <= 6, `实际调用 ${calls} 次`);
-    check('场景2: 最终仍 emit done(结束而非挂死)', sawAgent(events, 'done'));
-  }
-
-  // ---- 场景 3:输出被截断(finishReason=length)-> 无 todo 也自动续推 ----
-  console.log('\n[场景 3] max_tokens 截断应自动续推而非判完成');
+  // ---- 场景 2:输出被截断(finishReason=length)-> 本轮结束,原因 max-tokens(粘性) ----
+  console.log('\n[场景 2] max_tokens 截断应以 max-tokens 结束,不自动续推');
   {
     const { agent, events } = makeAgent();
     let calls = 0;
@@ -118,20 +92,18 @@ async function main() {
       isMock: false,
       async chat() {
         calls += 1;
-        if (calls === 1) {
-          return { content: '输出到一半被截断', toolCalls: [], finishReason: 'length' };
-        }
-        return { content: '继续完成后的完整输出', toolCalls: [], finishReason: 'stop' };
+        return { content: '输出到一半被截断', toolCalls: [], finishReason: 'length' };
       }
     };
     await agent.run('一个问题');
-    check('场景3: 截断后继续请求了模型(未直接结束)', calls >= 2, `实际调用 ${calls} 次`);
-    check('场景3: 最终 done 文本来自续推后的输出', doneText(events) === '继续完成后的完整输出');
-    check('场景3: 事件日志含截断续推提示', sawAgent(events, 'notice', (p) => /截断|自动续推/.test(p.text || '')));
+    check('场景2: 截断后未继续请求模型(本轮结束)', calls === 1, `实际调用 ${calls} 次`);
+    check('场景2: 有截断提示 notice', sawAgent(events, 'notice', (p) => /截断/.test(p.text || '')));
+    check('场景2: 结束原因为 max-tokens', lastTurnEndReason(agent)?.kind === 'max-tokens', JSON.stringify(lastTurnEndReason(agent)));
+    check('场景2: 仍 emit done(正常收尾而非报错)', sawAgent(events, 'done'));
   }
 
-  // ---- 场景 4:todo 全部 completed -> 正常结束,不误续推 ----
-  console.log('\n[场景 4] todo 全部 completed 应正常结束');
+  // ---- 场景 3:todo 全部 completed -> 正常结束 ----
+  console.log('\n[场景 3] todo 全部 completed 应正常结束');
   {
     const { agent, events } = makeAgent();
     let calls = 0;
@@ -146,9 +118,35 @@ async function main() {
       }
     };
     await agent.run('做一件已完成的事');
-    check('场景4: 未触发续推', calls === 2, `实际调用 ${calls} 次`);
-    check('场景4: 正常 done', sawAgent(events, 'done'));
-    check('场景4: 无"疑似卡住"提示', !sawAgent(events, 'notice', (p) => /疑似卡住|自动续推/.test(p.text || '')));
+    check('场景3: 未触发续推', calls === 2, `实际调用 ${calls} 次`);
+    check('场景3: 正常 done', sawAgent(events, 'done'));
+    check('场景3: 结束原因为 completed', lastTurnEndReason(agent)?.kind === 'completed');
+  }
+
+  // ---- 场景 4:运行时上下文快照(对齐 harness runtime-context:变化才发) ----
+  console.log('\n[场景 4] 运行时上下文作为 user 快照消息注入,内容未变不重复');
+  {
+    const { agent } = makeAgent();
+    let calls = 0;
+    let contextCountAtCall = [];
+    agent.llm = {
+      isMock: false,
+      async chat({ messages }) {
+        calls += 1;
+        contextCountAtCall.push(messages.filter((m) => m.role === 'user' && String(m.content).includes('<runtime_context>')).length);
+        if (calls === 1) {
+          return { content: '', toolCalls: [{ id: 'w', name: 'list_directory', arguments: JSON.stringify({ path: '/home' }) }] };
+        }
+        return { content: '看过了', toolCalls: [] };
+      }
+    };
+    await agent.run('看一下目录');
+    check('场景4: 首次请求前历史含 1 条运行时上下文快照', contextCountAtCall[0] === 1, `got ${contextCountAtCall[0]}`);
+    // 快照全文在事件日志里(getHistory 对带 display 的消息投影显示文本)
+    const ctxMsgs = agent.session.events.filter((e) => e.type === 'user/message' && e.data?.source === 'runtime');
+    check('场景4: 快照带工作区信息', ctxMsgs.some((e) => /远程工作区: \/home/.test(String(e.data?.content || ''))));
+    // 同一轮内环境未变化 -> 第二次请求仍是同一条快照
+    check('场景4: 未变化时不重复追加', contextCountAtCall[1] === 1, `got ${contextCountAtCall[1]}`);
   }
 
   // ---- 场景 5:repeat-tool-reminder——连续相同工具+参数调用达到阈值时注入提醒 ----
@@ -156,21 +154,13 @@ async function main() {
   {
     const { agent, events } = makeAgent();
     let calls = 0;
-    // 用 todo_write 模拟"原地打转":第 1 次建计划,之后每次重复调用 list_directory(相同参数)
     agent.llm = {
       isMock: false,
       async chat() {
         calls += 1;
-        if (calls === 1) {
-          return { content: '', toolCalls: [{ id: 'p', name: 'todo_write', arguments: JSON.stringify({ todos: [{ content: '目标', status: 'in_progress' }] }) }] };
-        }
         if (calls <= 5) {
-          // 第 2~5 次:反复调用 list_directory 同一路径
+          // 反复调用 list_directory 同一路径(达到阈值 3 后应注入提醒)
           return { content: '', toolCalls: [{ id: `l${calls}`, name: 'list_directory', arguments: JSON.stringify({ path: '/home' }) }] };
-        }
-        // 之后收尾(先完成计划再结束,避免续推干扰判定)
-        if (calls === 6) {
-          return { content: '', toolCalls: [{ id: 'f', name: 'todo_write', arguments: JSON.stringify({ todos: [{ content: '目标', status: 'completed' }] }) }] };
         }
         return { content: '完成了', toolCalls: [] };
       }

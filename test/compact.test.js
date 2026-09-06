@@ -41,10 +41,10 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   check('measureMessages 累加', measureMessages([{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }]) >= 2);
 }
 
-// ---- resolveCompactSpec ----
+// ---- resolveCompactSpec(照搬 harness compaction-basic:阈值 = 窗口×80%,保留 = 窗口×16%) ----
 {
   const spec = resolveCompactSpec(64000, 8192);
-  check('resolveCompactSpec 窗口 64k/输出 8k 触发阈值', spec.thresholdTokens === Math.floor((64000 - 8192) * 0.8), `got ${spec.thresholdTokens}`);
+  check('resolveCompactSpec 触发阈值为窗口×80%', spec.thresholdTokens === Math.floor(64000 * 0.8), `got ${spec.thresholdTokens}`);
   check('resolveCompactSpec 保留窗口', spec.retainTokens === 10240, `got ${spec.retainTokens}`);
   check('resolveCompactSpec 未配置窗口禁用', resolveCompactSpec(0, 8192).enabled === false);
 }

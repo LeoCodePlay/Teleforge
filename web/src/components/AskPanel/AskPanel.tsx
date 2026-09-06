@@ -1,8 +1,10 @@
 // 模型向用户提问面板(ask_user_question 工具):
 // 收到 agent 事件 ask_user 后,在会话页输入框上方以内联玻璃卡片展示(无遮罩)。
-// 支持单选/多选/"其它"自定义,多道提问可"上一道/下一道"逐道作答,最后统一提交。
+// 支持单选/多选/"其它"自定义,多道提问可"上一道/下一道"或点头部进度段逐道作答,最后统一提交。
 // 提问挂起期间通过 onPendingChange 通知父组件锁定输入框与停止按钮(未作答前不能继续输入/暂停);
-// 取消/超时/停止 Agent 时自动关闭并恢复输入。所有会话的提问都会入队(带 sid,
+// 取消/超时/停止 Agent 时自动关闭并恢复输入;页面刷新后挂载时经 ask_user_list
+// 从服务端拉回全部挂起提问恢复面板(全部前端断开且 20s 宽限期内未回来才会真正作废)。
+// 所有会话的提问都会入队(带 sid,
 // 不按当前会话过滤),切走会话时面板随会话隐藏、切回仍可见;背景会话提出的
 // 问题切回去也会重新展示,不会因事件被过滤而永久丢失。
 import React, { useEffect, useRef, useState } from 'react';
@@ -56,6 +58,26 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
     return () => { off(); };
   }, []);
 
+  useEffect(() => {
+    // 刷新/重连后恢复挂起提问:ask_user 事件只在提出时广播一次,刷新后组件重建、
+    // 事件不会再来,而 agent 仍在阻塞等回答。挂载时向服务端拉一次全量挂起列表
+    // (含所有会话,展示仍由 active 按 sid 过滤),切会话/切回的逻辑不受影响。
+    let alive = true;
+    api.request('ask_user_list', {}).then((r: any) => {
+      if (!alive || !Array.isArray(r?.asks)) return;
+      setQueue((prev) => {
+        const merged = [...prev];
+        for (const a of r.asks) {
+          if (!a?.askId || !Array.isArray(a.questions) || !a.questions.length) continue;
+          if (merged.some((x) => x.askId === a.askId)) continue;
+          merged.push({ askId: String(a.askId), questions: a.questions, sid: a.sid });
+        }
+        return merged;
+      });
+    }).catch(() => { /* 服务端暂不可用:下次事件仍会正常入队 */ });
+    return () => { alive = false; };
+  }, []);
+
   if (!active || !q) return null;
 
   const answered = (qn: AskQuestion) => {
@@ -63,7 +85,6 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
     const custom = (customs[qn.id] || '').trim().length > 0;
     return sel || custom;
   };
-  const answeredCount = active.questions.filter(answered).length;
 
   const toggleOption = (label: string) => {
     const cur = selections[q.id] || [];
@@ -105,14 +126,32 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
 
   return (
     <div className="ask-panel" role="dialog" aria-modal="false" aria-label="AI 需要你确认">
+      {/* 头部:左侧身份(徽标+标题),右侧题目进度段(可点跳转)+ 关闭。
+          原先挤在标题后的"第 x/y 题 · 已答 x/y"文字由进度段的颜色语义承担:
+          绿=已答,冰蓝=当前题,灰=未答;单道提问时不渲染进度段,头部保持极简 */}
       <div className="ask-head">
-        <span>
-          <span className="ask-badge">❓</span> AI 需要你确认
-          <span className="ask-head-meta">
-            {total > 1 ? ` · 第 ${qIndex + 1}/${total} 题` : ''} · 已答 {answeredCount}/{total}
-          </span>
-        </span>
-        <button className="ghost sm" onClick={cancel}>✕</button>
+        <div className="ask-id">
+          <span className="ask-badge" aria-hidden>?</span>
+          <span className="ask-title">AI 需要你确认</span>
+        </div>
+        <div className="ask-head-side">
+          {total > 1 && (
+            <div className="ask-steps" role="group" aria-label="题目进度,点击跳转">
+              {active.questions.map((qn, i) => (
+                <button
+                  key={qn.id}
+                  type="button"
+                  className={`ask-step ${i === qIndex ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`}
+                  aria-label={`第 ${i + 1} 题,${answered(qn) ? '已作答' : '未作答'}`}
+                  aria-current={i === qIndex ? 'step' : undefined}
+                  title={`第 ${i + 1} 题 · ${answered(qn) ? '已作答' : '未作答'}`}
+                  onClick={() => setQIndex(i)}
+                />
+              ))}
+            </div>
+          )}
+          <button className="ghost sm ask-close" onClick={cancel} aria-label="取消提问">✕</button>
+        </div>
       </div>
 
       <div className="ask-body" key={q.id}>
@@ -120,8 +159,12 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
         <div className="ask-question">{q.question}</div>
 
         {q.options && q.options.length > 0 && (
-          <div className="ask-opts" role={q.multi_select ? 'group' : undefined} aria-label={q.multi_select ? '多选' : '单选'}>
-            {q.options.map((opt) => {
+          <div
+            className={`ask-opts ${q.multi_select ? 'multi' : ''}`}
+            role={q.multi_select ? 'group' : undefined}
+            aria-label={q.multi_select ? '多选' : '单选'}
+          >
+            {q.options.map((opt, i) => {
               const on = (selections[q.id] || []).includes(opt.label);
               return (
                 <button
@@ -129,9 +172,24 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
                   type="button"
                   className={`ask-opt ${on ? 'on' : ''}`}
                   aria-pressed={on}
+                  style={{ '--i': i } as React.CSSProperties}
                   onClick={() => toggleOption(opt.label)}
                 >
-                  <span className="ask-opt-mark">{q.multi_select ? (on ? '☑' : '☐') : (on ? '◉' : '○')}</span>
+                  {/* 选中标记为内联 SVG 图标:单选=同心圆环靶标(外环+中心实心圆),
+                      多选=圆角方框+圆头对勾;形状描边在 SCSS 中按选中态着色 */}
+                  <span className="ask-opt-mark" aria-hidden>
+                    {q.multi_select ? (
+                      <svg viewBox="0 0 16 16">
+                        <rect className="ask-mark-box" x="1.25" y="1.25" width="13.5" height="13.5" rx="4" />
+                        <path className="ask-mark-check" d="M4.6 8.6 7 11 11.6 5.6" pathLength="12" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 16 16">
+                        <circle className="ask-mark-ring" cx="8" cy="8" r="6.75" />
+                        <circle className="ask-mark-core" cx="8" cy="8" r="3.4" />
+                      </svg>
+                    )}
+                  </span>
                   <span className="ask-opt-main">
                     <span className="ask-opt-label">{opt.label}</span>
                     {opt.description && <span className="ask-opt-desc">{opt.description}</span>}
@@ -145,29 +203,28 @@ export default function AskPanel({ sid, onPendingChange }: AskPanelProps) {
           <div className="hint ask-noopts">可直接在下方填写回答</div>
         )}
 
-        <input
-          className="ask-custom"
-          type="text"
-          value={customs[q.id] || ''}
-          placeholder={q.options?.length ? '其它(自定义回答,可不填)…' : '在这里输入你的回答…'}
-          onChange={(e) => setCustom(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); goNext(); } }}
-        />
+        <label className="ask-custom-wrap">
+          <span className="ask-custom-icon" aria-hidden>✎</span>
+          <input
+            className="ask-custom"
+            type="text"
+            value={customs[q.id] || ''}
+            placeholder={q.options?.length ? '其它(自定义回答,可不填)…' : '在这里输入你的回答…'}
+            autoFocus={!q.options?.length}
+            onChange={(e) => setCustom(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); goNext(); } }}
+          />
+        </label>
       </div>
 
+      {/* 底部只保留动作:取消在左,翻题/提交在右;进度展示已上移到头部进度段 */}
       <div className="ask-foot">
-        <button className="ghost sm" onClick={cancel}>取消提问</button>
+        <button className="ghost sm ask-cancel" onClick={cancel}>取消提问</button>
         <div className="ask-nav">
-          <button className="ghost sm" disabled={isFirst} onClick={() => setQIndex(qIndex - 1)}>‹ 上一道</button>
-          <div className="ask-dots" aria-hidden>
-            {active.questions.map((qn, i) => (
-              <span key={qn.id} className={`ask-dot ${i === qIndex ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`} data-tip={answered(qn) ? '已作答' : '未作答'} />
-            ))}
-          </div>
-          <button
-            className={isLast ? 'primary sm' : 'ghost sm'}
-            onClick={goNext}
-          >
+          {total > 1 && (
+            <button className="ghost sm" disabled={isFirst} onClick={() => setQIndex(qIndex - 1)}>‹ 上一道</button>
+          )}
+          <button className={isLast ? 'primary sm' : 'ghost sm'} onClick={goNext}>
             {isLast ? '提交 ✓' : '下一道 ›'}
           </button>
         </div>

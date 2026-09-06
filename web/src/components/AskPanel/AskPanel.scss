@@ -1,5 +1,6 @@
 /* ---- AskPanel 独有样式:模型提问面板(ask_user_question 工具),内联显示在输入框上方,无遮罩 ---- */
 .ask-panel {
+  position: relative;
   background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
   backdrop-filter: var(--blur-md);
   -webkit-backdrop-filter: var(--blur-md);
@@ -9,71 +10,188 @@
   overflow: hidden;
   animation: ask-in .22s cubic-bezier(.2, .9, .3, 1.2);
 }
+/* 顶部注意力渐隐线:一条极细的强调色光线,提示"这里需要处理",不破坏玻璃质感 */
+.ask-panel::before {
+  content: ''; position: absolute; top: 0; left: 12%; right: 12%; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: .5; pointer-events: none;
+}
 @keyframes ask-in {
   from { opacity: 0; transform: translateY(-6px); }
   to   { opacity: 1; transform: none; }
 }
+
+/* -- 头部:身份 + 进度段 + 关闭 -- */
 .ask-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 9px 14px; border-bottom: 1px solid var(--line);
-  font-weight: 600; font-size: 13px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
 }
-.ask-badge { margin-right: 6px; }
-.ask-head-meta { margin-left: 10px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.ask-id {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  font-size: 13px; font-weight: 600;
+}
+/* "?"徽标:强调色玻璃小方块 + 呼吸微光,替代跨平台渲染不一的 ❓ emoji */
+.ask-badge {
+  flex: none; width: 22px; height: 22px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 800; line-height: 1; color: var(--accent-2);
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  border: 1px solid var(--accent-border);
+  animation: ask-pulse 2.6s ease-in-out infinite;
+}
+@keyframes ask-pulse {
+  0%, 100% { box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 8px var(--accent-soft); }
+  50%      { box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 16px var(--accent-glow); }
+}
+.ask-head-side { display: flex; align-items: center; gap: 10px; flex: none; }
+.ask-close { flex: none; }
+
+/* 进度段:每道题一节胶囊,绿=已答 / 冰蓝=当前 / 灰=未答,点击可跳题 */
+.ask-steps { display: flex; align-items: center; gap: 4px; }
+.ask-step {
+  appearance: none; width: 20px; height: 16px; padding: 0; border: none;
+  background: transparent; cursor: pointer;
+  display: inline-flex; align-items: center;
+}
+.ask-step::before {
+  content: ''; width: 100%; height: 6px; border-radius: 999px;
+  background: var(--line-strong);
+  transition: background .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+.ask-step:hover::before { background: var(--glass-border-hover); }
+.ask-step.done::before { background: var(--green); }
+.ask-step.cur::before {
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transform: scaleY(1.35);
+}
+
+/* -- 正文 -- */
 .ask-body {
-  padding: 14px 16px 10px; overflow-y: auto; max-height: 46vh;
+  padding: 14px 16px 12px; overflow-y: auto; max-height: 46vh;
 }
+/* 题目分类小标签:软强调色胶囊 */
 .ask-header {
-  color: var(--accent-2); font-size: 12px; font-weight: 600; letter-spacing: .4px;
-  margin-bottom: 6px; text-shadow: 0 0 12px var(--accent-soft);
+  display: inline-flex; align-items: center;
+  color: var(--accent-2); font-size: 11.5px; font-weight: 600; letter-spacing: .5px;
+  padding: 3px 10px; margin-bottom: 10px;
+  background: var(--accent-soft); border: 1px solid var(--accent-border); border-radius: 999px;
 }
 .ask-question {
-  font-size: 14.5px; line-height: 1.65; font-weight: 600; color: var(--text);
-  margin: 0 0 12px; white-space: pre-wrap; word-break: break-word;
+  font-size: 15px; line-height: 1.65; font-weight: 600; color: var(--text);
+  margin: 0 0 14px; white-space: pre-wrap; word-break: break-word;
 }
+
+/* 选项列表:入场逐条浮起(--i 控制阶梯延迟) */
 .ask-opts { display: flex; flex-direction: column; gap: 8px; }
 .ask-opt {
-  display: flex; align-items: flex-start; gap: 10px; text-align: left;
-  padding: 9px 13px; border-radius: var(--r-md); cursor: pointer;
+  display: flex; align-items: flex-start; gap: 11px; text-align: left;
+  padding: 10px 13px; border-radius: var(--r-md); cursor: pointer;
   background: var(--glass-bg-inset);
   border: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 var(--glass-hi);
   transition: all .18s ease;
   color: var(--text); font-size: 13px;
+  animation: ask-opt-in .3s ease both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+@keyframes ask-opt-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: none; }
 }
 .ask-opt:hover:not(:disabled) {
   border-color: var(--glass-border-hover);
   background: linear-gradient(135deg, var(--fill-2), var(--fill-1));
+  transform: translateY(-1px);
 }
+.ask-opt:active:not(:disabled) { transform: translateY(0) scale(.99); }
 .ask-opt.on {
   border-color: var(--accent-border);
   background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
-  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 16px var(--accent-soft);
+  box-shadow: inset 0 1px 0 var(--btn-sheen);
 }
-.ask-opt-mark { flex: none; font-size: 14px; line-height: 1.4; color: var(--accent-2); }
+/* 选中标记:内联 SVG 重绘 —— 单选=同心圆环靶标(外环+中心实心圆,中留空隙),
+   多选=圆角方框+圆头对勾;未选中为暗色空芯,选中时环/芯/底按强调色着色,
+   对勾以描边动画划入(transform/dash 过渡,无额外动画) */
+.ask-opt-mark {
+  flex: none; width: 17px; height: 17px; margin-top: 1px;
+  display: inline-flex;
+}
+.ask-opt-mark svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+/* 单选:外环 + 中心圆芯 */
+.ask-mark-ring {
+  fill: none; stroke: var(--glass-border-hover); stroke-width: 1.5;
+  transition: stroke .15s ease;
+}
+.ask-mark-core {
+  fill: var(--accent);
+  transform: scale(0); transform-origin: 50% 50%;
+  transition: transform .18s cubic-bezier(.2, .9, .3, 1.4);
+}
+.ask-opts:not(.multi) .ask-opt.on .ask-mark-ring { stroke: var(--accent); }
+.ask-opts:not(.multi) .ask-opt.on .ask-mark-core { transform: scale(1); }
+
+/* 多选:圆角方框 + 圆头对勾 */
+.ask-mark-box {
+  fill: var(--glass-bg-inset); stroke: var(--glass-border-hover); stroke-width: 1.5;
+  transition: fill .15s ease, stroke .15s ease;
+}
+.ask-mark-check {
+  fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 12; stroke-dashoffset: 12;
+  transition: stroke-dashoffset .22s ease .04s;
+}
+.ask-opts.multi .ask-opt.on .ask-mark-box { fill: var(--accent); stroke: var(--accent); }
+.ask-opts.multi .ask-opt.on .ask-mark-check { stroke-dashoffset: 0; }
 .ask-opt-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ask-opt-label { font-weight: 600; line-height: 1.45; word-break: break-word; }
 .ask-opt-desc { color: var(--muted); font-size: 12px; line-height: 1.55; word-break: break-word; }
 .ask-noopts { margin: 0 0 8px; }
+
+/* 自定义回答输入:左侧 ✎ 图标前缀 */
+.ask-custom-wrap { position: relative; display: block; margin-top: 12px; }
+.ask-custom-icon {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  font-size: 12px; line-height: 1; color: var(--muted); pointer-events: none;
+}
 .ask-custom {
-  width: 100%; margin-top: 12px; box-sizing: border-box;
+  width: 100%; box-sizing: border-box;
   background: var(--glass-bg-inset); border: 1px solid var(--glass-border);
-  border-radius: var(--r-sm); padding: 9px 12px; color: var(--text);
+  border-radius: var(--r-sm); padding: 9px 12px 9px 33px; color: var(--text);
   font-size: 13px; outline: none;
   box-shadow: inset 0 1px 0 var(--ins-hl);
   transition: border-color .18s ease, box-shadow .18s ease;
 }
 .ask-custom:focus { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-soft); }
 .ask-custom::placeholder { color: var(--muted); }
+
+/* -- 底部:纯动作行,进度展示已上移头部 -- */
 .ask-foot {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 9px 14px; border-top: 1px solid var(--line);
+  padding: 10px 14px; border-top: 1px solid var(--line);
 }
-.ask-nav { display: flex; align-items: center; gap: 10px; }
-.ask-dots { display: flex; gap: 5px; align-items: center; }
-.ask-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--line-strong); transition: all .18s ease;
+.ask-nav { display: flex; align-items: center; gap: 8px; }
+
+/* 键盘可达性 */
+.ask-opt:focus-visible, .ask-step:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
 }
-.ask-dot.cur { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); transform: scale(1.25); }
-.ask-dot.done { background: var(--green); box-shadow: 0 0 8px var(--ok-border); }
+
+/* -- 响应式:窄屏收紧留白、缩小进度段,foot 三按钮不溢出 -- */
+@media (max-width: 560px) {
+  .ask-head { padding: 9px 12px; }
+  .ask-body { padding: 12px 12px 10px; }
+  .ask-foot { padding: 9px 12px; }
+  .ask-cancel { font-size: 12px; padding-left: 10px; padding-right: 10px; }
+}
+@media (max-width: 400px) {
+  .ask-step { width: 14px; }
+  .ask-steps { gap: 3px; }
+}
+
+/* -- 触屏:加大触控目标 -- */
+@media (hover: none) and (pointer: coarse) {
+  .ask-opt { padding: 12px 14px; }
+  .ask-custom { padding-top: 11px; padding-bottom: 11px; }
+  .ask-foot button { min-height: 38px; }
+}

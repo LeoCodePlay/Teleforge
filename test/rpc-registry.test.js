@@ -37,7 +37,7 @@ const GOLDEN = {
   remote:   ['list_dir', 'read_file', 'write_file', 'create_dir', 'delete', 'copy', 'rename', 'set_workspace'],
   transfer: ['local_to_remote', 'remote_to_local'],
   exec:     ['run_command', 'stop_command'],
-  'ask-user': ['ask_user_answer', 'ask_user_cancel'],
+  'ask-user': ['ask_user_answer', 'ask_user_cancel', 'ask_user_list'],
   ref:      ['ref_candidates']
 };
 
@@ -67,7 +67,7 @@ const router = createRpcRouter({
   emitStatus() {},
   syncAgentScope() {}
 });
-check('router 注册全部 57 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
+check('router 注册全部 58 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
   `缺/多: ${sorted(router.types()).filter((t) => !ALL_TYPES.includes(t)).join(',') || '(无)'}`);
 
 // 重复注册被拒

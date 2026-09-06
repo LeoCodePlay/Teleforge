@@ -62,7 +62,7 @@ check('空/短结果不折叠', pruneToolResults([mk('tool', 'short', { tool_cal
 // ---- 3. estimateTokens 校准 ----
 check('ASCII 估算按 3 字符/token', estimateTokens('aaaaaaaaaa') === Math.ceil(10 / 3) + 1, `got ${estimateTokens('aaaaaaaaaa')}`);
 
-// ---- 4. schemas() 缓存 + isMutating ----
+// ---- 4. schemas() 缓存 + isConcurrencySafe ----
 const s1 = toolRegistry.schemas({ localOnly: true });
 const s2 = toolRegistry.schemas({ localOnly: true });
 check('schemas() 命中缓存(同一引用)', s1 === s2);
@@ -70,7 +70,11 @@ const s3 = toolRegistry.schemas({ localOnly: false });
 check('localOnly 变化重建投影', s3 !== s1);
 const unregister = toolRegistry.register({ name: 'smoke_probe', description: 'x', parameters: { type: 'object', properties: {}, required: [] }, mutating: true, async run() { return 'ok'; } });
 check('新注册工具后缓存失效', toolRegistry.schemas({ localOnly: true }) !== s1);
-check('isMutating 读取标记', toolRegistry.isMutating('smoke_probe') === true && toolRegistry.isMutating('read_local_file') === false);
+// fail-closed 语义:mutating 工具与未声明的工具都不并发安全,只读工具显式安全
+check('isConcurrencySafe fail-closed', toolRegistry.isConcurrencySafe('smoke_probe') === false
+  && toolRegistry.isConcurrencySafe('read_local_file') === true
+  && toolRegistry.isConcurrencySafe('write_local_file') === false
+  && toolRegistry.isConcurrencySafe('不存在的工具') === false);
 unregister();
 check('注销后重建投影内容一致', JSON.stringify(toolRegistry.schemas({ localOnly: true })) === JSON.stringify(s1));
 

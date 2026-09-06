@@ -20,6 +20,8 @@ import { ToolCallList } from '../ToolCallList/ToolCallList';
 import { ReasoningRow } from '../ReasoningRow/ReasoningRow';
 import { CompactionRow } from './CompactionRow';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
+import { StateDot } from '../StateDot/StateDot';
+import { IconChevronDownOutline14 } from '../icons/icons';
 import './ChatPanel.scss';
 
 // 新会话(尚未创建服务端会话)的前端占位 sid:用于"草稿式"新建——
@@ -446,6 +448,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     return 'default';
   });
   const scrollRef = useRef<HTMLDivElement>(null);
+  // ---- 自动触底(吸附底部)控制 ----
+  // stick=true 时流式更新/消息变化跟随触底;用户手动上滑离开底部即暂停(方便回看上下文),
+  // 重新滚回底部、发送消息或切换会话时恢复。程序化 scrollTop 赋值同样会触发 scroll 事件,
+  // 用 progRef 标记本次滚动来自代码(只在确实改变 scrollTop 时置位,防止残留标志吞掉真实手势)。
+  const stickRef = useRef(true);
+  const progRef = useRef(false);
+  // 离开底部时显示"回到底部"悬浮按钮(流式期间内容持续增长,靠按钮一键返回)
+  const [showJump, setShowJump] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null); // chatwrap:聊天滚动条拇指的宿主(整列高度,含输入区区域)
   const taRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null); // 高亮叠加层(与 textarea 滚动同步)
@@ -919,6 +929,46 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     el.scrollTo({ top, behavior: 'smooth' });
   };
 
+  // 距底部多少像素内仍视为"在底部":容掉惯性滚动的残余位移与亚像素取整,
+  // 避免流式增长时因 1px 误差误判为"用户上滑"而暂停吸附
+  const STICK_EPS = 48;
+
+  // 瞬时触底并恢复吸附(发送消息/切换会话/点击回底按钮共用)。
+  // 与既有滚底一致用瞬时定位:平滑滚动目标是调用瞬间的底部,流式追加会让目标
+  // 持续前移,动画追不上移动靶;且动画中途的 scroll 事件位置不在底部,会反复
+  // 翻转吸附状态。只在赋值确实改变 scrollTop 时标记 progRef——已在底部时
+  // 赋值不会触发 scroll 事件,残留的标志会把用户下一次真实上滑误吞成程序化滚动。
+  const scrollToBottomNow = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = true;
+    setShowJump(false);
+    const prevBehavior = el.style.scrollBehavior;
+    el.style.scrollBehavior = 'auto'; // 覆盖任何来源的平滑滚动,保证瞬间滚底
+    refreshOverlayScrollbar(el, true); // 先重算拇指(scrollHeight 才是真实值)
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    if (el.scrollTop < maxScroll - 0.5) progRef.current = true;
+    el.scrollTop = maxScroll;
+    refreshOverlayScrollbar(el, true); // 同一帧内把拇指重绘到当前正确位置/尺寸
+    el.style.scrollBehavior = prevBehavior;
+    updateActiveDot();
+  };
+
+  // 对话区 scroll 统一入口:更新跳转点/提示,并据位置维护吸附状态。
+  // 程序化触底(scrollTop 赋值)触发的事件只吞掉标志不改状态;其余一律视为
+  // 用户手势——在底部(含 48px 容差)恢复吸附,离开底部暂停吸附并亮出回底按钮。
+  // 拇指拖拽/滚轮转发/触摸滚动都走原生 scroll 事件,天然被识别为用户手势。
+  const onChatScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateActiveDot();
+    hideDotTip();
+    if (progRef.current) { progRef.current = false; return; }
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_EPS;
+    stickRef.current = atBottom;
+    setShowJump(!atBottom);
+  };
+
   // 滚动条宿主 = tab-body(对话标签页整个区域):拇指从面板顶部铺到底部、贴最右侧。
   // 消息区限宽居中(780px),两侧空白与输入面板不属于滚动区,原生滚轮落在其上
   // 不会滚动对话——在宿主上监听 wheel,目标不在任何可滚动容器内时把滚动量
@@ -953,19 +1003,24 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   }, []);
 
   // 用 useLayoutEffect:在浏览器绘制前同步完成「清残留拇指 → 滚到底 → 重绘拇指」,
-  // 保证会话切换/流式更新时滚动条与内容在同一帧就位。这里强制瞬时定位:
-  // 1) 临时禁用平滑滚动(scroll-behavior:smooth 会让程序化 scrollTop 赋值也
-  //    动画,造成"内容从上面缓缓落下"的过渡);2) 拇指跳过淡入立即就位。
+  // 保证会话切换/流式更新时滚动条与内容在同一帧就位。吸附规则:
+  // - 吸附中(stick=true):每次消息/流式增量变化都瞬时触底,行为同以往;
+  // - 用户已上滑离底(暂停吸附):不强制触底,只重算悬浮拇指(内容仍在增长),
+  //   让用户在 AI 回答过程中自由回看上下文,新内容在下方静默追加;
+  // - 会话切换(justSwitched):总是恢复吸附并触底。
+  // 这里强制瞬时定位:1) 临时禁用平滑滚动(scroll-behavior:smooth 会让程序化
+  // scrollTop 赋值也动画,造成"内容从上面缓缓落下"的过渡);2) 拇指跳过淡入立即就位。
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const prevBehavior = el.style.scrollBehavior;
-    el.style.scrollBehavior = 'auto'; // 覆盖任何来源的平滑滚动,保证瞬间滚底
-    refreshOverlayScrollbar(el, true); // 先清掉上一会话残留的绝对定位拇指(scrollHeight 才恢复真实值)
-    el.scrollTop = el.scrollHeight;    // 滚到底部(最新消息)——切换会话与流式期间都保持底部
-    refreshOverlayScrollbar(el, true); // 同一帧内把拇指重绘到当前正确位置/尺寸
-    el.style.scrollBehavior = prevBehavior;
-    updateActiveDot();
+    if (justSwitchedRef.current) stickRef.current = true; // 切换会话总是回到底部
+    if (stickRef.current) {
+      scrollToBottomNow();
+    } else {
+      refreshOverlayScrollbar(el, true); // 离底查看:内容变长后拇指位置/长度需重算
+      setShowJump(true);                 // 流式增长不触发 scroll 事件,按钮显隐在此维护
+      updateActiveDot();
+    }
   }, [messages]);
 
   // 会话切换的兜底:首帧布局时内容挂载动画/延迟加载的图片可能在绘制后几帧内
@@ -976,14 +1031,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if (!justSwitchedRef.current) return;
     justSwitchedRef.current = false;
     const id = requestAnimationFrame(() => {
-      const el = scrollRef.current;
-      if (!el) return;
-      const prevBehavior = el.style.scrollBehavior;
-      el.style.scrollBehavior = 'auto';
-      el.scrollTop = el.scrollHeight;
-      refreshOverlayScrollbar(el, true);
-      el.style.scrollBehavior = prevBehavior;
-      updateActiveDot();
+      if (scrollRef.current) scrollToBottomNow();
     });
     return () => cancelAnimationFrame(id);
   }, [messages]);
@@ -1056,6 +1104,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     saveDrafts(draftsRef.current);
     setInput('');
     inputValueRef.current = ''; // 同步最新输入,防止随后的草稿保存把已发送文本回写
+    scrollToBottomNow(); // 发起对话:恢复吸附并回到底部,让用户新消息与回复立即可见
     setMessages((m) => [...m]);
     api.send('speak', { text, reasoning });
   };
@@ -1066,6 +1115,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     try {
       const r = await api.request('queue_steer', { id: item.id }, 8000);
       setQueue(Array.isArray(r.queue) ? r.queue : []);
+      scrollToBottomNow(); // 用户主动执行:回到底部跟进新一轮回复
     } catch (e) { toast.error((e as Error).message); }
   };
   // 编辑:把排队中的消息撤回输入框重新编辑(该条先移出队列,发送后重新排队)
@@ -1310,7 +1360,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     <>
     <div className={`chatwrap${askPending ? ' ask-focus' : ''}`} ref={wrapRef}>
       <div className="chat-scroll">
-        <div className={`chat${suppressIn ? ' no-anim' : ''}`} ref={scrollRef} onScroll={() => { updateActiveDot(); hideDotTip(); }}>
+        <div className={`chat${suppressIn ? ' no-anim' : ''}`} ref={scrollRef} onScroll={onChatScroll}>
           {messages.length === 0 && (
             <div className="empty">
               <img className="empty-logo" src="/logo-256.png" alt="" />
@@ -1366,7 +1416,23 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               )}
             </div>
           ))}
+          {/* 运行中指示行:agent 工作期间挂在消息列表末尾(StateDot ongoing 像素追光)。
+              长耗时步骤(如大文件写入/命令执行)没有文本增量流出,此行让"仍在运行"
+              可见,避免误以为卡死;提问挂起时 agent 在等用户作答,不算运行中 */}
+          {working && !askPending && (
+            <div className="running-row" role="status" aria-live="polite">
+              <StateDot state="ongoing" size={12} />
+              <span className="running-text">Agent 正在运行…</span>
+            </div>
+          )}
         </div>
+        {/* 回到底部悬浮按钮:用户上滑离开底部时出现(流式期间不被自动拉回,方便回看上下文),
+            点击瞬时回底并恢复吸附。挂在 chat-scroll(定位宿主)内,贴对话区右下角 */}
+        {showJump && (
+          <button type="button" className="jump-bottom" onClick={scrollToBottomNow} aria-label="回到底部">
+            <IconChevronDownOutline14 size={16} />
+          </button>
+        )}
       </div>
       {/* 跳转点悬停内容提示:fixed 定位防裁剪,两行截断 + 省略号 */}
       {dotTip && (

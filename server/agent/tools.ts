@@ -47,11 +47,66 @@ function resolveInWorkspace(p: string, { allowRoot = true }: { allowRoot?: boole
   throw new Error(`路径超出工作区,被拒绝: ${p}`);
 }
 
-const TEXT_TRUNCATION_HINT = '\n[结果过长已截断:中段内容被省略。若需中段/尾部细节,可用 read_file(offset/limit) 或 run_command 缩小范围再取,不要重复相同调用]';
-function capText(s: string, max: number = AGENT.TOOL_RESULT_MAX_CHARS): string {
-  if (!s) return '';
-  if (s.length <= max) return s;
-  return s.slice(0, Math.floor(max * 0.6)) + `\n…[结果过长,已截断,剩余 ${s.length - max} 字符]…\n` + s.slice(s.length - Math.floor(max * 0.4)) + TEXT_TRUNCATION_HINT;
+// ---- read 行窗口(照搬 harness tool-fs read-render)----
+// 行号窗口语义:offset/limit 按行;单行超长截断;选中行总字节超限即停并标记 truncatedByBytes;
+// 即使被字节上限截断也继续扫描到末尾,保证 totalLines 精确(页脚能给出准确的续读位置)。
+interface ReadLine { number: number; text: string }
+
+function buildLineWindow(text: string, opts: { offset: number; limit: number; maxLineLength: number; maxBytes: number }): { lines: ReadLine[]; totalLines: number; truncatedByBytes: boolean } {
+  const rawLines = text.split('\n');
+  if (rawLines.length > 0 && rawLines[rawLines.length - 1] === '') rawLines.pop(); // 末尾换行不产生空行
+  const lines: ReadLine[] = [];
+  let outputBytes = 0;
+  let truncatedByBytes = false;
+  for (let i = 0; i < rawLines.length; i++) {
+    const number = i + 1;
+    let lineText = rawLines[i];
+    if (lineText.endsWith('\r')) lineText = lineText.slice(0, -1);
+    if (truncatedByBytes || number < opts.offset || lines.length >= opts.limit) continue;
+    if (lineText.length > opts.maxLineLength) lineText = lineText.slice(0, opts.maxLineLength) + `... (line truncated to ${opts.maxLineLength} chars)`;
+    const bytes = Buffer.byteLength(lineText, 'utf8') + (lines.length > 0 ? 1 : 0);
+    if (outputBytes + bytes > opts.maxBytes) { truncatedByBytes = true; continue; }
+    outputBytes += bytes;
+    lines.push({ number, text: lineText });
+  }
+  return { lines, totalLines: rawLines.length, truncatedByBytes };
+}
+
+// 渲染 read 输出(照搬 harness formatReadOutput 的信封与续读页脚)
+function formatReadOutput(displayPath: string, outcome: { offset: number; lines: ReadLine[]; totalLines: number; truncatedByBytes?: boolean }, extraNote?: string): string {
+  const endLine = outcome.lines.length > 0 ? outcome.lines[outcome.lines.length - 1].number : Math.max(0, outcome.offset - 1);
+  let footer: string;
+  if (outcome.truncatedByBytes) footer = `(Output capped. Showing lines ${outcome.offset}-${endLine}. Use offset=${endLine + 1} to continue.)`;
+  else if (endLine < outcome.totalLines) footer = `(Showing lines ${outcome.offset}-${endLine} of ${outcome.totalLines}. Use offset=${endLine + 1} to continue.)`;
+  else footer = `(End of file - total ${outcome.totalLines} lines)`;
+  if (extraNote) footer += `\n(${extraNote})`;
+  const body = outcome.lines.length > 0
+    ? `${outcome.lines.map((l) => `${l.number}: ${l.text}`).join('\n')}\n\n${footer}`
+    : footer;
+  return `<path>${displayPath}</path>\n<type>file</type>\n<content>\n${body}\n</content>`;
+}
+
+// 解析 read 参数:offset 默认 1(1-based 行号),limit 默认/上限 READ.LIMIT(对齐 harness parseReadArgs)
+function parseReadArgs(args: { offset?: unknown; limit?: unknown }) {
+  const offset = args.offset === undefined || args.offset === null ? 1 : Number(args.offset);
+  if (!Number.isInteger(offset) || offset < 1) throw new Error('offset 必须是正整数(1-based 行号)');
+  const limit = args.limit === undefined || args.limit === null ? AGENT.READ.LIMIT : Number(args.limit);
+  if (!Number.isInteger(limit) || limit < 1) throw new Error('limit 必须是正整数(行数)');
+  return { offset, limit: Math.min(limit, AGENT.READ.LIMIT) };
+}
+
+// read 单次扫描上限:行号窗口需要精确总行数,扫描整个文件(超限部分在页脚注明)
+const READ_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+
+// ---- 命令/搜索输出上限(照搬 harness bash-local maxOutputBytes)----
+// 单次 64,000 字节,保留尾部(错误与最终结果聚集在尾部;头尾折叠由注册表 spill 统一负责)
+function capOutputBytes(s: string, max: number = AGENT.BASH_MAX_OUTPUT_BYTES): string {
+  const text = String(s || '');
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.length <= max) return text;
+  let slice = buf.subarray(buf.length - max);
+  while (slice.length > 0 && (slice[0] & 0xC0) === 0x80) slice = slice.subarray(1); // 对齐 UTF-8 字符边界
+  return `…[输出超过 ${max} 字节,前段已省略,仅保留尾部 ${slice.length} 字节]…\n` + slice.toString('utf8');
 }
 
 function safeJson(v: any): string { return JSON.stringify(v, null, 2).slice(0, 60000); }
@@ -160,24 +215,29 @@ const toolDefs: ToolDef[] = [
 
   {
     name: 'read_file',
-    description: '读取远程文本文件的指定片段(offset/maxBytes),二进制文件会报错',
+    description: '读取远程文本文件,返回带行号的行窗口(行号 + 内容)。用 offset(1-based 起始行)与 limit(行数)翻页读大文件,不要用 shell 命令 cat 读文件',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '远程绝对路径' },
-        offset: { type: 'integer', description: '起始字节偏移,单位字节' },
-        maxBytes: { type: 'integer', description: '最多读取字节数,默认 30000,最大 100000' }
+        offset: { type: 'integer', description: '起始行号(1-based),默认 1' },
+        limit: { type: 'integer', description: `最多返回行数,默认与上限均为 ${AGENT.READ.LIMIT}` }
       },
       required: ['path']
     },
-    async run({ path, offset = 0, maxBytes }) {
-      const mb = Math.min(maxBytes || 30000, 100000);
-      const { buffer, size, truncated } = await ssh.readFileChunk(path, { maxBytes: mb, offset });
+    async run({ path, offset, limit }) {
+      const { offset: off, limit: lim } = parseReadArgs({ offset, limit });
+      const { buffer, truncated: scanTruncated } = await ssh.readFileChunk(path, { maxBytes: READ_SCAN_MAX_BYTES, offset: 0 });
       if (ssh.isProbablyBinary(buffer)) return `文件 ${path} 是二进制文件,已拒绝读取(可先 run_command 查看)`;
-      const snippet = buffer.toString('utf8');
-      const head = `文件 ${path}(共 ${size} 字节${truncated ? `,本次读到 ${buffer.length} 字节` : ''}):\n`;
-      const tail = truncated ? `\n…[内容来自字节 ${offset}~${offset + buffer.length},如需继续用 offset=${offset + buffer.length} 读取]…` : '';
-      return head + snippet + tail;
+      const win = buildLineWindow(buffer.toString('utf8'), {
+        offset: off, limit: lim,
+        maxLineLength: AGENT.READ.MAX_LINE_LENGTH, maxBytes: AGENT.READ.MAX_BYTES
+      });
+      if (win.lines.length === 0 && win.totalLines > 0 && off > win.totalLines) {
+        throw new Error(`offset ${off} 超出范围("${path}" 共 ${win.totalLines} 行)`);
+      }
+      const note = scanTruncated ? '文件超过单次扫描上限,总行数基于文件前部统计' : '';
+      return formatReadOutput(path, { offset: off, ...win }, note);
     }
   },
 
@@ -257,7 +317,7 @@ const toolDefs: ToolDef[] = [
       if (!res.stdout.trim() && !res.stderr.trim()) parts.push('(无输出)');
       // meta:结构化终端卡数据(命令/工作目录/退出码/信号/超时),供前端 TerminalRow 忠实呈现
       return {
-        content: capText(parts.join('\n')),
+        content: capOutputBytes(parts.join('\n')),
         meta: { card: 'terminal', command, cwd: ssh.workspace || '', exitCode: res.code, signal: res.signal || null, timedOut: res.code === -1 }
       };
     }
@@ -334,7 +394,7 @@ const toolDefs: ToolDef[] = [
       if (res.code !== 0 && !res.stdout) {
         return err ? `搜索失败(退出码 ${res.code}): ${err}` : `无匹配(退出码 ${res.code})`;
       }
-      return capText(`匹配结果(${res.stdout.split('\n').filter(Boolean).length} 行):\n${res.stdout}`);
+      return capOutputBytes(`匹配结果(${res.stdout.split('\n').filter(Boolean).length} 行):\n${res.stdout}`);
     }
   },
 
@@ -548,14 +608,21 @@ const localToolDefs: ToolDef[] = [
   },
   {
     name: 'read_local_file',
-    description: '读取本机文本文件指定片段(offset/maxBytes),二进制会报错',
-    parameters: { type: 'object', properties: { path: { type: 'string', description: '本机绝对路径' }, offset: { type: 'integer' }, maxBytes: { type: 'integer' } }, required: ['path'] },
-    async run({ path, offset = 0, maxBytes }) {
-      const mb = Math.min(maxBytes || 30000, 100000);
-      const { buffer, size, truncated } = await localFs.readFileChunk(path, { maxBytes: mb, offset });
+    description: '读取本机文本文件,返回带行号的行窗口(行号 + 内容)。用 offset(1-based 起始行)与 limit(行数)翻页读大文件',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: '本机绝对路径' }, offset: { type: 'integer', description: '起始行号(1-based),默认 1' }, limit: { type: 'integer', description: `最多返回行数,默认与上限均为 ${AGENT.READ.LIMIT}` } }, required: ['path'] },
+    async run({ path, offset, limit }) {
+      const { offset: off, limit: lim } = parseReadArgs({ offset, limit });
+      const { buffer, truncated: scanTruncated } = await localFs.readFileChunk(path, { maxBytes: READ_SCAN_MAX_BYTES, offset: 0 });
       if (localFs.isProbablyBinary(buffer)) return `文件 ${path} 是二进制文件,已拒绝读取`;
-      const snippet = buffer.toString('utf8');
-      return `文件 ${path}(共 ${size} 字节${truncated ? `,本次读到 ${buffer.length} 字节` : ''}):\n${snippet}${truncated ? `\n…[如需继续用 offset=${offset + buffer.length} 读取]…` : ''}`;
+      const win = buildLineWindow(buffer.toString('utf8'), {
+        offset: off, limit: lim,
+        maxLineLength: AGENT.READ.MAX_LINE_LENGTH, maxBytes: AGENT.READ.MAX_BYTES
+      });
+      if (win.lines.length === 0 && win.totalLines > 0 && off > win.totalLines) {
+        throw new Error(`offset ${off} 超出范围("${path}" 共 ${win.totalLines} 行)`);
+      }
+      const note = scanTruncated ? '文件超过单次扫描上限,总行数基于文件前部统计' : '';
+      return formatReadOutput(path, { offset: off, ...win }, note);
     }
   },
   {
@@ -641,7 +708,7 @@ const localToolDefs: ToolDef[] = [
       }
       const r = await execLocal(cmd, { cwd: localFs.home });
       if (r.code !== 0 && !r.stdout) return `无匹配(退出码 ${r.code})`;
-      return capText(`匹配结果:\n${r.stdout}`);
+      return capOutputBytes(`匹配结果:\n${r.stdout}`);
     }
   },
   {
@@ -657,7 +724,7 @@ const localToolDefs: ToolDef[] = [
       if (res.stderr.trim()) parts.push('--- stderr ---\n' + res.stderr);
       if (!res.stdout.trim() && !res.stderr.trim()) parts.push('(无输出)');
       return {
-        content: capText(parts.join('\n')),
+        content: capOutputBytes(parts.join('\n')),
         meta: { card: 'terminal', command, cwd: localFs.workspace || '', exitCode: res.code, signal: res.signal || null, timedOut: !!res.timedOut }
       };
     }
@@ -762,10 +829,19 @@ const SSH_ONLY_TOOLS = new Set([
 
 /** 把全部内置工具与守卫注册到注册表(由 agent 启动时调用一次) */
 export function registerTools(registry: ToolRegistry) {
+  // 并发安全工具(对齐 harness isConcurrencySafe 的 fail-closed 语义):只有显式列入的
+  // 工具(只读探测/命令执行)之间才并行;写文件/编辑/删除/交互等待/任务清单等未列入的
+  // 一律按不安全处理,并行池里独占执行。
+  const CONCURRENCY_SAFE_TOOLS = new Set([
+    'list_directory', 'read_file', 'search_code', 'get_workspace_info', 'web_search', 'skill',
+    'list_local_dir', 'read_local_file', 'search_local_code', 'get_local_info',
+    'run_command', 'run_local_command'
+  ]);
+  const withSafety = (def: ToolDef): ToolDef => ({ ...def, concurrencySafe: CONCURRENCY_SAFE_TOOLS.has(def.name) });
   // 依赖 SSH 的工具打 remote 标记,供本地模式(未连接)下 schemas() 过滤用
-  for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...def, remote: true } : def);
-  for (const def of interactionToolDefs) registry.register(def);
-  for (const def of localToolDefs) registry.register(def);
+  for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...withSafety(def), remote: true } : withSafety(def));
+  for (const def of interactionToolDefs) registry.register(withSafety(def));
+  for (const def of localToolDefs) registry.register(withSafety(def));
   // 守卫 1:SSH 连接状态 —— 仅真正依赖 SSH 的远程工具需要连接;本地工具(local_*)、
   // 交互工具与技能/任务清单等非远程工具不受影响,连接断开时绝不误伤本机工具链
   registry.guard((name: string) => (SSH_ONLY_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));

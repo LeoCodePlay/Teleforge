@@ -21,7 +21,7 @@ import { sshManager as ssh } from './ssh-manager.ts';
 import { localFs } from './local-fs.ts';
 import { agent, setAgentHub } from '../agent/agent.ts';
 import { clearSearchEngine } from '../agent/tools.ts';
-import { rejectAllAskUser } from '../agent/ask-user.ts';
+import { armAskUserDisconnectGrace, disarmAskUserDisconnectGrace } from '../agent/ask-user.ts';
 import { migrateLegacy } from '../store/session-store.ts';
 
 export function setupWs(httpServer: Server) {
@@ -147,6 +147,7 @@ export function setupWs(httpServer: Server) {
     // 使电脑休眠/网络抖动导致的"假死连接"被及时发现并触发前端自动重连
     (ws as any).isAlive = true;
     ws.on('pong', () => { (ws as any).isAlive = true; });
+    disarmAskUserDisconnectGrace(); // 前端上线(含刷新后重连):解除断开宽限,挂起提问继续等待
     flushPending(); // 先补发断线期间缓存的 agent 事件,再下发状态,保证 UI 状态无缝衔接
     send({ type: 'log', level: 'info', message: '前端已连接' });
     syncAgentScope();
@@ -164,10 +165,11 @@ export function setupWs(httpServer: Server) {
     });
 
     ws.on('close', () => {
-      // 多浏览器可同时在线:只有全部连接都断开(最后一个前端离开)时,
-      // 才把正在等待用户回答的提问作废,避免 B 关掉页面把 A 的提问误杀
+      // 多浏览器可同时在线:只有全部连接都断开(最后一个前端离开)时才启动作废倒计时
+      // (20s 宽限,页面刷新也会瞬断重连,不会误杀;宽限期内任一前端上线即解除),
+      // 避免立刻作废导致"刷新后提问面板丢失、agent 干等"
       const stillAlive = [...wss.clients].some((c) => c !== ws && c.readyState === 1);
-      if (!stillAlive) rejectAllAskUser('前端连接已断开,提问已取消');
+      if (!stillAlive) armAskUserDisconnectGrace();
     });
     ws.on('error', () => {});
   });

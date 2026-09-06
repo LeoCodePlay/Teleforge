@@ -30,35 +30,37 @@ export const FILE = {
   DISCARD_BYTES: 8192          // 二进制探测采样长度
 };
 
+// Agent 常量:阈值与策略照搬 deepseek-harness(compaction-basic / tool-result-pruner /
+// spill-policy / bash-local / tool-fs read / agent-loop / repeat-tool-reminder)。
 export const AGENT = {
-  MAX_ITERS: 500,              // 单轮对话最大工具迭代次数(全局默认;前端不再单独编辑覆盖)
-  TOOL_RESULT_MAX_CHARS: 60_000,
-  HISTORY_BUDGET_CHARS: 180_000,
-  // 环境快照注入 system prompt 的字符预算(防 get_workspace_info/get_local_info 的大目录树撑爆提示词)
+  HISTORY_BUDGET_CHARS: 180_000, // 窗口未配置时的兜底字符裁剪预算(harness 无此项;作为最后防线保留)
+  // 环境快照/技能目录进入"运行时上下文"消息的字符预算(防大目录树撑爆历史)
   ENV_SNAPSHOT_MAX_CHARS: 6_000,
-  // 历史中旧工具结果的投影期折叠(参照 harness tool-result-pruner):
-  // 请求构造时把早期大体积工具结果替换为头尾摘要 + 回读指引;事件日志保持完整(可回放/分支)。
-  // 水位双触发:预估请求 token 超过可用窗口的 WATER_RATIO,或超过 ABS_FLOOR_TOKENS
-  // (声明窗口虚高/未配置时的绝对地板——否则 1M 窗口兜底会让裁剪永远不触发)。
-  TOOL_RESULT_PRUNE: {
-    ENABLED: true,
-    WATER_RATIO: 0.35,        // 预估请求 token(历史 + system + 工具 schema)超过可用窗口 35% 时启用
-    ABS_FLOOR_TOKENS: 60_000, // 绝对地板:无论窗口声明多大,超过 6 万 token 即启用
-    KEEP_RECENT: 6,           // 最近 6 条工具结果保持原样(模型正在分析的活跃上下文)
-    MIN_CHARS: 1_200,         // 只折叠超过该长度的结果
-    HEAD_CHARS: 900,
-    TAIL_CHARS: 300
+  // read 工具上限(照搬 harness tool-fs:READ_LIMIT / READ_MAX_LINE_LENGTH / READ_MAX_BYTES):
+  // 行号窗口语义——offset/limit 按行,单行超长截断,选中行总字节超限即停并提示续读位置
+  READ: {
+    LIMIT: 2_000,          // 单次返回的最大行数(也是 limit 参数上限)
+    MAX_LINE_LENGTH: 2_000,// 单行最大字符数,超出截断
+    MAX_BYTES: 50 * 1024   // 选中行内容的总字节上限
   },
-  CONCURRENT_TOOL_CALLS: true,  // 并行执行工具调用( 的有界滚动池,设 false 回退串行)
-  MAX_PARALLEL_TOOL_CALLS: 4,   // 并行工具调用并发上限(bounded rolling pool,串行模式忽略)
- 
-  GOAL_BLOCKED_AFTER: 3,       // 连续"模型宣称完成但任务计划仍有未完成项"达到该次数即停止续推,防死循环
-  GOAL_ROUND_MAX: 64,          // 单轮内自动续推次数硬上限(防失控,超限按 max-iters 结束)
-  CONTINUE_TRUNCATED: true,    // 模型输出因 max_tokens 被截断时自动注入续推消息继续,而非误判为完成
-  MAX_OVERFLOW_RECOVERIES: 2,  // 上下文爆窗时自动压缩后重试本步的最大次数(对齐 harness maxOverflowRetries)
+  // 命令输出上限(照搬 harness bash-local maxOutputBytes):单流 64,000 字节,保留尾部
+  BASH_MAX_OUTPUT_BYTES: 64_000,
+  // spill 策略(照搬 harness spill-policy maxInlineBytes):工具结果入历史前,
+  // 纯文本超过该字节数即替换为头尾对半预览 + 完整内容落盘提示;read 工具豁免
+  SPILL_MAX_BYTES: 50_000,
+  // 历史工具结果折叠(照搬 harness compaction-tool-result-pruner 默认值):
+  // 压缩水位触发时,把 surface 上所有超过 THRESHOLD_CHARS 的工具结果替换为头尾摘要。
+  TOOL_RESULT_PRUNE: {
+    THRESHOLD_CHARS: 8_192,
+    HEAD_CHARS: 4_096,
+    TAIL_CHARS: 1_024
+  },
+  CONCURRENT_TOOL_CALLS: true,  // 并行执行工具调用(agent-loop 的有界滚动池,设 false 回退串行)
+  MAX_PARALLEL_TOOL_CALLS: 10,  // 并行工具调用并发上限(照搬 harness DEFAULT_MAX_PARALLEL_TOOL_CALLS)
+  MAX_OVERFLOW_RECOVERIES: 1,   // 上下文爆窗时自动压缩后重试本步的最大次数(对齐 harness maxOverflowRetries)
   CHAT_ONLY_TTL_MS: 10 * 60 * 1000, // 工具降级纯对话的失效时间:超时后自动重试工具调用(避免网关临时故障把会话永久打成纯对话)
   REPEAT_REMIND_THRESHOLDS: [3, 5, 8], // 连续相同工具+参数调用达到该次数时注入提醒(repeat-tool-reminder)
-  REPEAT_ARG_PREVIEW: 200      // 重复调用提醒里引用的参数预览上限(字符),防超大参数膨胀
+  REPEAT_ARG_PREVIEW: 500       // 重复调用提醒里引用的参数预览上限(字符,对齐 harness)
 };
 
 export const WS_MAX_PAYLOAD = 32 * 1024 * 1024;

@@ -349,8 +349,9 @@ export function renderSearchResult(outcome: WebSearchOutcome): string {
     return `${i + 1}. ${head}\n   ${meta}${s.snippet ? `\n   ${s.snippet}` : ''}`;
   });
   const text = `DuckDuckGo 网络搜索结果 ${where}(${outcome.sources.length} 条):\n\n${lines.join('\n\n') || '(无结果)'}`;
-  // 与其它工具一致:超长时头尾保留、中段折叠(AGENT.TOOL_RESULT_MAX_CHARS)
-  const max = AGENT.TOOL_RESULT_MAX_CHARS;
-  if (text.length <= max) return text;
-  return text.slice(0, Math.floor(max * 0.6)) + `\n…[结果过长,已截断,剩余 ${text.length - max} 字符]…\n` + text.slice(text.length - Math.floor(max * 0.4));
+  // 超长兜底:按字节截到命令输出上限(harness bash-local 语义);头尾折叠由注册表 spill 统一负责
+  const max = AGENT.BASH_MAX_OUTPUT_BYTES;
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.length <= max) return text;
+  return buf.subarray(0, max).toString('utf8') + `\n…[结果过长已截断,共 ${buf.length} 字节]…`;
 }
