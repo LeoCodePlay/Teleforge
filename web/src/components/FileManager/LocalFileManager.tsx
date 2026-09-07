@@ -161,6 +161,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   const { confirm } = useFeedback();
   const [path, setPath] = useState(() => norm(workspace || home || ROOT));
   const [pathDraft, setPathDraft] = useState(path);
+  const [editingPath, setEditingPath] = useState(false); // 路径编辑模式:面包屑行变为输入框(点当前级面包屑进入)
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [navLoading, setNavLoading] = useState<string | null>(null);
@@ -223,6 +224,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   // 工作区/家目录变化时,回到对应目录
   useEffect(() => {
     const start = norm(workspace || home || ROOT);
+    setEditingPath(false); // 切换工作区时退出编辑,避免输入框挂着旧路径
     setPath(start); setPathDraft(start); setSelection(new Set()); setAnchor(null);
     load(start, { keepSelected: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -237,6 +239,17 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   const isRoot = path === ROOT;
   const refresh = () => load(path, { keepSelected: true });
   const up = () => { if (!isRoot) load(upDir(path)); };
+
+  // ---- 路径编辑(与面包屑合一):点父级面包屑直接跳转,点当前级(cur)进入编辑 ----
+  // 进入编辑以当前路径为草稿并全选;Enter 跳转后回到面包屑;Esc/失焦退出不跳转(与资源管理器一致,防误触)
+  const startEditPath = () => { setPathDraft(path); setEditingPath(true); };
+  const cancelEditPath = () => setEditingPath(false);
+  const commitEditPath = () => {
+    if (!editingPath) return;
+    setEditingPath(false);
+    const t = pathDraft.trim();
+    if (t && norm(t) !== path) load(t); // 路径没变就只退出编辑,不重新加载
+  };
 
   const clearSelection = () => { setSelection(new Set()); setAnchor(null); };
 
@@ -576,23 +589,36 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
 
   return (
     <div className="fm" ref={rootRef}>
+      {/* 面包屑与路径编辑合一:点父级直接跳转,点当前级(cur)进入输入框编辑,回车跳转后回到面包屑 */}
       <div className="fm-toolbar row gap">
-        <div className="fm-crumbs" ref={crumbsRef} data-ob-skip>
-          <span className={`crumb ${isRoot ? 'cur' : ''}`} onClick={() => load(rootPath())}>本机</span>
-          {crumbs.map(({ c, p }) => (
-            <span key={p} className="crumb-wrap">
-              <span className="crumb-sep">{sep}</span>
-              <span className={`crumb ${p === path ? 'cur' : ''}`} onClick={() => load(p)}>{c}</span>
-            </span>
-          ))}
+        {/* 编辑时面包屑只 display:none 隐藏而非卸载:useHorizontalScroller 只在挂载时绑定滚轮/拖拽,
+            卸载重挂会让横向滚动失效 */}
+        <div className="fm-crumbs" ref={crumbsRef} data-ob-skip style={editingPath ? { display: 'none' } : undefined}>
+          <span className={`crumb ${isRoot ? 'cur' : ''}`} data-tip={isRoot ? '点击编辑路径' : undefined}
+            onClick={() => (isRoot ? startEditPath() : load(rootPath()))}>本机</span>
+          {crumbs.map(({ c, p }) => {
+            const cur = p === path;
+            return (
+              <span key={p} className="crumb-wrap">
+                <span className="crumb-sep">{sep}</span>
+                <span className={`crumb ${cur ? 'cur' : ''}`} data-tip={cur ? '点击编辑路径' : undefined}
+                  onClick={() => (cur ? startEditPath() : load(p))}>{c}</span>
+              </span>
+            );
+          })}
         </div>
-      </div>
-
-      <div className="row gap fm-addrbar">
-        <input className="grow" value={pathDraft} spellCheck={false}
-          onChange={(e) => setPathDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && pathDraft.trim()) load(pathDraft.trim()); }} />
-        <button disabled={!pathDraft.trim()} onClick={() => load(pathDraft.trim())}>跳转</button>
+        {editingPath && (
+          <input className="fm-path-edit grow" autoFocus value={pathDraft} spellCheck={false}
+            onChange={(e) => setPathDraft(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onKeyDown={(e) => {
+              // 中文等输入法组词中:Enter 是确认候选字,不在此提交跳转
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === 'Enter') commitEditPath();
+              else if (e.key === 'Escape') cancelEditPath();
+            }}
+            onBlur={cancelEditPath} />
+        )}
       </div>
 
       <div className="row gap fm-actions">

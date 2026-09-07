@@ -103,8 +103,12 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
   return (
     <div className="s-group">
       <div className={`s-group-header${expanded ? ' open' : ''}`} onClick={onToggle}>
-        <span className="s-group-caret">▸</span>
-        <span className="s-group-ico">{icon}</span>
+        <span className="s-group-lead" aria-hidden>
+          <svg className="s-group-caret" width={14} height={14} viewBox="0 0 14 14" fill="none">
+            <path d="M5.3 3.4L9 7l-3.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="s-group-ico">{icon}</span>
+        </span>
         <span className="s-group-title" title={label}>{label}</span>
         {hasRunning && <span className="s-run" data-tip="有任务进行中">●</span>}
         <span className="s-group-count">{sessions.length}</span>
@@ -112,24 +116,28 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
           <button className="s-group-add" data-tip="在此工作区新建会话" onClick={() => onNewInGroup()}>＋</button>
         </span>
       </div>
-      {expanded && (
-        <div className="s-group-body">
-          {sessions.map((s) => {
-            const running = busyIds.includes(s.id);
-            // 有挂起提问(等待用户操作)时运行点变黄;仅非当前会话才显示
-            const askWaiting = askPendingIds.includes(s.id) && s.id !== activeId;
-            return (
-              <SessionRow key={s.id} session={s}
-                active={s.id === activeId}
-                running={running}
-                askWaiting={askWaiting}
-                onSwitch={onSwitch}
-                onMenu={onMenu}
-                onMenuAt={onMenuAt} />
-            );
-          })}
+      {/* 展开体常驻 DOM(不卸载),用 grid-template-rows 0fr↔1fr 做高度过渡:
+          展开/收起都有平滑动画;收起时 visibility:hidden 保证不可聚焦/不被读到 */}
+      <div className={`s-group-body-wrap${expanded ? ' open' : ''}`} aria-hidden={!expanded}>
+        <div className="s-group-body-clip">
+          <div className="s-group-body">
+            {sessions.map((s) => {
+              const running = busyIds.includes(s.id);
+              // 有挂起提问(等待用户操作)时运行点变黄;仅非当前会话才显示
+              const askWaiting = askPendingIds.includes(s.id) && s.id !== activeId;
+              return (
+                <SessionRow key={s.id} session={s}
+                  active={s.id === activeId}
+                  running={running}
+                  askWaiting={askWaiting}
+                  onSwitch={onSwitch}
+                  onMenu={onMenu}
+                  onMenuAt={onMenuAt} />
+              );
+            })}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

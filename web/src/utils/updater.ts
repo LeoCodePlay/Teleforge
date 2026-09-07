@@ -65,6 +65,36 @@ export async function installUpdate(path: string): Promise<void> {
   await tauri().core.invoke('install_update', { path });
 }
 
+// ---- 已下载安装包的持久化记录 ----
+// 下载完成状态只存在组件内存里,关闭设置/刷新面板后会丢——"立即安装"按钮就消失了,
+// 再次点下载又因文件已存在而"秒完成"却没有后续。这里把已下载的版本+路径落盘,
+// 面板重新打开时恢复,保证「立即重启安装」按钮始终出现。
+const DOWNLOAD_KEY = 'sshai.updater.downloaded';
+
+export interface StoredDownload {
+  /** 已下载的版本号(与 UpdateInfo.latest 比较,不一致则失效) */
+  latest: string;
+  /** 安装包落盘路径 */
+  path: string;
+  ts: number;
+}
+
+export function saveDownloadedUpdate(d: StoredDownload): void {
+  try { localStorage.setItem(DOWNLOAD_KEY, JSON.stringify(d)); } catch { /* 容量/隐私模式忽略 */ }
+}
+
+export function loadDownloadedUpdate(): StoredDownload | null {
+  try {
+    const j = JSON.parse(localStorage.getItem(DOWNLOAD_KEY) || 'null');
+    if (j && typeof j.latest === 'string' && typeof j.path === 'string') return j as StoredDownload;
+  } catch { /* 损坏则视为无 */ }
+  return null;
+}
+
+export function clearDownloadedUpdate(): void {
+  try { localStorage.removeItem(DOWNLOAD_KEY); } catch { /* 忽略 */ }
+}
+
 /** 系统浏览器打开外部链接;浏览器模式回落 window.open */
 export async function openExternal(url: string): Promise<void> {
   if (!isDesktop()) {

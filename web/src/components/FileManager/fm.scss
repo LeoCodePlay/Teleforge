@@ -2,7 +2,8 @@
 
 /* 远程/本地文件管理器 Tab 常驻挂载,非激活 Tab 用 CSS 隐藏(避免切回时重新加载) */
 .fm-pane.hide { display: none; }
-.fm-toolbar { display: flex; align-items: center; gap: 4px; }
+/* 固定行高:面包屑与路径编辑输入框等高切换,进出编辑不抖动 */
+.fm-toolbar { display: flex; align-items: center; gap: 4px; height: 26px; }
 /* 面包屑:长路径保持单行,横向滚动查看(滚动条由全局覆盖式引擎接管,不占空间) */
 .fm-crumbs {
   flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 1px;
@@ -16,7 +17,8 @@
 .crumb:hover { background: var(--glass-bg-hover); text-shadow: 0 0 10px var(--accent-glow); }
 .crumb.cur { color: var(--text); font-weight: 600; }
 .crumb-sep { color: var(--muted); user-select: none; }
-.fm-addrbar { margin-top: 6px; }
+/* 路径编辑输入框(点当前级面包屑进入,替代面包屑行):与工具栏同高(border-box 含边框),进出编辑零高度变化 */
+.fm-path-edit { flex: 1; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; font-size: 12.5px; }
 .fm-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 操作行(上级/刷新/上传/传到本地):原内联 margin-top 收敛到类上;
    窄侧栏下允许换行,保证所有操作按钮完整可见 */

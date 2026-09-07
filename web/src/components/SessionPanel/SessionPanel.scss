@@ -23,12 +23,27 @@
   transition: all .18s ease;
 }
 .s-group-header:hover { background: var(--glass-bg-hover); border-color: var(--glass-border); }
+/* 前导图标槽:文件夹图标与展开箭头叠放在同一格(合成一体,不再分占两列) */
+.s-group-header .s-group-lead {
+  flex: none; width: 16px; height: 16px;
+  display: grid; place-items: center;
+}
+.s-group-header .s-group-caret,
+.s-group-header .s-group-ico {
+  grid-area: 1 / 1; display: grid; place-items: center;
+}
+/* 箭头:14px SVG(原为 10px 文本字符),展开时旋转 90° 指向下方;
+   默认隐藏,悬停分组头时才与文件夹图标交叉切换 */
 .s-group-header .s-group-caret {
-  flex: none; font-size: 10px; color: var(--muted); width: 10px; text-align: center;
-  transition: transform .18s ease;
+  width: 14px; height: 14px; color: var(--muted);
+  opacity: 0; transform: rotate(0deg);
+  transition: opacity .16s ease, transform .18s ease;
 }
 .s-group-header.open .s-group-caret { transform: rotate(90deg); }
-.s-group-header .s-group-ico { flex: none; font-size: 12px; }
+.s-group-header .s-group-ico { font-size: 12px; transition: opacity .16s ease; }
+/* 悬停:交叉淡入淡出——箭头浮现、文件夹图标隐藏;移开恢复 */
+.s-group-header:hover .s-group-caret { opacity: 1; }
+.s-group-header:hover .s-group-ico { opacity: 0; }
 .s-group-header .s-group-title {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-weight: 600;
@@ -43,8 +58,23 @@
 .s-group-header:hover .s-group-actions { opacity: 1; }
 .s-group-header .s-group-add { font-size: 13px; line-height: 1; padding: 0 4px; }
 
-/* ---- 分组内会话行 ---- */
-.s-group-body { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+/* ---- 分组内会话行:常驻 DOM,展开/收起高度过渡(grid-template-rows 0fr↔1fr) ---- */
+.s-group-body-wrap {
+  display: grid; grid-template-rows: 0fr;
+  visibility: hidden;   /* 收起后不可聚焦/不被屏幕阅读器读到,过渡结束才隐藏 */
+  transition: grid-template-rows .24s ease, visibility 0s linear .24s;
+}
+.s-group-body-wrap.open {
+  grid-template-rows: 1fr; visibility: visible;
+  transition: grid-template-rows .24s ease, visibility 0s linear 0s;
+}
+.s-group-body-clip { overflow: hidden; min-height: 0; }
+.s-group-body {
+  display: flex; flex-direction: column; gap: 4px; margin-top: 4px;
+  opacity: 0; transform: translateY(-3px);   /* 展开时内容轻微下滑淡入 */
+  transition: opacity .16s ease, transform .2s ease;
+}
+.s-group-body-wrap.open .s-group-body { opacity: 1; transform: none; }
 .session-item {
   display: flex; align-items: center; gap: 6px; padding: 7px 10px;
   height: 33px; box-sizing: border-box;   /* 固定行高:列表行距统一稳定 */
@@ -105,4 +135,17 @@
   .session-item .s-meta,
   .session-item .s-actions { opacity: 1; }
   .s-group-header .s-group-actions { opacity: 1; }
+  /* 触屏无 hover:箭头常显(占住图标位),保留展开状态指示 */
+  .s-group-header .s-group-caret { opacity: 1; }
+  .s-group-header .s-group-ico { opacity: 0; }
+}
+
+
+/* 用户偏好减弱动态效果:展开/收起不做高度与位移动画,直接切换 */
+@media (prefers-reduced-motion: reduce) {
+  .s-group-body-wrap,
+  .s-group-body-wrap .s-group-body,
+  .s-group-header .s-group-caret,
+  .s-group-header .s-group-ico { transition: none; }
+  .s-group-body { transform: none; }
 }

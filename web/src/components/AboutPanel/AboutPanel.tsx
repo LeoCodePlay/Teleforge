@@ -5,6 +5,7 @@ import { useFeedback } from '../../context/feedback';
 import { isDesktop } from '../../utils/desktop';
 import {
   UPDATE_REPO_URL, getUpdateInfo, downloadUpdate, installUpdate, openExternal,
+  saveDownloadedUpdate, loadDownloadedUpdate, clearDownloadedUpdate,
   type UpdateInfo, type DownloadProgress
 } from '../../utils/updater';
 import './AboutPanel.scss';
@@ -48,6 +49,18 @@ export default function AboutPanel() {
     else setPhase('ready');
   }, [check]);
 
+  // 恢复「已下载待安装」状态:上次下载完成的安装包若仍是最新版本,
+  // 直接回到 downloaded,让「立即重启安装」按钮始终可见(下载状态已持久化,
+  // 关闭设置/刷新面板不再丢失)
+  useEffect(() => {
+    if (!info?.hasUpdate) return;
+    const saved = loadDownloadedUpdate();
+    if (saved && saved.latest === info.latest) {
+      setSavedPath(saved.path);
+      setPhase('downloaded');
+    }
+  }, [info]);
+
   const startDownload = async () => {
     if (!info) return;
     setErr('');
@@ -59,8 +72,11 @@ export default function AboutPanel() {
       });
       setSavedPath(p);
       setProgress(1);
+      saveDownloadedUpdate({ latest: info.latest, path: p, ts: Date.now() });
       setPhase('downloaded');
-      toast.success('新版本已下载,点击「立即安装」关闭应用并安装');
+      toast.success('新版本已下载');
+      // 下载完成直接进入安装确认,避免"下载完没反应"停在原地
+      await startInstall();
     } catch (e) {
       const msg = (e as Error)?.message || String(e);
       setErr(msg);
@@ -81,7 +97,8 @@ export default function AboutPanel() {
     setPhase('installing');
     try {
       await installUpdate(savedPath);
-      // 成功后 Rust 会自动退出应用,无需后续处理
+      // 安装程序已拉起,清理已下载记录,应用随后由 Rust 自动退出
+      clearDownloadedUpdate();
     } catch (e) {
       const msg = (e as Error)?.message || String(e);
       setErr(msg);
