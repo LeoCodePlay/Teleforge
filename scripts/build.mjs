@@ -103,6 +103,24 @@ async function prepareNodeModules() {
   await fsp.rm(nm, { recursive: true, force: true });
   await fsp.cp(path.join(STAGING, 'node_modules'), nm, { recursive: true });
   await fsp.rm(path.join(STAGING, 'node_modules'), { recursive: true, force: true });
+  // Tauri 资源嵌入会把 resources/ 整个拷进安装包,node_modules 里 npm 的 .bin
+  // 符号链接在 Linux/mac 上是悬空的(指向不存在的 bin 文件),会导致
+  // tauri-build 的 build.rs 校验资源路径时 panic。打包出的服务端用不到 .bin,
+  // 直接把 .bin 目录与所有符号链接清掉
+  await stripBins(nm);
+}
+
+/** 递归删除 node_modules 中的 .bin 目录与任何符号链接(Tauri 嵌入依赖真实文件) */
+async function stripBins(dir) {
+  for (const ent of await fsp.readdir(dir, { withFileTypes: true })) {
+    const p = path.join(dir, ent.name);
+    if (ent.isSymbolicLink()) {
+      await fsp.rm(p, { force: true });
+    } else if (ent.isDirectory()) {
+      if (ent.name === '.bin') await fsp.rm(p, { recursive: true, force: true });
+      else await stripBins(p);
+    }
+  }
 }
 
 async function dirSize(dir) {
