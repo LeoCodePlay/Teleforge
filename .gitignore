@@ -22,6 +22,7 @@ desktop/.staging/
 .DS_Store
 
 # 运行时数据(会话历史持久化,含对话工具结果与连接配置缓存,不入库)
-data/
-server/data/  
+# 注意:必须根锚定(/data/),否则会误伤 web/src/data/ 下的源码(提供商模板)
+/data/
+server/data/
 .gstack/

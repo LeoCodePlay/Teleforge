@@ -17,8 +17,8 @@ jobs:
       matrix:
         include:
           - { platform: windows-latest, bundles: "nsis",  artifact: "teleforge-windows-x64" }
-          - { platform: macos-14,       bundles: "dmg",   artifact: "teleforge-macos-arm64" }
-          - { platform: macos-13,       bundles: "dmg",   artifact: "teleforge-macos-x64" }
+          - { platform: macos-15,       bundles: "dmg",   artifact: "teleforge-macos-arm64" }
+          - { platform: macos-15-intel, bundles: "dmg",   artifact: "teleforge-macos-x64" }
           - { platform: ubuntu-22.04,   bundles: "deb,appimage", artifact: "teleforge-linux-x64" }
     runs-on: ${{ matrix.platform }}
     steps:
