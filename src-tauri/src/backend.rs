@@ -1,7 +1,15 @@
 // Node 后端 sidecar 生命周期:找空闲端口 → spawn node → 轮询 /api/health → 导航主窗口 → 退出清理
+// 启动/健康检查仅在 release(生产)模式被调用,dev 模式由 vite 代理 + 外部 server 承担,
+// 故这些项整体带 #[cfg(not(debug_assertions))],避免调试构建产生 dead_code 告警。
+#[cfg(not(debug_assertions))]
 use std::io::{Read, Write};
+#[cfg(not(debug_assertions))]
 use std::net::{TcpListener, TcpStream};
-use std::process::{Child, Command, Stdio};
+#[cfg(not(debug_assertions))]
+use std::process::Command;
+use std::process::Child;
+#[cfg(not(debug_assertions))]
+use std::process::Stdio;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
@@ -10,9 +18,11 @@ pub struct BackendState {
     pub child: Mutex<Option<Child>>,
 }
 
+#[cfg(not(debug_assertions))]
 const HEALTH_TIMEOUT_SECS: u64 = 30;
 
 /// 生产模式入口:在后台线程运行,完成后把主窗口导航到后端地址
+#[cfg(not(debug_assertions))]
 pub fn spawn_and_wait(handle: AppHandle) {
     // 1. 找空闲端口(先绑 127.0.0.1:0 拿端口再释放;单实例场景竞态可接受)
     let port = match TcpListener::bind("127.0.0.1:0") {
@@ -129,6 +139,7 @@ pub fn spawn_and_wait(handle: AppHandle) {
 }
 
 /// 原始 TCP GET 健康检查(仅访问本机明文 http,无需 HTTP 客户端)
+#[cfg(not(debug_assertions))]
 fn health_ok(port: u16) -> bool {
     let addr: std::net::SocketAddr = match format!("127.0.0.1:{port}").parse() {
         Ok(a) => a,

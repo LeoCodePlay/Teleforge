@@ -17,7 +17,13 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::download])
+        .invoke_handler(tauri::generate_handler![
+            commands::download,
+            commands::update_info,
+            commands::download_update,
+            commands::install_update,
+            commands::open_external
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {

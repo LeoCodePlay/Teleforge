@@ -9,6 +9,15 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "allow-download"
+    "allow-download",
+    "allow-update-info",
+    "allow-download-update",
+    "allow-install-update",
+    "allow-open-external",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-is-maximized"
   ]
 }

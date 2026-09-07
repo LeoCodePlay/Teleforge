@@ -1,10 +1,14 @@
-# 桌面端三平台构建:每次打 v* 标签或手动触发,产出 Windows/macOS/Linux 安装包
+# 桌面端三平台构建:每次打 v* 标签或手动触发,产出 Windows/macOS/Linux 安装包,
+# 并把安装包发布到对应 GitHub Release(应用内「关于与更新」从 GitHub 拉取最新版本自动更新)
 name: desktop-build
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -63,3 +67,26 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: warn
+
+  # 单独一个发布 job:汇总全部平台安装包后一次发布(避免多平台并发创建同一个 release 的竞态)
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Teleforge ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: bundles/**

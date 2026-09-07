@@ -2,8 +2,15 @@
 // 下自定义命令受 ACL 门控(Tauri >= 2.11.2),必须在清单注册 + capability 授权才能被调用
 fn main() {
     tauri_build::try_build(
-        tauri_build::Attributes::new()
-            .app_manifest(tauri_build::AppManifest::new().commands(&["download"])),
+        tauri_build::Attributes::new().app_manifest(
+            tauri_build::AppManifest::new().commands(&[
+                "download",
+                "update_info",
+                "download_update",
+                "install_update",
+                "open_external",
+            ]),
+        ),
     )
     .unwrap();
 }

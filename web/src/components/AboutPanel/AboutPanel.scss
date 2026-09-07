@@ -1,0 +1,52 @@
+/* ---- AboutPanel(关于与更新)独有样式:版本卡 + 配置目录 + 更新进度 ---- */
+.about-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; margin-bottom: 14px; border-radius: var(--r-md);
+  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+.about-logo img { width: 38px; height: 38px; border-radius: 10px; display: block; }
+.about-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.about-name { font-weight: 700; font-size: 14px; color: var(--text); }
+.about-ver { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+.about-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.about-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.about-datadir {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: var(--r-sm);
+  background: var(--code-bg); border: 1px solid var(--line-soft);
+}
+.about-datadir code {
+  font-size: 11.5px; font-family: var(--mono); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
+}
+.about-datadir code::-webkit-scrollbar { display: none; }
+
+.about-update {
+  margin-top: 14px; padding: 12px 14px; border-radius: var(--r-md);
+  border: 1px solid var(--warn-border);
+  background: linear-gradient(135deg, var(--warn-bg), transparent);
+}
+.about-update .panel-title { margin-bottom: 8px; }
+.update-notes {
+  max-height: 200px; overflow-y: auto;
+  font-size: 12px; line-height: 1.6; color: var(--text);
+  background: var(--code-bg); border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm); padding: 10px 12px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.update-progress { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.up-bar {
+  flex: 1; height: 8px; border-radius: 4px; overflow: hidden;
+  background: var(--glass-bg-inset); border: 1px solid var(--line-soft);
+}
+.up-fill {
+  height: 100%; border-radius: 4px; transition: width .2s ease;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 10px var(--accent-soft);
+}
+.up-pct { flex: none; font-size: 12px; color: var(--muted); font-family: var(--mono); min-width: 44px; text-align: right; }
+.update-actions { display: flex; gap: 8px; margin-top: 12px; }
+.update-actions .primary { box-shadow: none; }

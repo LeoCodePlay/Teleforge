@@ -14,6 +14,8 @@
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 24px var(--shadow-1);
   position: relative; z-index: 20;
 }
+/* 桌面壳自定义标题栏:中部拖拽带撑满空白区(拖动窗口,不影响两侧按钮) */
+.topbar-dragpad { flex: 1 1 auto; align-self: stretch; min-width: 24px; }
 .brand {
   font-weight: 700; letter-spacing: .5px; font-size: 14px;
   display: flex; align-items: center; gap: 7px;
@@ -28,6 +30,13 @@
 }
 /* 右上角设置图标:放大显示 */
 .settings-btn { font-size: 17px; line-height: 1; padding: 2px 6px; }
+/* 右上角更新角标:发现新版本时高亮提示(点击直达「关于与更新」) */
+.update-chip {
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  color: var(--amber); border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+.update-chip:hover:not(:disabled) { color: var(--amber); background: var(--warn-bg); border-color: var(--warn-border); }
 .edge-toggle:hover:not(:disabled) {
   color: var(--text); background: var(--glass-bg-hover);
   border-color: var(--glass-border);

@@ -91,6 +91,16 @@
 
 > 环境要求：**Node.js ≥ 22.18**。后端为纯 TypeScript，由 Node 直接运行（无需编译步骤）。
 
+**桌面端安装包**（Windows / macOS / Linux）可直接从 **GitHub Releases** 下载，无需安装 Node：
+
+```bash
+https://github.com/LeoCodePlay/Teleforge/releases
+```
+
+安装后即可使用；后续新版本可在应用内「设置 → 关于与更新」一键升级（Windows 支持自动安装）。
+
+源码方式运行：
+
 ```bash
 npm install        # 安装依赖
 npm run build      # 构建前端(输出 web/dist)
@@ -186,15 +196,33 @@ npm test
 | 项 | 位置 | 说明 |
 |----|------|------|
 | 监听地址/端口 | 环境变量 `HOST` / `PORT` | 默认 `127.0.0.1:4000`，仅本机访问 |
-| 模型服务 | 界面「AI 模型配置」 | Base URL / Key / 模型名，自定义提供商存 `server/data/ai-providers.json` |
-| SSH 服务器配置 | 界面「SSH 连接」 | 保存的配置存 `server/data/ssh-profiles.json`（密码/私钥只留服务端，不下发前端） |
+| 模型服务 | 界面「AI 模型配置」 | Base URL / Key / 模型名，自定义提供商存 `ai-providers.json`（见下） |
+| SSH 服务器配置 | 界面「SSH 连接」 | 保存的配置存 `ssh-profiles.json`（密码/私钥只留服务端，不下发前端） |
 | 工作区 | 界面「远程工作区」 | 每会话可换，Agent 的写/改/删被限制在该目录内 |
-| 会话历史 | 项目根 `data/` | 多会话事件日志与跨轮记忆，重启自动恢复（gitignore，不入库） |
+| 会话历史 | `sessions/` | 多会话事件日志与跨轮记忆，重启自动恢复（gitignore，不入库） |
+
+### 桌面端（Tauri 安装包）配置目录
+
+安装包**不携带任何用户配置**（提供商 / SSH 配置 / 会话历史都不打包）。首次运行会自动在系统 **App 数据目录** 下创建并写入配置，不同系统位置如下：
+
+| 平台 | 配置目录 |
+|------|----------|
+| Windows | `%APPDATA%\com.teleforge.desktop\` |
+| macOS | `~/Library/Application Support/com.teleforge.desktop/` |
+| Linux | `~/.local/share/com.teleforge.desktop/` |
+
+该目录包含：`ai-providers.json`（自定义模型提供商，含 Key）、`ssh-profiles.json`、`sessions/`（会话历史）、`settings.json` 等。其他用户安装后需在「设置 → AI 配置」中自行添加提供商；应用内「设置 → 关于与更新」可直接查看/复制配置目录路径。
+
+### 桌面端自动更新（Windows）
+
+- 每次打 `v*` 标签，GitHub Actions 自动构建三平台安装包并发布到 **GitHub Releases**（`https://github.com/LeoCodePlay/Teleforge/releases`），应用内的安装包下载同样来自该页面。
+- 应用启动时静默检查 GitHub 最新版本；发现新版本后顶栏出现更新角标，进入「设置 → 关于与更新」可查看更新说明并**一键下载 → 关闭应用 → 运行安装程序**完成升级（当前仅 Windows 支持一键安装；macOS / Linux 通过浏览器跳转 Releases 手动下载）。
+- 更新检查无需任何账号/Token（走 GitHub 公开 API，有 60 次/小时/IP 的速率限制，正常使用不受影响）。
 
 ## 安全说明
 
 - 服务**默认只监听 127.0.0.1**，有条件时建议再加反向代理 + HTTPS。
-- **自定义提供商的 API Key 保存在本机 `server/data/ai-providers.json`**（明文，已 .gitignore，不入库）；首次启动会自动把 `~/.openclaw/openclaw.json` 里的提供商导入该配置。请勿用于共享/公网部署。
+- 自定义提供商的 **API Key 仅保存在本机**：桌面端存于 App 数据目录（见上「配置目录」），独立部署时默认存项目根 `data/ai-providers.json`（明文，已 .gitignore，不入库）。请勿用于共享/公网部署。
 - Agent 的写/改/删操作被限制在**工作区目录内**，且禁止删除工作区根；命令执行有超时与输出上限。
 - 建议用**单独的低权限账号 + 密钥登录**远程服务器，并谨慎让 Agent 执行破坏性命令。
 - 本机拿根权限后本工具可读任意文件，属本地工具的正常风险。

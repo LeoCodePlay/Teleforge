@@ -1,0 +1,38 @@
+/* 自定义标题栏窗口控制(仅 Tauri 窗口内渲染) */
+.winctls {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 8px;
+  border-left: 1px solid var(--line-soft);
+  padding-left: 8px;
+}
+
+.winctl {
+  /* 完全重置 button 默认内边距/边框,避免内容盒偏移 */
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  margin: 0;
+  width: 30px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--r-sm);
+  cursor: default;
+  transition: background .15s ease, color .15s ease;
+}
+/* svg 统一 10×10 块级:行内基线空隙与尺寸差异都会破坏居中 */
+.winctl svg {
+  display: block;
+  width: 10px;
+  height: 10px;
+}
+.winctl:hover { color: var(--text); background: var(--glass-bg-hover); }
+/* 关闭按钮悬停:主题危险色(与 --btn-danger-* 主按钮一致),区分危险操作 */
+.winctl-close:hover {
+  color: var(--btn-danger-text);
+  background: linear-gradient(135deg, var(--btn-danger-a), var(--btn-danger-b));
+}

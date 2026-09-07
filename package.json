@@ -1,6 +1,6 @@
 {
   "name": "teleforge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "SSH 远程 AI 编程工具:保持 SSH 连接、选择远程工作区、AI Agent 在远程服务器上读写文件与执行命令",
@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n SRV,WEB -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "node --watch server/index.ts",
+    "dev:server": "node scripts/dev-server.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build": "vite build --config web/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json",

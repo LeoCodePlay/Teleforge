@@ -11,6 +11,9 @@ import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
 import TooltipHost from './components/Tooltip/Tooltip';
 import BottomBar, { type MobileView } from './components/BottomBar/BottomBar';
+import WindowControls from './components/WindowControls/WindowControls';
+import { isTauri } from './utils/desktop';
+import { getUpdateInfo } from './utils/updater';
 import { useIsPhone, useIsTablet, useIsDesktop } from './hooks/useMediaQuery';
 import { useVisualViewportInset } from './hooks/useVisualViewport';
 import { useLlm } from './context/llm-context';
@@ -112,16 +115,31 @@ export default function App() {
   const [localCwd, setLocalCwd] = useState('');   // 本地面板当前目录
   const [remoteCwd, setRemoteCwd] = useState(''); // 远程面板当前目录
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 设置面板初始菜单项(顶栏更新角标点击时直达「关于与更新」)
+  const [settingsTab, setSettingsTab] = useState('ai');
+  // 桌面壳启动时静默检查到的新版本号(有值则顶栏显示更新角标)
+  const [updateChip, setUpdateChip] = useState('');
   const [sshOpen, setSshOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [leftWidth, setLeftWidth] = useState(320);
   const leftRef = useRef<HTMLElement>(null);
 
+  // 桌面壳启动时静默检查 GitHub 最新版本;有更新则在顶栏显示角标(失败静默,不打扰)
+  useEffect(() => {
+    if (!isTauri()) return;
+    let alive = true;
+    getUpdateInfo()
+      .then((info) => { if (alive && info?.hasUpdate) setUpdateChip(info.latest); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   // ---- 响应式断点(与 App.scss/styles.scss 的 @media 数值一一对应) ----
   // <768 手机(底部 Tab 单栏)/ 768-1279 平板(侧栏抽屉化)/ ≥1280 桌面(三栏原样)
   const isPhone = useIsPhone();
   const isTablet = useIsTablet();
-  const isDesktop = useIsDesktop();
+  // 宽屏(media query)判定:与 utils/desktop 的 isDesktop()(Tauri 壳检测)区分命名,避免遮蔽
+  const isDesktopQuery = useIsDesktop();
   // 虚拟键盘遮挡高度(仅 phone 生效):键盘弹出时把 .app 底部顶上去,输入区不被遮挡
   const vkInset = useVisualViewportInset();
   // 平板抽屉:默认收起(桌面仍用 leftOpen;手机不渲染侧栏,此状态无意义但保持无害)
@@ -137,7 +155,7 @@ export default function App() {
     activeTabId === FILES_HOME_ID || tabs.some((t) => t.kind === 'file' && t.id === activeTabId) ? 'files'
     : activeTabId === 'agent' ? 'agent' : 'console';
   // 桌面/平板不允许停留在哨兵视图(窗口从手机放大到更大尺寸时兜底回 agent)
-  const effActiveTabId = (isDesktop || isTablet) && (activeTabId === SESSIONS_ID || activeTabId === FILES_HOME_ID)
+  const effActiveTabId = (isDesktopQuery || isTablet) && (activeTabId === SESSIONS_ID || activeTabId === FILES_HOME_ID)
     ? 'agent' : activeTabId;
 
   // 手机底部栏回调:选择视图。files 视图「有打开的文件回到上次查看的那个,
@@ -781,10 +799,13 @@ export default function App() {
                 onClick={() => (isTablet ? setDrawerOpen((v) => !v) : setLeftOpen((v) => !v))}>
                 {isTablet ? '☰' : (leftOpen ? '◀' : '▶')}
               </button>
-              <div className="brand"><img className="brand-logo" src="/logo-64.png" alt="" /> Teleforge</div>
+              {/* 品牌区(无交互元素)同时作为桌面壳拖拽区 */}
+              <div className="brand" data-tauri-drag-region={isTauri() || undefined}><img className="brand-logo" src="/logo-64.png" alt="" /> Teleforge</div>
             </>
           )}
         </div>
+        {/* 桌面壳:中部空白拖拽带(顶栏空区可拖动窗口,不影响两侧按钮) */}
+        {isTauri() && <div className="topbar-dragpad" data-tauri-drag-region />}
         <div className="topbar-right">
           <button
             className={`conn-chip ${connected ? 'ok' : status.status === 'disconnected' ? 'off' : 'warn'}`}
@@ -798,7 +819,16 @@ export default function App() {
                   ? '● 未连接 · 点击 SSH 连接'
                   : `● ${STATUS_LABEL[status.status] || status.status}`}
           </button>
+          {/* 更新角标:启动时发现新版本后出现,点击直达设置「关于与更新」 */}
+          {updateChip && (
+            <button className="ghost edge-toggle update-chip" data-tip={`发现新版本 v${updateChip},点击查看`}
+              onClick={() => { setSettingsTab('about'); setSettingsOpen(true); }}>
+              ⬆ v{updateChip}
+            </button>
+          )}
           <button className="ghost edge-toggle settings-btn" onClick={() => setSettingsOpen(true)}>⚙</button>
+          {/* 桌面壳:窗口控制按钮(自定义标题栏),浏览器模式不渲染 */}
+          <WindowControls />
         </div>
       </header>
 
@@ -972,7 +1002,10 @@ export default function App() {
         />
       )}
 
-      {settingsOpen && <SettingsPanel connected={connected} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsPanel connected={connected} initialTab={settingsTab}
+          onClose={() => { setSettingsTab('ai'); setSettingsOpen(false); }} />
+      )}
       {sshOpen && <SshConnectModal status={status} onClose={() => setSshOpen(false)} />}
       <TooltipHost />
     </div>
