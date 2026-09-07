@@ -1,8 +1,7 @@
 // 「我的 AI 模型提供商」持久化:用户手动添加/删除的提供商保存在独立的配置文件里。
-// 首次启动若配置文件不存在,自动把本机 openclaw(~/.openclaw/openclaw.json)里已配置的
-// 模型提供商作为种子写入,之后用户可在此基础上手动增删,不再依赖 openclaw 导入按钮。
+// 全新安装/首次启动时配置文件不存在 → 初始为空列表,不自动导入任何第三方配置,
+// 由用户在界面「AI 配置」里自行添加提供商。
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { AI_PROVIDERS_FILE as CONFIG_FILE } from '../config.ts';
 export { CONFIG_FILE };
@@ -17,24 +16,6 @@ export interface AiProvider {
   /** 每个模型的能力/参数声明(可选),key = 模型名:
    *  contextWindow 输入窗口、maxTokens 输出上限、multimodal 是否支持图片输入 */
   modelConfig?: Record<string, { contextWindow?: number; maxTokens?: number; multimodal?: boolean }>;
-}
-
-// 读取 openclaw 配置里的模型提供商,作为首次启动的种子数据
-function seedFromOpenclaw(): AiProvider[] {
-  const p = path.join(os.homedir(), '.openclaw', 'openclaw.json');
-  let j: any;
-  try { j = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return []; }
-  const providersRaw: Record<string, any> = j.models?.providers || {};
-  return Object.entries(providersRaw)
-    .filter(([, v]) => v && v.baseUrl && v.apiKey && Array.isArray(v.models) && v.models.length)
-    .map(([id, v]) => ({
-      id: 'openclaw-' + id,
-      name: `${id}(openclaw)`,
-      baseUrl: String(v.baseUrl).replace(/\/+$/, ''),
-      apiKey: v.apiKey,
-      models: v.models.map((m: any) => m.id).filter(Boolean),
-      note: '首次启动已从 openclaw 导入'
-    }));
 }
 
 let providers: AiProvider[] | null = null; // 懒加载缓存
@@ -54,7 +35,7 @@ function load(): AiProvider[] {
     try { providers = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); }
     catch { providers = []; }
   } else {
-    providers = seedFromOpenclaw(); // 首次运行:先把 openclaw 的提供商保存进配置文件
+    providers = []; // 首次运行:无任何预置提供商,等待用户自行添加
     persist();
   }
   if (!Array.isArray(providers)) providers = [];

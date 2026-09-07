@@ -211,7 +211,7 @@ npm test
 | macOS | `~/Library/Application Support/com.teleforge.desktop/` |
 | Linux | `~/.local/share/com.teleforge.desktop/` |
 
-该目录包含：`ai-providers.json`（自定义模型提供商，含 Key）、`ssh-profiles.json`、`sessions/`（会话历史）、`settings.json` 等。其他用户安装后需在「设置 → AI 配置」中自行添加提供商；应用内「设置 → 关于与更新」可直接查看/复制配置目录路径。
+该目录包含：`ai-providers.json`（自定义模型提供商，含 Key）、`ssh-profiles.json`、`sessions/`（会话历史）、`settings.json` 等。**首次运行不携带、也不从本机任何第三方配置（如 openclaw）自动导入提供商**——「我的提供商」初始为空，其他用户安装后需在「设置 → AI 配置」中自行添加；应用内「设置 → 关于与更新」可直接查看/复制配置目录路径。
 
 ### 桌面端自动更新（Windows）
 
