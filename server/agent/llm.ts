@@ -25,6 +25,8 @@ export interface LlmOptions {
   maxTokens?: number;
   contextWindow?: number;
   maxIters?: number;
+  /** 模型是否具备多模态(看图)能力:开启后带图片附件的 user 消息以 image_url 注入 */
+  multimodal?: boolean;
 }
 
 /** 一次请求失败进入重试的信息(供上层把「重试第几次」推到前端,对齐 harness llm-retry 的 retry 事件语义) */
@@ -56,16 +58,19 @@ export class LlmClient {
   maxTokens: number;
   // 输入上下文窗口(token):>0 时启用对话历史自动压缩(见 compact.js);未配置则沿用字符预算裁剪
   contextWindow: number;
+  /** 多模态开关(提供商配置里逐模型声明):true 时请求把图片附件注入为 image_url 内容段 */
+  multimodal: boolean;
   /** @deprecated harness 的 agent-loop 没有迭代上限(循环由"无 tool_calls"收敛,水位靠压缩治理);
    *  字段仅为兼容旧的提供方配置保留,agent 主循环不再读取 */
   maxIters: number;
 
-  constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters }: LlmOptions) {
+  constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters, multimodal }: LlmOptions) {
     this.baseUrl = (baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
     this.apiKey = apiKey || '';
     this.model = model || 'deepseek-chat';
     this.maxTokens = maxTokens || 8192;
     this.contextWindow = Number(contextWindow) > 0 ? Math.floor(Number(contextWindow)) : 0;
+    this.multimodal = multimodal === true;
     this.maxIters = Number(maxIters) > 0 ? Math.floor(Number(maxIters)) : 0;
   }
 
@@ -101,8 +106,10 @@ export class LlmClient {
     // - DeepSeek v4:default 也显式开启思考(对齐 dsh 部署级默认 thinking=enabled)——
     //   不再依赖网关默认值(各网关默认开/关不一致,会出现"有时有思考、有时整轮没有");
     //   off 关闭(thinking.type=disabled);非 default 附加 reasoning_effort
-    // - GLM 系列(智谱):off → thinking.type=disabled,显式选档 → enabled;default 不传,用提供方默认
-    //   (GLM-4.5+ 默认开思考;glm-4v 等老模型可能不认该参数,默认档保持不发,避免 400)
+    // - GLM 系列(智谱):off → thinking.type=disabled,显式选档 → enabled;
+    //   default:思考系列(glm-4.5+/glm-5.x,见 GLM_THINKING_RE)也显式 enabled——这些模型
+    //   强制/默认开启深度思考,不传时 glm-5.3-flash 等会返回 400 REASONING_REQUIRED;
+    //   glm-4 及视觉模型(glm-4v)等老模型可能不认该参数,default 保持不发,由用户显式选档
     // - Qwen 系列(通义兼容模式):off → enable_thinking=false,显式选档 → true;default 不传
     // - 其他推理模型(OpenAI o 系列 / gpt-5 / grok 等):reasoning_effort 仅 low/high 合法,off/xhigh/max 就近映射
     const deepseekV4 = isDeepSeekV4(this.model);
@@ -115,7 +122,7 @@ export class LlmClient {
       }
     } else if (GLM_RE.test(this.model)) {
       if (reasoning === 'off') body.thinking = { type: 'disabled' };
-      else if (reasoning !== 'default') body.thinking = { type: 'enabled' };
+      else if (reasoning !== 'default' || GLM_THINKING_RE.test(this.model)) body.thinking = { type: 'enabled' };
     } else if (QWEN_RE.test(this.model)) {
       if (reasoning === 'off') body.enable_thinking = false;
       else if (reasoning !== 'default') body.enable_thinking = true;
@@ -203,6 +210,11 @@ const isDeepSeekV4 = (m: string) => /^deepseek-v4/i.test(m);
 // GLM 系列(智谱):thinking.type 开关;Qwen 系列(通义):enable_thinking 开关
 const GLM_RE = /^glm-/i;
 const QWEN_RE = /^qwen/i;
+
+// GLM 思考系列(glm-4.5+/glm-5.x):强制/默认开启深度思考,default 档也显式 thinking=enabled,
+// 否则 glm-5.3-flash 等返回 400 REASONING_REQUIRED(当前模型必须开启深度思考)。
+// glm-4 及视觉模型(glm-4v)等老模型不认该参数,不在匹配范围内,default 保持不发。
+const GLM_THINKING_RE = /^glm-(4\.(5|6)|5)/i;
 
 // 支持 reasoning_effort 参数的其他推理模型(OpenAI o 系列 / gpt-5 / grok-3-mini 等);其余模型不透传
 const REASONING_EFFORT_RE = /^(o[134](-|$)|gpt-5|grok-3-mini|grok-4)/i;

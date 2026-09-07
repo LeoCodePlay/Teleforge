@@ -1,0 +1,25 @@
+/* ---- FilesChangedCard 独有样式:AI 回复下方的「N 个文件已更改」长条卡片 ----
+   折叠态 = 整行胶囊(圆角/浅背景/细边框),hover 轻微提亮;
+   展开列表以等宽间距排布:文件名(固定) + 路径(弹性省略) + 类型标签 + 行数(右对齐)。 */
+.fcc { display: flex; flex-direction: column; min-width: 0; margin: 6px 0 2px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg-soft); overflow: hidden; }
+.fcc-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; transition: background 0.15s ease; }
+.fcc-head:hover { background: var(--hover-bg-hard); }
+.fcc-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fcc-icon { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-2); }
+.fcc-title { flex: 1; min-width: 0; text-align: left; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fcc-chevron { flex: none; color: var(--muted); transition: transform 0.18s ease; }
+.fcc-chevron.flip { transform: rotate(180deg); }
+.fcc-list { list-style: none; margin: 0; padding: 4px 0 8px; border-top: 1px solid var(--line-soft); }
+.fcc-item { display: flex; align-items: baseline; gap: 8px; padding: 4px 12px; font-size: 12.5px; line-height: 18px; white-space: nowrap; }
+.fcc-item:hover { background: var(--hover-bg-hard); }
+.fcc-name { flex: none; max-width: 42%; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.fcc-path { flex: 1; min-width: 0; color: var(--muted); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.fcc-kind { flex: none; padding: 0 7px; border-radius: var(--r-pill); font-size: 11px; line-height: 16px; background: var(--fill-1-lo); color: var(--muted); }
+.fcc-kind.kind-create { color: var(--green); }
+.fcc-kind.kind-write { color: var(--accent-2); }
+.fcc-kind.kind-edit { color: var(--amber); }
+.fcc-kind.kind-delete { color: var(--red); }
+.fcc-delta { flex: none; font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.fcc-delta.add { color: var(--green); }
+.fcc-delta.del { color: var(--red); }
+.fcc-delta.none { color: var(--muted); }

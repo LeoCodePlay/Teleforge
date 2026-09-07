@@ -1,7 +1,8 @@
 // 上下文窗口自动压缩(设计参照 dsh 的 compaction-basic 子系统):
 // - 每个模型可在提供方配置里声明 contextWindow(输入上下文长度)与 maxTokens(单次输出上限)。
 // - 每次发请求前估算 token;超过阈值窗口(默认 contextWindow×80%,再扣除输出预留)时,
-//   把早期区间压缩成一段摘要(调用 LLM,reasoning=off,不含工具),保留最近约 retainRatio(16%)的窗口。
+//   把早期区间压缩成一段结构化 checkpoint 摘要(调用 LLM,不带工具;思考系列模型默认开启思考),
+//   保留最近约 retainRatio(16%)的窗口。
 // - 区间选择按"位置"而非"对话组"(见 selectCompactRange):单条消息引发的深工具任务
 //   同样可以中途压缩;切点对齐工具配对边界,压缩后消息序列始终合法。
 // - 摘要生成失败时降级为"直接裁剪"(丢弃早期区间,保留任务锚点),保证对话永不因压缩失败中断。
@@ -108,15 +109,44 @@ export function selectCompactRange(msgs: any[], retainTokens: number): { drop: a
   return { drop, recent: msgs.slice(keep) };
 }
 
-/** 摘要指令:要求把对话历史压缩为紧凑的结构化 checkpoint(参照 harness 的 COMPACTION_INSTRUCTION) */
+/** 摘要指令:要求把对话历史压缩为紧凑的结构化 checkpoint(照搬 harness 的 COMPACTION_INSTRUCTION,中文版) */
 export function compactionInstruction(): string {
   return [
-    '请把上面的对话历史压缩成一段紧凑的中文摘要,供后续对话作为上下文回顾。要求:',
-    '1. 保留所有用户提出的任务、明确要求与限制条件;',
-    '2. 保留关键事实:远程平台、工作区路径、执行过的命令及其关键输出、创建/修改/删除的文件与路径、目录结构与环境探测结果;',
-    '3. 保留尚未完成的任务与待办事项;',
-    '4. 只压缩已有内容,不要新增信息,不要臆测,不要讨论摘要本身;',
-    '5. 直接输出纯文本摘要,不要 Markdown 代码块,不要列表符号之外的多余格式。'
+    '你现在充当这个 AI 编码助手的压缩引擎。把上面(ABOVE)的对话压缩成一份结构化 checkpoint,让另一个模型在不丢失关键上下文的前提下接续工作。',
+    '',
+    '严格按下面的 Markdown 结构输出:每个 section 都保留、按顺序排列。用简洁的条目式 bullet,不要散文段落。空 section 写"(无)"——绝不要删掉任何 section。',
+    '',
+    '## 主要请求与意图',
+    '- [用户的原始与演化目标;措辞关键处逐字引用]',
+    '',
+    '## 关键技术概念',
+    '- [涉及的框架、模式与约定]',
+    '',
+    '## 文件与代码',
+    '- [确切路径:为何重要、关键改动或片段]',
+    '',
+    '## 错误与修复',
+    '- [错误:如何解决,以及相关的用户反馈]',
+    '',
+    '## 待办任务',
+    '- [明确请求但尚未完成的工作]',
+    '',
+    '## 当前工作',
+    '- [这个检查点时正在进行的工作]',
+    '',
+    '## 下一步',
+    '- [与最近请求直接一致的唯一动作,或"(无)"]',
+    '',
+    '## 关键上下文',
+    '- [决策及其理由、约束、用户偏好、未决问题、继续所需的数据]',
+    '',
+    '规则:',
+    '- 用简洁的中文工程叙述。保留确切的文件路径、命令、错误串、标识符、数值、函数签名与语法片段。',
+    '- 忠实记录用户的反馈与明确指令,尤其是纠正。',
+    '- 不要提及本次压缩请求,或上下文已被压缩。',
+    '- 只输出 checkpoint 文本:不要调用任何工具,也不要采取其他动作。',
+    '- 若对话中已包含 <compacted-summary> 块,它是先前 checkpoint:不要逐字复制它,',
+    '  保留仍然成立的事实、剔除过时内容,把新信息合并进同一结构的单一汇总。'
   ].join('\n');
 }
 
@@ -193,7 +223,9 @@ function preserveOriginalTask(dropMsgs: any[]): string {
   return first ? `\n原始任务(降级裁剪时保留,供后续对话回顾):\n${first.content}` : '';
 }
 
-/** 调用 LLM 生成摘要:沿用原始 system 前缀 + 被压缩的历史 + 摘要指令,不带工具、关闭思考 */
+/** 调用 LLM 生成摘要:沿用原始 system 前缀 + 被压缩的历史 + 摘要指令,不带工具。
+ *  reasoning 不传(默认档):思考系列模型(DeepSeek v4 / GLM-4.5+/GLM-5.x 等)默认开启深度思考——
+ *  此前硬编码 reasoning:'off' 会让 glm-5.3-flash 等强制思考模型返回 400 REASONING_REQUIRED。 */
 export async function summarizeWithLlm({ llm, system, dropMsgs, signal }: { llm: LlmClient; system?: string; dropMsgs: any[]; signal?: AbortSignal }): Promise<string> {
   const messages = [
     ...(system ? [{ role: 'system', content: system }] : []),
@@ -203,8 +235,7 @@ export async function summarizeWithLlm({ llm, system, dropMsgs, signal }: { llm:
   const res = await llm.chat({
     messages,
     tools: [],
-    signal,
-    reasoning: 'off'
+    signal
   });
   const text = (res && (res.content || '')) || '';
   return text.trim().slice(0, AGENT.HISTORY_BUDGET_CHARS);

@@ -1,0 +1,69 @@
+/* 访问权限模式选择器(输入框左下角):chip 触发器 + 向上弹出菜单。
+   视觉语言沿用工作区 chip(.ws-chip)/下拉(.ws-pick)的玻璃拟态,
+   菜单行带图标 + 名称 + 一句话说明(对齐 harness PermissionSelect 的行式菜单) */
+
+.perm-select { position: relative; flex: none; }
+
+/* 触发器 chip:比工作区 chip 更轻(贴在 composer-foot 里,避免与输入卡抢戏) */
+.perm-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 180px; height: 26px; padding: 0 8px;
+  border-radius: var(--r-pill); font-size: 12px; cursor: pointer;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  color: var(--muted); font-family: inherit;
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
+  transition: all .18s;
+}
+.perm-chip:hover:not(:disabled) { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); color: var(--text); }
+.perm-chip:disabled { opacity: .55; cursor: default; }
+/* 计划模式:琥珀色提示"只读";完全访问:红色警示 */
+.perm-chip.plan { color: var(--amber); border-color: var(--warn-border); background: var(--warn-bg); }
+.perm-chip.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.perm-chip-icon { display: inline-flex; flex: none; }
+.perm-chip-icon svg { width: 14px; height: 14px; }
+.perm-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-chip-arrow { flex: none; font-size: 9px; color: inherit; opacity: .7; transition: transform .15s; }
+.perm-chip-arrow.open { transform: rotate(180deg); }
+
+/* 向上弹出的模式菜单:portal 到 body、fixed 定位(坐标由组件按触发 chip 计算,
+   bottom 锚定 = chip 上方 8px,与 msm/ws-pick 同语义;不用 translateY(-100%),
+   入场动画 glass-pop 的 transform 会覆盖静态位移造成先下后上瞬移)。
+   统一液态玻璃:标准 pop 渐变 + blur-md + 玻璃三段式,行式布局,图标 + 名称/说明两行 */
+.perm-menu {
+  position: fixed; z-index: 140;
+  min-width: 300px; max-width: min(420px, 88vw);
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md); padding: 5px;
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
+  display: flex; flex-direction: column; gap: 2px;
+  animation: glass-pop .16s ease-out;
+}
+.perm-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; background: transparent; border: none; border-radius: var(--r-sm);
+  text-align: left; cursor: pointer; transition: background .15s;
+  /* 全局 button 自带玻璃底+投影(msm-cell 同款必须显式压掉,否则静止态每行都带阴影卡) */
+  box-shadow: none;
+}
+.perm-menu-item:hover { background: var(--glass-bg-hover); }
+/* 悬停/选中行文字与模型下拉(.msm-cell/.msm-option)统一:强调色;说明文字保持弱化。
+   悬停投影不做压制:与 msm 行一致,由全局 button:hover 提供抬升投影 */
+.perm-menu-item:hover .perm-menu-name,
+.perm-menu-item.on .perm-menu-name { color: var(--accent-2); }
+.perm-menu-item.on { background: var(--accent-soft); }
+.perm-menu-icon { display: inline-flex; flex: none; color: var(--muted); }
+.perm-menu-item:hover .perm-menu-icon, .perm-menu-item.on .perm-menu-icon { color: var(--accent-2); }
+.perm-menu-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.perm-menu-name { font-size: 12.5px; color: var(--text); line-height: 1.3; }
+.perm-menu-desc { font-size: 11px; color: var(--muted); line-height: 1.4; }
+.perm-menu-cur { flex: none; color: var(--green); font-size: 12px; }
+
+/* 窄屏:chip 收缩为仅图标 + 箭头(说明在悬停 title 里),菜单贴左不溢出 */
+@media (max-width: 560px) {
+  .perm-chip { max-width: 26px; padding: 0 7px; gap: 3px; }
+  .perm-chip-label { display: none; }
+  .perm-menu { min-width: 260px; }
+}

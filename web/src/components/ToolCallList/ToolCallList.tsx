@@ -2,7 +2,7 @@
 // 每条工具调用 = 一行 ToolRow(替代原 ToolRun 的"组头+卡片"两级结构),
 // 按 toolName 分发到专属视图,未注册兜底 GenericToolCard。当前工具扁平无嵌套子调用。
 
-import React from 'react';
+import React, { memo } from 'react';
 import type { ToolCallInfo } from '../../types';
 import { TerminalRow } from '../toolviews/TerminalRow';
 import { ReadRow } from '../toolviews/ReadRow';
@@ -21,7 +21,9 @@ interface ToolCallListProps {
   onOpenFile?: (path: string) => void;
 }
 
-export function ToolCallList({ tools, workspace, onOpenFile }: ToolCallListProps) {
+// memo:按 tools 数组引用判定。ChatPanel 的 tool_call/tool_result 事件走不可变更新,
+// 只有工具组真实变化时本列表才重渲染;流式文本/输入变化不再牵动全部历史的工具卡。
+export const ToolCallList = memo(function ToolCallList({ tools, workspace, onOpenFile }: ToolCallListProps) {
   if (!tools || tools.length === 0) return null;
   return (
     <div className="dsh-tooltree">
@@ -30,7 +32,7 @@ export function ToolCallList({ tools, workspace, onOpenFile }: ToolCallListProps
       ))}
     </div>
   );
-}
+});
 
 function ToolCallBranch({ call, workspace, onOpenFile }: { call: ToolCallInfo; workspace?: string; onOpenFile?: (path: string) => void }) {
   const name = call.tool || '';

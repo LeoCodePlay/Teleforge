@@ -2,6 +2,7 @@
 // 集中管理主题:切换预设(深色三套 + 亮色一套)/ 新建 / 编辑 / 删除自定义主题。
 // 主题的 token 定义与持久化逻辑见 ../themes.ts,本组件只负责 UI 与「应用+保存」。
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   applyTheme, getAllThemes, getTheme, loadThemeState, saveThemeState,
   buildCustomTheme, newThemeId, toDraft,
@@ -210,7 +211,9 @@ function ThemeEditor({ edit, onClose, onSave }: ThemeEditorProps) {
     </label>
   );
 
-  return (
+  // portal 到 body:同 AiConfigPanel 提供商弹窗 —— .settings 的 backdrop-filter 会让
+  // 内联 .modal 的液态玻璃失效(采样不到真实页面),fixed 遮罩也被困在面板内
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal theme-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
@@ -244,6 +247,7 @@ function ThemeEditor({ edit, onClose, onSave }: ThemeEditorProps) {
           <button className="primary grow" onClick={submit}>{edit ? '保存' : '保存并使用'}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

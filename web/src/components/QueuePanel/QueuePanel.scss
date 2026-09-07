@@ -44,6 +44,11 @@
   font-size: 13px; line-height: 1.5; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* 附件计数徽标(📎 N):排队消息携带附件时的轻量提示 */
+.queue-attach {
+  flex: none; font-size: 11px; color: var(--accent-2); white-space: nowrap;
+  background: var(--accent-soft); border-radius: 999px; padding: 2px 8px;
+}
 .queue-status {
   flex: none; font-size: 11px; font-weight: 600; white-space: nowrap;
   color: var(--amber);

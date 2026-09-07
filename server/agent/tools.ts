@@ -98,6 +98,30 @@ function parseReadArgs(args: { offset?: unknown; limit?: unknown }) {
 // read 单次扫描上限:行号窗口需要精确总行数,扫描整个文件(超限部分在页脚注明)
 const READ_SCAN_MAX_BYTES = 8 * 1024 * 1024;
 
+// ---- 文件变更统计(供 write/edit/delete 工具的 meta)----
+// 双端文件工具共用:meta 携带结构化"文件改动卡"(card:'diff'),前端据此在回复下方汇总出
+// 「N 个文件已更改」长条卡片(文件名/路径/新增删除行数)。行数口径与 buildLineWindow 一致:
+// 末尾换行不产生额外空行,空文本计 0 行。
+function countLines(s: string): number {
+  if (!s) return 0;
+  const n = s.split('\n').length;
+  return s.endsWith('\n') ? n - 1 : n;
+}
+
+// 读取已存在文件的全文(上限 2MB,与 edit 工具一致)统计删除行数;超限/读取失败返回 null(未知)
+async function countExistingFileLines(
+  readChunk: (abs: string, opts: { maxBytes: number }) => Promise<{ buffer: Buffer; size: number }>,
+  abs: string
+): Promise<number | null> {
+  try {
+    const { buffer, size } = await readChunk(abs, { maxBytes: 2 * 1024 * 1024 });
+    if (size > buffer.length) return null; // 文件超过 2MB:行数未知
+    return countLines(buffer.toString('utf8'));
+  } catch {
+    return null; // 读取失败(竞态/权限):行数未知
+  }
+}
+
 // ---- 命令/搜索输出上限(照搬 harness bash-local maxOutputBytes)----
 // 单次 64,000 字节,保留尾部(错误与最终结果聚集在尾部;头尾折叠由注册表 spill 统一负责)
 function capOutputBytes(s: string, max: number = AGENT.BASH_MAX_OUTPUT_BYTES): string {
@@ -255,9 +279,16 @@ const toolDefs: ToolDef[] = [
     },
     async run({ path, content }) {
       const abs = resolveInWorkspace(path);
-      if ((await ssh.atype(abs)) === 'dir') throw new Error('目标路径已存在且是目录');
+      const type = await ssh.atype(abs);
+      if (type === 'dir') throw new Error('目标路径已存在且是目录');
+      const kind = type === 'file' ? 'write' : 'create';
+      const delLines = kind === 'write' ? await countExistingFileLines((p, o) => ssh.readFileChunk(p, o), abs) : 0;
       const bytes = await ssh.writeRemoteFile(abs, content);
-      return `已写入 ${abs}(${bytes} 字节)`;
+      return {
+        content: `已写入 ${abs}(${bytes} 字节)`,
+        // meta:文件改动卡(新建/覆盖 + 增删行数),供前端「N 个文件已更改」汇总卡呈现
+        meta: { card: 'diff', kind, path: abs, addLines: countLines(content), delLines }
+      };
     }
   },
 
@@ -288,7 +319,12 @@ const toolDefs: ToolDef[] = [
       if (count > 1 && !replace_all) throw new Error(`"${old_string.slice(0, 60)}" 在文件中出现 ${count} 次,请设置 replace_all=true 或让 old_string 更具体`);
       const next = replace_all ? text.split(old_string).join(new_string) : text.replace(old_string, new_string);
       const bytes = await ssh.writeRemoteFile(abs, next);
-      return `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`;
+      const times = replace_all ? count : 1;
+      return {
+        content: `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`,
+        // meta:文件改动卡(编辑 + 增删行数,按替换次数累乘),供前端「N 个文件已更改」汇总卡呈现
+        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(new_string) * times, delLines: countLines(old_string) * times }
+      };
     }
   },
 
@@ -359,8 +395,12 @@ const toolDefs: ToolDef[] = [
       const type = await ssh.atype(abs);
       if (!type) throw new Error(`路径不存在: ${abs}`);
       if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
+      // 文件删除:先读旧内容统计行数(上限 2MB)供改动卡展示;目录删除不产生文件级改动卡
+      const delLines = type === 'file' ? await countExistingFileLines((p, o) => ssh.readFileChunk(p, o), abs) : 0;
       await ssh.rmdirRecursive(abs);
-      return `已删除: ${abs}`;
+      return type === 'file'
+        ? { content: `已删除: ${abs}`, meta: { card: 'diff', kind: 'delete', path: abs, addLines: 0, delLines } }
+        : `已删除: ${abs}`;
     }
   },
 
@@ -632,9 +672,16 @@ const localToolDefs: ToolDef[] = [
     parameters: { type: 'object', properties: { path: { type: 'string', description: '本机路径(本地工作区内,支持相对路径)' }, content: { type: 'string' } }, required: ['path', 'content'] },
     async run({ path: p, content }) {
       const abs = resolveInLocalWorkspace(p);
-      if ((await localFs.atype(abs)) === 'dir') throw new Error('目标路径已存在且是目录');
+      const type = await localFs.atype(abs);
+      if (type === 'dir') throw new Error('目标路径已存在且是目录');
+      const kind = type === 'file' ? 'write' : 'create';
+      const delLines = kind === 'write' ? await countExistingFileLines((p, o) => localFs.readFileChunk(p, o), abs) : 0;
       const bytes = await localFs.writeFile(abs, content);
-      return `已写入 ${abs}(${bytes} 字节)`;
+      return {
+        content: `已写入 ${abs}(${bytes} 字节)`,
+        // meta:文件改动卡(新建/覆盖 + 增删行数),供前端「N 个文件已更改」汇总卡呈现
+        meta: { card: 'diff', kind, path: abs, addLines: countLines(content), delLines }
+      };
     }
   },
   {
@@ -652,7 +699,12 @@ const localToolDefs: ToolDef[] = [
       if (count > 1 && !replace_all) throw new Error(`"${old_string.slice(0, 60)}" 在文件中出现 ${count} 次,请设置 replace_all=true`);
       const next = replace_all ? text.split(old_string).join(new_string) : text.replace(old_string, new_string);
       const bytes = await localFs.writeFile(abs, next);
-      return `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`;
+      const times = replace_all ? count : 1;
+      return {
+        content: `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`,
+        // meta:文件改动卡(编辑 + 增删行数,按替换次数累乘),供前端「N 个文件已更改」汇总卡呈现
+        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(new_string) * times, delLines: countLines(old_string) * times }
+      };
     }
   },
   {
@@ -673,8 +725,12 @@ const localToolDefs: ToolDef[] = [
       const type = await localFs.atype(abs);
       if (!type) throw new Error(`路径不存在: ${abs}`);
       if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
+      // 文件删除:先读旧内容统计行数(上限 2MB)供改动卡展示;目录删除不产生文件级改动卡
+      const delLines = type === 'file' ? await countExistingFileLines((p, o) => localFs.readFileChunk(p, o), abs) : 0;
       await localFs.rmdirRecursive(abs);
-      return `已删除: ${abs}`;
+      return type === 'file'
+        ? { content: `已删除: ${abs}`, meta: { card: 'diff', kind: 'delete', path: abs, addLines: 0, delLines } }
+        : `已删除: ${abs}`;
     }
   },
   {

@@ -23,6 +23,21 @@
 .mc-remove { flex: 0 0 auto; padding: 2px 8px; font-size: 11px; }
 /* 颜色与 hover/active 反馈由 .action-icon.danger 统一提供 */
 
+/* 多模态开关(每模型是否支持图片输入):玻璃胶囊滑块,开启时点亮 accent 色 */
+.mc-mm { cursor: pointer; }
+.mc-switch {
+  width: 30px; height: 17px; padding: 0; border-radius: var(--r-pill); flex: none;
+  border: 1px solid var(--glass-border); background: var(--glass-bg-inset);
+  display: inline-flex; align-items: center; padding-inline: 2px;
+  transition: background .18s, border-color .18s;
+}
+.mc-switch .mc-knob {
+  width: 11px; height: 11px; border-radius: 50%; background: var(--muted);
+  transition: transform .18s ease, background .18s;
+}
+.mc-switch.on { border-color: var(--accent-border); background: var(--accent-soft); }
+.mc-switch.on .mc-knob { transform: translateX(13px); background: var(--accent-2); }
+
 /* ---- AI 配置:预置提供商快速切换 chips ---- */
 .provider-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .provider-chips button {

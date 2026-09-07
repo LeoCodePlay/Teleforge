@@ -17,6 +17,9 @@ localFs.workspace = root;
 writeFileSync(path.join(root, 'note.txt'), 'local content');
 
 const agent = new Agent({ emit: () => {} });
+// 本测试验证本地工具链(写入直接落盘),与权限门控无关:默认「变更前确认」模式下
+// 写入会弹审批挂起等待作答,这里显式切到完全访问绕开门控
+agent.setPermissionMode('full-access');
 let calls = 0;
 agent.configureLlm({ baseUrl: 'http://x', apiKey: 'k', model: 'fake' });
 agent.llm = {

@@ -14,6 +14,7 @@ server-trace.log*
 .playwright-cli/
 docs/superpowers/
 dbg2.mjs
+desktop/.staging/
 
 # 编辑器
 .vscode/

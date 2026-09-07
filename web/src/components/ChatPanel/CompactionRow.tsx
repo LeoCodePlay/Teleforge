@@ -5,9 +5,20 @@
 // 被压缩的历史(其上的对话保持原样),摘要本身是写给模型的,标记行只作披露。
 
 import React from 'react';
+import { Marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { DisclosureRow, useDisclosure } from '../DisclosureRow/DisclosureRow';
 import { IconApiOutline14 } from '../icons/icons';
 import './CompactionRow.scss';
+
+// 摘要正文是结构化 checkpoint(Markdown,参照 harness COMPACTION_INSTRUCTION 的 8 段结构),
+// 展开态用与助手回复同款的安全 Markdown 渲染(harness 的 CompactionItem 也用 MarkdownText)。
+const mdParser = new Marked({ gfm: true, breaks: true });
+function renderMarkdown(text = '') {
+  if (!text || !text.trim()) return '';
+  const html = mdParser.parse(text) as string;
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+}
 
 interface CompactionRowProps {
   /** 压缩摘要完整文本(服务端 compaction/done 事件投影而来) */
@@ -40,7 +51,9 @@ export function CompactionRow({ content, dropCount = 0, manual = false }: Compac
           </>
         )}
       >
-        <div className="dsh-compaction-body">{content}</div>
+        <div className="dsh-compaction-body">
+          <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
+        </div>
       </DisclosureRow>
     </div>
   );

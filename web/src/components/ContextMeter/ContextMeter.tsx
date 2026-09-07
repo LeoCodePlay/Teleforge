@@ -51,14 +51,26 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
   const win = serverWin > 0 ? serverWin : (Number(contextWindow) || 0);
   if (win <= 0) return null;
 
-  // 服务端口径:actual 优先(真实请求),否则用服务端折叠后预估;两者都没有才回退前端估算
+  // 服务端口径:actual 优先(真实请求),否则用服务端折叠后预估。
+  // 前端估算对整段历史做 JSON.stringify,仅在服务端未上报时走(此时安全,Hooks
+  // 不可条件调用,用按 messages 引用的惰性缓存代替:打字等仅输入变化的重渲染命中缓存)。
+  // 服务端正常上报时完全不触发整段历史的序列化,流式增量帧不背这个开销。
   const serverUsed = usage ? (usage.actual ?? usage.estimated) : null;
-  const clientUsed = SYSTEM_EST + estimateMessages(messages) + estimateTokens(input as string) + 20;
-  const used = serverUsed != null && serverUsed > 0 ? serverUsed : clientUsed;
+  const hasServer = serverUsed != null && serverUsed > 0;
+  const estCache = useRef<{ key: ChatMessage[] | null; val: number }>({ key: null, val: 0 });
+  const estimateMsgs = () => {
+    const c = estCache.current;
+    if (c.key === messages) return c.val;
+    const v = estimateMessages(messages);
+    estCache.current = { key: messages, val: v };
+    return v;
+  };
+  const used = hasServer ? serverUsed : SYSTEM_EST + estimateMsgs() + estimateTokens(input as string) + 20;
   const pct = Math.min(100, Math.round((used / win) * 100));
   const level = pct >= 95 ? ' danger' : pct >= 80 ? ' warn' : '';
-  const seg = estimateBreakdown(messages, input);
-  const segTotal = seg.system + seg.tools + seg.conversation || 1;
+  // 分项明细(遍历全部消息)只在悬浮面板打开时计算,常闭时省掉整段历史的开销
+  const breakdown = show && pos ? estimateBreakdown(messages, input) : null;
+  const segTotal = breakdown ? (breakdown.system + breakdown.tools + breakdown.conversation || 1) : 1;
   const segPct = (n: number) => Math.round((n / segTotal) * 100);
 
   const ringPct = Math.min(1, used / win);
@@ -95,9 +107,11 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
             {usage && usage.window > 0
               ? <div className="ctx-pop-hint">以上为服务端实际请求口径(旧工具结果已折叠,不再按前端渲染历史估算)</div>
               : <>
-                <SegRow name="系统提示词" tokens={seg.system} pct={segPct(seg.system)} cls="sys" />
-                <SegRow name="工具调用" tokens={seg.tools} pct={segPct(seg.tools)} cls="tool" />
-                <SegRow name="对话消息" tokens={seg.conversation} pct={segPct(seg.conversation)} cls="conv" />
+                {breakdown && <>
+                  <SegRow name="系统提示词" tokens={breakdown.system} pct={segPct(breakdown.system)} cls="sys" />
+                  <SegRow name="工具调用" tokens={breakdown.tools} pct={segPct(breakdown.tools)} cls="tool" />
+                  <SegRow name="对话消息" tokens={breakdown.conversation} pct={segPct(breakdown.conversation)} cls="conv" />
+                </>}
               </>}
           </div>
           <div className="ctx-pop-hint">达到 80% 水位时自动压缩早期对话</div>

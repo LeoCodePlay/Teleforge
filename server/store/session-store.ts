@@ -6,13 +6,8 @@
 // - 零依赖(Node 内置 fs),原子写(临时文件 + rename)防损坏
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { eventsFromTurns } from '../agent/session.ts';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', '..', 'data'); // 项目根 data/(测试可注入隔离目录)
-const INDEX_FILE = path.join(DATA_DIR, 'sessions.json');
-const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
+import { DATA_DIR, SESSIONS_FILE as INDEX_FILE, SESSIONS_DIR } from '../config.ts';
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
@@ -26,6 +21,10 @@ export interface SessionMeta {
   createdAt: number;
   updatedAt: number;
   msgCount: number;
+  /** 会话绑定的远程工作区(连接服务器时执行目录);null/缺失 = 未绑定,执行时回落连接级工作区 */
+  workspace?: string | null;
+  /** 会话绑定的本地工作区;null/缺失 = 未绑定,执行时回落全局本地工作区 */
+  localWorkspace?: string | null;
 }
 
 export interface SessionIndex {
@@ -117,11 +116,16 @@ export function setActive(id: string | null): void {
   writeIndex(idx);
 }
 
-/** 创建新会话并设为活跃,返回元数据。connKey = 归属作用域(服务器键或 'local') */
-export function create(title: string, connKey?: string | null): SessionMeta {
+/** 创建新会话并设为活跃,返回元数据。connKey = 归属作用域(服务器键或 'local')。
+    opts.workspace / opts.localWorkspace = 会话绑定的执行工作区(新建时捕获当前连接工作区) */
+export function create(title: string, connKey?: string | null, opts: { workspace?: string | null; localWorkspace?: string | null } = {}): SessionMeta {
   const id = newId();
   const now = Date.now();
-  const sess: SessionMeta = { id, title: title || '新会话', connKey: connKey || null, createdAt: now, updatedAt: now, msgCount: 0 };
+  const sess: SessionMeta = {
+    id, title: title || '新会话', connKey: connKey || null, createdAt: now, updatedAt: now, msgCount: 0,
+    workspace: opts.workspace != null ? opts.workspace : null,
+    localWorkspace: opts.localWorkspace != null ? opts.localWorkspace : null
+  };
   const idx = readIndex();
   idx.sessions.push(sess);
   idx.active = id;
@@ -147,7 +151,11 @@ export function saveEvents(id: string, events: any[]): void {
   const clean = Array.isArray(events) ? events : [];
   writeEventsFile(id, clean);
   s.updatedAt = Date.now();
-  s.msgCount = clean.filter((e: any) => e?.type === 'user/message' && e.data?.source === 'user').length;
+  // 有内容的消息数(user 消息 + 压缩检查点)。非破坏压缩下早期 user 消息仍完整保留在
+  // 日志里,msgCount 真实反映历史体量;压缩检查点(compaction/done)也计入,保证压缩后
+  // 会话不被前端"空会话"过滤规则隐藏。
+  s.msgCount = clean.filter((e: any) =>
+    (e?.type === 'user/message' && e.data?.source === 'user') || e?.type === 'compaction/done').length;
   writeIndex(idx);
 }
 
@@ -156,6 +164,33 @@ export function rename(id: string, title: string): void {
   const s = idx.sessions.find((x) => x.id === id);
   if (!s) throw new Error(`会话不存在: ${id}`);
   s.title = String(title || '').slice(0, 80) || '新会话';
+  writeIndex(idx);
+}
+
+// 更新会话绑定的执行工作区(远程/本地)。只改绑定字段,不动 updatedAt——
+// 工作区切换属于"视图状态"而非对话活动,不应打乱列表按最近更新的排序。
+export function setWorkspace(id: string, ws: string | null): void {
+  const idx = readIndex();
+  const s = idx.sessions.find((x) => x.id === id);
+  if (!s) throw new Error(`会话不存在: ${id}`);
+  s.workspace = ws;
+  writeIndex(idx);
+}
+
+export function setLocalWorkspace(id: string, lws: string | null): void {
+  const idx = readIndex();
+  const s = idx.sessions.find((x) => x.id === id);
+  if (!s) throw new Error(`会话不存在: ${id}`);
+  s.localWorkspace = lws;
+  writeIndex(idx);
+}
+
+// 重新归属会话作用域(如空会话补选远程工作区后,从本地翻转为当前服务器作用域)
+export function setConnKey(id: string, connKey: string | null): void {
+  const idx = readIndex();
+  const s = idx.sessions.find((x) => x.id === id);
+  if (!s) throw new Error(`会话不存在: ${id}`);
+  s.connKey = connKey || null;
   writeIndex(idx);
 }
 
@@ -193,3 +228,24 @@ function ensureMigrated() {
   } catch { /* 迁移失败不影响使用 */ }
 }
 ensureMigrated();
+
+// ---------------- 存量索引修复 ----------------
+// 老版本破坏式压缩(squash 直接把早期 user 消息从日志删除)落盘时,msgCount 可能被计为 0
+// (深工具会话唯一 user 也被压掉),前端会话列表据此把有内容的会话当"空会话"隐藏——
+// 会话数据文件仍在,只是索引里 msgCount 失真。启动时对 msgCount=0 但有事件内容的会话
+// 按现行口径(user 消息 + 压缩检查点)重算并写回索引,让这类会话重新出现在侧栏。
+function repairStaleMsgCounts(): number {
+  let idx = readIndex();
+  let n = 0;
+  for (const s of idx.sessions) {
+    if ((s.msgCount ?? 0) > 0) continue;
+    const events = readEvents(s.id);
+    if (!events.length) continue;
+    const count = events.filter((e: any) =>
+      (e?.type === 'user/message' && e.data?.source === 'user') || e?.type === 'compaction/done').length;
+    if (count > 0) { s.msgCount = count; n++; }
+  }
+  if (n) writeIndex(idx);
+  return n;
+}
+repairStaleMsgCounts();

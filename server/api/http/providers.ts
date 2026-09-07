@@ -1,8 +1,25 @@
 // 「我的 AI 模型提供商」配置文件操作插件(增删改查 + 代理拉取模型列表)
 // 数据保存在 server/data/ai-providers.json(首次启动自动从 openclaw 导入种子)
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { aiProviders } from '../../store/ai-providers-store.ts';
+import { aiProviders, type AiProvider } from '../../store/ai-providers-store.ts';
 import { uiState } from '../../store/ui-state-store.ts';
+
+// modelConfig 白名单净化:每模型只保留 contextWindow/maxTokens(正数)与 multimodal(布尔)
+function sanitizeModelConfig(mc: unknown): Record<string, any> | null {
+  if (!mc || typeof mc !== 'object' || Array.isArray(mc)) return null;
+  const out: Record<string, any> = {};
+  for (const [m, v] of Object.entries(mc as Record<string, any>)) {
+    if (!m || !v || typeof v !== 'object') continue;
+    const e: Record<string, any> = {};
+    const win = Math.floor(Number(v.contextWindow));
+    const max = Math.floor(Number(v.maxTokens));
+    if (Number.isFinite(win) && win > 0) e.contextWindow = win;
+    if (Number.isFinite(max) && max > 0) e.maxTokens = max;
+    if (v.multimodal === true) e.multimodal = true;
+    if (Object.keys(e).length > 0) out[m] = e;
+  }
+  return out;
+}
 
 export default async function registerProviders(app: FastifyInstance) {
   app.get('/api/providers', () => ({ userProviders: aiProviders.list() }));
@@ -36,7 +53,7 @@ export default async function registerProviders(app: FastifyInstance) {
     const baseUrl = String(b.baseUrl || '').trim().replace(/\/+$/, '');
     if (!name) return reply.code(400).send({ error: '请填写提供商名称' });
     if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) return reply.code(400).send({ error: 'Base URL 需以 http:// 或 https:// 开头' });
-    const entry = {
+    const entry: AiProvider = {
       id: 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       name,
       baseUrl,
@@ -44,6 +61,8 @@ export default async function registerProviders(app: FastifyInstance) {
       apiKey: String(b.apiKey || ''),
       note: '由用户添加'
     };
+    const mc = sanitizeModelConfig(b.modelConfig);
+    if (mc) entry.modelConfig = mc;
     aiProviders.add(entry);
     return { userProviders: aiProviders.list() };
   });
@@ -60,6 +79,7 @@ export default async function registerProviders(app: FastifyInstance) {
     }
     if (Array.isArray(b.models)) patch.models = b.models.map((m: any) => String(m)).filter(Boolean);
     if (typeof b.apiKey === 'string') patch.apiKey = b.apiKey;
+    if (b.modelConfig !== undefined) patch.modelConfig = sanitizeModelConfig(b.modelConfig) || {};
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: '没有可更新的字段' });
     if (!aiProviders.update(String((request.params as any)?.id), patch)) return reply.code(404).send({ error: '提供商不存在' });
     return { userProviders: aiProviders.list() };

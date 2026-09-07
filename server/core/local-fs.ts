@@ -4,7 +4,15 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { FILE } from '../config.ts';
+
+// 本地工作区作用域:agent 会话一轮运行期间被绑定到它自己的本地工作区。
+// 多会话并行时各自读到自己的工作区;undefined = 未绑定(旧会话),回落全局本地工作区。
+const localWorkspaceScope = new AsyncLocalStorage<string | null | undefined>();
+export function runWithLocalWorkspace<T>(ws: string | null | undefined, fn: () => T): T {
+  return localWorkspaceScope.run(ws, fn);
+}
 
 export interface FsEntry {
   name: string;
@@ -20,7 +28,14 @@ export interface ChunkReadResult {
 }
 
 export class LocalFs {
-  workspace: string | null = null; // 用户选择的本地工作区绝对路径(可空)
+  private _workspace: string | null = null; // 用户选择的本地工作区绝对路径(可空)
+  // 会话作用域优先:agent 运行期间取该会话绑定的本地工作区;作用域外(undefined)才回落全局值
+  get workspace(): string | null {
+    const scoped = localWorkspaceScope.getStore();
+    if (scoped !== undefined) return scoped;
+    return this._workspace;
+  }
+  set workspace(v: string | null) { this._workspace = v; }
   get home() { return os.homedir(); }
   // 各本地终端会话的启动 cwd:重命名目录报 EBUSY 时,若占用者可能是自家终端(停在该目录内),可给出针对性提示
   readonly localTermCwds = new Set<string>();

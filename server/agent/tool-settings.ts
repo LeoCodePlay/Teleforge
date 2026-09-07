@@ -4,10 +4,7 @@
 // 存储格式:data/agent-tools.json { "disabled": ["write_file", ...] }
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_FILE = process.env.AGENT_TOOLS_FILE || path.join(__dirname, '..', 'data', 'agent-tools.json');
+import { AGENT_TOOLS_FILE as CONFIG_FILE } from '../config.ts';
 
 interface ToolSettingsState {
   disabled: Set<string>;

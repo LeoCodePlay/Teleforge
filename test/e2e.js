@@ -121,8 +121,9 @@ async function main() {
   const rf = await ws.request('read_file', { path: '/src/main.js' });
   check('读文件内容正确', rf.content && rf.content.includes('greeting'), rf.content);
 
-  // 5. 选工作区
-  await ws.request('set_workspace', { path: '/src' });
+  // 5. 选工作区(绑定到当前活跃会话:协议要求带 sid,会话发起对话后工作区即锁定)
+  const sList0 = await ws.request('session_list', {});
+  await ws.request('set_workspace', { path: '/src', sid: sList0.active });
   const st2 = await waitFor(() => ws.events.slice(-3).find((e) => e.type === 'status' && e.workspace === '/src'));
   check('工作区已设置为 /src', Boolean(st2));
 
@@ -331,6 +332,14 @@ async function main() {
 
   // 8. Agent 完整流程(mock LLM:列目录->读 README->run_command->write_file->总结)
   console.log('== 测试 Agent 完整工具循环(mock LLM)==');
+  // 默认「变更前确认」模式下 run_command/write_file 会挂审批等用户作答;
+  // 本节验证工具循环本身,先经 permission_set 切到完全访问(顺带端到端验证该 RPC)
+  {
+    const permSet = await ws.request('permission_set', { mode: 'full-access' });
+    check('permission_set 返回当前模式', permSet.type === 'permission' && permSet.mode === 'full-access', JSON.stringify(permSet));
+    const permGet = await ws.request('permission_get', {});
+    check('permission_get 回读一致', permGet.type === 'permission' && permGet.mode === 'full-access', JSON.stringify(permGet));
+  }
   ws.send('speak', { text: '帮我看一下这个项目' });
   const agentEvents = await waitFor(() => {
     const ds = ws.events.filter((e) => e.type === 'agent' && e.event === 'done');
@@ -420,8 +429,9 @@ async function main() {
     await ws.request('session_switch', { id: sidA });
     const hist = await ws.request('get_history');
     const lastAsst = [...(hist.turns || [])].reverse().find((t) => t.role === 'assistant');
-    check('中断时已生成的部分内容保留在历史(含中断标记)',
-      Boolean(lastAsst) && String(lastAsst.content || '').includes('生成被中断'),
+    check('中断时已生成的部分内容保留在历史(不带中断标记)',
+      Boolean(lastAsst) && (lastAsst.content || '').trim().length > 0
+        && !String(lastAsst.content || '').includes('生成被中断'),
       JSON.stringify(lastAsst?.content || '').slice(0, 150));
   }
 

@@ -2,12 +2,7 @@
 // - 零依赖(Node 内置 fs),原子写(临时文件 + rename)防损坏
 // - 数据量受 AGENT.HISTORY_BUDGET_CHARS 约束,量小,整文件覆盖即可
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-const FILE = path.join(DATA_DIR, 'chat-history.json');
+import { DATA_DIR, CHAT_HISTORY_FILE as FILE } from '../config.ts';
 
 // 确保数据目录存在(避免首写时因目录缺失而失败)
 fs.mkdirSync(DATA_DIR, { recursive: true });

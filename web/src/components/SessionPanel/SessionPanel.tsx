@@ -15,9 +15,11 @@ interface SessionPanelProps {
   /** 当前作用域键(username@host:port 或 'local');用于识别其他服务器后台运行的会话 */
   scopeKey?: string | null;
   onNew: () => void;
-  onSwitch: (id: string) => void;
+  /** 分组内「＋」:切到该分组工作区后新建会话(工作区参数二选一,未指定工作区组回落 onNew) */
+  onNewInWorkspace?: (ws: string | null, localWs: string | null) => void;
   /** 点击其他服务器正在运行的会话:切回该服务器并打开它 */
   onSwitchForeign?: (id: string, connKey: string) => void;
+  onSwitch: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }
@@ -25,6 +27,10 @@ interface SessionPanelProps {
 // 三点菜单的预估尺寸(用于视口边界夹取/向上翻转;宽对齐 .ctxmenu 的 min-width 175px)
 const MENU_W = 175;
 const MENU_H = 78;
+
+// 未指定工作区的分组键与显示名
+const UNGROUPED = '__ungrouped__';
+const UNGROUPED_LABEL = '未指定工作区';
 
 // 会话行时间格式化(模块级,SessionRow 复用)
 function fmtTime(t: string | number | undefined) {
@@ -34,6 +40,13 @@ function fmtTime(t: string | number | undefined) {
   const sameDay = d.toDateString() === now.toDateString();
   const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
+// 工作区路径取最后一段作为分组头显示名(兼容 / 与 \ 分隔)
+function lastPathSegment(p: string): string {
+  const t = String(p || '').replace(/[\\/]+$/, '');
+  const i = Math.max(t.lastIndexOf('/'), t.lastIndexOf('\\'));
+  return i >= 0 ? t.slice(i + 1) : (t || '');
 }
 
 // 会话列表单行:独立子组件以便在每行内调用 useLongPress(hook 不能在 map 循环中调用)。
@@ -70,12 +83,65 @@ function SessionRow({ session: s, active, running, askWaiting, onSwitch, onMenu,
   );
 }
 
-// 历史会话面板:新建/切换/重命名/删除会话(当前作用域的会话)
-// 多会话并行:busyIds 是正在运行任务的会话集合——随时可新建/切换,切回运行中的会话可看到进行中的状态
-// 跨服务器:其他服务器仍在后台运行的会话也显示在列表里(带所属服务器标记与「运行中」,
-// 点击可切回该服务器查看);它们只在运行期间可见,结束后回到各自服务器的会话列表。
-// 行尾「⋯」展开三点菜单(重命名/删除),重命名通过弹窗完成,不再内嵌编辑框(避免列表高度抖动)。
-export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], scopeLabel, scopeKey, onNew, onSwitch, onSwitchForeign, onRename, onDelete }: SessionPanelProps) {
+// 一个工作区分组:分组头(折叠箭头 + 图标 + 路径名 + 计数 + 组内新建) + 折叠的会话行
+interface WorkspaceGroupProps {
+  label: string;
+  icon: string;
+  sessions: Session[];
+  expanded: boolean;
+  activeId: string | null;
+  busyIds: string[];
+  askPendingIds: string[];
+  onToggle: () => void;
+  onNewInGroup: () => void;
+  onSwitch: (id: string) => void;
+  onMenu: (e: React.MouseEvent, s: Session) => void;
+  onMenuAt: (x: number, y: number, s: Session) => void;
+}
+function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, askPendingIds, onToggle, onNewInGroup, onSwitch, onMenu, onMenuAt }: WorkspaceGroupProps) {
+  const hasRunning = sessions.some((s) => busyIds.includes(s.id));
+  return (
+    <div className="s-group">
+      <div className={`s-group-header${expanded ? ' open' : ''}`} onClick={onToggle}>
+        <span className="s-group-caret">▸</span>
+        <span className="s-group-ico">{icon}</span>
+        <span className="s-group-title" title={label}>{label}</span>
+        {hasRunning && <span className="s-run" data-tip="有任务进行中">●</span>}
+        <span className="s-group-count">{sessions.length}</span>
+        <span className="s-group-actions" onClick={(e) => e.stopPropagation()}>
+          <button className="s-group-add" data-tip="在此工作区新建会话" onClick={() => onNewInGroup()}>＋</button>
+        </span>
+      </div>
+      {expanded && (
+        <div className="s-group-body">
+          {sessions.map((s) => {
+            const running = busyIds.includes(s.id);
+            // 有挂起提问(等待用户操作)时运行点变黄;仅非当前会话才显示
+            const askWaiting = askPendingIds.includes(s.id) && s.id !== activeId;
+            return (
+              <SessionRow key={s.id} session={s}
+                active={s.id === activeId}
+                running={running}
+                askWaiting={askWaiting}
+                onSwitch={onSwitch}
+                onMenu={onMenu}
+                onMenuAt={onMenuAt} />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 任务列表面板(原「历史会话」):按工作区把会话分组展示(参照 deepseek-harness 侧栏会话树)。
+// - 「远程任务列表」= 绑定了远程工作区的会话(按远程工作区分组);
+//   「本地任务列表」= 无远程工作区的会话(按本地工作区分组)——连接服务器时两列表分开显示,
+//   本地列表不隐藏;未连接时只有本地列表。
+// - 分组头可折叠(折叠状态存 localStorage);当前会话所在组自动展开。
+// - 分组内「＋」= 切到该工作区后新建会话;行尾「⋯」仍是重命名/删除。
+// - 其他服务器后台运行的会话保持跨服务器可见,点击切回原服务器。
+export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete }: SessionPanelProps) {
   // 三点菜单:当前展开的会话 + 屏幕坐标(portal 到 body、fixed 定位,不被侧栏 overflow 裁剪)
   const [menu, setMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -83,13 +149,71 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   const [rename, setRename] = useState<Session | null>(null);
   const [renameText, setRenameText] = useState('');
 
-  // 其他服务器后台运行的会话:connKey 与当前作用域不同,且仅在运行中(服务端只下发运行中的)
-  const foreign = scopeKey ? (sessions || []).filter((s) => s.connKey && s.connKey !== scopeKey) : [];
-  // 当前作用域的会话:仅显示"有对话内容"的(msgCount>0)、正运行中、或当前激活的——
-  // 新建会话(尚未发送首条消息,或服务端自动创建的空会话)不占历史列表位,
-  // 发送开始对话后才按内容出现在列表(服务端只在发言后计入 msgCount)
+  // 工作区分组折叠状态:groupKey -> 是否折叠。缺省(未记录)= 展开;
+  // 记录折叠的键写入 localStorage,跨刷新保留。分组键带作用域前缀,避免跨服务器冲突。
+  const GROUPS_KEY = 'sshai.taskGroups';
+  const loadGroupState = (): Record<string, boolean> => {
+    try {
+      const o = JSON.parse(localStorage.getItem(GROUPS_KEY) || '{}');
+      return o && typeof o === 'object' ? o : {};
+    } catch { return {}; }
+  };
+  const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>(loadGroupState);
+  const saveCollapsed = (key: string, collapsed: boolean) => {
+    setCollapsedMap((m) => {
+      const next = { ...m, [key]: collapsed };
+      try { localStorage.setItem(GROUPS_KEY, JSON.stringify(next)); } catch { /* 存储不可用忽略 */ }
+      return next;
+    });
+  };
+  const isExpanded = (key: string) => !collapsedMap[key];
+
+  // 其他服务器后台运行的会话:connKey 是其他服务器(排除本地模式会话——连接时本地会话
+  // 也始终可见,归入本地任务列表),且仅在运行中(服务端只下发运行中的)
+  const foreign = scopeKey ? (sessions || []).filter((s) => s.connKey && s.connKey !== scopeKey && s.connKey !== 'local') : [];
+  // 可见会话:仅显示"有对话内容"的(msgCount>0)、正运行中、或当前激活的——
+  // 新建会话(尚未发送首条消息,或服务端自动创建的空会话)不占任务列表位
   const mine = (sessions || []).filter((s) => !foreign.includes(s) && (s.id === activeId || busyIds.includes(s.id) || (s.msgCount ?? 0) > 0));
   const foreignLabel = (s: Session) => s.connKey === 'local' ? '本地工作区' : String(s.connKey || '');
+
+  // 分组:远程任务 = 绑定了远程工作区的会话(按远程工作区分组);
+  // 本地任务 = 无远程工作区的会话(按本地工作区分组)——含未连接时的本地会话,
+  // 以及连接了 SSH 但未选远程工作区、仅限本地工作的会话(需求:归本地任务列表)
+  const remoteSessions = mine.filter((s) => s.workspace);
+  const localSessions = mine.filter((s) => !s.workspace);
+  const remoteKey = (ws: string) => `r:${scopeKey}:${ws}`;
+  const localKey = (ws: string) => `l:${ws}`;
+  const groupSessions = (list: Session[], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string) => {
+    const groups = new Map<string, Session[]>();
+    for (const s of list) {
+      const ws = wsOf(s) || UNGROUPED;
+      const arr = groups.get(keyOf(ws)) || [];
+      arr.push(s);
+      groups.set(keyOf(ws), arr);
+    }
+    // 未指定工作区组排最后,其余按更新时间倒序(会话最近活跃的组靠前)
+    return [...groups.entries()].sort((a, b) => {
+      if (a[0] === b[0]) return 0;
+      if (a[0].endsWith(`:${UNGROUPED}`)) return 1;
+      if (b[0].endsWith(`:${UNGROUPED}`)) return -1;
+      return (Number(b[1][0]?.updatedAt) || 0) - (Number(a[1][0]?.updatedAt) || 0);
+    });
+  };
+  const remoteGroups = groupSessions(remoteSessions, (s) => s.workspace, remoteKey);
+  const localGroups = groupSessions(localSessions, (s) => s.localWorkspace, localKey);
+
+  // 当前激活会话所在组自动展开(harness SessionTree 行为):仅当该组从未被用户记录过折叠状态时生效,
+  // 已手动折叠的组不强行展开
+  useEffect(() => {
+    if (!activeId) return;
+    const active = mine.find((s) => s.id === activeId);
+    if (!active) return;
+    const key = active.workspace
+      ? remoteKey(active.workspace)
+      : localKey(active.localWorkspace || UNGROUPED);
+    if (!Object.hasOwn(collapsedMap, key)) saveCollapsed(key, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, sessions]);
 
   // 打开三点菜单:右对齐按钮、向下弹出;底部放不下时向上翻转,并夹取到视口内
   const openMenu = (e: React.MouseEvent, s: Session) => {
@@ -135,32 +259,46 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   };
   const cancelRename = () => setRename(null);
 
+  const totalVisible = mine.length;
+  const noTasks = totalVisible === 0;
+
+  // 渲染一组会话(共用分组头/行渲染)
+  const renderGroup = (groups: [string, Session[]][], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string, icon: string, newInGroup: (ws: string | null) => void) =>
+    groups.map(([key, list]) => {
+      const label = key.endsWith(`:${UNGROUPED}`) ? UNGROUPED_LABEL : lastPathSegment(wsOf(list[0]) || '');
+      return (
+        <WorkspaceGroup key={key} label={label} icon={icon} sessions={list}
+          expanded={isExpanded(key)}
+          activeId={activeId} busyIds={busyIds} askPendingIds={askPendingIds}
+          onToggle={() => saveCollapsed(key, isExpanded(key))}
+          onNewInGroup={() => { const ws = key.endsWith(`:${UNGROUPED}`) ? null : wsOf(list[0]) || null; newInGroup(ws); }}
+          onSwitch={onSwitch}
+          onMenu={openMenu}
+          onMenuAt={openMenuAt} />
+      );
+    });
+
   return (
     <div className="panel s-panel">
       <div className="panel-title row" style={{ justifyContent: 'space-between' }}>
-        <span>历史会话</span>
+        <span>任务列表</span>
         <button className="sm" onClick={() => onNew()}>＋ 新建</button>
       </div>
       {scopeLabel && <div className="s-scope">📡 {scopeLabel}</div>}
       <div className="s-list">
-        {mine.length === 0 && <div className="muted" style={{ fontSize: 12 }}>暂无历史会话,点「＋ 新建」开始</div>}
-        <div className="sessions">
-          {mine.map((s) => {
-            const running = busyIds.includes(s.id);
-            // 有挂起提问(等待用户操作)时运行点变黄;仅非当前会话才显示——
-            // 正在看的会话顶部已有提问面板,点保持绿色运行态,避免重复提示
-            const askWaiting = askPendingIds.includes(s.id) && s.id !== activeId;
-            return (
-              <SessionRow key={s.id} session={s}
-                active={s.id === activeId}
-                running={running}
-                askWaiting={askWaiting}
-                onSwitch={onSwitch}
-                onMenu={openMenu}
-                onMenuAt={openMenuAt} />
-            );
-          })}
-        </div>
+        {noTasks && <div className="muted" style={{ fontSize: 12 }}>暂无任务,点「＋ 新建」开始</div>}
+        {remoteGroups.length > 0 && (
+          <div className="s-section">
+            <div className="s-section-title">远程任务列表</div>
+            {renderGroup(remoteGroups, (s) => s.workspace, remoteKey, '🖥', (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null); else onNew(); })}
+          </div>
+        )}
+        {localGroups.length > 0 && (
+          <div className="s-section">
+            <div className="s-section-title">本地任务列表</div>
+            {renderGroup(localGroups, (s) => s.localWorkspace, localKey, '📂', (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws); else onNew(); })}
+          </div>
+        )}
         {foreign.length > 0 && (
           <div className="s-foreign">
             <div className="s-foreign-title">其他服务器后台运行中</div>

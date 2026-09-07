@@ -9,6 +9,7 @@
 // 文件头 frontmatter(name/description)是目录,正文是给 AI 的完整指令;
 // 模型通过 skill 工具按需加载。内置技能不可编辑,可"复制到"任意级别成为可编辑副本。
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../api';
 import { useFeedback } from '../../context/feedback';
 import GlassSelect from '../GlassSelect/GlassSelect';
@@ -247,7 +248,9 @@ function SkillModal({ edit, connected, onClose, onSaved }: SkillModalProps) {
     }
   };
 
-  return (
+  // portal 到 body:同 AiConfigPanel 提供商弹窗 —— .settings 的 backdrop-filter 会让
+  // 内联 .modal 的液态玻璃失效(采样不到真实页面),fixed 遮罩也被困在面板内
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal skill-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
@@ -299,6 +302,7 @@ function SkillModal({ edit, connected, onClose, onSaved }: SkillModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

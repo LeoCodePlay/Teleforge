@@ -117,7 +117,8 @@ export class Session {
    * - assistant/message -> assistant 消息;空内容且无 tool_calls 的跳过
    *   (max-tokens 截断等"无产出"的请求不进入下一份请求)
    * - tool/result -> tool 消息(紧跟带对应 tool_calls 的 assistant 之后)
-   * - compaction/done -> user 摘要消息(行内压缩:早期区间已被 squash 移除,摘要保留原位)
+   * - compaction/done -> user 摘要消息(非破坏压缩检查点:seq ≤ dropThroughSeq 的
+   *   早期消息面事件在模型面被摘要顶替,但日志/前端显示仍完整保留)
    * - 超预算时按"对话组"从头部整组丢弃(裁剪发生在投影层,日志本身保持完整)
    */
   deriveMessages({ budgetChars = Infinity }: { budgetChars?: number } = {}): LlmMessage[] {
@@ -131,18 +132,54 @@ export class Session {
    */
   deriveMessagesWithTrace({ budgetChars = Infinity }: { budgetChars?: number } = {}): TracedMessage[] {
     const traced: TracedMessage[] = [];
+    // 生效压缩检查点 = 日志中最后一条带 dropThroughSeq 的 compaction/done(非破坏压缩:
+    // 早期消息仍完整保留在日志里,只是模型面不可见——压缩只削切"可见起点",不删除数据;
+    // 前端显示投影 projectEvents 始终完整,刷新后历史完整可回看)。
+    // dropThroughSeq = 被压缩区间最后一条消息面事件的 seq,投影时其及更早的消息面事件
+    // 跳过(内置前缀区间性质:跳过 [0, dropThroughSeq] 恰好等价于丢弃被压的前缀),
+    // 并以摘要 user 消息顶替(序列以 user 开头、工具配对完整);更早的检查点一并被覆盖。
+    let cp: { summary?: string; dropThroughSeq?: number; dropCount?: number; manual?: boolean } | null = null;
+    let cpSeq = -1;
+    for (const ev of this.events) {
+      if (ev.type === 'compaction/done' && typeof ev.data?.dropThroughSeq === 'number') {
+        cp = ev.data;
+        cpSeq = ev.seq;
+      }
+    }
     // 待消费的 tool_call id(最近一条带 tool_calls 的 assistant 声明的,OpenAI 配对语义):
     // 投影期过滤孤儿 tool/result——构造时自愈(_heal)能清掉落盘损坏,但运行中会话
     // (旧版压缩产生的孤儿仍驻内存)也要保证投影序列永远合法,严格提供商会 400。
     let pending = new Set<string>();
+    // 摘要 user 消息的插入时机:进入保留区第一个消息面事件之前。插摘要时清空 alive,
+    // 与 user/message 同语义(摘要之后的 tool/result 不能依赖摘要之前的 tool_calls——
+    // 切点已对齐"工具配对完整",这里只是安全冗余)。
+    let cpPlaced = !cp;
+    const placeCp = () => {
+      pending = new Set();
+      traced.push({ seq: cpSeq, msg: { role: 'user', content: cp?.summary || '【上下文已自动压缩】早期对话已省略。' } });
+      cpPlaced = true;
+    };
     for (const ev of this.events) {
       const d = ev.data || {};
       switch (ev.type) {
         case 'user/message':
+          if (cp && ev.seq <= (cp.dropThroughSeq ?? -1)) continue; // 被压缩:模型面不可见
+          if (!cpPlaced) placeCp();
           pending = new Set(); // user 之后工具 id 失效
-          traced.push({ seq: ev.seq, msg: { role: 'user', content: d.content } });
+          traced.push({
+            seq: ev.seq,
+            msg: {
+              role: 'user',
+              content: d.content,
+              // 附件元数据(图片/文件/视频)随消息携带:agent 在请求期把图片升级为
+              // image_url 内容段(仅多模态模型);content 本身保持字符串,便于裁剪/压缩
+              ...(Array.isArray(d.attachments) && d.attachments.length ? { attachments: d.attachments } : {})
+            }
+          });
           break;
         case 'assistant/message': {
+          if (cp && ev.seq <= (cp.dropThroughSeq ?? -1)) continue;
+          if (!cpPlaced) placeCp();
           const m = d.message || {};
           const hasCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
           if (!m.content && !hasCalls) break;
@@ -159,22 +196,29 @@ export class Session {
           break;
         }
         case 'tool/result':
+          if (cp && ev.seq <= (cp.dropThroughSeq ?? -1)) continue;
+          if (!cpPlaced) placeCp();
           // 孤儿 tool/result(无前置 assistant tool_calls):跳过,不进入模型可见面
           if (!pending.has(d.callId)) break;
           pending.delete(d.callId);
           traced.push({ seq: ev.seq, msg: { role: 'tool', tool_call_id: d.callId, content: d.content } });
           break;
         case 'compaction/done':
-          pending = new Set(); // 压缩摘要 user 消息:工具 id 失效(与 user/message 同语义)
-          traced.push({
-            seq: ev.seq,
-            msg: { role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。' }
-          });
+          // 旧版破坏式压缩遗留(无 dropThroughSeq,早期消息已被物理删除):原位投影摘要
+          // user 消息维持旧行为;新版检查点由 placeCp 统一插入,这里只忽略不重复投影。
+          if (!cp) {
+            pending = new Set(); // 压缩摘要 user 消息:工具 id 失效(与 user/message 同语义)
+            traced.push({
+              seq: ev.seq,
+              msg: { role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。' }
+            });
+          }
           break;
         default:
           break; // turn/*、step/* 等结构事件不投影
       }
     }
+    if (!cpPlaced) placeCp(); // 兜底:压缩后保留区没有消息面事件(理论上不会发生)时摘要收尾
     // 兼容旧版损坏数据:丢弃首个 user 之前的消息
     const firstUser = traced.findIndex((t) => t.msg.role === 'user');
     const base = firstUser > 0 ? traced.slice(firstUser) : traced;
@@ -210,6 +254,27 @@ export class Session {
     if (!inserted) kept.push({ type: 'compaction/done', data });
     // 重排 seq = 新数组下标,保持单调;time 缺失时补当前时间
     this.events = kept.map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
+  }
+
+  /**
+   * 非破坏压缩:在日志尾部追加一条 compaction/done 压缩检查点,记录
+   * "seq ≤ dropThroughSeq 的消息面事件在模型面已被摘要取代"。
+   * 与 squash 的本质区别:被压缩的早期事件**完整保留**在日志里——
+   * 前端显示投影(projectEvents)与刷新后的历史回放始终完整,
+   * 只有模型历史投影(deriveMessagesWithTrace)按检查点跳过早期消息。
+   * dropSeqs 为被压缩消息面的前缀 seq(升序,来自 deriveMessagesWithTrace 的 trace
+   * 投影);多次压缩时后一个检查点覆盖前一个(取日志最后一条生效)。
+   * meta 可选:手动/自动调用方借此携带 dropCount、manual 标记。
+   */
+  markCompacted(dropSeqs: number[] | string[], summary: string, meta?: { dropCount?: number; manual?: boolean }): SessionEvent {
+    const nums = dropSeqs.map(Number).filter((n) => Number.isFinite(n));
+    const dropThroughSeq = nums.length ? Math.max(...nums) : null;
+    const data = { summary, ...(meta || {}) };
+    // dropThroughSeq 必须存在:它既是检查点生效标志,也是模型面跳过阈值。
+    // 缺消息面 seq(理论上不发生)时退化为纯摘要记事件、不跳过任何消息。
+    if (dropThroughSeq != null) (data as any).dropThroughSeq = dropThroughSeq;
+    const ev = this.append('compaction/done', data as any);
+    return ev;
   }
 
   /**
@@ -324,7 +389,11 @@ export function eventsFromTurns(turns: any[]): SessionEvent[] {
       closeTurn();
       turn++; turnOpen = true;
       push('turn/start', { turn });
-      push('user/message', { content: String(m.content || ''), source: 'user' });
+      push('user/message', {
+        content: String(m.content || ''),
+        source: 'user',
+        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {})
+      });
     } else if (m.role === 'assistant') {
       if (!turnOpen) { turn++; turnOpen = true; push('turn/start', { turn }); }
       closeStep();

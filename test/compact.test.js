@@ -259,4 +259,82 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   check('旧格式迁移后 deriveMessages 正常', s.deriveMessages({})[0].role === 'user');
 }
 
+// ---- markCompacted 非破坏压缩:日志完整保留,模型面压缩,显示面完整 ----
+{
+  const turns = [];
+  for (let i = 0; i < 4; i++) {
+    turns.push({ role: 'user', content: `第${i}轮:检查目录` });
+    turns.push({ role: 'assistant', content: '', tool_calls: [{ id: `c${i}`, function: { name: 'list_directory', arguments: '{}' } }] });
+    turns.push({ role: 'tool', tool_call_id: `c${i}`, content: `目录内容 ${i}`, ok: true, ms: 5 });
+    turns.push({ role: 'assistant', content: `第${i}轮结论` });
+  }
+  const session = new Session();
+  for (const ev of eventsFromTurns(turns)) session.append(ev.type, ev.data);
+  const totalEvents = session.events.length;
+  const trace = session.deriveMessagesWithTrace();
+  const dropCount = 12;
+  const dropSeqs = trace.slice(0, dropCount).map((t) => t.seq);
+  const lastDropSeq = dropSeqs[dropSeqs.length - 1];
+  session.markCompacted(dropSeqs, '【上下文已自动压缩】早期对话摘要内容', { dropCount, manual: true });
+
+  check('markCompacted 不删除事件,仅追加检查点(日志完整)', session.events.length === totalEvents + 1, `got ${session.events.length}`);
+  check('markCompacted 检查点携带 dropThroughSeq+dropCount+manual',
+    (() => {
+      const e = session.events[session.events.length - 1];
+      return e.type === 'compaction/done' && e.data.dropThroughSeq === lastDropSeq
+        && e.data.dropCount === dropCount && e.data.manual === true;
+    })());
+  check('markCompacted 后被压前缀消息仍在日志里(user/message 4 条)',
+    session.events.filter((ev) => ev.type === 'user/message' && ev.data.source === 'user').length === 4);
+
+  // 模型面:被压前缀被摘要顶替 = 保留 4 条 + 摘要 1 条
+  const msgs = session.deriveMessages({});
+  check('markCompacted 后模型面 = 摘要 + 保留 4 条', msgs.length === 16 - dropCount + 1, `got ${msgs.length}`);
+  check('markCompacted 后模型面首条为压缩摘要 user', msgs[0]?.role === 'user' && /上下文已自动压缩/.test(msgs[0].content));
+  check('markCompacted 后模型面序列合法', assertValidApiSequence(msgs).length === 0);
+  check('markCompacted 后模型面最后一条不变', msgs[msgs.length - 1]?.content === '第3轮结论');
+
+  // 旧版破坏式遗留(无 dropThroughSeq,早期消息已被物理删除,只剩摘要):原位投影摘要,
+  // 后续消息正常投影;deriveMessages 不受影响。
+  const legacy = new Session();
+  legacy.append('compaction/done', { summary: '【上下文已自动压缩】旧摘要' });
+  legacy.append('user/message', { content: '压缩后的新问题', source: 'user' });
+  check('无 dropThroughSeq 的旧检查点原位投影摘要(兼容旧日志)',
+    (() => {
+      const m = legacy.deriveMessages({});
+      return m.length === 2 && m[0]?.role === 'user' && /旧摘要/.test(m[0].content)
+        && m[1]?.content === '压缩后的新问题';
+    })());
+}
+
+// ---- markCompacted 多次压缩:新检查点覆盖旧检查点,模型面只遵循最新阈值 ----
+{
+  const turns = [];
+  for (let i = 0; i < 4; i++) {
+    turns.push({ role: 'user', content: `第${i}轮:检查目录` });
+    turns.push({ role: 'assistant', content: '', tool_calls: [{ id: `c${i}`, function: { name: 'list_directory', arguments: '{}' } }] });
+    turns.push({ role: 'tool', tool_call_id: `c${i}`, content: `目录内容 ${i}`, ok: true, ms: 5 });
+    turns.push({ role: 'assistant', content: `第${i}轮结论` });
+  }
+  const session = new Session();
+  for (const ev of eventsFromTurns(turns)) session.append(ev.type, ev.data);
+  // 第一次压缩:压掉前 2 组(8 条消息面)
+  let trace = session.deriveMessagesWithTrace();
+  session.markCompacted(trace.slice(0, 8).map((t) => t.seq), '【上下文已自动压缩】摘要#1', { dropCount: 8, manual: false });
+  // 又聊了一轮
+  session.append('user/message', { content: '继续', source: 'user' });
+  session.append('assistant/message', { turn: 5, step: 1, message: { role: 'assistant', content: '继续的回复' } });
+  // 第二次压缩:压掉第一次摘要 + 之前保留的 2 组(消息面 = 摘要1 + 8 条 + 新 user...)
+  trace = session.deriveMessagesWithTrace();
+  const dropCount2 = trace.length - 2; // 只留新 user + 新回复
+  session.markCompacted(trace.slice(0, dropCount2).map((t) => t.seq), '【上下文已自动压缩】摘要#2', { dropCount: dropCount2, manual: false });
+
+  const cp = session.events.filter((ev) => ev.type === 'compaction/done');
+  check('多次压缩保留全部检查点事件(日志完整)', cp.length === 2, `got ${cp.length}`);
+  const msgs = session.deriveMessages({});
+  check('多次压缩后模型面 = 新摘要 + 最新一轮', msgs.length === 3 && /摘要#2/.test(msgs[0].content), `got ${JSON.stringify(msgs.map((m) => m.content))}`);
+  check('多次压缩后模型面最后一条不变', msgs[msgs.length - 1]?.content === '继续的回复');
+  check('多次压缩后模型面序列合法', assertValidApiSequence(msgs).length === 0);
+}
+
 finish();

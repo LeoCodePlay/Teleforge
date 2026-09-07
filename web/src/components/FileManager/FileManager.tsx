@@ -4,6 +4,7 @@ import { api } from '../../api';
 import { useFeedback } from '../../context/feedback';
 import { useHorizontalScroller } from '../../hooks/useHorizontalScroller';
 import { useLongPress } from '../../hooks/useLongPress';
+import { downloadViaTauri } from '../../utils/desktop';
 import type { DirEntry } from '../../types';
 import './fm.scss';
 
@@ -449,11 +450,12 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
       const url = (it?.type === 'dir')
         ? `/api/downloaddir?path=${encodeURIComponent(p)}`
         : `/api/download?path=${encodeURIComponent(p)}`;
-      window.open(url, '_blank');
+      // 桌面端走原生保存对话框;浏览器端 window.open
+      downloadViaTauri(url, it?.type === 'dir' ? `${baseName(p)}.tar.gz` : baseName(p));
       flash(`正在下载 ${baseName(p)}…`);
     } else {
       const qs = opPaths.map((p) => `path=${encodeURIComponent(p)}`).join('&');
-      window.open(`/api/downloaddir?${qs}`, '_blank');
+      downloadViaTauri(`/api/downloaddir?${qs}`, 'download.tar.gz');
       flash(`正在打包下载 ${opCount} 项…`);
     }
   };

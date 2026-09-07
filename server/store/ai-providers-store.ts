@@ -4,11 +4,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// 默认存 server/data/ (已被 .gitignore 忽略,含 API Key,不做版本入库);可用环境变量覆盖路径
-export const CONFIG_FILE = process.env.AI_PROVIDERS_FILE || path.join(__dirname, '..', 'data', 'ai-providers.json');
+import { AI_PROVIDERS_FILE as CONFIG_FILE } from '../config.ts';
+export { CONFIG_FILE };
 
 export interface AiProvider {
   id: string;
@@ -17,6 +14,9 @@ export interface AiProvider {
   apiKey: string;
   models: string[];
   note: string;
+  /** 每个模型的能力/参数声明(可选),key = 模型名:
+   *  contextWindow 输入窗口、maxTokens 输出上限、multimodal 是否支持图片输入 */
+  modelConfig?: Record<string, { contextWindow?: number; maxTokens?: number; multimodal?: boolean }>;
 }
 
 // 读取 openclaw 配置里的模型提供商,作为首次启动的种子数据

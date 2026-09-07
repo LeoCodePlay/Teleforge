@@ -1,0 +1,174 @@
+/* ---- 聊天附件:输入轨道(参照 deepseek-harness AttachmentRail:
+   64px 圆角缩略图卡、悬停露出删除钮、端部箭头翻页)+ 消息附件 + 灯箱 ---- */
+
+// ---- 输入框上方草稿轨道 ----
+.att-rail { position: relative; min-width: 0; margin-bottom: 8px; }
+.att-rail-track {
+  display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 2px;
+  scrollbar-width: none; /* 溢出由端部箭头翻页,滚动条隐藏 */
+}
+.att-rail-track::-webkit-scrollbar { display: none; }
+.att-item {
+  position: relative; flex: 0 0 64px; width: 64px; height: 64px;
+  display: flex; align-items: center; justify-content: center;
+}
+.att-item.err .att-thumb { border-color: var(--red); }
+.att-thumb {
+  width: 64px; height: 64px; padding: 0; overflow: hidden; cursor: zoom-in;
+  border: 1px solid var(--glass-border); border-radius: 16px;
+  background: var(--glass-bg-strong);
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color .15s, transform .15s;
+}
+.att-thumb:hover:not(:disabled) { border-color: var(--accent-border); }
+.att-thumb:disabled { cursor: default; }
+.att-thumb img {
+  display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+}
+/* 文件(非图)卡:图标 + 扩展名徽标,纵向排布 */
+.att-file-card {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; color: var(--muted); width: 100%; height: 100%;
+}
+.att-file-ext { font-size: 9px; font-family: var(--mono); letter-spacing: .04em; color: var(--text); }
+/* 删除钮:默认隐藏,悬停/聚焦露出(触屏无 hover:媒体查询常显) */
+.att-remove {
+  position: absolute; top: 4px; right: 4px; z-index: 1;
+  width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
+  display: grid; place-items: center;
+  background: rgba(15, 18, 26, .82); color: #fff; cursor: pointer;
+  opacity: 0; transition: opacity .2s ease-in-out;
+}
+.att-item:hover .att-remove, .att-remove:focus-visible { opacity: 1; }
+@media (pointer: coarse) { .att-remove { opacity: 1; } }
+/* 文件/错误项的名字:覆盖在 tile 底部内侧(轨道 overflow hidden,不能探出 tile) */
+.att-name {
+  position: absolute; left: 3px; right: 3px; bottom: 3px; z-index: 1;
+  font-size: 9px; line-height: 1.3; text-align: center;
+  color: #fff; background: rgba(15, 18, 26, .72); border-radius: 6px; padding: 1px 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+}
+/* 上传中转圈 */
+.att-spin {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--glass-border); border-top-color: var(--accent-2);
+  animation: att-spin 0.8s linear infinite;
+}
+@keyframes att-spin { to { transform: rotate(360deg); } }
+/* 两端翻页箭头:悬浮圆形玻璃钮 */
+.att-arrow {
+  position: absolute; top: 50%; z-index: 2; transform: translateY(-50%);
+  width: 24px; height: 24px; padding: 0; border-radius: 999px;
+  display: grid; place-items: center; cursor: pointer;
+  border: 1px solid var(--glass-border-hover);
+  background: var(--glass-bg-strong); color: var(--muted);
+  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
+  box-shadow: var(--glass-shadow);
+}
+.att-arrow:hover { color: var(--text); background: var(--glass-bg-hover); }
+.att-arrow-l { left: -4px; }
+.att-arrow-r { right: -4px; }
+
+/* ---- 用户消息内附件 ---- */
+.msg-att { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-bottom: 6px; }
+.msg-att-gallery { display: flex; flex-wrap: wrap; gap: 10px; max-width: 100%; }
+.msg-att-img {
+  display: grid; place-items: center; overflow: hidden; padding: 0; cursor: zoom-in;
+  border: 1px solid var(--glass-border); border-radius: 16px;
+  background: var(--glass-bg-strong); transition: border-color .15s;
+}
+.msg-att-img:hover { border-color: var(--accent-border); }
+.msg-att-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* 多图:64px 方块平铺(harness tile) */
+.msg-att-img.tile { width: 64px; height: 64px; }
+/* 单图:harness singleFit —— 尺寸由 JS 按原始比例计算(长边 240px、比例钳制 [0.25,4]、
+   不放大小图),未测得尺寸前给固定占位;容器 relative + overflow hidden,
+   测量期的 img 绝对定位缩小隐藏,不产生布局抖动 */
+.msg-att-img.single {
+  position: relative;
+  width: 240px; height: 160px;
+  min-width: 44px; min-height: 44px;
+}
+.msg-att-img.single img { position: absolute; inset: 0; }
+.msg-att-loading { font-size: 12px; line-height: 1; color: var(--muted); }
+.msg-att-file {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  padding: 7px 12px; border-radius: var(--r-md); text-decoration: none;
+  border: 1px solid var(--glass-border); background: var(--glass-bg);
+  color: var(--text); transition: border-color .15s, background .15s;
+}
+.msg-att-file:hover { border-color: var(--accent-border); background: var(--glass-bg-hover); }
+.msg-att-file svg { color: var(--muted); flex: none; }
+.msg-att-file-main { display: flex; flex-direction: column; min-width: 0; }
+.msg-att-file-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-att-file-meta { font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+
+/* ---- 灯箱(点击缩略图/消息图片放大) ---- */
+.lightbox {
+  position: fixed; inset: 0; z-index: 400;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 6, 12, .78); backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
+  animation: att-fade .16s ease-out;
+  cursor: zoom-out;
+}
+@keyframes att-fade { from { opacity: 0; } to { opacity: 1; } }
+.lightbox img {
+  max-width: min(92vw, 1400px); max-height: 88vh; border-radius: var(--r-md);
+  box-shadow: var(--glass-shadow); cursor: default;
+  animation: glass-pop .18s ease-out;
+}
+.lightbox-close {
+  position: absolute; top: 16px; right: 16px;
+  width: 34px; height: 34px; padding: 0; border-radius: 50%; cursor: pointer;
+  display: grid; place-items: center;
+  border: 1px solid var(--glass-border-hover);
+  background: var(--glass-bg-strong); color: var(--text);
+  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
+}
+.lightbox-close:hover { background: var(--glass-bg-hover); }
+
+/* ---- 输入框左下角"+"上传按钮与菜单 ---- */
+.composer-add-wrap { position: relative; flex: none; }
+.composer-add {
+  width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 15px; line-height: 1; cursor: pointer; flex: none;
+  background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--muted);
+  transition: all .18s;
+}
+.composer-add:hover, .composer-add.on {
+  color: var(--accent-2); border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.composer-add.on { transform: rotate(45deg); } /* 打开时 + 变 ×,呼应菜单可关 */
+.add-menu {
+  /* portal 到 body、fixed 定位(坐标由组件按"+"按钮计算,bottom 锚定 = 按钮上方 10px;
+     不用 translateY(-100%):入场动画 glass-pop 的 transform 会覆盖静态位移,
+     造成先垂在下方、动画结束瞬移上去的抖动) */
+  position: fixed; z-index: 140;
+  min-width: 200px; padding: 5px;
+  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
+  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
+  display: flex; flex-direction: column; gap: 2px;
+  animation: glass-pop .16s ease-out;
+}
+.add-menu-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer;
+  background: transparent; border: none; color: var(--text);
+  font-size: 12.5px; text-align: left; transition: background .15s;
+  /* 全局 button 自带玻璃底+投影(msm-cell 同款必须显式压掉,否则静止态每行都带阴影卡) */
+  box-shadow: none;
+}
+.add-menu-item:hover { background: var(--glass-bg-hover); }
+/* 悬停行文字与模型下拉(.msm-cell)统一:强调色;说明文字保持弱化。
+   悬停投影不做压制:与 msm 行一致,由全局 button:hover 提供抬升投影 */
+.add-menu-item:hover .am-main > span:first-child { color: var(--accent-2); }
+.add-menu-item .am-ico { width: 26px; height: 26px; flex: none; border-radius: var(--r-sm);
+  display: grid; place-items: center; font-size: 13px;
+  background: var(--glass-bg-inset); border: 1px solid var(--glass-border); }
+.add-menu-item .am-main { display: flex; flex-direction: column; min-width: 0; }
+.add-menu-item .am-desc { font-size: 10.5px; color: var(--muted); }
+.add-menu-item.disabled { opacity: .5; cursor: not-allowed; }

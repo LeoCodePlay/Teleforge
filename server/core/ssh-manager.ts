@@ -59,6 +59,14 @@ export interface ExecResult {
 // 用户切走活动连接后,后台会话的工具调用仍走绑定连接,不会误操作新服务器。
 const connScope = new AsyncLocalStorage<SshConnection | null>();
 
+// 工作区作用域:agent 会话一轮运行期间被绑定到它自己的远程工作区。
+// 多会话并行(可绑定同一台服务器)时,各自读到自己的工作区,互不影响;
+// 作用域值 undefined = 未绑定(旧会话),回落连接级工作区;null 会强制"无工作区"报错,不可用于此。
+const workspaceScope = new AsyncLocalStorage<string | null | undefined>();
+export function runWithWorkspace<T>(ws: string | null | undefined, fn: () => T): T {
+  return workspaceScope.run(ws, fn);
+}
+
 // 远程路径归一化(兼容 posix / windows 反斜杠),返回不带尾斜杠的绝对路径
 export function normalizeRemote(p: string): string {
   if (!p) return p;
@@ -648,7 +656,12 @@ export class SshManager extends EventEmitter {
   set platform(v: RemotePlatform) { this._platform = v; if (this.active) this.active.platform = v; }
   get home(): string | null { return this.active ? this.active.home : (this._home ?? null); }
   set home(v: string | null) { this._home = v; if (this.active) this.active.home = v; }
-  get workspace(): string | null { return this.active ? this.active.workspace : (this._workspace ?? null); }
+  get workspace(): string | null {
+    // 会话作用域优先:agent 运行期间取该会话绑定的工作区;作用域外(undefined)才回落连接工作区
+    const scoped = workspaceScope.getStore();
+    if (scoped !== undefined) return scoped;
+    return this.active ? this.active.workspace : (this._workspace ?? null);
+  }
   set workspace(v: string | null) { this._workspace = v; if (this.active) this.active.workspace = v; }
   get hostInfo(): SshHostInfo | null { return this.active ? this.active.hostInfo : (this._hostInfo ?? null); }
   set hostInfo(v: SshHostInfo | null) { this._hostInfo = v; if (this.active) this.active.hostInfo = v; }

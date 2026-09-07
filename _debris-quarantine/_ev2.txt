@@ -1,0 +1,54 @@
+=== s_mtqrsicotcn6sa.json (289 events) ===
+--- 04:58:18 user/message seq=3
+{"content":"<runtime_context>\nCurrent runtime context. This snapshot supersedes earlier runtime-context snapshots.\n(当前运行时上下文快照,取代此前所有快照;其中未变化的信息直接复用,不要重复探测)\n\n权限模式: 变更前确认 — 写文件、编辑、删除与执行命令前,先弹窗请求你批准请求被拒绝时不要重试同一操作,调整方案或向用户说明影响。\n本地平台: win32\n本地工作区: F:\\Dm\\companyProject\\自己\\远程ssh工具\n<system-reminder>\n技能(skill)是一组可复用的任务专用指令。本次会话可用以下技能:\n\n<available_skills>\n- `ask-matt`: Ask which skill or flow fits your situation. A router over the skills in this repo.\n- `autoplan`: Auto-review pipeline — 
+--- 04:58:30 user/message seq=13
+{"content":"<runtime_context>\nCurrent runtime context. This snapshot supersedes earlier runtime-context snapshots.\n(当前运行时上下文快照,取代此前所有快照;其中未变化的信息直接复用,不要重复探测)\n\n权限模式: 完全访问 — 全部操作自动执行,不再询问(高危命令拦截仍然生效)\n本地平台: win32\n本地工作区: F:\\Dm\\companyProject\\自己\\远程ssh工具\n<system-reminder>\n技能(skill)是一组可复用的任务专用指令。本次会话可用以下技能:\n\n<available_skills>\n- `ask-matt`: Ask which skill or flow fits your situation. A router over the skills in this repo.\n- `autoplan`: Auto-review pipeline — reads the full CEO, design, 
+=== s_mtqrpfoojjoh33.json (136 events) ===
+--- 04:56:09 tool/result get_local_info isError=false seq=6
+{
+  "workspace": "F:\\Dm\\companyProject\\自己\\远程ssh工具",
+  "platform": "win32",
+  "home": "C:\\Users\\30653",
+  "toolVersions": {
+    "node": "v24.19.0",
+    "git": "git version 2.40.0.windows.1"
+  },
+  "tree": [
+    ".gstack/",
+    "browse-audit.jsonl",
+    "browse-network.log",
+    "data/",
+    "sessions/",
+    "s_mtilmv5bwmxjmp.json",
+    "s_mtirbmc9a9ftp0.json",
+    "s_mtitmwf37byqz3.json",
+    "s_mtixdml9iobse9.json",
+    "s_mtixq0wnxlsxaf.json",
+    "s_mtiz2kp0nuqpnm.json",
+    "s_mtiz3rm4m8im69.json",
+    "s_mtiz4d466wdzii.json",
+    "s_mtjjefjvp7kt77.json",
+    "s_mtjjl6vxzr1vbj.json",
+    "s_mtjjs8epf6qwfc.json",
+    "s_mtjl4porhnowe1.json",
+    "s_mtjl57xtk3rhnx.json",
+    "s_mtjlzonipvv97l.json",
+    "s_mtjoh66lzimcfj.json",
+    "s_mtjqh4uj6xsrgr.json",
+    "s_mtjthkq0i158hb.json",
+    "s_mtjto358h02f25.json",
+    "s_mtjtpipt5imk42.json",
+    "s_mtjute5pl1905x.json",
+    "s_mtj
+--- 04:56:22 user/message seq=10
+{"content":"<runtime_context>\nCurrent runtime context. This snapshot supersedes earlier runtime-context snapshots.\n(当前运行时上下文快照,取代此前所有快照;其中未变化的信息直接复用,不要重复探测)\n\n权限模式: 变更前确认 — 写文件、编辑、删除与执行命令前,先弹窗请求你批准请求被拒绝时不要重试同一操作,调整方案或向用户说明影响。\n本地平台: win32\n本地工作区: F:\\Dm\\companyProject\\自己\\远程ssh工具\n<system-reminder>\n技能(skill)是一组可复用的任务专用指令。本次会话可用以下技能:\n\n<available_skills>\n- `ask-matt`: Ask which skill or flow fits your situation. A router over the skills in this repo.\n- `autoplan`: Auto-review pipeline — 
+--- 04:58:36 tool/result search_local_code isError=false seq=75
+匹配结果:
+F:\Dm\companyProject\�Լ�\Զ��ssh����\server\agent\tools.ts:127:  '.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.nuxt',
+F:\Dm\companyProject\�Լ�\Զ��ssh����\server\agent\tools.ts:696:      // 与远程 search_code 对齐:排除 .git/node_modules/dist 等噪声目录,
+F:\Dm\companyProject\�Լ�\Զ��ssh����\server\agent\tools.ts:698:      const rgExcl = ['-g', '"!.git"', '-g', '"!node_modules"', '-g', '"!dist"', '-g', '"!test-results"'].join(' ');
+F:\Dm\companyProject\�Լ�\Զ��ssh����\server\agent\tools.ts:699:      const grepExcl = '--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=test-results';
+F:\Dm\companyProject\�Լ�\Զ��ssh����\server\agent\tools.ts:1494:skip = {".git", "node_modules", "__pycache__", ".venv", "venv", ".svn", ".hg", "dist", "build", ".next", ".cache", ".tox"}
+F:\Dm\companyProject\�Լ�\Զ��ssh����\server\api\http\static.ts:9:const distDir =
+--- 04:59:02 user/message seq=84
+{"content":"<runtime_context>\nCurrent runtime context. This snapshot supersedes earlier runtime-context snapshots.\n(当前运行时上下文快照,取代此前所有快照;其中未变化的信息直接复用,不要重复探测)\n\n权限模式: 完全访问 — 全部操作自动执行,不再询问(高危命令拦截仍然生效)\n本地平台: win32\n本地工作区: F:\\Dm\\companyProject\\自己\\远程ssh工具\n<system-reminder>\n技能(skill)是一组可复用的任务专用指令。本次会话可用以下技能:\n\n<available_skills>\n- `ask-matt`: Ask which skill or flow fits your situation. A router over the skills in this repo.\n- `autoplan`: Auto-review pipeline — reads the full CEO, design, 

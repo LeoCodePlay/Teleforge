@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark" />
+    <title>Teleforge</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #05070f; color: #8ab4f8;
+        display: grid; place-items: center; font-family: system-ui, -apple-system, sans-serif; }
+      .spinner { width: 36px; height: 36px; border: 3px solid #1e2a44;
+        border-top-color: #4c8dff; border-radius: 50%;
+        animation: spin 0.9s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .tip { margin-top: 16px; font-size: 13px; opacity: 0.75; letter-spacing: 0.05em; }
+    </style>
+  </head>
+  <body>
+    <div style="text-align:center">
+      <div class="spinner"></div>
+      <div class="tip">正在启动后端服务…</div>
+    </div>
+  </body>
+</html>

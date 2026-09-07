@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api';
+import { downloadViaTauri, isDesktop } from '../../utils/desktop';
 import CodeEditor from './CodeEditor';
 import './FileViewer.scss';
 
@@ -112,7 +113,8 @@ export default function FileViewer({ path, name, onDirtyChange, onClose, onBack 
           ? MEDIA_KIND_LABEL[media]
           : meta && `${fmtSize(meta.size)}${meta.truncated ? ' (仅展示前部)' : ''}`}</span></span>
         <div className="fviewer-actions">
-          {downloadHref && <a className="btn-link" href={downloadHref}>⬇ 下载</a>}
+          {downloadHref && <a className="btn-link" href={downloadHref}
+            onClick={isDesktop() ? (e) => { e.preventDefault(); downloadViaTauri(downloadHref, name); } : undefined}>⬇ 下载</a>}
           {!media && dirty && <button className="primary sm" disabled={saving} onClick={save}>{saving ? '保存中…' : '保存修改'}</button>}
           {!media && saved && <span className="okline">✓ 已保存</span>}
           <button className="ghost sm" onClick={onClose}>✕</button>

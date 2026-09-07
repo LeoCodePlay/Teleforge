@@ -1,5 +1,15 @@
 /* ---- CompactionRow 独有样式:上下文压缩标记行(样式参照 harness 的 CompactionItem) ----
    整行占满对话宽度、低调不打扰:折叠态 24px 行高由 DisclosureRow 承载,
-   展开态正文缩进对齐前导槽(22px),灰色次要色、pre-wrap 保留摘要换行。 */
+   展开态正文缩进对齐前导槽(22px),灰色次要色;正文是结构化 checkpoint(Markdown),
+   标题收敛为小号加粗、代码行沿用 .md 的内联样式,保持与助手回复一致的可读性。 */
 .dsh-compaction { display: flex; flex-direction: column; width: 100%; margin: 4px 0; min-width: 0; }
-.dsh-compaction-body { padding: 4px 0 4px 22px; color: var(--muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.dsh-compaction-body { padding: 4px 0 4px 22px; color: var(--muted); font-size: 13px; line-height: 1.6; word-break: break-word; }
+.dsh-compaction-body .md { white-space: normal; }
+.dsh-compaction-body .md h1, .dsh-compaction-body .md h2, .dsh-compaction-body .md h3,
+.dsh-compaction-body .md h4, .dsh-compaction-body .md h5, .dsh-compaction-body .md h6 {
+  margin: 8px 0 3px; font-size: 13px; line-height: 1.4; color: var(--text); font-weight: 600;
+}
+.dsh-compaction-body .md p { margin: 4px 0; }
+.dsh-compaction-body .md ul, .dsh-compaction-body .md ol { margin: 4px 0; padding-left: 20px; }
+.dsh-compaction-body .md li { margin: 1px 0; }
+.dsh-compaction-body .md code { background: var(--code-bg); padding: 0 4px; border-radius: 4px; font-size: 12px; border: 1px solid var(--code-bor); color: var(--code-ink); }

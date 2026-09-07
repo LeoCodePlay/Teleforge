@@ -58,14 +58,20 @@ export interface Session {
   updatedAt?: string | number;
   /** 所属作用域:服务器键(username@host:port)或 'local';与当前作用域不同 = 其他服务器后台运行的会话 */
   connKey?: string | null;
+  /** 会话绑定的远程工作区(连接服务器时的执行目录);null/缺失 = 未绑定 */
+  workspace?: string | null;
+  /** 会话绑定的本地工作区;null/缺失 = 未绑定 */
+  localWorkspace?: string | null;
 }
 
-/** 单个模型的上下文能力声明(可选):未配置时沿用全局字符预算裁剪,不启用自动压缩 */
+/** 单个模型的能力声明(可选):未配置时沿用全局字符预算裁剪,不启用自动压缩 */
 export interface ModelContextConfig {
   /** 输入上下文窗口(token,含历史与当前输入)。>0 时超过 80% 水位自动压缩早期历史 */
   contextWindow?: number;
   /** 单次输出 token 上限(请求体 max_tokens) */
   maxTokens?: number;
+  /** 是否具备多模态(看图)能力:开启后输入框可粘贴/上传图片,随消息注入 image_url */
+  multimodal?: boolean;
 }
 
 /** LLM 提供商(预置 + 用户自定义,userProviders 来自服务端配置文件) */
@@ -131,10 +137,25 @@ export interface ToolCallMeta {
   offset?: number;
   truncated?: boolean;
   kind?: string;
+  /** 文件改动卡(write/edit/delete 工具附加):新增行数(addLines)/删除行数(delLines) */
+  addLines?: number;
+  delLines?: number | null;
   pattern?: string;
   /** web_search 的来源列表(标题/摘要/链接/发布时间),由后端结构化附加 */
   query?: string;
   sources?: WebSearchSourceMeta[];
+}
+
+/** 一条文件变更记录(单轮 AI 回复中某个文件的改动汇总,供回复下方「N 个文件已更改」卡展示) */
+export interface FileChangeItem {
+  /** 文件绝对路径(远程服务器或本机) */
+  path: string;
+  /** 变更类型:create=新建, write=覆盖写入, edit=修改, delete=删除 */
+  kind: 'create' | 'write' | 'edit' | 'delete';
+  /** 新增行数 */
+  addLines: number;
+  /** 删除行数(null=未知,如覆盖写入的大文件未能读取旧内容) */
+  delLines?: number | null;
 }
 
 /** 一条网络搜索结果来源(与后端 web-search.ts 的 WebSearchSource 对齐) */
@@ -143,6 +164,16 @@ export interface WebSearchSourceMeta {
   title?: string;
   snippet?: string;
   publishedAt?: string;
+}
+
+/** 一个聊天附件的服务端元数据(上传接口返回/会话历史下发);字节经 /api/attachments/:id 访问 */
+export interface AttachmentInfo {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  kind: 'image' | 'video' | 'file';
+  url?: string;
 }
 
 /** 聊天消息内的分段:文本 / 思考 / 连续工具组,按实际发生顺序排列(思考可穿插在工具组之间) */
@@ -158,15 +189,36 @@ export interface ChatMessage {
   content?: string;
   segments?: MsgSegment[];
   streaming?: boolean;
+  /** 用户消息携带的附件(图片/文件/视频,服务端元数据;图片经 /api/attachments/:id 取字节) */
+  attachments?: AttachmentInfo[];
   /** 分支点:该消息在服务端 turns 数组中的结束索引(>=0 时按此截断克隆,缺省 -1 从尾部) */
   forkTail?: number;
   /** 消息时间戳(毫秒,来自服务端事件 time;实时消息用前端 Date.now()) */
   time?: number;
-  /** 请求失败进入重试的提示消息(role=notice),同一失败重试时原地更新不堆叠 */
-  retryNotice?: boolean;
+  /** 模型请求失败进入重试的提示消息(role=notice):同一失败重试时原地更新不堆叠。
+      渲染为 harness 风格的单行折叠状态行(等待重试实时倒计时 + 可展开的失败详情) */
+  retry?: {
+    /** 当前第几次重试(从 1 起) */
+    retry: number;
+    /** 最大重试次数 */
+    maxRetries: number;
+    /** 本次重试的等待时长(ms) */
+    delayMs: number;
+    /** 失败原因摘要 */
+    error: string;
+    /** 状态:scheduled=等待重试(倒计时中) → started=已开始重试 / cancelled=已取消 */
+    state: 'scheduled' | 'started' | 'cancelled';
+  };
   /** 上下文压缩标记(compaction/done 投影消息):dropCount=被压缩消息数,manual=手动压缩。
       渲染为对话流中的折叠「压缩标记行」(样式参照 harness 的 CompactionItem) */
   compaction?: { dropCount?: number; manual?: boolean };
+  /** 斜杠命令在对话流中的命令卡片(role='command',本地插入,不持久化):
+      压缩中/完成/失败的可见反馈(样式参照 harness 的 GenericCommandCard) */
+  command?: { name: string; state: 'running' | 'ok' | 'error'; text?: string };
+  /** 命令卡片的本地唯一 id(供异步完成后原地更新;压缩成功时 history_compacted 重拉历史自然移除) */
+  cmdId?: number;
+  /** 单轮回复中修改过的文件汇总(write/edit/delete 工具 meta 聚合):渲染回复下方的「N 个文件已更改」卡片 */
+  filesChanged?: FileChangeItem[];
 }
 
 /** 任务计划项(todo_write 工具维护,状态对齐 deepseek-harness) */

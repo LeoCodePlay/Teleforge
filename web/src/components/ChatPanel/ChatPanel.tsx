@@ -1,9 +1,10 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../../api';
 import { useLlm } from '../../context/llm-context';
-import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem } from '../../types';
+import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, FileChangeItem } from '../../types';
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import ModelMenu from '../ModelMenu/ModelMenu';
@@ -16,12 +17,19 @@ import type { AtCandidate } from '../AtMenu/AtMenu';
 import { useFeedback } from '../../context/feedback';
 import AskPanel from '../AskPanel/AskPanel';
 import QueuePanel, { QueueItem } from '../QueuePanel/QueuePanel';
+import PermissionSelect, { isPermissionMode } from '../PermissionSelect/PermissionSelect';
+import type { PermissionMode } from '../PermissionSelect/PermissionSelect';
 import { ToolCallList } from '../ToolCallList/ToolCallList';
 import { ReasoningRow } from '../ReasoningRow/ReasoningRow';
 import { CompactionRow } from './CompactionRow';
+import { FilesChangedCard } from './FilesChangedCard';
+import { CommandCard } from './CommandCard';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
 import { IconChevronDownOutline14 } from '../icons/icons';
+import { AttachRail, MessageAttachments, Lightbox, classifyKind } from '../Attachments/Attachments';
+import type { ComposerAttachment, LightboxSrc } from '../Attachments/Attachments';
+import type { AttachmentInfo } from '../../types';
 import './ChatPanel.scss';
 
 // 新会话(尚未创建服务端会话)的前端占位 sid:用于"草稿式"新建——
@@ -103,7 +111,9 @@ function formatMsgTime(ts?: number) {
   return `${date} ${hm}`;
 }
 
-function AssistantText({ text }: { text: string }) {
+// 文本段 memo:按 text 引用判定,未变化的历史段整体跳过重渲染(含 markdown 解析)。
+// 流式增量每次赋值新字符串,正在流的段仍正常更新。
+const AssistantText = memo(function AssistantText({ text }: { text: string }) {
   const spans: React.ReactNode[] = [];
   const parts = text.split(/(```[\s\S]*?```)/g);
   parts.forEach((part, i) => {
@@ -115,7 +125,17 @@ function AssistantText({ text }: { text: string }) {
     }
   });
   return <>{spans}</>;
-}
+});
+
+// 段级渲染 memo(正文/思考):历史段内容引用未变时整体跳过,长会话的流式更新、
+// 输入与面板重渲染不再拖着全部消息重跑 thinking 提取与 markdown 解析;
+// 正在流式更新的段(text 每次增量都是新字符串)依旧正常渲染。
+const AssistantSegment = memo(function AssistantSegment({ text }: { text: string }) {
+  return <div>{renderAssistantContent(text) || <AssistantText text={text} />}</div>;
+});
+const ReasoningSegment = memo(function ReasoningSegment({ text, running }: { text: string; running?: boolean }) {
+  return text && text.trim() ? <ReasoningRow text={text.trim()} running={running} /> : null;
+});
 
 // 消息操作栏(照搬 deepseek-harness 的 MessageIconActions):
 // - 复制:复制该条回复的全文,成功后图标短暂换成 ✓(1s)
@@ -250,6 +270,35 @@ function segText(msg: ChatMessage) {
   return (msg.segments || []).filter((s) => s.kind === 'text').reduce((a, s) => a + (s.text || ''), '');
 }
 
+// ---- 文件变更汇总:从消息的工具调用 meta 聚合「N 个文件已更改」卡片数据 ----
+// 文件类工具(write/edit/delete × 远程/本地)在 tool_result 附加 card='diff' 的改动卡
+// (path/kind/addLines/delLines);同文件多次操作按路径合并增删行数,kind 删除优先。
+const FILE_CHANGE_KINDS = new Set(['create', 'write', 'edit', 'delete']);
+function collectFileChanges(msg: ChatMessage): FileChangeItem[] {
+  const byPath = new Map<string, FileChangeItem>();
+  for (const seg of msg.segments || []) {
+    if (seg.kind !== 'tools') continue;
+    for (const t of seg.tools || []) {
+      const m = t.meta;
+      if (!m || m.card !== 'diff' || typeof m.path !== 'string' || !m.path) continue;
+      const kind: FileChangeItem['kind'] = FILE_CHANGE_KINDS.has(m.kind ?? '') ? (m.kind as FileChangeItem['kind']) : 'edit';
+      const add = typeof m.addLines === 'number' && Number.isFinite(m.addLines) ? m.addLines : 0;
+      const del = typeof m.delLines === 'number' && Number.isFinite(m.delLines) ? m.delLines : null;
+      const cur = byPath.get(m.path);
+      if (!cur) { byPath.set(m.path, { path: m.path, kind, addLines: add, delLines: del }); continue; }
+      cur.addLines += add;
+      cur.delLines = del !== null ? (cur.delLines ?? 0) + del : cur.delLines;
+      if (kind === 'delete') cur.kind = 'delete'; // 删除是文件的最终状态
+    }
+  }
+  // 按路径排序,展示顺序稳定
+  return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+// 消息结束(完成/停止/出错)或历史回放时,把聚合结果挂到 assistant 消息上
+function attachFileChanges(msg: ChatMessage | undefined) {
+  if (msg && msg.role === 'assistant') msg.filesChanged = collectFileChanges(msg);
+}
+
 // 把服务端持久化的 turns 转成渲染消息数组:
 // 一次 run 的多轮 assistant/tool 在渲染上合并为一条回复,按「思考 / 文本 / 连续工具组」实际发生顺序分段
 function turnsToMessages(turns: any[]): ChatMessage[] {
@@ -273,7 +322,12 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
       continue; // tool 消息本身不渲染,只作为结果并入上游工具组
     }
     if (t.role === 'user') {
-      out.push({ role: 'user', content: t.content || '', forkTail: ti, time: t.time, ...(t.compaction ? { compaction: t.compaction } : {}) });
+      out.push({
+        role: 'user', content: t.content || '', forkTail: ti, time: t.time,
+        // 附件元数据随历史回放,用户气泡内渲染缩略图/文件 chip
+        ...(Array.isArray(t.attachments) && t.attachments.length ? { attachments: t.attachments } : {}),
+        ...(t.compaction ? { compaction: t.compaction } : {})
+      });
       continue;
     }
     if (t.role === 'assistant') {
@@ -306,6 +360,8 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
     }
     // 其余角色跳过
   }
+  // 文件变更汇总:历史回放的工具 meta 已随 tool/result 持久化,按消息聚合挂载
+  for (const m of out) if (m.role === 'assistant') attachFileChanges(m);
   return out;
 }
 
@@ -352,9 +408,13 @@ interface ChatPanelProps {
   localHome?: string | null;
   /** 本机保存过的本地工作区历史 */
   savedLocalWs?: string[];
+  /** 当前会话远程工作区已锁定(会话已开始对话):远程 chip 禁用 */
+  remoteLocked?: boolean;
+  /** 当前会话本地工作区已锁定(本地会话已开始对话):本地 chip 禁用 */
+  localLocked?: boolean;
   onWorkspaceSet: (ws: string) => void;
-  /** 选择/切换本地工作区 */
-  onLocalWorkspaceSet?: (p: string) => void;
+  /** 选择/切换本地工作区;sid = 当前会话 id(草稿态为 null,服务端不绑定会话) */
+  onLocalWorkspaceSet?: (p: string, sid?: string | null) => void;
   /** 从当前服务器的工作区历史中删除一条记录(仅删快捷记录,不影响远程目录) */
   onDeleteWs?: (ws: string) => void;
   /** 从本地工作区历史中删除一条记录 */
@@ -363,11 +423,63 @@ interface ChatPanelProps {
   onFork?: (at: number) => void;
   /** 新会话草稿态发送首条消息:ChatPanel 先创建服务端会话,成功后回调让 App 刷新会话列表/active/sessionSeq */
   onSessionCreated?: (r: any) => void;
+  /** 会话发送了首条消息(发送那一刻即回调):App 据此立即锁定会话工作区,不必等服务端 msgCount 落盘回传 */
+  onSessionTouched?: (sid: string | null) => void;
   /** 移动端(手机)布局:Enter 改为换行(发送只点按钮),提示文案同步切换 */
   compact?: boolean;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, compact = false }: ChatPanelProps) {
+// 模型请求失败进入重试的状态行(照搬 deepseek-harness 的 ModelRetryItem):
+// 单行折叠行,不占大块警示横幅——收起时只显示「等待/已重试模型请求(N/M) · Xs」实时倒计时,
+// 展开可看重试延迟与失败原因。等待中文字带扫光动画,同一失败重试原地更新不堆叠。
+function RetryRow({ data }: { data: NonNullable<ChatMessage['retry']> }) {
+  const { retry, maxRetries, delayMs, error, state } = data;
+  const scheduledSeconds = Math.max(1, Math.ceil(delayMs / 1000));
+  const [seconds, setSeconds] = useState(scheduledSeconds);
+
+  useEffect(() => {
+    // 仅"等待重试"阶段走实时倒计时;开始/取消后定格为该次的计划等待秒数
+    if (state !== 'scheduled') { setSeconds(scheduledSeconds); return; }
+    // 倒计时锚定浏览器时钟(事件时间与 Date.now() 可能不同钟),每秒校准
+    const deadline = Date.now() + delayMs;
+    const tick = () => setSeconds(Math.max(1, Math.ceil((deadline - Date.now()) / 1000)));
+    tick();
+    if (Math.max(1, Math.ceil(delayMs / 1000)) <= 1) return;
+    const timer = window.setInterval(tick, 250);
+    return () => window.clearInterval(timer);
+  }, [delayMs, retry, state, scheduledSeconds]);
+
+  const label = state === 'started' ? '已重试模型请求'
+    : state === 'cancelled' ? '模型请求重试已取消'
+    : '等待重试模型请求';
+
+  return (
+    <details className={`retry-msg${state === 'scheduled' ? ' active' : ''}`}>
+      <summary>
+        <span className="retry-text">{label}({retry}/{maxRetries}) · {seconds}s</span>
+      </summary>
+      <div className="retry-details">
+        <div><span className="retry-detail-label">重试延迟：</span>{delayMs}ms</div>
+        <div><span className="retry-detail-label">失败原因：</span>{error}</div>
+      </div>
+    </details>
+  );
+}
+
+// 把最近的「等待重试」提示标记为「已开始重试」:模型流恢复(text/reasoning/tool 到达)后,
+// 对齐 harness llm/retry-started 语义;多次到达幂等(状态已非 scheduled 时不动)。
+function markRetryStarted(msgs: ChatMessage[]): ChatMessage[] {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const rt = msgs[i]?.retry;
+    if (rt && rt.state === 'scheduled') {
+      msgs[i] = { ...msgs[i], retry: { ...rt, state: 'started' } };
+      break;
+    }
+  }
+  return msgs;
+}
+
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, onSessionTouched, compact = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -426,7 +538,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const [switching, setSwitching] = useState(false);
   // 抑制入场动画:历史整表载入(挂载/切换会话/后台刷新)时给 .chat 加 no-anim,
   // 连最新一条消息的 msg-in 淡入也不播——切换瞬间就该是静止的成品画面;
-  // 只有用户实时发送(start/steer 追加新消息)才解除,让新消息保留浮现动效
+  // 只有用户实时发送(start 追加新消息)才解除,让新消息保留浮现动效
   const [suppressIn, setSuppressIn] = useState(true);
   // 会话历史缓存:切回已加载过的会话时秒开(零网络),后台静默刷新保持最新
   const histCache = useRef(new Map<string, { msgs: ChatMessage[]; todos: TodoItem[] }>());
@@ -450,6 +562,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if (saved === 'max' || saved === 'low' || saved === 'xhigh') return saved;
     return 'default';
   });
+  // 访问权限模式(变更前确认/自动编辑/计划模式/完全访问):会话级开关,服务端权威。
+  // 初值/切会话后由 get_history 的 permissionMode 回填,运行中的切换经 permission_changed 广播同步;
+  // 新会话草稿态先取全局默认(permission_default_get),发送时随 session_create 落地
+  const [permMode, setPermMode] = useState<PermissionMode>('confirm');
+  const permTouchedRef = useRef(false); // 草稿态用户是否手动改过权限档位(避免把服务端默认误当"用户选择"提交)
   const scrollRef = useRef<HTMLDivElement>(null);
   // ---- 自动触底(吸附底部)控制 ----
   // stick=true 时流式更新/消息变化跟随触底;用户手动上滑离开底部即暂停(方便回看上下文),
@@ -487,6 +604,108 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setReasoning(lv);
     localStorage.setItem('sshai.reasoning', lv);
   };
+
+  // 切换访问权限模式:乐观更新,服务端确认(permission_set 成功 + permission_changed 广播)
+  // 即最终态;请求失败回滚并提示(模式以服务端事件日志为准,避免界面与实际放行口径脱节)。
+  // 草稿态(新会话/尚未激活)没有可写的目标:仅记在本地,等 send() 里 session_create
+  // 成功后随新会话提交,避免对不存在的会话发 permission_set 报错
+  const changePermMode = (mode: PermissionMode) => {
+    const prev = permMode;
+    permTouchedRef.current = true; // 用户显式选择(草稿态发送时据此决定是否提交 permission_set)
+    setPermMode(mode);
+    if (sid == null || sid === NEW_SESSION_ID) return;
+    api.request('permission_set', { mode }, 8000)
+      .catch((e) => {
+        setPermMode(prev);
+        toast.error(`切换权限模式失败: ${(e as Error).message}`);
+      });
+  };
+
+  // ---- 聊天附件(图片/文件):粘贴、拖拽与"+"号上传 ----
+  // 草稿附件仅存内存(上传拿到服务端 id 后随 speak 发送,不进输入草稿);
+  // 图片缩略图在上传前后都用本地 objectURL 预览(上传完成换服务端 URL 会闪烁,发送时统一回收)。
+  // 多模态开关(设置 → AI 模型 → 模型「多模态」)决定能否添加/发送图片。
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [lightbox, setLightbox] = useState<LightboxSrc | null>(null);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const attSeqRef = useRef(0); // 附件本地 key 自增
+  const addWrapRef = useRef<HTMLDivElement>(null); // "+"按钮与菜单容器(外部点击关闭菜单)
+  const imgInputRef = useRef<HTMLInputElement>(null);   // 图片选择(accept=image/*)
+  const fileInputRef = useRef<HTMLInputElement>(null);  // 任意文件选择
+  // 当前模型是否具备多模态(看图)能力:由提供方配置里逐模型声明
+  const multimodal = llm.effModelContext?.multimodal === true;
+  const attPending = attachments.some((a) => a.uploading); // 仍在上传中(禁发)
+  const attFailed = attachments.some((a) => !!a.error);    // 有上传失败项(须先移除)
+
+  // 收纳文件:分类 → 本地预览 → 立即上传(逐个独立,失败只影响自身);
+  // 图片仅在多模态模型下接受,其余类型(文件)不受限
+  const intakeFiles = (files: File[]) => {
+    const list = files.filter(Boolean);
+    if (!list.length) return;
+    const room = 10 - attachments.length;
+    if (room <= 0) { toast.warning('一条消息最多 10 个附件'); return; }
+    for (const file of list.slice(0, room)) {
+      const kind = classifyKind(file.type, file.name);
+      if (kind === 'image' && !multimodal) {
+        toast.warning('当前模型未开启多模态,不支持发送图片(设置 → AI 模型 → 模型「多模态」开关)');
+        continue;
+      }
+      const key = `att${++attSeqRef.current}`;
+      const previewUrl = kind === 'image' ? URL.createObjectURL(file) : '';
+      const item: ComposerAttachment = {
+        key,
+        name: file.name || (kind === 'image' ? `粘贴图片.${(file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}` : '未命名文件'),
+        mime: file.type || 'application/octet-stream',
+        size: file.size,
+        kind,
+        uploading: true,
+        previewUrl
+      };
+      setAttachments((prev) => [...prev, item]);
+      const fd = new FormData();
+      fd.append('files', file, file.name || item.name);
+      fetch('/api/attachments', { method: 'POST', body: fd })
+        .then(async (r) => {
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+          const att: AttachmentInfo | undefined = j.attachments?.[0];
+          if (!att) throw new Error('服务端未返回附件信息');
+          return att;
+        })
+        .then((att) => setAttachments((prev) => prev.map((x) => (x.key === key ? { ...x, uploading: false, att } : x))))
+        .catch((e) => {
+          setAttachments((prev) => prev.map((x) => (x.key === key ? { ...x, uploading: false, error: (e as Error).message } : x)));
+          toast.error(`附件上传失败:${(e as Error).message}`);
+        });
+    }
+  };
+  // 移除单个草稿附件(回收本地预览的 objectURL)
+  const removeAttachment = (item: ComposerAttachment) => {
+    if (item.previewUrl.startsWith('blob:')) { try { URL.revokeObjectURL(item.previewUrl); } catch {} }
+    setAttachments((prev) => prev.filter((x) => x.key !== item.key));
+  };
+  // 清空全部草稿附件(发送成功/切换会话时调用)
+  const clearAttachments = () => {
+    setAttachments((prev) => {
+      for (const x of prev) if (x.previewUrl.startsWith('blob:')) { try { URL.revokeObjectURL(x.previewUrl); } catch {} }
+      return [];
+    });
+  };
+  // 点击"+"菜单外部时关闭(与工作区 chip 弹窗同款交互)。
+  // 菜单本体 portal 到 body(脱离 composer-box 的 backdrop-filter,否则 Chromium
+  // 不应用其 backdrop-filter,玻璃磨砂失效),portal 节点的点击同样视为内部区域
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (addWrapRef.current && addWrapRef.current.contains(t)) return;
+      if (t instanceof Element && t.closest('.add-menu')) return;
+      setAddMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [addMenuOpen]);
 
   // 输入框自适应高度(主流聊天工具样式:单行起步,随内容增高)
   const autoGrow = () => {
@@ -542,7 +761,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'status':
             setAgentState(m.status === 'running' ? 'working' : 'idle');
             if (m.status !== 'running') {
-              push((msgs) => { const c = [...msgs]; const l = c[c.length - 1]; if (l?.streaming) l.streaming = false; return c; });
+              push((msgs) => { const c = [...msgs]; const l = c[c.length - 1]; if (l?.streaming) l.streaming = false;
+              return c; });
             }
             break;
           case 'queue_update':
@@ -556,8 +776,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setAgentState('working'); setErrorMsg('');
             setTodos([]); // 开启新一轮:上一轮的任务计划清空(对齐 harness 的 standing plan 语义)
             setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
-            push((msgs) => [...msgs, { role: 'user', content: m.text, time: Date.now(), forkTail: forkTurnRef.current - 1 }]);
-            push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: forkTurnRef.current - 1 }]);
+            push((msgs) => [...msgs, { role: 'user', content: m.text, attachments: Array.isArray(m.attachments) ? m.attachments : undefined, time: Date.now(), forkTail: Math.max(0, forkTurnRef.current - 1) }]);
+            push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: Math.max(0, forkTurnRef.current - 1) }]);
             break;
           case 'context_usage':
             // 服务端每步请求后广播的上下文用量(实际/预估/窗口):仪表盘权威口径
@@ -572,6 +792,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // todo_write 工具写入的任务计划整表快照
             setTodos(Array.isArray(m.todos) ? m.todos : []);
             break;
+          case 'permission_changed':
+            // 访问权限模式切换广播(任意前端/任意窗口发起,服务端确认后下发):
+            // 只作用于当前正在查看的会话,其他会话的模式在切回时经 get_history 回填
+            if (m.sid && m.sid === activeRef.current && isPermissionMode(m.mode)) setPermMode(m.mode);
+            break;
           case 'iteration':
             // 每次迭代对应一条 assistant/message turn;truncate 重开会重复相同 iter,去重
             if (m.iter !== lastIterRef.current) {
@@ -581,7 +806,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'text_delta':
             push((msgs) => {
-              const copy = [...msgs];
+              const copy = markRetryStarted([...msgs]);
               const last = copy[copy.length - 1];
               if (last?.role === 'assistant') appendText(last, m.text);
               return copy;
@@ -591,7 +816,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 思考内容增量(推理模型的 reasoning 通道):按到达顺序落为独立段,
             // 后续步骤的思考自然出现在上一组工具调用之后,而不是全堆在消息开头
             push((msgs) => {
-              const copy = [...msgs];
+              const copy = markRetryStarted([...msgs]);
               const last = copy[copy.length - 1];
               if (last?.role === 'assistant') appendReasoning(last, m.text);
               return copy;
@@ -599,12 +824,20 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'tool_call':
             push((msgs) => {
-              const copy = [...msgs];
-              const last = copy[copy.length - 1];
-              // 断线补偿(服务端补发)时同一 callId 可能已被实时事件渲染过,按 id 去重避免重复卡片
+              const copy = markRetryStarted([...msgs]);
+              const li = copy.length - 1;
+              const last = copy[li];
+              // 断线补偿(服务端补发)时同一 callId 可能已被实时事件渲染过,按 id 去重避免重复卡片。
+              // 不可变更新(新 segments/tools 数组):配合工具列表 memo,
+              // 只有本段真正变化时才重渲染,其余历史段原样跳过
               if (last?.role === 'assistant'
                 && !(last.segments || []).some((s) => s.kind === 'tools' && (s.tools || []).some((t) => t.id === m.callId))) {
-                appendTools(last, [{ id: m.callId, tool: m.tool, args: m.args, ok: undefined, ms: undefined, result: undefined }]);
+                const segs = last.segments || [];
+                const newCall: ToolCallInfo = { id: m.callId, tool: m.tool, args: m.args, ok: undefined, ms: undefined, result: undefined };
+                const newSegs = segs.length && segs[segs.length - 1].kind === 'tools'
+                  ? [...segs.slice(0, -1), { ...segs[segs.length - 1], tools: [...(segs[segs.length - 1].tools || []), newCall] }]
+                  : [...segs, { kind: 'tools' as const, tools: [newCall] }];
+                copy[li] = { ...last, segments: newSegs };
               }
               return copy;
             });
@@ -614,16 +847,27 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             forkTurnRef.current += 1;
             push((msgs) => {
               const copy = [...msgs];
-              const last = copy[copy.length - 1];
+              const li = copy.length - 1;
+              const last = copy[li];
               if (last?.role === 'assistant' && Array.isArray(last.segments)) {
-                last.forkTail = forkTurnRef.current - 1;
-                const tseg = [...last.segments].reverse().find((s) => s.kind === 'tools');
-                if (tseg) {
-                  const tools = tseg.tools || [];
-                  const byId = m.callId ? tools.find((x) => x.id === m.callId) : null;
-                  const target = byId || tools.find((x) => x.tool === m.tool && x.ok === undefined);
-                  if (target) Object.assign(target, { ok: m.ok, ms: m.ms, result: m.result, meta: m.meta });
+                // 不可变更新:替换目标工具对象与所在组数组,使工具列表 memo 正确感知变化
+                const patch = { ok: m.ok, ms: m.ms, result: m.result, meta: m.meta };
+                let segIndex = -1;
+                for (let i = last.segments.length - 1; i >= 0; i--) {
+                  if (last.segments[i].kind === 'tools') { segIndex = i; break; }
                 }
+                const newSegs = segIndex >= 0
+                  ? last.segments.map((s, i) => {
+                      if (i !== segIndex) return s;
+                      const tools = s.tools || [];
+                      const byId = m.callId ? tools.find((x) => x.id === m.callId) : null;
+                      const target = byId || tools.find((x) => x.tool === m.tool && x.ok === undefined);
+                      return target
+                        ? { ...s, tools: tools.map((t) => (t === target ? { ...t, ...patch } : t)) }
+                        : s;
+                    })
+                  : last.segments;
+                copy[li] = { ...last, forkTail: forkTurnRef.current - 1, segments: newSegs };
               }
               return copy;
             });
@@ -635,6 +879,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               const last = copy[copy.length - 1];
               if (last?.role === 'assistant') {
                 last.streaming = false;
+                // 文件变更汇总:所有 tool_result 已落定,聚合「N 个文件已更改」卡片数据
+                attachFileChanges(last);
                 // 最终文本通常已由 text_delta 流式拼好;这里只补上未流出的部分
                 // (如达到最大迭代次数后追加的提示),避免重复
                 const cur = segText(last);
@@ -650,11 +896,33 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'stopped':
             setAgentState('idle');
-            push((msgs) => { const c = [...msgs]; const l = c[c.length - 1]; if (l?.streaming) l.streaming = false; return c; });
+            push((msgs) => {
+              const c = [...msgs];
+              const l = c[c.length - 1];
+              if (l?.streaming) l.streaming = false;
+                attachFileChanges(l);
+              // 用户停下 Agent 时,尚在倒计时中的重试随之取消(对齐 harness llm/retry-started 的 cancelled 态)
+              for (let i = c.length - 1; i >= 0; i--) {
+                const rt = c[i]?.retry;
+                if (rt && rt.state === 'scheduled') { c[i] = { ...c[i], retry: { ...rt, state: 'cancelled' } }; break; }
+              }
+              return c;
+            });
             break;
           case 'error':
             setAgentState('error'); setErrorMsg(m.message);
-            push((msgs) => { const c = [...msgs]; const l = c.slice(-1)[0]; if (l?.streaming) l.streaming = false; return c; });
+            push((msgs) => {
+              const c = [...msgs];
+              const l = c.slice(-1)[0];
+              if (l?.streaming) l.streaming = false;
+                attachFileChanges(l);
+              // 重试耗尽/不可重试的直接失败:倒计时中的重试随本轮中止取消(对齐 harness cancelled 态)
+              for (let i = c.length - 1; i >= 0; i--) {
+                const rt = c[i]?.retry;
+                if (rt && rt.state === 'scheduled') { c[i] = { ...c[i], retry: { ...rt, state: 'cancelled' } }; break; }
+              }
+              return c;
+            });
             break;
           case 'notice':
             // 通知不打断流式中的 assistant 气泡:插到它前面,
@@ -670,37 +938,46 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               return c;
             });
             break;
-          case 'retry':
-            // 模型请求失败进入重试:显示「重试第 N/M 次」(对齐 harness llm-retry 语义)。
-            // 同一失败的重试提示原地更新,避免堆叠;流式 assistant 存在时插到它前面
+          case 'compaction_done':
+            // 自动压缩完成(上下文超水位/爆窗恢复):在消息流中插入「上下文压缩」标记行,
+            // 披露模型自该处起不再看到被压缩的早期历史(其上的消息保持原样,与 CompactionRow
+            // 的语义一致)。运行中不做整表重拉,避免打断正在流式的输出;刷新/切回会话后
+            // 由 compaction/done 事件在原位投影出同款标记行。流式中的 assistant 不打断,插到它前面。
             push((msgs) => {
               const c = [...msgs];
-              const err = String(m.error || '网络错误').slice(0, 120);
-              const delay = Math.round((Number(m.delayMs) || 2000) / 1000);
-              const content = `请求失败(${err}),${delay}s 后重试(第 ${m.retry}/${m.maxRetries} 次)`;
+              const item = {
+                role: 'user' as const,
+                content: m.summary || '【上下文已自动压缩】早期对话已省略。',
+                compaction: { dropCount: Number(m.dropCount) || 0, manual: m.manual === true }
+              };
+              const last = c[c.length - 1];
+              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
+              else c.push(item);
+              return c;
+            });
+            scrollToBottomNow();
+            break;
+          case 'retry':
+            // 模型请求失败进入重试:渲染为 harness 风格的单行状态行(实时倒计时 + 可展开失败详情),
+            // 同一失败的重试原地更新不堆叠;流式 assistant 存在时插到它前面(不打断对话流)
+            push((msgs) => {
+              const c = [...msgs];
+              const payload = {
+                retry: Number(m.retry) || 1,
+                maxRetries: Number(m.maxRetries) || 5,
+                delayMs: Number(m.delayMs) || 2000,
+                error: String(m.error || '网络错误').slice(0, 120),
+                state: 'scheduled' as const
+              };
               for (let i = c.length - 1; i >= 0; i--) {
-                if (c[i]?.retryNotice) { c[i] = { role: 'notice', content, retryNotice: true }; return c; }
+                if (c[i]?.retry) { c[i] = { role: 'notice', retry: payload }; return c; }
               }
               const last = c[c.length - 1];
               if (last?.role === 'assistant' && last.streaming) {
-                c.splice(c.length - 1, 0, { role: 'notice', content, retryNotice: true });
+                c.splice(c.length - 1, 0, { role: 'notice', retry: payload });
               } else {
-                c.push({ role: 'notice', content, retryNotice: true });
+                c.push({ role: 'notice', retry: payload });
               }
-              return c;
-            });
-            break;
-          case 'steer':
-            // 运行中补充的指令:显示为用户消息,并另起一条流式 assistant 气泡接收后续输出
-            // (后端会写入一条 steer 的 user/message,计入分支点计数)
-            forkTurnRef.current += 1;
-            setSuppressIn(false); // 实时追加:解除入场动画抑制
-            push((msgs) => {
-              const c = [...msgs];
-              const l = c[c.length - 1];
-              if (l?.streaming) l.streaming = false;
-              c.push({ role: 'user', content: m.text, time: Date.now(), forkTail: forkTurnRef.current - 1 });
-              c.push({ role: 'assistant', segments: [], streaming: true, forkTail: forkTurnRef.current - 1 });
               return c;
             });
             break;
@@ -752,8 +1029,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     return () => { if (timer) clearTimeout(timer); off(); };
   }, []);
 
-  // 组件卸载(切走标签页/关闭)前立即落盘草稿,避免 400ms 防抖窗口内的输入丢失
-  useEffect(() => () => persistDrafts(), []);
+  // 组件卸载(切走标签页/关闭)前立即落盘草稿,避免 400ms 防抖窗口内的输入丢失;
+  // 顺带取消挂起的跳转点度量帧
+  useEffect(() => () => { persistDrafts(); if (dotRafRef.current) cancelAnimationFrame(dotRafRef.current); }, []);
 
   // 挂载或会话切换时,载入当前活跃会话的历史。
   // 不先清空消息:保留上一会话内容 + 「正在加载会话」提示,新会话历史到达后再整体替换,
@@ -791,6 +1069,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setTodos([]);
     setAgentState('idle'); setErrorMsg('');
     setQueue([]); // 切会话先复位队列,避免串到上一会话;真实队列随 get_history 返回
+    clearAttachments(); // 草稿附件不跨会话携带(纯内存,发送时才随消息上行)
 
     // 新会话草稿态(sid 为占位符):不请求历史,显示空对话;sid=null(App 初次加载尚未定向)
     // 则沿用原切换重载逻辑(请求 get_history 拿回服务端活跃会话)
@@ -798,6 +1077,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       setSuppressIn(true);
       setMessages([]);
       setSwitching(false);
+      permTouchedRef.current = false; // 新草稿:本次尚未手动改过权限档位
+      // 草稿态权限选择器回显全局默认(用户上次设置的档位,服务端持久化):
+      // 没手动改过才用默认值覆盖(防与用户刚做的选择竞态),请求失败回落 confirm
+      setPermMode('confirm');
+      api.request('permission_default_get', {}, 8000)
+        .then((r) => {
+          if (!alive || activeRef.current !== NEW_SESSION_ID) return;
+          if (!permTouchedRef.current && isPermissionMode(r.mode)) setPermMode(r.mode);
+        })
+        .catch(() => { /* 回落 confirm:权限以服务端为准,不影响使用 */ });
       return () => { alive = false; };
     }
     // 刚由新会话草稿发送创建:首条消息正由事件流渲染,跳过历史回载避免重复;
@@ -833,6 +1122,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         setMessages(msgs);
         setTodos(Array.isArray(r.todos) ? r.todos : []); // 该会话当前的任务计划
         setQueue(Array.isArray(r.queue) ? r.queue : []); // 该会话的待执行队列快照
+        // 该会话的权限模式快照(服务端权威):非法值/旧服务端缺省回落默认
+        setPermMode(isPermissionMode(r.permissionMode) ? r.permissionMode : 'confirm');
         setSwitching(false);
       })
       .catch((e) => {
@@ -857,6 +1148,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     });
     if (!ok) return;
     api.send('clear_history', {});
+    // 清空后服务端 turns 归零,分支点计数器必须同步重置——
+    // 否则下一条新消息的 forkTail 沿用旧计数值,返回/删除时会索引越界报「目标消息不存在」
+    forkTurnRef.current = 0; lastIterRef.current = 0;
     setMessages([]);
     setQueue([]);
   };
@@ -910,17 +1204,27 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     return acc;
   }, []);
 
-  // 计算当前激活点:视口 40% 参考线之下的最后一条用户消息
+  // 计算当前激活点:视口 40% 参考线之下的最后一条用户消息。
+  // rAF 节流 + 文档序单调早停:滚动帧里不再对全部用户消息逐条 getBoundingClientRect
+  // (强制整文档布局),首个越过参考线的点之后位置只会更靠下,直接终止遍历;
+  // 加上 .msg 的 content-visibility,长会话滑动时每帧的开销稳定在常量级。
+  const dotRafRef = useRef(0);
   const updateActiveDot = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const line = el.getBoundingClientRect().top + el.clientHeight * 0.4;
-    let cur = -1;
-    for (const i of userMsgIndices) {
-      const node = userMsgRefs.current[i];
-      if (node && node.getBoundingClientRect().top <= line) cur = i;
-    }
-    setActiveDot(cur);
+    if (dotRafRef.current) return; // 上一帧的度量还没跑完,合并本次需求
+    dotRafRef.current = requestAnimationFrame(() => {
+      dotRafRef.current = 0;
+      const el = scrollRef.current;
+      if (!el) return;
+      const line = el.getBoundingClientRect().top + el.clientHeight * 0.4;
+      let cur = -1;
+      for (const i of userMsgIndices) {
+        const node = userMsgRefs.current[i];
+        if (!node) continue;
+        if (node.getBoundingClientRect().top > line) break; // 文档序单调:之后都更靠下
+        cur = i;
+      }
+      setActiveDot(cur);
+    });
   };
 
   // 点击跳转点:平滑滚动到对应的用户消息
@@ -1085,20 +1389,45 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
 
   const send = async () => {
     // 工作中仍可发送:服务端会把消息放入待执行队列(当前轮结束后按序自动执行,不打断回复);
-    // 提问挂起时禁止发送(须先作答或取消)
-    if (!input.trim() || !canSend || askPending) return;
+    // 提问挂起时禁止发送(须先作答或取消);纯附件消息(无文字)也允许发送
+    const atts = attachments.filter((a) => a.att).map((a) => a.att!);
+    if ((!input.trim() && atts.length === 0) || !canSend || askPending) return;
+    if (attPending) { toast.warning('附件还在上传中,请稍候…'); return; }
+    if (attFailed) { toast.warning('有附件上传失败,请先移除后再发送'); return; }
+    if (atts.some((a) => a.kind === 'image') && !multimodal) {
+      toast.warning('当前模型未开启多模态,不支持发送图片(设置 → AI 模型 → 模型「多模态」开关)');
+      return;
+    }
     const text = composedInput;
+    let realSid: string | null = sid == null || sid === NEW_SESSION_ID ? null : sid;
     // 新会话草稿态(sid 为占位符或尚未加载):先真正创建服务端会话(此时才列入历史会话列表),
     // 创建失败则保留输入与草稿,不发送
     if (sid == null || sid === NEW_SESSION_ID) {
+      let created: any;
       try {
-        const r = await api.request('session_create', {}, 8000);
-        activeRef.current = r.active ?? null; // 立即更新事件路由,不等 App 侧 state 同步
+        created = await api.request('session_create', {}, 8000);
+        realSid = created.active ?? null;
+        activeRef.current = realSid; // 立即更新事件路由,不等 App 侧 state 同步
         skipHistoryOnceRef.current = true; // 跳过随后 sid 变化触发的历史回载(消息由事件流渲染)
-        onSessionCreated?.(r); // App 刷新会话列表并激活新会话
+        onSessionCreated?.(created); // App 刷新会话列表并激活新会话
       } catch (e) {
         toast.error(`新建会话失败: ${(e as Error).message}`);
         return;
+      }
+      // 草稿态权限模式落地:新会话已按服务端全局默认生效(session_create 回传
+      // permissionMode)。用户手动改过且与服务端默认不一致时才提交 permission_set
+      // (该档位同时成为新的全局默认,后续新会话继承);没手动改过则直接采纳默认,
+      // 无需提交,避免把服务端默认误当"用户选择"而多写一条 mode 事件
+      const seededPerm = isPermissionMode(created.permissionMode) ? created.permissionMode : 'confirm';
+      if (permTouchedRef.current && permMode !== seededPerm) {
+        try {
+          await api.request('permission_set', { mode: permMode }, 8000);
+        } catch (e) {
+          setPermMode(seededPerm);
+          toast.error(`应用权限模式失败,本次按服务端默认「${seededPerm}」执行: ${(e as Error).message}`);
+        }
+      } else {
+        setPermMode(seededPerm);
       }
     }
     // 发送即使用草稿:清除对应会话(或新会话)的输入草稿
@@ -1107,13 +1436,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     saveDrafts(draftsRef.current);
     setInput('');
     inputValueRef.current = ''; // 同步最新输入,防止随后的草稿保存把已发送文本回写
+    clearAttachments(); // 附件随消息上行,清空草稿轨道并回收本地预览
     scrollToBottomNow(); // 发起对话:恢复吸附并回到底部,让用户新消息与回复立即可见
     setMessages((m) => [...m]);
-    api.send('speak', { text, reasoning });
+    // 发送消息的那一刻即通知 App 锁定该会话的工作区(不等服务端 msgCount 落盘回传)
+    onSessionTouched?.(realSid);
+    api.send('speak', { text, reasoning, ...(atts.length ? { attachments: atts } : {}) });
   };
 
   // ---- 待执行队列操作 ----
-  // 立即执行:把排队中的消息立即注入当前对话(忙碌时作为下一步 steer,空闲时直接开新轮)
+  // 立即执行:把排队中的消息立即生效(忙碌时打断当前回复即时切换,空闲时直接开新轮)
   const runQueueNow = async (item: QueueItem) => {
     try {
       const r = await api.request('queue_steer', { id: item.id }, 8000);
@@ -1145,6 +1477,21 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     } catch (e) { toast.error((e as Error).message); }
   };
 
+  // ---- 命令卡片本地状态(role='command',仅前端可见,不持久化) ----
+  // 系统命令(如 /compact)执行时插入消息流尾部显示「运行中」,异步完成后按 cmdId 原地更新;
+  // 压缩成功时服务端广播 history_compacted 重拉历史,命令卡随之被「压缩标记行」(CompactionRow)
+  // 取代——呈现方式对齐 harness 的 CompactionCommandCard(运行行 + checkpoint 披露)。
+  const cmdSeqRef = useRef(0);
+  const pushCmd = (cmd: { state: 'running' | 'ok' | 'error'; text?: string }, id?: number) => {
+    const cid = id ?? ++cmdSeqRef.current;
+    setMessages((msgs) => [...msgs, { role: 'command', cmdId: cid, command: { name: 'compact', ...cmd } }]);
+    scrollToBottomNow();
+    return cid;
+  };
+  const patchCmd = (id: number, patch: { state: 'running' | 'ok' | 'error'; text?: string }) => {
+    setMessages((msgs) => msgs.map((m) => (m.cmdId === id ? { ...m, command: { name: 'compact', ...patch } } : m)));
+  };
+
   // ---- / 命令菜单(照搬 deepseek-harness 的行内命令交互) ----
   // 系统命令:除技能外,提供常见会话操作(与 harness 的 command-compact/clear/fork 对齐)
   const slashCommands: SlashItem[] = [
@@ -1152,15 +1499,25 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       name: 'compact', kind: 'command',
       description: '压缩当前会话上下文(把早期对话合并为摘要,释放窗口空间)',
       run: async () => {
-        if (busy || agentState === 'working') { toast.warning('Agent 正在运行,请先停止或等待完成再压缩'); return true; }
+        // 运行中直接失败(与 harness runMaintenance 的同步 busy 语义一致),命令卡给失败态
+        if (busy || agentState === 'working') {
+          pushCmd({ state: 'error', text: 'Agent 正在运行,请先停止或等待完成再压缩' });
+          return true;
+        }
+        // 插入「运行中」命令卡:压缩进行中的可见反馈(替代原先的纯 toast,
+        // 呈现方式对齐 harness 的 CompactionCommandCard 运行行)
+        const id = pushCmd({ state: 'running', text: '正在压缩当前会话上下文…' });
         try {
           const r = await api.request('compact_now', {}, 120000);
-          // 命令反馈走 toast(玻璃胶囊,自动消失),不用底部红色错误横幅:
-          // 压缩成功/无需压缩是信息而非错误,错误横幅只留给真正的失败
-          if (r.compacted) toast.success(`已压缩 ${r.dropCount} 条早期消息,上下文空间已释放`);
-          else toast.info('当前历史较短,无需压缩');
+          // 压缩成功时服务端先广播 history_compacted → 前端重拉历史,
+          // 命令卡随之被「压缩标记行」(CompactionRow)取代;这里先落完成态兜底,
+          // 保证事件重拉失败时用户仍能看到结果(harness:命令卡片折叠进 CompactionItem)
+          if (r.compacted) patchCmd(id, { state: 'ok', text: `已压缩 ${r.dropCount} 条早期消息,上下文空间已释放` });
+          else patchCmd(id, { state: 'ok', text: '当前历史较短,无需压缩' });
         } catch (e) {
-          toast.error((e as Error).message);
+          // 压缩失败(如摘要生成失败/shrink 校验不通过):会话原样保留,
+          // 命令卡显示失败原因(对齐 harness ManualCompactionError 的呈现)
+          patchCmd(id, { state: 'error', text: (e as Error).message || '压缩失败,会话历史保持不变' });
         }
         return true;
       }
@@ -1317,14 +1674,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
 
   const setWorkspace = async (p: string) => {
     try {
-      await api.request('set_workspace', { path: p }, 20000);
+      // sid:当前会话 id;草稿态(尚未创建服务端会话)传 null——服务端只改连接级工作区,
+      // 不重绑旧会话;真正创建会话时(发送首条消息)会捕获"当时的连接工作区"作为自己的绑定
+      await api.request('set_workspace', { path: p, sid: sid && sid !== NEW_SESSION_ID ? sid : null }, 20000);
       onWorkspaceSet(p); setWsBrowserOpen(false); setWsMenuOpen(false);
     } catch (e) { toast.error((e as Error).message); }
   };
 
   const setLocalWorkspace = (p: string) => {
     if (!onLocalWorkspaceSet) return;
-    onLocalWorkspaceSet(p); // App 内负责 set_local_workspace 请求 + 记录历史
+    onLocalWorkspaceSet(p, sid && sid !== NEW_SESSION_ID ? sid : null); // App 内负责 set_local_workspace 请求 + 记录历史
     setLocalWsBrowserOpen(false); setLocalWsMenuOpen(false);
   };
 
@@ -1353,9 +1712,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 发送后等待回答 / agent 工作期间都应允许暂停:busy(服务端 status) 与 agentState 任一命中即视为工作中
   const working = busy || agentState === 'working';
   // 工作中也允许输入发送(自动进入待执行队列,当前轮结束后按序执行);
-  // 连接时需远程工作区,本地模式需本地工作区;
+  // 发送条件:远程或本地工作区任一已选——连接服务器但未选远程工作区时,
+  // 只要选了本地工作区即可发起对话(仅限本地工作,会话归本地任务列表);
   // 模型提问挂起时锁定输入与暂停(须先作答或取消提问);会话切换加载中也锁定,避免发到错误会话
-  const canSend = (connected ? !!workspace : !!localWorkspace) && !askPending && !switching;
+  const canSend = (!!workspace || !!localWorkspace) && !askPending && !switching;
 
   return (
     // 根为 fragment:跳转点(chat-dots)渲染在 chatwrap 之外,作为 tab-body 的子元素
@@ -1367,7 +1727,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {messages.length === 0 && (
             <div className="empty">
               <img className="empty-logo" src="/logo-256.png" alt="" />
-              <div>{connected ? '连接服务器、选择工作区后,即可让 Agent 在远程服务器上工作' : '未连接服务器 · 选择本地工作区后,即可让 Agent 在本机工作'}</div>
+              <div>{connected ? '连接服务器后:选远程工作区可远程+本地工作;只选本地工作区则仅在本机工作' : '未连接服务器 · 选择本地工作区后,即可让 Agent 在本机工作'}</div>
               <div className="muted">例如:「帮我看一下这个项目结构,然后修复 main.js 里的 bug」</div>
             </div>
           )}
@@ -1377,10 +1737,23 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 // 上下文压缩标记行(手动/自动):折叠展示摘要,展开看正文(样式参照 harness CompactionItem)
                 <CompactionRow content={m.content || ''} dropCount={m.compaction.dropCount} manual={m.compaction.manual} />
               )}
-              {m.role === 'notice' && <div className={`bubble ${m.retryNotice ? 'retry-bubble' : 'notice-bubble'}`}>⚠ {m.content}</div>}
+              {m.command && (
+                // 斜杠命令卡片(/compact 等):运行中/成功/失败的可见反馈(样式参照 harness GenericCommandCard)
+                <CommandCard name={m.command.name} state={m.command.state} text={m.command.text} />
+              )}
+              {m.role === 'notice' && (m.retry
+                // 模型请求失败进入重试:harness 风格单行折叠状态行(倒计时 + 可展开详情),非警示横幅
+                ? <div className="retry-msg-wrap"><RetryRow data={m.retry} /></div>
+                : <div className="bubble notice-bubble">⚠ {m.content}</div>)}
               {m.role === 'user' && !m.compaction && (
                 <>
-                  <div className="bubble user-bubble">{m.content}</div>
+                  <div className="bubble user-bubble">
+                    {/* 附件(图片/文件)渲染在正文上方:单图 singleFit,多图方块平铺 */}
+                    {!!m.attachments?.length && (
+                      <MessageAttachments items={m.attachments} onOpen={setLightbox} />
+                    )}
+                    {m.content}
+                  </div>
                   <div className="user-msg-foot">
                     {!!m.time && <span className="user-msg-time">{formatMsgTime(m.time)}</span>}
                     <UserMessageActions
@@ -1399,16 +1772,19 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                         <ToolCallList key={si} tools={seg.tools || []} workspace={(connected ? workspace : localWorkspace) ?? undefined} />
                       );
                       // 思考段:穿插在文本/工具组之间,折叠展示(照搬 dsh 的 ReasoningRow;
-                      // 流式时仅最后一段标记 running 获得扫光)
+                      // 流式时仅最后一段标记 running 获得扫光);ReasoningSegment 按 text 引用 memo
                       if (seg.kind === 'reasoning') {
-                        return (seg.text && seg.text.trim())
-                          ? <ReasoningRow key={si} text={seg.text.trim()} running={m.streaming && si === (m.segments || []).length - 1} />
-                          : null;
+                        return <ReasoningSegment key={si} text={seg.text || ''} running={m.streaming && si === (m.segments || []).length - 1} />;
                       }
-                      return <div key={si}>{renderAssistantContent(seg.text || '') || <AssistantText text={seg.text || ''} />}</div>;
+                      // 正文段:AssistantSegment 按 text 引用 memo,历史段不变时跳过重渲染
+                      return <AssistantSegment key={si} text={seg.text || ''} />;
                     })}
                     {m.streaming && (m.segments || []).length === 0 && <span className="cursor" aria-hidden="true" />}
                   </div>
+                  {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表) */}
+                  {!m.streaming && !!m.filesChanged?.length && (
+                    <FilesChangedCard items={m.filesChanged} workspace={(connected ? workspace : localWorkspace) ?? undefined} />
+                  )}
                   {!m.streaming && (
                     <MessageActions
                       text={segText(m)}
@@ -1450,7 +1826,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         <AskPanel sid={sid} onPendingChange={setAskPending} onBootChange={setAskChecking} />
         {/* 待执行消息队列:对话进行中发送的消息在此排队等待,当前轮结束后按 FIFO 自动执行 */}
         <QueuePanel queue={queue} onRunNow={runQueueNow} onEdit={editQueueItem} onDelete={deleteQueueItem} />
-        <div className="composer-box" ref={composerBoxRef}>
+        <div className={`composer-box ${dragOver ? 'drag-over' : ''}`} ref={composerBoxRef}
+          onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); setDragOver(true); } }}
+          onDragLeave={(e) => { if (e.currentTarget.contains(e.relatedTarget as Node)) return; setDragOver(false); }}
+          onDrop={(e) => {
+            // 拖拽文件到输入卡:整批收纳(图片遵循多模态开关)
+            if (!e.dataTransfer?.files?.length) return;
+            e.preventDefault();
+            setDragOver(false);
+            intakeFiles(Array.from(e.dataTransfer.files));
+          }}>
           {/* / 命令菜单:输入 / (行首或空格后)时浮在输入框上方,前缀优先+模糊匹配过滤 */}
           {slashOpen && (
             <SlashMenu
@@ -1476,6 +1861,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               anchorRef={composerBoxRef}
             />
           )}
+          {/* 草稿附件轨道:粘贴/拖拽/上传的图片与文件(64px 缩略图卡,悬停删除) */}
+          {attachments.length > 0 && (
+            <AttachRail items={attachments} onRemove={removeAttachment}
+              onOpen={(it) => setLightbox({ src: it.previewUrl, alt: it.name })} />
+          )}
           <div className="composer-input">
             {/* 高亮叠加层:文字透明只露出 /技能名 与 @文件名 高亮底;pointer-events 穿透,不挡输入 */}
             <div className="composer-overlay" ref={overlayRef} aria-hidden="true">
@@ -1489,8 +1879,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             <textarea ref={taRef} rows={1} value={input}
               onChange={(e) => { const v = e.target.value; updateInput(v); syncSlash(v); syncAt(v); }}
               onScroll={syncOverlayScroll}
+              onPaste={(e) => {
+                // 粘贴图片/文件:拦截默认行为改为附件收纳(粘贴文本不受影响)
+                const files = Array.from(e.clipboardData?.files || []);
+                if (files.length > 0) { e.preventDefault(); intakeFiles(files); }
+              }}
               placeholder={!connected && !localWorkspace ? '未连接服务器 · 选择本地工作区后即可对话'
-                : connected && !workspace ? '请先选择远程工作区'
+                : connected && !workspace && !localWorkspace ? '请先选择远程工作区或本地工作区'
+                : connected && !workspace ? '未选远程工作区 · 当前仅限本地工作区对话'
                 : askPending ? '请先在提问面板中作答或取消…'
                 : working ? 'Agent 工作中,发送后将进入队列等待执行…'
                 : hasSkillToken ? '输入需求…' : '输入 @ 引用文件、/ 唤起命令与技能菜单…'}
@@ -1570,16 +1966,70 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               }} />
           </div>
           <div className="composer-foot">
+            {/* 左下角:"+"上传附件菜单(图片/文件)+ AI 访问权限模式。
+                图片项仅在模型开启多模态时可用(关闭时给出原因提示) */}
+            <div className="composer-foot-left">
+            <div className="composer-add-wrap" ref={addWrapRef}>
+              <button type="button" className={`composer-add ${addMenuOpen ? 'on' : ''}`}
+                data-tip="添加附件" aria-label="添加附件" aria-haspopup="menu" aria-expanded={addMenuOpen}
+                onClick={() => setAddMenuOpen((v) => !v)}>＋</button>
+              {addMenuOpen && createPortal(
+                (() => {
+                  // portal 定位:菜单底边锚定"+"按钮上方 10px(msm/ws-pick 同语义)。
+                  // 用 bottom 而非 top+translateY(-100%):入场动画 glass-pop 的 transform
+                  // 会临时覆盖静态位移,造成先垂在下方、动画结束瞬移上去的抖动
+                  const chipR = addWrapRef.current?.getBoundingClientRect();
+                  const pos = chipR
+                    ? { left: Math.max(8, chipR.left), bottom: Math.max(12, window.innerHeight - chipR.top + 10) }
+                    : undefined;
+                  return (
+                    <div className="add-menu" role="menu" aria-label="选择上传类型" style={pos}>
+                      <button type="button" role="menuitem" className={`add-menu-item ${multimodal ? '' : 'disabled'}`}
+                        data-tip={multimodal ? undefined : '当前模型未开启多模态(设置 → AI 模型 → 模型「多模态」)'}
+                        onClick={() => {
+                          if (!multimodal) { toast.warning('当前模型未开启多模态,不支持发送图片'); return; }
+                          setAddMenuOpen(false); imgInputRef.current?.click();
+                        }}>
+                        <span className="am-ico" aria-hidden>🖼</span>
+                        <span className="am-main">
+                          <span>图片</span>
+                          <span className="am-desc">{multimodal ? 'PNG / JPG / WebP / GIF…' : '当前模型未开启多模态'}</span>
+                        </span>
+                      </button>
+                      <button type="button" role="menuitem" className="add-menu-item"
+                        onClick={() => { setAddMenuOpen(false); fileInputRef.current?.click(); }}>
+                        <span className="am-ico" aria-hidden>📎</span>
+                        <span className="am-main">
+                          <span>文件</span>
+                          <span className="am-desc">任意类型,文本文件会随消息发给 AI</span>
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })(),
+                document.body
+              )}
+              {/* 隐藏的选择器:菜单项触发,选择后立即上传收纳;onChange 后清空 value 以便重复选择同一文件 */}
+              <input ref={imgInputRef} type="file" accept="image/*" multiple hidden
+                onChange={(e) => { intakeFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
+              <input ref={fileInputRef} type="file" multiple hidden
+                onChange={(e) => { intakeFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
+            </div>
+            {/* AI 访问权限模式(变更前确认/自动编辑/计划模式/完全访问)。
+                仅切换中锁定;草稿态(新会话)也开放选择:模式先存本地,随 session_create 落地 */}
+            <PermissionSelect value={permMode} disabled={switching}
+              onChange={changePermMode} anchorRef={composerBoxRef} />
             <span className="muted composer-tip">{compact ? '点 ➤ 发送 · 换行直接回车' : 'Enter 发送 · Shift+Enter 换行'}</span>
+            </div>
             <ContextMeter messages={messages} input={composedInput}
               contextWindow={llm.effModelContext?.contextWindow || 0} usage={ctxUsage} />
-            {/* 工作中且输入框为空:显示停止按钮;有内容时变为发送按钮,
+            {/* 工作中且输入框为空(且无附件):显示停止按钮;有内容/附件时变为发送按钮,
                 发送后默认进入待执行队列等待执行 */}
-            {working && !askPending && !input.trim()
+            {working && !askPending && !input.trim() && attachments.length === 0
               ? <button className="send-btn stop" onClick={stop} title="停止当前任务">⏹</button>
               : <button className="send-btn"
                   title={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
-                  disabled={!canSend || !input.trim()} onClick={send}>➤</button>}
+                  disabled={!canSend || (!input.trim() && attachments.length === 0)} onClick={send}>➤</button>}
           </div>
         </div>
         {/* 工作区 + 模型:工作区在左,模型在右;模型为二级菜单(模型清单按提供商分组 / 推理等级) */}
@@ -1587,10 +2037,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {connected && (
             <div className="wsbar" ref={wsBarRef}>
               <button
-                className={`ws-chip ${workspace ? '' : 'none'}`}
-                onClick={() => { setWsMenuOpen((v) => !v); setLocalWsMenuOpen(false); }}
+                className={`ws-chip ${workspace ? '' : 'none'}${remoteLocked ? ' locked' : ''}`}
+                disabled={remoteLocked}
+                data-tip={remoteLocked ? '该会话已开始对话,远程工作区已锁定;如需更换请新建会话' : undefined}
+                onClick={() => { if (!remoteLocked) { setWsMenuOpen((v) => !v); setLocalWsMenuOpen(false); } }}
               >
-                <span className="ws-chip-path">{workspace ? `📂 ${lastPathSegment(workspace)}` : '选择远程工作区'}</span>
+                <span className="ws-chip-path">{remoteLocked ? `🔒 ${lastPathSegment(workspace || '') || '远程工作区'}` : (workspace ? `📂 ${lastPathSegment(workspace)}` : '选择远程工作区')}</span>
                 <span className="ws-chip-arrow">{wsMenuOpen ? '▾' : '▸'}</span>
               </button>
               {wsMenuOpen && (
@@ -1628,10 +2080,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           )}
           <div className="wsbar" ref={localWsBarRef}>
             <button
-              className={`ws-chip local ${localWorkspace ? '' : 'none'}`}
-              onClick={() => { setLocalWsMenuOpen((v) => !v); setWsMenuOpen(false); }}
+              className={`ws-chip local ${localWorkspace ? '' : 'none'}${localLocked ? ' locked' : ''}`}
+              disabled={localLocked}
+              data-tip={localLocked ? '该本地会话已开始对话,本地工作区已锁定;如需更换请新建会话' : undefined}
+              onClick={() => { if (!localLocked) { setLocalWsMenuOpen((v) => !v); setWsMenuOpen(false); } }}
             >
-              <span className="ws-chip-path">{localWorkspace ? `🖥 ${lastPathSegment(localWorkspace)}` : '选择本地工作区'}</span>
+              <span className="ws-chip-path">{localLocked ? `🔒 ${lastPathSegment(localWorkspace || '') || '本地工作区'}` : (localWorkspace ? `🖥 ${lastPathSegment(localWorkspace)}` : '选择本地工作区')}</span>
               <span className="ws-chip-arrow">{localWsMenuOpen ? '▾' : '▸'}</span>
             </button>
             {localWsMenuOpen && (
@@ -1685,6 +2139,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         <LocalDirBrowser initial={localWorkspace || localHome || undefined} home={localHome} onClose={() => setLocalWsBrowserOpen(false)} onPick={setLocalWorkspace} />
       )}
     </div>
+    {/* 附件灯箱:草稿轨道与消息里的图片点击放大(Esc/点击遮罩关闭) */}
+    <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
     {/* 用户消息跳转点:absolute 贴对话区(main 内、sidebar 右侧)最左侧,
         不随限宽的聊天内容移动,也不钉在浏览器窗口最左。渲染在 chatwrap 之外:
         chatwrap 是滚动条拇指宿主、会被设为定位元素,放里面会被重新锚定到限宽列 */}

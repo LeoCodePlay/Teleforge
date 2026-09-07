@@ -37,7 +37,9 @@ export interface ToolDef {
   [k: string]: any;
 }
 
-export type GuardFn = (name: string, args: any) => string | void | undefined | Promise<string | void | undefined>;
+// guard 第三参 ctx 为执行上下文({signal, ...invokeCtx},含 sid/session/emit),
+// 供权限守卫读取会话模式并向用户发起审批;同步守卫忽略它即可。
+export type GuardFn = (name: string, args: any, ctx?: any) => string | void | undefined | Promise<string | void | undefined>;
 
 export interface ToolResult {
   isError: boolean;
@@ -139,10 +141,11 @@ export class ToolRegistry {
       return fail(`工具参数不是合法 JSON: ${String(args).slice(0, 200)}`);
     }
 
-    // pre-execute 守卫:任一守卫给出理由即拒绝;守卫只能收紧,不能放行
+    // pre-execute 守卫:任一守卫给出理由即拒绝;守卫只能收紧,不能放行。
+    // await 兼容异步守卫(权限守卫的审批会阻塞到用户作答)
     for (const guard of this.guards) {
       let reason: any;
-      try { reason = guard(name, parsed); } catch { reason = '守卫执行异常'; }
+      try { reason = await guard(name, parsed, { signal, ...(invokeCtx || {}) }); } catch { reason = '守卫执行异常'; }
       if (reason) return fail(`工具调用被拒绝: ${reason}`);
     }
 

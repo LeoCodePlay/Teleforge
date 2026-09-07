@@ -1,4 +1,45 @@
 // 全局配置与常量
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 数据目录:会话/配置/附件等全部持久化落盘位置。
+// - 桌面端:由 Tauri 外壳注入 App 数据目录(DATA_DIR 环境变量)
+// - 独立部署/测试:用环境变量覆盖
+export const DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../data'); // 项目根 data/
+
+// 兼容迁移:旧版本把部分配置(ai-providers/ssh-profiles/ui-state/attachments/prompt-inject 等)
+// 落在 server/data/,统一到 DATA_DIR 后首次启动把缺失文件拷过去,避免已有配置丢失(仅默认路径生效)
+if (!process.env.DATA_DIR) {
+  try {
+    const legacyDir = path.resolve(__dirname, 'data'); // server/data
+    if (fs.existsSync(legacyDir) && legacyDir !== DATA_DIR) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      for (const name of fs.readdirSync(legacyDir)) {
+        const src = path.join(legacyDir, name);
+        const dst = path.join(DATA_DIR, name);
+        if (!fs.existsSync(dst)) {
+          try { fs.cpSync(src, dst, { recursive: true }); } catch { /* 单个失败不阻塞 */ }
+        }
+      }
+    }
+  } catch { /* 迁移失败不影响启动 */ }
+}
+
+// 各持久化文件/目录的统一默认路径(均保留原有环境变量覆盖)
+export const UI_STATE_FILE      = process.env.UI_STATE_FILE      || path.join(DATA_DIR, 'ui-state.json');
+export const SSH_PROFILES_FILE  = process.env.SSH_PROFILES_FILE  || path.join(DATA_DIR, 'ssh-profiles.json');
+export const AI_PROVIDERS_FILE  = process.env.AI_PROVIDERS_FILE  || path.join(DATA_DIR, 'ai-providers.json');
+export const ATTACHMENTS_DIR    = process.env.ATTACHMENTS_DIR    || path.join(DATA_DIR, 'attachments');
+export const AGENT_TOOLS_FILE   = process.env.AGENT_TOOLS_FILE   || path.join(DATA_DIR, 'agent-tools.json');
+export const PROMPT_INJECT_FILE = process.env.PROMPT_INJECT_FILE || path.join(DATA_DIR, 'prompt-inject.md');
+export const CHAT_HISTORY_FILE  = path.join(DATA_DIR, 'chat-history.json');
+export const SESSIONS_FILE      = path.join(DATA_DIR, 'sessions.json');
+export const SESSIONS_DIR       = path.join(DATA_DIR, 'sessions');
+export const SETTINGS_FILE      = path.join(DATA_DIR, 'settings.json');
+
 export const PORT = Number(process.env.PORT || 4000);
 export const HOST = process.env.HOST || '127.0.0.1'; // 默认仅本机访问,避免暴露 ✓
 
@@ -50,10 +91,18 @@ export const AGENT = {
   SPILL_MAX_BYTES: 50_000,
   // 历史工具结果折叠(照搬 harness compaction-tool-result-pruner 默认值):
   // 压缩水位触发时,把 surface 上所有超过 THRESHOLD_CHARS 的工具结果替换为头尾摘要。
+  // ABS_FLOOR_TOKENS:绝对地板——声明窗口虚高(前端兜底 1M)或未配置时,80% 水位永不
+  // 触发,长会话会无治理增长(实测一次分析任务冲到 100k token);地板保证预估请求
+  // (历史 + system + 工具 schema)超过该值就先做一轮"保最近"的折叠。设 0 关闭。
+  // 地板路径独立阈值:水位路径按 harness 8192 保守折叠;地板路径目的是主动压体积,
+  // 用更低阈值(2k)把旧的中等结果(一次 read 30k 默认即 30k 字符)也折叠掉。
   TOOL_RESULT_PRUNE: {
     THRESHOLD_CHARS: 8_192,
     HEAD_CHARS: 4_096,
-    TAIL_CHARS: 1_024
+    TAIL_CHARS: 1_024,
+    ABS_FLOOR_TOKENS: 60_000,
+    ABS_FLOOR_THRESHOLD_CHARS: 2_000,
+    ABS_FLOOR_KEEP_RECENT: 6
   },
   CONCURRENT_TOOL_CALLS: true,  // 并行执行工具调用(agent-loop 的有界滚动池,设 false 回退串行)
   MAX_PARALLEL_TOOL_CALLS: 10,  // 并行工具调用并发上限(照搬 harness DEFAULT_MAX_PARALLEL_TOOL_CALLS)

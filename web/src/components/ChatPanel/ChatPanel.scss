@@ -26,7 +26,11 @@
 .jump-bottom:active { transform: translateY(1px); }
 .empty { text-align: center; color: var(--muted); margin-top: 12vh; font-size: 14px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .empty-logo { width: 72px; height: 72px; opacity: .9; margin-bottom: 6px; user-select: none; -webkit-user-drag: none; }
-.msg { margin-bottom: 14px; display: flex; }
+/* 长会话滚动性能:整条消息(含 markdown/工具卡子树)超出视口即跳过渲染与布局,
+   仅保留占位高度(contain-intrinsic-size:auto 会记住元素最近一次的真实高度,
+   之前渲染过的高度之后依然精确)。会话越长收益越大——滚动、整表布局与悬浮滚动条
+   的 scrollHeight 度量不再随每帧遍历全部消息的完整子树走。 */
+.msg { margin-bottom: 14px; display: flex; content-visibility: auto; contain-intrinsic-size: auto 320px; }
 /* 挂载入场动画只给最新一条消息:历史整表切换/载入时若全部消息同时重放
    msg-in(.25s 淡入+上移),整段会话看起来就从上面"缓缓落下";
    流式追加的最新回复仍保留入场动效,普通消息保持静止。 */
@@ -44,6 +48,9 @@
 /* 上下文压缩标记行(CompactionRow):不是用户气泡,取消 .msg.user 的右对齐,
    整行占满对话宽度、左对齐,低调不打扰对话流(样式参照 harness 的 CompactionItem) */
 .msg.compaction-msg { justify-content: flex-start; align-items: stretch; }
+/* 斜杠命令卡片(CommandCard,/compact 等):同样占满对话宽度、左对齐
+   (样式参照 harness 的 GenericCommandCard) */
+.msg.command { justify-content: flex-start; align-items: stretch; }
 .bubble { max-width: 78%; min-width: 0; padding: 10px 14px; border-radius: var(--r-md); line-height: 1.6; font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
 
 /* 用户气泡:深色玻璃 + 主色淡晕,不套磨砂避免每屏气泡数超 backdrop-filter 额度。
@@ -151,18 +158,46 @@
   to   { opacity: 1; transform: translateY(-50%) translateX(0); }
 }
 
-/* 任务相关提示气泡 / 模型重试提示 */
+/* 任务相关提示气泡 */
 .notice-bubble {
   background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--amber);
   border-radius: var(--r-sm); font-size: 12px; white-space: normal;
   box-shadow: inset 0 1px 0 var(--ins-hl);
 }
-/* 模型请求失败进入重试的提示(重试第 N/M 次):红色警示,区别于普通琥珀色通知 */
-.retry-bubble {
-  background: var(--err-bg); border: 1px solid var(--err-border); color: var(--red);
-  border-radius: var(--r-sm); font-size: 12px; white-space: normal;
-  box-shadow: inset 0 1px 0 var(--ins-hl);
+/* 模型请求失败进入重试的提示(照搬 harness ModelRetryItem):单行折叠状态行,非警示横幅——
+   等待中实时倒计时 + 文字扫光,展开可看重试延迟与失败原因;结束(已重试/已取消)后静态定格 */
+.msg.notice .retry-msg-wrap { width: 100%; display: flex; justify-content: flex-start; }
+.retry-msg {
+  color: var(--muted); font-size: 12px; line-height: 1.6;
 }
+.retry-msg summary {
+  display: inline-flex; align-items: center; gap: 7px; width: fit-content;
+  padding: 2px 0; cursor: pointer; user-select: none; color: inherit; list-style: none;
+}
+.retry-msg summary::-webkit-details-marker { display: none; }
+.retry-msg summary::after {
+  width: 6px; height: 6px; border-right: 1.5px solid currentcolor; border-bottom: 1.5px solid currentcolor;
+  content: ''; opacity: .8; transform: rotate(-45deg); transition: transform 120ms ease;
+}
+.retry-msg[open] summary::after { transform: rotate(45deg); }
+.retry-msg summary:hover { color: var(--text); }
+.retry-msg summary:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; }
+/* 等待重试:文字扫光动画(harness retry shimmer) */
+.retry-msg.active .retry-text {
+  background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 40%, var(--text) 50%, var(--muted) 60%, var(--muted) 100%);
+  background-position: 100% 50%; background-size: 200% 100%;
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  animation: retry-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes retry-shimmer {
+  from { background-position: 100% 50%; }
+  to   { background-position: -100% 50%; }
+}
+.retry-msg .retry-details {
+  display: grid; gap: 2px; margin-top: 3px; padding-left: 14px;
+  overflow-wrap: anywhere; font-size: 11.5px; line-height: 1.6;
+}
+.retry-msg .retry-detail-label { color: var(--muted); }
 .msg.notice { justify-content: center; }
 .md { white-space: normal; }
 .md code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; border: 1px solid var(--code-bor); color: var(--code-ink); }
@@ -262,13 +297,11 @@
 .chatwrap.ask-focus .jump-bottom { display: none; }
 /* 用户消息下的操作栏(复制/删除/回退)同为操作入口,一并隐藏 */
 .chatwrap.ask-focus .user-msg-foot { opacity: 0; }
-/* 收起 composer 玻璃底垫,让提问面板以独立卡片呈现并居中 */
+/* 收起 composer 底部留白,让提问面板以独立卡片呈现并居中 */
 .chatwrap.ask-focus .composer {
-  padding: 6px 14px 10px;
   margin: 2px 12px 12px;
   gap: 0;
 }
-.chatwrap.ask-focus .composer::before { display: none; }
 .chatwrap.ask-focus .ask-panel {
   max-width: 560px; width: 100%; margin: 0 auto;
 }
@@ -276,15 +309,12 @@
 
 /* ---- 启动检查期(ask-boot):刷新后 AskPanel 先向服务端确认有无挂起提问。
    期间隐藏会被提问面板替换的输入区部件(输入框/工具栏/队列/工作区条),
-   且 composer 的玻璃底垫与 ask-focus 同款隐藏——否则会先闪现一个空玻璃框、
-   面板出现后框又消失,仍是两次布局变化。检查期与挂起态的 composer 外形完全一致,
-   "面板直接出现"或"无提问时输入区直接出现",都只发生一次视觉变化 ---- */
+   避免"面板直接出现"或"无提问时输入区直接出现"之外的两次布局变化 ---- */
 .chatwrap.ask-boot .composer-box,
 .chatwrap.ask-boot .composer-toolbar,
 .chatwrap.ask-boot .queue-panel,
 .chatwrap.ask-boot .wsbar-row { display: none; }
-.chatwrap.ask-boot .composer { padding: 6px 14px 10px; margin: 2px 12px 12px; gap: 0; }
-.chatwrap.ask-boot .composer::before { display: none; }
+.chatwrap.ask-boot .composer { margin: 2px 12px 12px; gap: 0; }
 .chatwrap.ask-boot .ask-panel {
   max-width: 560px; width: 100%; margin: 0 auto;
 }
@@ -292,31 +322,15 @@
 
 /* 命令台容器:左侧终端主体 + 右侧终端列表 —— 布局在 console.scss,此处仅输入区 */
 
-/* 输入区:液态玻璃停靠面板(半透明 + 仅背景模糊)——
-   模糊只作用于 ::before 背景层;子元素(输入框/工具栏/工作区条)通过
-   position:relative 抬到绘制层级之上,保持清晰、可点击。
-   任务计划面板(TodoPanel)渲染在本面板之外,不被包进玻璃底 */
+/* 输入区:不做整体玻璃底垫——输入卡片(.composer-box)自身是玻璃,
+   其余部件(工作区条/任务计划面板等)直接铺在透明背景上 */
 .composer {
   position: relative;
   margin: 12px;
   margin-top: 0;
   border-radius: var(--r-lg);
-  padding: 12px; /* 内边距上下左右一致 */
+  padding: 0; /* 取消外层内边距:不做整体玻璃底垫,内容直接铺开 */
   display: flex; flex-direction: column; gap: 8px;
-}
-/* 子元素高于 ::before 背景层:树序在后即可,不借助 z-index/isolation,
-   保证背景层的 backdrop-filter 能采样到页面极光光斑(隔离会形成 backdrop-root) */
-.composer > * { position: relative; }
-.composer::before {
-  content: ''; position: absolute; inset: 0;
-  border-radius: inherit;
-  /* LIQUID_GLASS 规范玻璃底色:半透明渐变,底层光斑透出并被模糊折射 */
-  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
-  border: 1px solid var(--glass-border);
-  /* 三段式玻璃阴影:顶部高光 + 底部微光 + 悬浮投影 */
-  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
 }
 /* 任务计划面板停靠在玻璃面板之外:与面板左右边缘对齐,底部留 8px 缝 */
 .chatwrap > .todo-panel { margin: 0 12px 8px; }
@@ -338,6 +352,18 @@
   border-color: var(--accent-border);
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 0 3px var(--accent-soft), 0 8px 32px var(--accent-soft);
 }
+/* 拖拽文件悬停输入卡时的落点高亮(松手即收纳为附件) */
+.composer-box.drag-over {
+  border-color: var(--accent-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 0 3px var(--accent-soft);
+}
+.composer-box.drag-over::after {
+  content: '松开以添加附件'; position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: inherit; pointer-events: none;
+  background: var(--accent-soft); backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
+  color: var(--accent-2); font-size: 13px; font-weight: 600;
+}
 .composer-box textarea {
   background: transparent; border: none; padding: 2px; min-height: 24px; max-height: 180px;
   resize: none; line-height: 1.5; font-size: 13.5px; width: 100%;
@@ -347,6 +373,8 @@
 .composer-box textarea:focus { border: none; box-shadow: none; background: transparent; }
 .composer-box textarea:disabled { opacity: .5; }
 .composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+/* 左下角分组:"+"附件菜单 + 权限模式 + 发送提示,作为一体与右侧(仪表/发送)两端分布 */
+.composer-foot-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .composer-tip { font-size: 11px; }
 
 /* ---- 输入区:可编辑 textarea + 高亮叠加层(单一文本源,无冻结段/tag) ---- */
@@ -401,6 +429,12 @@
   transition: all .18s;
 }
 .ws-chip:hover:not(:disabled) { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
+/* 已开始对话的会话:工作区锁定,chip 置灰禁点(服务端同样拒绝变更) */
+.ws-chip.locked:disabled {
+  opacity: .62; cursor: not-allowed;
+  color: var(--muted); border-color: var(--glass-border); background: var(--glass-bg);
+  box-shadow: none;
+}
 .ws-chip.none { color: var(--muted); font-family: inherit; }
 /* 本地工作区 chip:绿色系与远程(蓝色)区分 */
 .ws-chip.local { color: var(--green); border-color: var(--ok-border); }
@@ -453,12 +487,12 @@
 @media (max-width: 860px) {
   .chatwrap { max-width: 100%; }
   .chat { padding: 8px 12px 14px; }
-  .composer { margin: 8px; padding: 12px; }
+  .composer { margin: 8px; }
 }
 @media (max-width: 560px) {
   .chat { padding: 6px 8px 12px; }
   .bubble { max-width: 88%; }
-  .composer { margin: 6px; padding: 8px; border-radius: var(--r-md); }
+  .composer { margin: 6px; border-radius: var(--r-md); }
   .composer-box { padding: 8px; border-radius: var(--r-md); }
   .wsbar-row { gap: 6px; }
   .jump-bottom { right: 10px; bottom: 8px; width: 30px; height: 30px; }
@@ -470,7 +504,7 @@
   .chat-dots { display: none; }                 /* 跳转点依赖 hover,触屏隐藏,腾出横向空间 */
 }
 @media (max-width: 767px) {
-  .composer { margin: 0 0 calc(8px + env(safe-area-inset-bottom)); padding: 8px; }
+  .composer { margin: 0 0 calc(8px + env(safe-area-inset-bottom)); }
   .wsbar-row { flex-wrap: wrap; }               /* 两个工作区 chip + 模型菜单换行,不溢出 */
   .wsbar-row .tb-model { min-width: 0; }
   .bubble { max-width: 92%; }

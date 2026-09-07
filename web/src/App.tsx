@@ -13,7 +13,7 @@ import TooltipHost from './components/Tooltip/Tooltip';
 import BottomBar, { type MobileView } from './components/BottomBar/BottomBar';
 import { useIsPhone, useIsTablet, useIsDesktop } from './hooks/useMediaQuery';
 import { useVisualViewportInset } from './hooks/useVisualViewport';
-import { LlmProvider } from './context/llm-context';
+import { useLlm } from './context/llm-context';
 import { useFeedback } from './context/feedback';
 import './App.scss';
 
@@ -81,6 +81,7 @@ function tabIcon(name: string): string {
 // 本地面板起点:真实家目录来自服务端 status 事件(localHome = os.homedir())
 export default function App() {
   const { confirm, toast } = useFeedback();
+  const llm = useLlm(); // 会话级模型记忆:切换会话时保存/恢复各会话用过的模型(见下方 effect)
   const [status, setStatus] = useState<ServerStatus>({
     status: 'disconnected', host: null, port: null, username: null,
     platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null
@@ -347,6 +348,8 @@ export default function App() {
   const handleSessionCreated = (r: any) => {
     bumpOp();
     pendingNewRef.current = false;
+    // 草稿期选定的模型固化到真实会话 id,切回该会话时按此恢复
+    if (r?.active) llm.rememberSessionModel(String(r.active));
     refreshSessions(r, { forceActive: true });
   };
   const deleteSession = async (id: string) => {
@@ -364,6 +367,7 @@ export default function App() {
     bumpOp();
     try {
       const r = await api.request('session_delete', { id }, 8000);
+      llm.forgetSessionModel(id); // 清理该会话的模型记忆残留
       refreshSessions(r); // 草稿态下 refreshSessions 只刷新列表,不会拉回服务端收敛的会话
     } catch (e) {
       if (wasActive) switchSession(id);
@@ -373,6 +377,13 @@ export default function App() {
 
   const statusRef = useRef(status);
   statusRef.current = status;
+
+  // 会话级模型记忆:activeSessionId 变化(切换/新建/删除后收敛/重连恢复)时,
+  // 保存离开会话用的模型、恢复目标会话各自记忆,详见 llm-context 的 trackSession
+  useEffect(() => {
+    llm.trackSession(activeSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
 
   useEffect(() => {
     api.connect();
@@ -427,6 +438,23 @@ export default function App() {
   // 多会话并行:busySessions 是运行中的会话集合;聊天区只关心"当前活跃会话"是否在运行
   const busySessions = status.busySessions || [];
   const activeBusy = activeSessionId != null && busySessions.includes(activeSessionId);
+
+  // 工作区锁定:会话发送首条消息后锁定,不能改——
+  // 远程会话锁远程工作区(本地工作区作辅助仍可改);本地会话锁本地工作区。
+  // 锁定依据 = 服务端 msgCount(已开始对话)或前端"发送那一刻"的本地标记(touchedSessions,
+  // 覆盖发送到 msgCount 落盘回传之间的滞后窗口,保证发送即锁)。UI 据此禁用工作区 chip
+  // (服务端是最终裁决,即使绕过 UI 也会被拒)。
+  const [touchedSessions, setTouchedSessions] = useState<Set<string>>(new Set());
+  const touchSession = (sid: string | null) => {
+    if (!sid || sid === NEW_SESSION_ID) return;
+    setTouchedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
+  };
+  const activeMeta = activeSessionId && activeSessionId !== NEW_SESSION_ID
+    ? sessions.find((s) => s.id === activeSessionId) : undefined;
+  const activeTouched = activeSessionId != null && activeSessionId !== NEW_SESSION_ID && touchedSessions.has(activeSessionId);
+  const activeHasMsg = ((activeMeta?.msgCount ?? 0) > 0) || activeTouched;
+  const remoteLocked = !!activeMeta && activeHasMsg;
+  const localLocked = !!activeMeta && activeHasMsg && !activeMeta.workspace;
 
   // ---- 浏览器式标签页:打开文件 = 在固定页右侧追加标签(已存在则仅激活) ----
   // 文件标签面板常驻挂载,切走仅 CSS 隐藏,未保存修改不丢失
@@ -662,9 +690,10 @@ export default function App() {
   const saveLocalWs = (list: string[]) => localStorage.setItem(LOCAL_WS_KEY, JSON.stringify(list));
   const [localWs, setLocalWs] = useState<string[]>(loadLocalWs);
 
-  // 选择本地工作区:通知服务端切换,记录到历史,并在状态里记住
-  const onSetLocalWorkspace = (p: string) =>
-    api.request('set_local_workspace', { path: p }, 20000)
+  // 选择本地工作区:通知服务端切换,记录到历史,并在状态里记住。
+  // sid = 当前会话 id(草稿态为 null):服务端把绑定写到该会话,草稿态不绑定任何会话
+  const onSetLocalWorkspace = (p: string, sid?: string | null) =>
+    api.request('set_local_workspace', { path: p, sid: sid ?? null }, 20000)
       .then(() => {
         setStatus((s) => ({ ...s, localWorkspace: p }));
         setLocalWs((m) => {
@@ -715,8 +744,23 @@ export default function App() {
     });
   };
 
+  // 任务列表「组内新建」:先切到该分组的工作区,再进入新会话草稿态。
+  // 工作区切换带 sid:null(草稿态),只改连接级工作区、不重绑其他会话;
+  // 先 await 工作区生效再 newSession,避免首条消息早于工作区切换落地。
+  const newInWorkspace = async (ws: string | null, localWs: string | null) => {
+    try {
+      if (ws) {
+        await api.request('set_workspace', { path: ws, sid: null }, 20000);
+        onWorkspaceSet(ws);
+      }
+      if (localWs) await onSetLocalWorkspace(localWs, null);
+      newSession();
+    } catch (e) {
+      toast.error(`切换到工作区失败: ${(e as Error).message}`);
+    }
+  };
+
   return (
-    <LlmProvider>
     <div className="app" style={isPhone && vkInset > 0 ? { paddingBottom: vkInset } : undefined}>
       <header className="topbar">
         <div className="topbar-left">
@@ -775,6 +819,7 @@ export default function App() {
                 scopeLabel={scopeLabel}
                 scopeKey={scopeKey}
                 onNew={newSession}
+                onNewInWorkspace={newInWorkspace}
                 onSwitch={(id) => { switchSession(id); setDrawerOpen(false); }}
                 onSwitchForeign={(id, key) => { switchForeignSession(id, key); setDrawerOpen(false); }}
                 onRename={renameSession}
@@ -817,6 +862,7 @@ export default function App() {
                 scopeLabel={scopeLabel}
                 scopeKey={scopeKey}
                 onNew={() => { newSession(); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
+                onNewInWorkspace={(ws, lws) => { void newInWorkspace(ws, lws).then(() => { setSessionDrawerOpen(false); setActiveTabId('agent'); }); }}
                 onSwitch={(id) => { switchSession(id); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
                 onSwitchForeign={(id, key) => { switchForeignSession(id, key); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
                 onRename={renameSession}
@@ -876,9 +922,10 @@ export default function App() {
               <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
               localHome={status.localHome} savedLocalWs={localWs}
+              remoteLocked={remoteLocked} localLocked={localLocked}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
               onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}
-              onSessionCreated={handleSessionCreated} />
+              onSessionCreated={handleSessionCreated} onSessionTouched={touchSession} />
             </div>
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
             <div className={`tab-pane ${effActiveTabId === 'console' ? '' : 'hide'}`}>
@@ -929,6 +976,5 @@ export default function App() {
       {sshOpen && <SshConnectModal status={status} onClose={() => setSshOpen(false)} />}
       <TooltipHost />
     </div>
-    </LlmProvider>
   );
 }

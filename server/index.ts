@@ -12,6 +12,7 @@ import registerProviders from './api/http/providers.ts';
 import registerUiState from './api/http/ui-state.ts';
 import registerTransfer from './api/http/transfer.ts';
 import registerMedia from './api/http/media.ts';
+import registerAttachments from './api/http/attachments.ts';
 import registerStatic from './api/http/static.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,7 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
   await app.register(registerUiState);
   await app.register(registerTransfer);
   await app.register(registerMedia);
+  await app.register(registerAttachments);
   await app.register(registerStatic); // 最后注册:静态通配不能影响 API 路由
 
   const { wss, termWss } = setupWs(app.server);

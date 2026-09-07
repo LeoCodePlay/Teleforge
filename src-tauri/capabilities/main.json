@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "主窗口能力:本地 loading 页 + 远程应用页(127.0.0.1 任意端口)的 IPC 访问",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"]
+  },
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "allow-download"
+  ]
+}

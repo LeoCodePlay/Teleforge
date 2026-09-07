@@ -4,10 +4,8 @@
 // 前端仅能看到「是否有密码 / 是否有私钥」的布尔标记。
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const SSH_PROFILES_FILE = process.env.SSH_PROFILES_FILE || path.join(__dirname, '..', 'data', 'ssh-profiles.json');
+import { SSH_PROFILES_FILE } from '../config.ts';
+export { SSH_PROFILES_FILE };
 
 export interface SshProfile {
   id: string;

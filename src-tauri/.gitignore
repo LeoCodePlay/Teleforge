@@ -1,0 +1,4 @@
+# Rust/Tauri 构建产物与打包资源(不入库)
+/target/
+/gen/
+/resources/

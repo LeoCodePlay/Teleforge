@@ -1,12 +1,50 @@
-/* ---- 会话侧栏独有样式:历史会话列表 + 跨服务器会话 ---- */
+/* ---- 任务列表面板独有样式:工作区分组 + 会话行 + 跨服务器会话 ---- */
 
 /* 面板根节点:填满上分栏,标题/作用域固定,列表区独立滚动 */
 .s-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: none; }
 .s-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 
-/* ---- 历史会话列表 ---- */
-.sessions { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+/* ---- 分区(远程任务列表 / 本地任务列表) ---- */
+.s-section { margin-top: 10px; }
+.s-section-title {
+  font-size: 11px; color: var(--muted); margin-bottom: 4px; padding: 0 10px;
+  display: flex; align-items: center; gap: 6px;
+}
 .s-scope { margin-top: 6px; font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- 工作区分组头:折叠箭头 + 图标 + 路径名 + 计数 + 组内新建 ---- */
+.s-group { margin-top: 2px; }
+.s-group-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; margin-top: 4px;
+  border-radius: var(--r-md); border: 1px solid transparent;
+  cursor: pointer; user-select: none;
+  font-size: 12px; color: var(--text);
+  transition: all .18s ease;
+}
+.s-group-header:hover { background: var(--glass-bg-hover); border-color: var(--glass-border); }
+.s-group-header .s-group-caret {
+  flex: none; font-size: 10px; color: var(--muted); width: 10px; text-align: center;
+  transition: transform .18s ease;
+}
+.s-group-header.open .s-group-caret { transform: rotate(90deg); }
+.s-group-header .s-group-ico { flex: none; font-size: 12px; }
+.s-group-header .s-group-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 600;
+}
+.s-group-header .s-run { color: var(--green); font-size: 11px; flex: none; animation: s-run-pulse 1.2s ease-in-out infinite; }
+.s-group-header .s-group-count {
+  flex: none; font-size: 10px; color: var(--muted); background: var(--glass-bg-hover);
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 0 5px; line-height: 15px;
+}
+/* 组内新建按钮:悬停分组时才浮现(与行尾 ⋮ 同款交互) */
+.s-group-header .s-group-actions { display: flex; gap: 2px; opacity: 0; transition: opacity .15s ease; }
+.s-group-header:hover .s-group-actions { opacity: 1; }
+.s-group-header .s-group-add { font-size: 13px; line-height: 1; padding: 0 4px; }
+
+/* ---- 分组内会话行 ---- */
+.s-group-body { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .session-item {
   display: flex; align-items: center; gap: 6px; padding: 7px 10px;
   height: 33px; box-sizing: border-box;   /* 固定行高:列表行距统一稳定 */
@@ -60,9 +98,11 @@
 @media (max-width: 767px) {
   .session-item { min-height: 46px; padding: 8px 12px; height: auto; }
   .s-panel { padding: 10px 12px; }
+  .s-group-header { padding: 8px 12px; }
 }
 /* 触屏设备:hover 不存在,时间与 ⋮ 操作常显(桌面仍是悬停浮现) */
 @media (hover: none) and (pointer: coarse) {
   .session-item .s-meta,
   .session-item .s-actions { opacity: 1; }
+  .s-group-header .s-group-actions { opacity: 1; }
 }

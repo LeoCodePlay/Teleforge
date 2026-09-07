@@ -9,6 +9,25 @@ import './llm-context.scss';
 const LS = (k: string, v: string) => localStorage.getItem('sshai.' + k) || v;
 const LSS = (k: string, v: string) => localStorage.setItem('sshai.' + k, v);
 const initialProviderId = () => LS('llm.provider', '') || DEFAULT_PROVIDER;
+
+// 会话级模型记忆:每个对话(会话)记住自己"进行时使用的模型"(提供方+模型+自定义模型名),
+// 切换会话时恢复各自记忆,在一个会话里切换模型不会影响其他会话;
+// 会话无记忆时才回落提供方级默认(llm.model.<pid>)。存 localStorage,刷新不丢。
+export interface SessionModelMem {
+  providerId: string;
+  model: string;
+  customModel: string;
+}
+const SESSION_MODELS_KEY = 'sshai.llm.sessionModels';
+function loadSessionModels(): Record<string, SessionModelMem> {
+  try {
+    const o = JSON.parse(localStorage.getItem(SESSION_MODELS_KEY) || '{}');
+    return o && typeof o === 'object' ? o : {};
+  } catch { return {}; }
+}
+function saveSessionModels(m: Record<string, SessionModelMem>) {
+  try { localStorage.setItem(SESSION_MODELS_KEY, JSON.stringify(m)); } catch {}
+}
 // 删除对象某个 key 并返回新对象(避免直接修改 React 状态里的对象)
 const omitKey = <T extends Record<string, unknown>>(o: T, k: string): T => {
   const n = { ...o };
@@ -41,6 +60,12 @@ export interface LlmContextValue {
   effBaseUrl: string;
   effKey: string;
   switchProvider: (id: string) => void;
+  /** 会话级模型记忆:会话切换时保存离开会话用的模型、恢复目标会话各自记忆(见 trackSession 实现) */
+  trackSession: (sid: string | null) => void;
+  /** 将当前生效模型固化到指定会话(新会话发送首条消息成功后迁移草稿期模型) */
+  rememberSessionModel: (sid: string) => void;
+  /** 遗忘某会话的模型记忆(会话删除时调用) */
+  forgetSessionModel: (sid: string) => void;
   addProvider: (d: ProviderDraft) => Promise<boolean>;
   updateProvider: (id: string, d: ProviderDraft) => Promise<boolean>;
   duplicateProvider: (id: string) => Promise<void>;
@@ -143,10 +168,27 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     : provider.models.length === 0 ? model
       : model === '__custom__' ? customModel
         : (model || provider.models[0] || '');
-  // 当前模型生效的上下文能力:该模型显式配置优先,否则全局兜底默认(1M/32k)
-  const effModelContext: ModelContextConfig = provider.modelConfig?.[effModel] || FALLBACK_CONTEXT;
+  // 当前模型生效的上下文能力:该模型显式配置优先,缺字段逐项回落到全局默认(1M/32k)。
+  // 不能把"只配了输出上限/多模态、没配上下文窗口"的条目当成窗口=0——
+  // 否则上下文仪表盘消失、服务端压缩被误禁用(与未配置模型回落默认的语义保持一致)
+  const _lcCfg = provider.modelConfig?.[effModel];
+  const effModelContext: ModelContextConfig = _lcCfg
+    ? {
+        contextWindow: _lcCfg.contextWindow || FALLBACK_CONTEXT.contextWindow,
+        maxTokens: _lcCfg.maxTokens || FALLBACK_CONTEXT.maxTokens,
+        multimodal: _lcCfg.multimodal === true
+      }
+    : FALLBACK_CONTEXT;
   const effBaseUrl = provider.baseUrl;
   const effKey = isMock ? '' : apiKey;
+
+  // 统一生效的 llm 下发载荷(baseUrl/key/model + 上下文能力 + 多模态开关)
+  const llmPayload = () => ({
+    baseUrl: effBaseUrl, apiKey: effKey, model: effModel,
+    contextWindow: effModelContext.contextWindow || 0,
+    maxTokens: effModelContext.maxTokens || 0,
+    multimodal: effModelContext.multimodal === true
+  });
 
   // 切换提供商:恢复该条目的 Key 与上次使用的模型(优先后端保存的选择级配置)
   const switchProvider = (pid: string) => {
@@ -155,6 +197,52 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     setApiKey(p?.apiKey || uiStateData.keys?.[pid] || LS('llm.key.' + pid, ''));
     const saved = uiStateData.models?.[pid] || LS('llm.model.' + pid, '');
     setModel(saved || p?.models?.[0] || '');
+  };
+
+  // ---- 会话级模型记忆 ----
+  // 记忆表:会话 id → {providerId, model, customModel},localStorage 同步持久化(刷新不丢)。
+  // curSidRef 记录当前模型记忆绑定的会话:模型每次变化立即固化到该会话(避免改完模型直接
+  // 刷新丢失),切会话时 trackSession 再把"离开会话"的模型补存、并恢复目标会话的记忆。
+  const sessionModelsRef = useRef<Record<string, SessionModelMem>>(loadSessionModels());
+  const curSidRef = useRef<string | null>(null);
+  // 模型/提供方/自定义模型名变化:立即固化到当前会话
+  useEffect(() => {
+    const sid = curSidRef.current;
+    if (!sid) return;
+    sessionModelsRef.current[sid] = { providerId, model, customModel };
+    saveSessionModels(sessionModelsRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerId, model, customModel]);
+
+  // 会话切换(由 App 在 activeSessionId 变化时调用):保存离开会话用的模型 + 恢复目标会话记忆。
+  // 新会话草稿(尚未创建服务端会话,固定 sid '__new__')不恢复历史残留——新建对话跟随当前模型
+  const trackSession = (sid: string | null) => {
+    const prev = curSidRef.current;
+    curSidRef.current = sid;
+    if (prev && prev !== sid) {
+      sessionModelsRef.current[prev] = { providerId, model, customModel };
+      saveSessionModels(sessionModelsRef.current);
+    }
+    if (!sid || sid === '__new__') return;
+    const mem = sessionModelsRef.current[sid];
+    if (!mem) return;
+    if (mem.providerId && mem.providerId !== providerId) switchProvider(mem.providerId);
+    if (mem.model && mem.model !== model) setModel(mem.model);
+    if (mem.customModel !== customModel) setCustomModel(mem.customModel);
+  };
+  // 将当前生效模型固化到指定会话:新会话草稿发送首条消息成功后,把草稿期选定的模型
+  // 记到真实会话 id,切回该会话时按此恢复
+  const rememberSessionModel = (sid: string) => {
+    if (!sid) return;
+    sessionModelsRef.current[sid] = { providerId, model, customModel };
+    saveSessionModels(sessionModelsRef.current);
+  };
+  // 遗忘某会话的模型记忆(会话删除后清掉残留)
+  const forgetSessionModel = (sid: string) => {
+    if (sid && sessionModelsRef.current[sid]) {
+      delete sessionModelsRef.current[sid];
+      saveSessionModels(sessionModelsRef.current);
+    }
   };
 
   // 写回「我的提供商」的 Key:去抖后保存到服务端配置文件(随条目删除一并删除)
@@ -176,16 +264,8 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
 
   // 应用 + 持久化(切换/修改即生效)
   useEffect(() => {
-    // 该模型的上下文能力(输入窗口/输出上限):显式配置优先,否则用全局默认 1M/32k
-    const cfg = provider.modelConfig?.[effModel] || FALLBACK_CONTEXT;
     // 单轮最大工具迭代次数固定用全局默认(AGENT.MAX_ITERS=500),不再由前端单独配置
-    api.send('llm', {
-      llm: {
-        baseUrl: effBaseUrl, apiKey: effKey, model: effModel,
-        contextWindow: cfg.contextWindow || 0,
-        maxTokens: cfg.maxTokens || 0
-      }
-    });
+    api.send('llm', { llm: llmPayload() });
     LSS('llm.provider', providerId);
     LSS('llm.customModel', customModel);
     if (isMock) localStorage.removeItem('sshai.llm.model.' + providerId);
@@ -219,25 +299,18 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       } catch { /* 后端写失败不阻塞 UI,下次变更会重试 */ }
     }, 400);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId, apiKey, model, customModel, isMock]);
+  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, apiKey, model, customModel, isMock]);
 
   // 后端重启/WS 断线重连后:agent.llm 是后端内存态,重启即清空。
   // 前端不刷新时不会重新触发上面的配置 effect,这里监听 open 重连后按当前生效
   // 配置重新下发,否则重连后的第一条消息会因「尚未配置 LLM」被拒(且无提示,表现为发送没反应)。
   useEffect(() => {
     const off = api.on('open', () => {
-      const cfg = provider.modelConfig?.[effModel] || FALLBACK_CONTEXT;
-      api.send('llm', {
-        llm: {
-          baseUrl: effBaseUrl, apiKey: effKey, model: effModel,
-          contextWindow: cfg.contextWindow || 0,
-          maxTokens: cfg.maxTokens || 0
-        }
-      });
+      api.send('llm', { llm: llmPayload() });
     });
     return () => { off(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId]);
+  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal]);
 
   // ---- 添加 / 编辑 / 复制 / 删除「我的提供商」(增删改均写入服务端配置文件) ----
   // 添加成功后自动切换为当前使用;返回 true/false 供弹窗决定是否关闭
@@ -299,7 +372,10 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       const r = await fetch('/api/providers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: p.name + '(副本)', baseUrl: p.baseUrl, models: p.models, apiKey: p.apiKey })
+        body: JSON.stringify({
+          name: p.name + '(副本)', baseUrl: p.baseUrl, models: p.models, apiKey: p.apiKey,
+          ...(p.modelConfig ? { modelConfig: p.modelConfig } : {})
+        })
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || '复制失败');
@@ -339,7 +415,8 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     userProviders, allProviders, providerId, provider, isUser, isMock,
     model, setModel, customModel, setCustomModel, apiKey, setApiKey,
     effModel, effModelContext, effBaseUrl, effKey,
-    switchProvider, addProvider, updateProvider, duplicateProvider, removeProvider,
+    switchProvider, trackSession, rememberSessionModel, forgetSessionModel,
+    addProvider, updateProvider, duplicateProvider, removeProvider,
     err, setErr
   };
   // 提供方配置未就绪前不渲染应用:避免首帧 provider 缺失回退为 mock、请求返回后再跳变引起的抖动

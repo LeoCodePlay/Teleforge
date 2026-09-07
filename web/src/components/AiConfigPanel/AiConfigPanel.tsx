@@ -3,6 +3,7 @@
 // 仅作为「添加提供方」弹窗里的快速填充模板(预置了标准接口地址,免手输 Base URL)
 // 状态与聊天输入框下方的切换器共享(见 llm-context.tsx)
 import React, { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useLlm } from '../../context/llm-context';
 import { PROVIDERS, getDefaultModelContext } from '../../data/llm-providers';
 import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../../types';
@@ -55,13 +56,16 @@ export default function AiConfigPanel() {
       </div>
 
       {/* ---- 预置提供商不单独展示:预置仅是模板(标准接口地址),添加提供方时可快速填充 ---- */}
-      {/* 添加 / 编辑提供商弹窗 */}
-      {modal && (
+      {/* 添加 / 编辑提供商弹窗:portal 到 body——设置弹窗自身带 backdrop-filter,
+          嵌套其中会成为 backdrop-root,导致本弹窗 blur 采不到真实页面(玻璃失效、文字透出)。
+          与重命名弹窗同一处理(见 SessionPanel) */}
+      {modal && createPortal(
         <ProviderModal
           editProvider={modal.provider || null}
           onClose={() => setModal(null)}
           onSave={handleSave}
-        />
+        />,
+        document.body
       )}
     </div>
   );
@@ -120,21 +124,31 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // 直接更新某模型的上下文配置(输入窗口/输出上限);两项都为空时清除该条配置
-  const updateModelCfg = (m: string, field: 'contextWindow' | 'maxTokens', raw: string) => {
-    const n = Math.floor(Number(raw));
+  // 直接更新某模型的能力配置(上下文窗口/输出上限/多模态);全部为空/关闭时清除该条配置。
+  // multimodal 用 '1'/'' 两个字符串值复用同一签名(数字字段走 Number 解析)
+  const updateModelCfg = (m: string, field: 'contextWindow' | 'maxTokens' | 'multimodal', raw: string) => {
     setModelConfig((cur) => {
       const next = { ...cur };
       const prev = next[m] || {};
       const merged: ModelContextConfig = {};
-      if (field === 'contextWindow') {
-        if (prev.maxTokens) merged.maxTokens = prev.maxTokens;
-        if (n > 0) merged.contextWindow = n;
-      } else {
+      if (field === 'multimodal') {
         if (prev.contextWindow) merged.contextWindow = prev.contextWindow;
-        if (n > 0) merged.maxTokens = n;
+        if (prev.maxTokens) merged.maxTokens = prev.maxTokens;
+        if (raw === '1') merged.multimodal = true;
+      } else {
+        const n = Math.floor(Number(raw));
+        if (prev.contextWindow) merged.contextWindow = prev.contextWindow;
+        if (prev.maxTokens) merged.maxTokens = prev.maxTokens;
+        if (field === 'contextWindow') {
+          delete merged.contextWindow;
+          if (n > 0) merged.contextWindow = n;
+        } else {
+          delete merged.maxTokens;
+          if (n > 0) merged.maxTokens = n;
+        }
+        if (prev.multimodal) merged.multimodal = true;
       }
-      if (merged.contextWindow || merged.maxTokens) next[m] = merged;
+      if (merged.contextWindow || merged.maxTokens || merged.multimodal) next[m] = merged;
       else delete next[m];
       return next;
     });
@@ -218,7 +232,12 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
     else setSaving(false);
   };
 
-  return (
+  // portal 到 body:本弹窗内联在设置面板里,而 .settings 自带 backdrop-filter ——
+  // 按 Chromium backdrop-root 机制,内层 .modal 的液态玻璃只能采样到设置面板内部、
+  // 采不到真实页面,玻璃退化成半透明平色(能看清弹窗后面的文字);且该祖先会成为
+  // fixed 遮罩的包含块,遮罩也被困在面板内。portal 出去与设置弹窗同层才生效
+  // (同 SessionPanel 重命名弹窗的处理)
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal provider-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
@@ -268,9 +287,21 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                   const cfg = modelConfig[m] || {};
                   const dflt = getDefaultModelContext(m);
                   const fmt = (n?: number) => (n ? (n >= 1000000 ? (n / 1000000) + 'M' : n >= 1000 ? (n / 1000) + 'k' : String(n)) : '');
+                  const mm = cfg.multimodal === true;
                   return (
                     <div key={m} className="model-config-row">
                       <span className="mc-name" data-tip={m}>{m}</span>
+                      {/* 多模态开关:开启后聊天输入框支持粘贴/上传图片(模型支持看图才勾选) */}
+                      <label className="mc-field mc-mm" data-tip={mm ? '已开启:聊天中可发送图片' : '开启后聊天中可向该模型发送图片'}>
+                        <span>多模态</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={mm}
+                          className={`mc-switch ${mm ? 'on' : ''}`}
+                          onClick={() => updateModelCfg(m, 'multimodal', mm ? '' : '1')}
+                        ><span className="mc-knob" /></button>
+                      </label>
                       <label className="mc-field">
                         <span>上下文</span>
                         <input type="number" min={0} step={1000}
@@ -323,6 +354,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

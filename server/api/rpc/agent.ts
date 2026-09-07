@@ -6,14 +6,19 @@ import type { RpcModule } from './router.ts';
 
 export function registerAgent(rpc: RpcModule) {
   rpc.register('speak', async (msg, { reply, send, emitStatus }) => {
-    // 原 ws.js speak case(445-458)逐字复制
-    if (!msg.text?.trim()) throw new Error('指令为空');
+    // 原 ws.js speak case(445-458)逐字复制;附件(图片/文件/视频)为后加能力:
+    // 纯附件消息允许 text 为空,附件按 id 解析,元数据以服务端存储为准
+    const hasAttachments = Array.isArray(msg.attachments) && msg.attachments.length > 0;
+    if (!msg.text?.trim() && !hasAttachments) throw new Error('指令为空');
     // 可连服务器对话(操作远程+本地),也可不连服务器仅操作本地工作区
     if (!ssh.workspace && !localFs.workspace) throw new Error('请先选择远程工作区或本地工作区');
     // 不 await:流式回收,事件经 send 推送;reasoning 为推理等级(default|off|low|high|xhigh|max)
     // 提交到当前活跃会话:该会话空闲时开新轮,运行中自动进入待执行队列(当前轮结束后按序执行)
     // 其他会话的运行不受影响(多会话并行)
-    Promise.resolve(agent.submit(agent.sessionId, msg.text, { reasoning: msg.reasoning || 'default' }))
+    Promise.resolve(agent.submit(agent.sessionId, msg.text || '', {
+      reasoning: msg.reasoning || 'default',
+      attachments: hasAttachments ? msg.attachments : null
+    }))
       .catch((e) => send({ type: 'agent', event: 'error', message: e.message, sid: agent.sessionId }))
       .finally(() => { emitStatus(); send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId }); });
     emitStatus(); // busy 立即置位,让前端马上显示"停止/暂停"
@@ -29,7 +34,25 @@ export function registerAgent(rpc: RpcModule) {
 
   rpc.register('get_history', async (msg, { reply }) => {
     // 原 ws.js get_history case(210-212)逐字复制
-    reply({ type: 'history', turns: agent.getHistory(), todos: agent.currentTodos(), queue: agent.queueSnapshot(agent.sessionId) });
+    // permissionMode:当前会话的访问权限模式,前端输入区左下角选择器据此回显
+    reply({ type: 'history', turns: agent.getHistory(), todos: agent.currentTodos(), queue: agent.queueSnapshot(agent.sessionId), permissionMode: agent.getPermissionMode() });
+  });
+
+  rpc.register('permission_get', async (msg, { reply }) => {
+    // 当前会话的访问权限模式(变更前确认/自动编辑/计划模式/完全访问)
+    reply({ type: 'permission', mode: agent.getPermissionMode() });
+  });
+
+  rpc.register('permission_default_get', async (msg, { reply }) => {
+    // 全局默认访问权限模式(settings-store 持久化):新建会话继承的档位。
+    // 新会话草稿态(尚未创建会话)据此回显输入区左下角的权限选择器。
+    reply({ type: 'permission_default', mode: agent.getDefaultPermissionMode() });
+  });
+
+  rpc.register('permission_set', async (msg, { reply }) => {
+    // 切换当前会话的访问权限模式:写入会话事件日志(可回放/分支继承)并广播
+    // permission_changed;该档位同时持久化为全局默认,新会话直接继承
+    reply({ type: 'permission', mode: agent.setPermissionMode(msg.mode) });
   });
 
   rpc.register('clear_history', async (msg, { reply, send }) => {
@@ -51,22 +74,27 @@ export function registerAgent(rpc: RpcModule) {
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });
 
-  rpc.register('session_create', async (msg, { reply }) => {
+  rpc.register('session_create', async (msg, { reply, emitStatus }) => {
     // 原 ws.js session_create case(228-233)逐字复制
     // 多会话并行:新建/切换不影响其他会话的运行
+    // permissionMode:新会话生效的访问权限模式(=全局默认,见 settings-store),
+    // 前端草稿态据此对齐权限选择器,避免"用户设了完全访问、新会话却显示变更前确认"
     const s = agent.createSession(msg.title);
-    reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId, created: s });
+    emitStatus(); // 新会话已捕获并应用绑定工作区,同步下发状态
+    reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId, created: s, permissionMode: agent.getPermissionMode(s.id) });
   });
 
-  rpc.register('session_switch', async (msg, { reply }) => {
+  rpc.register('session_switch', async (msg, { reply, emitStatus }) => {
     // 原 ws.js session_switch case(234-238)逐字复制
     agent.switchSession(msg.id);
+    emitStatus(); // 切回会话时把绑定工作区应用到活动连接,下发新工作区供 UI 自动跟随
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });
 
-  rpc.register('session_delete', async (msg, { reply }) => {
+  rpc.register('session_delete', async (msg, { reply, emitStatus }) => {
     // 原 ws.js session_delete case(239-243)逐字复制
     agent.deleteSession(msg.id);
+    emitStatus(); // 删除活跃会话后 _settleActive 收敛到新会话,同步其绑定工作区
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });
 
@@ -76,11 +104,12 @@ export function registerAgent(rpc: RpcModule) {
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });
 
-  rpc.register('session_fork', async (msg, { reply }) => {
+  rpc.register('session_fork', async (msg, { reply, emitStatus }) => {
     // 原 ws.js session_fork case(248-254)逐字复制
     // 从当前活跃会话创建分支(at 为 turns 索引,截断到该条消息为止;
-    // 缺省 -1 从尾部整体克隆)并切换
+    // 缺省 -1 从尾部整体克隆)并切换;分支继承源会话的工作区绑定
     const forked = agent.forkSession(typeof msg.at === 'number' && msg.at >= 0 ? msg.at : -1);
+    emitStatus();
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId, created: forked });
   });
 

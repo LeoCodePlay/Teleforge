@@ -5,10 +5,8 @@
 // 默认存 server/data/ui-state.json(已被 .gitignore 忽略,含 API Key,不做版本入库);可用环境变量覆盖路径。
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const UI_STATE_FILE = process.env.UI_STATE_FILE || path.join(__dirname, '..', 'data', 'ui-state.json');
+import { UI_STATE_FILE } from '../config.ts';
+export { UI_STATE_FILE };
 
 export interface UiState {
   providerId: string;

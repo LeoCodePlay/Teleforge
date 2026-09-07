@@ -30,7 +30,7 @@ const scratchRpc = () => {
 
 const GOLDEN = {
   ssh:      ['connect', 'disconnect', 'conn_disconnect', 'conn_switch', 'ssh_profiles_list', 'ssh_profile_save', 'ssh_profile_delete'],
-  agent:    ['speak', 'stop_agent', 'get_history', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
+  agent:    ['speak', 'stop_agent', 'get_history', 'permission_get', 'permission_default_get', 'permission_set', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
   skills:   ['skills_list', 'skill_get', 'skill_save', 'skill_delete', 'skill_copy_builtin'],
   config:   ['llm', 'get_status', 'tools_list', 'tool_toggle', 'prompt_inject_get', 'prompt_inject_set'],
   local:    ['list_local_dir', 'read_local_file', 'write_local_file', 'create_local_dir', 'local_delete', 'local_copy', 'local_rename', 'set_local_workspace'],
@@ -67,7 +67,7 @@ const router = createRpcRouter({
   emitStatus() {},
   syncAgentScope() {}
 });
-check('router 注册全部 58 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
+check('router 注册全部 60 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
   `缺/多: ${sorted(router.types()).filter((t) => !ALL_TYPES.includes(t)).join(',') || '(无)'}`);
 
 // 重复注册被拒

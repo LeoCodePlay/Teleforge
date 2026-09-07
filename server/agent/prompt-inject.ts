@@ -6,10 +6,7 @@
 // - 存储:server/data/prompt-inject.md,本机可读写
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const INJECT_FILE = process.env.PROMPT_INJECT_FILE || path.join(__dirname, '..', 'data', 'prompt-inject.md');
+import { PROMPT_INJECT_FILE as INJECT_FILE } from '../config.ts';
 
 /** 读取全局指令注入内容(文件不存在或为空返回空串) */
 export function getPromptInject(): string {

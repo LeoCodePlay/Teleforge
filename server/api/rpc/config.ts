@@ -35,7 +35,7 @@ export function registerConfig(rpc: RpcModule) {
   rpc.register('prompt_inject_get', async (msg, { reply }) => {
     // 原 ws.js prompt_inject_get case(300-302)逐字复制
     // 全局指令注入(移植自 dsh-purge 插件:prompt-inject.md)
-    reply({ type: 'ok', content: getPromptInject(), file: 'server/data/prompt-inject.md' });
+    reply({ type: 'ok', content: getPromptInject(), file: 'data/prompt-inject.md' });
   });
 
   rpc.register('prompt_inject_set', async (msg, { reply }) => {

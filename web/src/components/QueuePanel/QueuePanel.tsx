@@ -5,10 +5,12 @@
 import React from 'react';
 import './QueuePanel.scss';
 
-/** 待执行队列项(与后端 queueSnapshot 的 {id, text} 结构一致) */
+/** 待执行队列项(与后端 queueSnapshot 的 {id, text, attach} 结构一致;attach=附件数) */
 export interface QueueItem {
   id: number;
   text: string;
+  /** 该条消息携带的附件数(0/缺省 = 无附件) */
+  attach?: number;
 }
 
 // 操作图标:同消息操作栏的线性风格
@@ -50,10 +52,11 @@ export default function QueuePanel({ queue, onRunNow, onEdit, onDelete }: QueueP
           <div className="queue-item" key={item.id}>
             <span className="queue-idx">{i + 1}</span>
             <span className="queue-text" title={item.text}>{item.text}</span>
+            {!!item.attach && <span className="queue-attach" title={`${item.attach} 个附件`}>📎 {item.attach}</span>}
             <span className="queue-status">等待执行</span>
             <div className="queue-actions">
               <button type="button" className="queue-action action-icon" aria-label="立即执行"
-                data-tip="立即执行:注入当前对话,不等待队列,由 Agent 在下一步响应"
+                data-tip="立即执行:打断当前回复,立即切换回复这条消息"
                 onClick={() => onRunNow(item)}>
                 <IconRun />
               </button>
