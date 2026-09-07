@@ -109,8 +109,11 @@ async function dirSize(dir) {
   let total = 0;
   for (const ent of await fsp.readdir(dir, { withFileTypes: true })) {
     const p = path.join(dir, ent.name);
+    // npm 的 .bin 在 Linux/mac 上是符号链接(指向 ../<pkg>/cli.js),悬空或指向
+    // 已剔除的包时 stat 会 ENOENT;符号链接不计体积,直接跳过
+    if (ent.isSymbolicLink()) continue;
     if (ent.isDirectory()) total += await dirSize(p);
-    else total += (await fsp.stat(p)).size;
+    else total += await fsp.stat(p).catch(() => 0);
   }
   return total;
 }
@@ -149,6 +152,11 @@ async function main() {
   const entry = path.join(OUT, 'server', 'index.ts');
   if (!fs.existsSync(entry)) throw new Error('server/index.ts 缺失');
   console.log(`   server/index.ts ✓`);
+  // node-pty 原生绑定必须真实可加载(否则打包出的终端在后端启动即崩);
+  // cwd 指向资源根,让 require('node-pty') 解析到 OUT/node_modules
+  const pty = spawnSync(nodeBin, ['-e', "require('node-pty')"], { cwd: OUT, encoding: 'utf8' });
+  if (pty.status !== 0) throw new Error('node-pty 原生绑定缺失或无法加载,请确认 npm 已允许其 install scripts(allowScripts)');
+  console.log(`   node-pty 绑定可加载 ✓`);
   const sizeMB = (await dirSize(OUT)) / 1024 / 1024;
   console.log(`完成:${OUT} 共 ${sizeMB.toFixed(1)} MB,耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   await fsp.rm(STAGING, { recursive: true, force: true });

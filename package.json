@@ -9,6 +9,11 @@
   "engines": {
     "node": ">=22.18"
   },
+  "allowScripts": {
+    "node-pty": true,
+    "ssh2": true,
+    "cpu-features": true
+  },
   "scripts": {
     "dev": "concurrently -k -n SRV,WEB -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "node scripts/dev-server.mjs",
