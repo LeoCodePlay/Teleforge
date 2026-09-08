@@ -105,8 +105,11 @@ export function setupWs(httpServer: Server) {
       platform: active?.platform ?? null,
       home: active?.home ?? null,
       workspace: active?.workspace ?? null,
+      // 「不在工作区对话」(全盘模式)标记:远程取真实活动连接,与上一行同理不用 ALS 门面
+      noWorkspace: active?.noWorkspace ?? false,
       ...ssh.snapshot(), // { activeConn, conns: [...] }
       localWorkspace: localFs.workspace,
+      localNoWorkspace: localFs.noWorkspace,
       localHome: localFs.home,
       agentBusy: agent.busyNow,
       busySessions: agent.busyIds(),

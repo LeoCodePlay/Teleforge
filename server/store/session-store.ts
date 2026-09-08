@@ -21,9 +21,13 @@ export interface SessionMeta {
   createdAt: number;
   updatedAt: number;
   msgCount: number;
-  /** 会话绑定的远程工作区(连接服务器时执行目录);null/缺失 = 未绑定,执行时回落连接级工作区 */
+  /**
+   * 会话绑定的远程工作区(连接服务器时执行目录)。
+   * 三种取值:目录路径 / NO_WORKSPACE(「不在工作区对话」,边界=整台服务器)
+   * / null·缺失(未绑定,执行时回落连接级工作区)
+   */
   workspace?: string | null;
-  /** 会话绑定的本地工作区;null/缺失 = 未绑定,执行时回落全局本地工作区 */
+  /** 会话绑定的本地工作区;同样可为 NO_WORKSPACE(边界=整台电脑)或 null·缺失(回落全局值) */
   localWorkspace?: string | null;
 }
 

@@ -2,6 +2,7 @@
 //                  local_delete / local_copy / set_local_workspace
 import path from 'node:path';
 import { localFs } from '../../core/local-fs.ts';
+import { NO_WORKSPACE } from '../../config.ts';
 import { clearLocalEnvInfo } from '../../agent/tools.ts';
 import { agent } from '../../agent/agent.ts';
 import type { RpcModule } from './router.ts';
@@ -80,17 +81,21 @@ export function registerLocal(rpc: RpcModule) {
 
   rpc.register('set_local_workspace', async (msg, { reply, emitStatus }) => {
     // 原 ws.js set_local_workspace case(372-381)逐字复制
-    const st = await localFs.stat(msg.path);
-    if (!st) throw new Error(`目录不存在: ${msg.path}`);
-    if (!st.isDirectory()) throw new Error(`不是目录: ${msg.path}`);
+    // path 为哨兵 NO_WORKSPACE = 「不在工作区对话」:不校验目录,边界放宽到整台电脑
+    const whole = msg.path === NO_WORKSPACE;
+    if (!whole) {
+      const st = await localFs.stat(msg.path);
+      if (!st) throw new Error(`目录不存在: ${msg.path}`);
+      if (!st.isDirectory()) throw new Error(`不是目录: ${msg.path}`);
+    }
     const sid = typeof msg.sid === 'string' && msg.sid ? msg.sid : null;
     // 先校验锁定(本地模式会话开始对话后本地工作区不可改),再改状态
     agent.assertLocalWorkspaceChangeable(sid);
-    localFs.workspace = msg.path;
+    if (whole) localFs.noWorkspace = true; else localFs.workspace = msg.path;
     clearLocalEnvInfo(); // 本地工作区变化,旧本地环境快照失效
     // 绑定到当前会话(草稿态 sid 为空则不绑定任何会话;会话创建时捕获当时工作区)
-    agent.updateSessionLocalWorkspace(sid, msg.path);
-    reply({ type: 'local_workspace', path: msg.path });
+    agent.updateSessionLocalWorkspace(sid, whole ? NO_WORKSPACE : msg.path);
+    reply({ type: 'local_workspace', path: whole ? null : msg.path, noWorkspace: whole });
     emitStatus();
   });
 }

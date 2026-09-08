@@ -1,9 +1,9 @@
 // 本地 FS 适配层测试:listDir/readFileChunk/writeFile/mkdirp/rmdirRecursive/copyPath
-// 与 resolveInLocalWorkspace 越界守卫
+// 与 resolveInLocalWorkspace 越界守卫(含「不在工作区对话」全盘模式)
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import path from 'node:path';
-const { localFs, resolveInLocalWorkspace } = await import('../server/core/local-fs.ts');
+const { localFs, resolveInLocalWorkspace, isLocalMachineRoot } = await import('../server/core/local-fs.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -41,6 +41,20 @@ const saved = localFs.workspace; localFs.workspace = null;
 let threw2 = false; try { resolveInLocalWorkspace('x'); } catch { threw2 = true; }
 check('resolveInLocalWorkspace 未设工作区抛错', threw2);
 localFs.workspace = saved;
+
+// 「不在工作区对话」(全盘模式):边界放宽到整台电脑,绝对路径一律放行、相对路径仍拒
+const isWin = process.platform === 'win32';
+localFs.noWorkspace = true;
+check('全盘模式:置位即清空本地工作区', localFs.workspace === null, String(localFs.workspace));
+const anyAbs = isWin ? path.join(root, '..', 'outside-全盘.txt') : '/etc/hosts';
+check('全盘模式:工作区外的绝对路径放行', resolveInLocalWorkspace(anyAbs) === path.resolve(anyAbs), resolveInLocalWorkspace(anyAbs));
+check('全盘模式:家目录 ~ 展开为绝对路径', resolveInLocalWorkspace('~/x.txt') === path.resolve(path.join(homedir(), 'x.txt')));
+let threwW = false; try { resolveInLocalWorkspace('relative.txt'); } catch { threwW = true; }
+check('全盘模式:相对路径仍被拒(必须绝对路径)', threwW);
+check('全盘模式:识别文件系统根', isLocalMachineRoot(isWin ? 'C:\\' : '/'));
+check('全盘模式:普通目录不算根', !isLocalMachineRoot(root));
+localFs.workspace = saved; // 重新选目录 = 退出全盘模式
+check('选回目录后自动退出全盘模式', localFs.noWorkspace === false && localFs.workspace === saved);
 
 // copyPath:文件复制 + 目录递归 + 越界(复制到自身内部)
 await localFs.copyPath(path.join(ws, 'a.txt'), path.join(ws, 'a-copy.txt'));

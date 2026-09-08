@@ -1,4 +1,4 @@
-// Agent 工具集:工具定义(name/description/parameters + run)+ 注册与守卫。
+﻿// Agent 工具集:工具定义(name/description/parameters + run)+ 注册与守卫。
 // 定义 的 ToolDefinition:模型可见字段(name/description/parameters)
 // 与宿主执行细节(run/timeoutMs)分离,由 registry.schemas() 白名单投影进模型请求;
 // 执行统一走 registry.execute() 管线(守卫 -> 超时 -> 结构化结果)。
@@ -8,10 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { joinRemote, normalizeRemote, sshManager as ssh } from '../core/ssh-manager.ts';
-import { localFs, resolveInLocalWorkspace } from '../core/local-fs.ts';
+import { localFs, resolveInLocalWorkspace, isLocalMachineRoot } from '../core/local-fs.ts';
 import type { FsEntry } from '../core/local-fs.ts';
 import { execLocal } from '../core/local-exec.ts';
 import { askUserQuestion } from './ask-user.ts';
+import { resolveImageTool, runImageJob, IMAGE_TOOL_MISSING } from './image-gen.ts';
+import { IMAGE_QUALITIES, IMAGE_SIZES } from '../store/settings-store.ts';
 import { webSearch, renderSearchResult } from './web-search.ts';
 import type { ToolDef, ToolRegistry } from './registry.ts';
 
@@ -28,10 +30,15 @@ const LOCAL_SKILL_PREFIX = 'local://';
 
 // ---------------- 安全辅助 ----------------
 
-// 将路径解析为工作区内的绝对远程路径;越界或不存在工作区时报错
+// 将路径解析为工作区内的绝对远程路径;越界或不存在工作区时报错。
+// 例外:处于「不在工作区对话」(全盘模式)时边界放宽到整个远程文件系统,
+// 必须传绝对路径(见 resolveWholeRemotePath)。
 function resolveInWorkspace(p: string, { allowRoot = true }: { allowRoot?: boolean } = {}) {
   const ws = normalizeRemote(ssh.workspace || '');
-  if (!ws) throw new Error('尚未选择工作区,请先在界面中选择远程目录作为工作区');
+  if (!ws) {
+    if (!ssh.noWorkspace) throw new Error('尚未选择工作区,请先在界面中选择远程目录作为工作区(或选择「不在工作区对话」让 AI 在整台服务器工作)');
+    return resolveWholeRemotePath(p);
+  }
   const norm = normalizeRemote(p || '.');
   const joined = norm === '/' ? ws : norm.startsWith(ws + '/') || norm === ws ? norm : joinRemote(ws, norm.replace(/^\.\.\/+/g, ''));
   // 重新计算相对路径(处理 ../ 越界)
@@ -45,6 +52,24 @@ function resolveInWorkspace(p: string, { allowRoot = true }: { allowRoot?: boole
   if (parts.length === 0 || abs === ws) return allowRoot ? ws : ws;
   if (abs === ws || abs.startsWith(ws + '/')) return abs;
   throw new Error(`路径超出工作区,被拒绝: ${p}`);
+}
+
+// 「不在工作区对话」下的远程路径解析:边界 = 整个远程文件系统(根 '/'),必须传绝对路径。
+// 兼容 Windows 服务器的 'C:\dir' / 'C:/dir' 写法(normalizeRemote 统一成 '/C:/dir'),
+// 并在此消解 '..',越出根时收敛到 '/'。
+function resolveWholeRemotePath(p: string): string {
+  const raw = String(p ?? '').trim();
+  if (!raw) throw new Error('「不在工作区对话」下必须传远程绝对路径(如 /srv/app/a.txt)');
+  if (!raw.startsWith('/') && !raw.startsWith('\\') && !/^[A-Za-z]:[\\/]/.test(raw)) {
+    throw new Error(`「不在工作区对话」下请传远程绝对路径(如 /var/log/app.log):${p}`);
+  }
+  const parts: string[] = [];
+  for (const seg of normalizeRemote(raw).split('/').filter(Boolean)) {
+    if (seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return parts.length ? '/' + parts.join('/') : '/';
 }
 
 // ---- read 行窗口(照搬 harness tool-fs read-render)----
@@ -215,6 +240,10 @@ export function clearLocalEnvInfo() { localEnvCache = null; }
 
 // ---------------- 工具定义 ----------------
 // 每个工具:name/description/parameters(模型可见)+ run(执行)+ timeoutMs(可选,注册表超时依据)
+
+// 生图档位白名单:与 settings-store 的净化白名单、前端「生图工具」面板同源一处定义,
+// 避免三处各写一份导致枚举漂移。尺寸按用户口径(1K/1.5K/2K/3K/4K 方圆)映射为
+// OpenAI 兼容端点的 WxH 字符串。
 
 const toolDefs: ToolDef[] = [
   {
@@ -391,7 +420,8 @@ const toolDefs: ToolDef[] = [
     async run({ path, recursive }) {
       const ws = normalizeRemote(ssh.workspace || '');
       const abs = resolveInWorkspace(path);
-      if (abs === ws) throw new Error('禁止删除工作区根目录');
+      // 全盘模式(不在工作区对话)没有工作区根,改防删除远程文件系统根 '/'
+      if (ws ? abs === ws : abs === '/') throw new Error(ws ? '禁止删除工作区根目录' : '禁止删除远程文件系统根目录');
       const type = await ssh.atype(abs);
       if (!type) throw new Error(`路径不存在: ${abs}`);
       if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
@@ -566,6 +596,8 @@ const toolDefs: ToolDef[] = [
         platform: ssh.platform,
         home: ssh.home
       };
+      // 全盘模式:告知模型本次可操作整台服务器(不列目录树,避免全盘扫描)
+      if (!ssh.workspace && ssh.noWorkspace) info.scope = '不在工作区对话:可读写远程任意绝对路径(整个远程文件系统)';
       const probe = async (cmd: string) => {
         try {
           const r = await ssh.exec(cmd, { timeout: 8000 });
@@ -721,7 +753,11 @@ const localToolDefs: ToolDef[] = [
     parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } }, required: ['path'] },
     async run({ path: p, recursive }) {
       const abs = resolveInLocalWorkspace(p);
-      if (abs === path.resolve(localFs.workspace!)) throw new Error('禁止删除本地工作区根目录');
+      const ws = localFs.workspace;
+      // 全盘模式(不在工作区对话)没有本地工作区根,改防删除盘符根/系统根/UNC 共享根
+      if (ws ? abs === path.resolve(ws) : isLocalMachineRoot(abs)) {
+        throw new Error(ws ? '禁止删除本地工作区根目录' : '禁止删除磁盘/文件系统根目录');
+      }
       const type = await localFs.atype(abs);
       if (!type) throw new Error(`路径不存在: ${abs}`);
       if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
@@ -774,14 +810,16 @@ const localToolDefs: ToolDef[] = [
     timeoutMs: 660_000,
     async run({ command, timeout, description }) {
       if (!command) throw new Error('命令为空');
-      const res = await execLocal(command, { cwd: localFs.workspace || undefined, timeout: (timeout || 300) * 1000 });
+      // 全盘模式(不在工作区对话)下没有工作区可 cd,默认落在家目录,避免继承服务进程工作目录
+      const cwd = localFs.workspace || (localFs.noWorkspace ? localFs.home : undefined);
+      const res = await execLocal(command, { cwd, timeout: (timeout || 300) * 1000 });
       const parts = [`[退出码 ${res.code}${res.timedOut ? ' 超时' : ''}${res.signal ? `, 信号 ${res.signal}` : ''}]`];
       if (res.stdout.trim()) parts.push('--- stdout ---\n' + res.stdout);
       if (res.stderr.trim()) parts.push('--- stderr ---\n' + res.stderr);
       if (!res.stdout.trim() && !res.stderr.trim()) parts.push('(无输出)');
       return {
         content: capOutputBytes(parts.join('\n')),
-        meta: { card: 'terminal', command, cwd: localFs.workspace || '', exitCode: res.code, signal: res.signal || null, timedOut: !!res.timedOut }
+        meta: { card: 'terminal', command, cwd: cwd || '', exitCode: res.code, signal: res.signal || null, timedOut: !!res.timedOut }
       };
     }
   },
@@ -791,6 +829,8 @@ const localToolDefs: ToolDef[] = [
     parameters: { type: 'object', properties: {}, required: [] },
     async run() {
       const info: any = { workspace: localFs.workspace || null, platform: process.platform, home: localFs.home };
+      // 全盘模式:告知模型本次可操作整台电脑(不列目录树,避免全盘扫描)
+      if (!localFs.workspace && localFs.noWorkspace) info.scope = '不在工作区对话:可读写本机任意绝对路径(所有盘符)';
       const probe = async (cmd: string) => { try { const r = await execLocal(cmd, { cwd: localFs.home, timeout: 8000 }); return r.code === 0 && r.stdout.trim() ? r.stdout.trim().split('\n')[0] : null; } catch { return null; } };
       const [node, git] = await Promise.all([probe('node --version'), probe('git --version')]);
       info.toolVersions = { node, git };
@@ -850,6 +890,106 @@ const interactionToolDefs: ToolDef[] = [
     async run(args, { sid, signal, emit }) {
       const answers = await askUserQuestion({ questions: args.questions, sid, signal, emit });
       return safeJson({ answers });
+    }
+  },
+
+  {
+    // 生图工具:让「文本模型」具备画图能力,这才是真正的对话式生图 ——
+    // 文本模型手里有完整对话历史,能把"再亮一点""把帽子换蓝"补全成自包含提示词,
+    // 并自行判断走文生图还是图生图、要什么尺寸与质量;生图端点只负责一次性执行。
+    // 端点配置(baseUrl/apiKey/model)与对话模型完全独立,见设置 → AI 模型 → 生图工具。
+    name: 'generate_image',
+    description: 'Generate a new image, or edit an existing one, and show the result to the user. '
+      + 'Call it whenever the user asks for a picture, illustration, poster, logo, icon or mock-up, '
+      + 'or asks to change an image you produced earlier. '
+      + 'You must write the prompt yourself: the image endpoint receives ONE prompt string and no chat '
+      + 'history, so resolve every reference ("it", "that one", "make it brighter") into a '
+      + 'self-contained description stating what to keep and what to change. '
+      + 'Text-to-image: pass prompt only. Image-to-image / editing: pass reference_attachment_ids '
+      + '(the ids of images the user attached to their message) or use_last_image=true to iterate on '
+      + 'the most recent image you generated in this session. '
+      + 'The finished image is rendered to the user automatically — never embed it as markdown in '
+      + 'your reply, just describe what you produced. '
+      + 'If the tool reports that it is not configured, tell the user where to configure it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '自包含的完整画面描述(主体、风格、构图、光线、背景)。改图时把"保持什么"和"改什么"都写全,不要留指代词。'
+        },
+        quality: {
+          type: 'string',
+          enum: IMAGE_QUALITIES,
+          description: '画质档位。auto=由上游决定;low/medium/high 越高越慢越贵。省略则用生图工具里的默认值。'
+        },
+        size: {
+          type: 'string',
+          enum: IMAGE_SIZES,
+          description: '画面尺寸。1024x1024=1K方图,1536x1024=1.5K横图,1024x1536=1.5K竖图,2048x2048=2K方图,'
+            + '3072x3072=3K方图,3840x2160=4K横图,2160x3840=4K竖图,auto=由上游决定。'
+            + '注意:部分网关会忽略该参数并按自己的尺寸出图,以结果回显为准。'
+        },
+        reference_attachment_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '参考图的附件 id 列表(可多张,上游逐张消费)。用户提供图片并要求"按这张图/参考这张图"时填它,走图生图。'
+        },
+        use_last_image: {
+          type: 'boolean',
+          description: 'true=自动取本会话最近一张成图作参考继续修改。用户对已生成的图不满意、提出调整要求时用它。'
+        }
+      },
+      required: ['prompt']
+    },
+    // 比图像客户端自身的 300s 超时更长:让客户端先超时并给出友好原因,而不是被注册表掐断
+    timeoutMs: 330_000,
+    // 按张计费 + 写盘 + 追加会话事件:并行池里必须独占,绝不与自身并发
+    mutating: true,
+    async run(args: any, { session, emit, sid, signal }: any = {}) {
+      const prompt = String(args?.prompt || '').trim();
+      if (!prompt) throw new Error('generate_image: prompt 不能为空,请给出自包含的完整画面描述');
+      const rt = resolveImageTool();
+      if (!rt) throw new Error(IMAGE_TOOL_MISSING);
+      const ids = Array.isArray(args?.reference_attachment_ids)
+        ? args.reference_attachment_ids.map((x: any) => String(x || '').trim()).filter(Boolean) : [];
+      const useLast = args?.use_last_image === true;
+      const quality = IMAGE_QUALITIES.includes(args?.quality) ? args.quality : rt.cfg.quality;
+      const size = IMAGE_SIZES.includes(args?.size) ? args.size : rt.cfg.size;
+      // 先报"开始生成":非流式端点要等几十秒,前端据此把回复气泡切成生成中态
+      emit?.('agent', {
+        event: 'image_job', sid,
+        mode: ids.length || useLast ? 'i2i' : 't2i',
+        refs: ids.length || (useLast ? 1 : 0), prompt
+      });
+      const job = await runImageJob({
+        llm: rt.llm, prompt, refIds: ids, useLastImage: useLast,
+        events: session?.events, quality, size, dialect: rt.cfg.dialect, signal
+      });
+      // 成图随事件日志持久化:刷新后仍能回看,且下一轮 use_last_image 能取到它
+      session?.append?.('image/generated', {
+        mode: job.mode, prompt: job.prompt,
+        attachments: job.saved, refs: job.refs,
+        size: job.size, upstreamModel: job.upstreamModel, ms: job.ms
+      });
+      emit?.('agent', {
+        event: 'image_done', sid, mode: job.mode, refs: job.refs, ms: job.ms,
+        size: job.size || null, revised: job.revisedPrompt || null,
+        attachments: job.saved
+      });
+      const lines = [
+        `已生成图片(${job.mode === 'i2i' ? '图生图' : '文生图'}`
+        + `${job.refs ? `,参考 ${job.refs} 张` : ''}`
+        + `${job.size ? `,实际尺寸 ${job.size}` : ''}`
+        + `,耗时 ${Math.round(job.ms / 1000)}s)。`
+      ];
+      lines.push(`成图附件 id:${job.saved.map((a) => a.id).join(', ')}`
+        + '(用户若要继续修改这张图,下次调用带 use_last_image=true;要显式指定这张图作参考,把该 id 放进 reference_attachment_ids)。');
+      lines.push('图片已自动展示给用户,不要把图片嵌入你的回复正文。');
+      if (job.skipped.length) lines.push(`警告:${job.skipped.length} 个参考图 id 无效或不是图片,已跳过:${job.skipped.join(', ')}`);
+      if (job.upstreamModel && job.upstreamModel !== rt.cfg.model) lines.push(`注意:上游回显的实际模型为 ${job.upstreamModel}(网关做了别名路由)。`);
+      if (size && size !== 'auto' && job.size && job.size !== size) lines.push(`注意:请求尺寸 ${size} 未被采纳,上游返回 ${job.size}(该网关可能忽略 size 参数)。`);
+      return lines.join('\n');
     }
   }
 ];

@@ -1,5 +1,15 @@
 // 共享类型定义:前后端 WebSocket 消息为动态结构,这里只描述前端使用到的关键形状
 
+/**
+ * 「不在工作区对话」哨兵值(与 server/config.ts 的 NO_WORKSPACE 保持一致):
+ * 作为 set_workspace / set_local_workspace 的 path 传入,表示该侧不绑定任何目录,
+ * AI 的文件边界放宽到整台机器(本机 = 所有盘符,远程 = 整个远程文件系统)。
+ */
+export const NO_WORKSPACE = 'no-workspace';
+
+/** 全盘模式下的展示文案:本地侧 = 整台电脑,远程侧 = 整台服务器 */
+export const WHOLE_LABEL = { local: '整台电脑', remote: '整台服务器' } as const;
+
 /** 一条 SSH 连接(服务端多连接池中的一个) */
 export interface ConnInfo {
   id: string;
@@ -11,6 +21,8 @@ export interface ConnInfo {
   platform: string | null;
   home: string | null;
   workspace: string | null;
+  /** 该连接是否处于「不在工作区对话」(全盘模式):为 true 时 workspace 必为 null */
+  noWorkspace?: boolean;
   autoReconnect: boolean;
   reason?: string | null;
   retry?: number;
@@ -39,7 +51,11 @@ export interface ServerStatus {
   platform: string | null;
   home: string | null;
   workspace: string | null;
+  /** 活动连接是否处于「不在工作区对话」(全盘模式,边界=整台服务器) */
+  noWorkspace?: boolean;
   localWorkspace: string | null;
+  /** 本机是否处于「不在工作区对话」(全盘模式,边界=整台电脑) */
+  localNoWorkspace?: boolean;
   localHome: string | null;
   agentBusy: boolean;
   busySessions: string[];
@@ -58,9 +74,12 @@ export interface Session {
   updatedAt?: string | number;
   /** 所属作用域:服务器键(username@host:port)或 'local';与当前作用域不同 = 其他服务器后台运行的会话 */
   connKey?: string | null;
-  /** 会话绑定的远程工作区(连接服务器时的执行目录);null/缺失 = 未绑定 */
+  /**
+   * 会话绑定的远程工作区(连接服务器时的执行目录)。
+   * 路径 / NO_WORKSPACE(「不在工作区对话」,边界=整台服务器)/ null·缺失(未绑定)
+   */
   workspace?: string | null;
-  /** 会话绑定的本地工作区;null/缺失 = 未绑定 */
+  /** 会话绑定的本地工作区;同样可为 NO_WORKSPACE(边界=整台电脑)或 null·缺失(未绑定) */
   localWorkspace?: string | null;
 }
 
@@ -72,6 +91,13 @@ export interface ModelContextConfig {
   maxTokens?: number;
   /** 是否具备多模态(看图)能力:开启后输入框可粘贴/上传图片,随消息注入 image_url */
   multimodal?: boolean;
+  /**
+   * 是否为「生图模型」:开启后该对话整体切换为生图链路——
+   * 每轮直接调用 /images/generations(文生图)或 /images/edits(图生图),
+   * 不再走 chat/completions、不注入 system 提示词、不挂工具。
+   * 纯图像端点模型(如 gpt-image-2)在 chat/completions 上会被网关 503 拒绝,必须开启本开关。
+   */
+  imageGen?: boolean;
 }
 
 /** LLM 提供商(预置 + 用户自定义,userProviders 来自服务端配置文件) */
@@ -189,8 +215,12 @@ export interface ChatMessage {
   content?: string;
   segments?: MsgSegment[];
   streaming?: boolean;
-  /** 用户消息携带的附件(图片/文件/视频,服务端元数据;图片经 /api/attachments/:id 取字节) */
+  /** 消息携带的附件(图片/文件/视频,服务端元数据;图片经 /api/attachments/:id 取字节)。
+   *  user 消息 = 用户上传;assistant 消息 = 生图模型本轮生成的成图 */
   attachments?: AttachmentInfo[];
+  /** 生图模型本轮的生成态(assistant 消息):pending=生成中(耗时数十秒,无流式增量),
+   *  mode 标注本轮实际走的通路,供气泡显示「文生图 / 图生图」徽标与参考图数量 */
+  imageJob?: { mode: 't2i' | 'i2i'; refs?: number; pending?: boolean; ms?: number };
   /** 分支点:该消息在服务端 turns 数组中的结束索引(>=0 时按此截断克隆,缺省 -1 从尾部) */
   forkTail?: number;
   /** 消息时间戳(毫秒,来自服务端事件 time;实时消息用前端 Date.now()) */

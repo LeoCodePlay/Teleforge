@@ -5,6 +5,7 @@ import DOMPurify from 'dompurify';
 import { api } from '../../api';
 import { useLlm } from '../../context/llm-context';
 import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, FileChangeItem } from '../../types';
+import { NO_WORKSPACE, WHOLE_LABEL } from '../../types';
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import ModelMenu from '../ModelMenu/ModelMenu';
@@ -348,12 +349,17 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         if (t.reasoning_content) appendReasoning(prev, t.reasoning_content);
         appendText(prev, t.content);
         appendTools(prev, tools);
+        // 生图成图(image/generated 投影)并入上一条摘要消息:摘要文本 + 成图同处一个气泡
+        if (Array.isArray(t.attachments) && t.attachments.length) prev.attachments = t.attachments;
+        if (t.imageJob) prev.imageJob = t.imageJob;
         prev.forkTail = ti;
       } else {
         const nm: ChatMessage = { role: 'assistant', segments: [], streaming: false, forkTail: ti };
         if (t.reasoning_content) appendReasoning(nm, t.reasoning_content);
         appendText(nm, t.content);
         appendTools(nm, tools);
+        if (Array.isArray(t.attachments) && t.attachments.length) nm.attachments = t.attachments;
+        if (t.imageJob) nm.imageJob = t.imageJob;
         out.push(nm);
       }
       continue;
@@ -408,6 +414,10 @@ interface ChatPanelProps {
   localHome?: string | null;
   /** 本机保存过的本地工作区历史 */
   savedLocalWs?: string[];
+  /** 远程侧处于「不在工作区对话」(全盘模式):边界 = 整台服务器,workspace 必为 null */
+  noWorkspace?: boolean;
+  /** 本地侧处于「不在工作区对话」(全盘模式):边界 = 整台电脑,localWorkspace 必为 null */
+  localNoWorkspace?: boolean;
   /** 当前会话远程工作区已锁定(会话已开始对话):远程 chip 禁用 */
   remoteLocked?: boolean;
   /** 当前会话本地工作区已锁定(本地会话已开始对话):本地 chip 禁用 */
@@ -479,7 +489,7 @@ function markRetryStarted(msgs: ChatMessage[]): ChatMessage[] {
   return msgs;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, onSessionTouched, compact = false }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, onSessionTouched, compact = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -635,6 +645,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const fileInputRef = useRef<HTMLInputElement>(null);  // 任意文件选择
   // 当前模型是否具备多模态(看图)能力:由提供方配置里逐模型声明
   const multimodal = llm.effModelContext?.multimodal === true;
+  // 生图模型(imageGen):本轮对话整体走 /images/*,用户发的图是「图生图的参考图」,
+  // 因此上传闸门必须一并放开 —— 只看 multimodal 会把生图模型的参考图入口堵死
+  const imageGen = llm.effModelContext?.imageGen === true;
+  // 「/图生图」「/生图」命令:即使对话模型不是多模态,也允许附带图片作为生图参考图。
+  // 图片字节不会发给对话模型(那会让不支持视觉的上游直接报错),只把附件 id 以文本
+  // 告知模型,由它转交 generate_image 工具 —— 参考图的实际读取发生在服务端。
+  const i2iCommand = /(?:^|\s)\/(?:图生图|生图|文生图|i2i|t2i|genimage)(?=\s|$)/i.test(input);
+  const canSendImage = multimodal || imageGen || i2iCommand;
+  // 被拦下时给用户的指引:两个开关都关、且没用 /图生图 命令时才会走到这里
+  const imgGateTip = '当前模型不支持图片输入。可在输入框开头加 /图生图 附参考图走生图工具,'
+    + '或到「设置 → AI 模型」开启该模型的「多模态」/「生图」开关';
   const attPending = attachments.some((a) => a.uploading); // 仍在上传中(禁发)
   const attFailed = attachments.some((a) => !!a.error);    // 有上传失败项(须先移除)
 
@@ -647,8 +668,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if (room <= 0) { toast.warning('一条消息最多 10 个附件'); return; }
     for (const file of list.slice(0, room)) {
       const kind = classifyKind(file.type, file.name);
-      if (kind === 'image' && !multimodal) {
-        toast.warning('当前模型未开启多模态,不支持发送图片(设置 → AI 模型 → 模型「多模态」开关)');
+      if (kind === 'image' && !canSendImage) {
+        toast.warning(imgGateTip);
         continue;
       }
       const key = `att${++attSeqRef.current}`;
@@ -729,7 +750,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     atFetchTokenRef.current += 1; // 使在途候选失效
     atMapRef.current.clear();
     setAtCandidates([]);
-  }, [workspace, localWorkspace]);
+  }, [workspace, localWorkspace, noWorkspace, localNoWorkspace]);
 
   // 文件面板目录变化后 @ 候选失效:下次打开 @ 时按新目录重新拉取
   // (@ 菜单跟随文件管理器当前打开的目录,而非工作区根)
@@ -871,6 +892,36 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               }
               return copy;
             });
+            break;
+          case 'image_job':
+            // 生图模型已发出请求。图像端点是非流式的:几十秒内没有任何增量可显示,
+            // 所以把当前 assistant 气泡标成"生成中",并说明走的哪条通路、带了几张参考图,
+            // 避免用户误以为卡死(与文本轮的流式光标是两套反馈)。
+            push((msgs) => {
+              const c = [...msgs];
+              const l = c[c.length - 1];
+              if (l?.role === 'assistant') {
+                c[c.length - 1] = { ...l, imageJob: { mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0, pending: true } };
+              }
+              return c;
+            });
+            break;
+          case 'image_done':
+            // 成图落盘完成:附件元数据挂到当前 assistant 气泡(与历史回放同构,刷新后由
+            // image/generated 事件投影回来),并解除"生成中"态
+            push((msgs) => {
+              const c = [...msgs];
+              const l = c[c.length - 1];
+              if (l?.role === 'assistant') {
+                c[c.length - 1] = {
+                  ...l,
+                  ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
+                  imageJob: { mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0, ms: Number(m.ms) || 0, pending: false }
+                };
+              }
+              return c;
+            });
+            scrollToBottomNow();
             break;
           case 'done':
             setAgentState('done');
@@ -1394,8 +1445,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if ((!input.trim() && atts.length === 0) || !canSend || askPending) return;
     if (attPending) { toast.warning('附件还在上传中,请稍候…'); return; }
     if (attFailed) { toast.warning('有附件上传失败,请先移除后再发送'); return; }
-    if (atts.some((a) => a.kind === 'image') && !multimodal) {
-      toast.warning('当前模型未开启多模态,不支持发送图片(设置 → AI 模型 → 模型「多模态」开关)');
+    if (atts.some((a) => a.kind === 'image') && !canSendImage) {
+      toast.warning(imgGateTip);
       return;
     }
     const text = composedInput;
@@ -1687,6 +1738,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setLocalWsBrowserOpen(false); setLocalWsMenuOpen(false);
   };
 
+  // 工作区 chip 文案的三种状态:绑定了目录 / 「不在工作区对话」(全盘模式)/ 尚未选择
+  const remoteChip = noWorkspace ? `🌐 ${WHOLE_LABEL.remote}` : workspace ? `📂 ${lastPathSegment(workspace)}` : '选择远程工作区';
+  const localChip = localNoWorkspace ? `🌐 ${WHOLE_LABEL.local}` : localWorkspace ? `🖥 ${lastPathSegment(localWorkspace)}` : '选择本地工作区';
+
   // 从历史中删除一条工作区记录:先确认(仅删快捷记录,不动远程/本地目录本身)
   const removeWs = async (p: string) => {
     const ok = await confirm({
@@ -1712,10 +1767,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 发送后等待回答 / agent 工作期间都应允许暂停:busy(服务端 status) 与 agentState 任一命中即视为工作中
   const working = busy || agentState === 'working';
   // 工作中也允许输入发送(自动进入待执行队列,当前轮结束后按序执行);
-  // 发送条件:远程或本地工作区任一已选——连接服务器但未选远程工作区时,
-  // 只要选了本地工作区即可发起对话(仅限本地工作,会话归本地任务列表);
+  // 发送条件:远程或本地任一侧「有工作区」或「已选择不在工作区对话(全盘模式)」——
+  // 连接服务器但未选远程工作区时,只要选了本地工作区即可发起对话(仅限本地工作,会话归本地任务列表);
   // 模型提问挂起时锁定输入与暂停(须先作答或取消提问);会话切换加载中也锁定,避免发到错误会话
-  const canSend = (!!workspace || !!localWorkspace) && !askPending && !switching;
+  const canSend = (!!workspace || !!localWorkspace || noWorkspace || localNoWorkspace) && !askPending && !switching;
 
   return (
     // 根为 fragment:跳转点(chat-dots)渲染在 chatwrap 之外,作为 tab-body 的子元素
@@ -1727,7 +1782,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {messages.length === 0 && (
             <div className="empty">
               <img className="empty-logo" src="/logo-256.png" alt="" />
-              <div>{connected ? '连接服务器后:选远程工作区可远程+本地工作;只选本地工作区则仅在本机工作' : '未连接服务器 · 选择本地工作区后,即可让 Agent 在本机工作'}</div>
+              <div>{connected ? '连接服务器后:选远程工作区可远程+本地工作;只选本地工作区则仅在本机工作;也可选「不在工作区对话」让 AI 在整台机器上工作' : '未连接服务器 · 选择本地工作区后,即可让 Agent 在本机工作(或选「不在工作区对话」覆盖整台电脑)'}</div>
               <div className="muted">例如:「帮我看一下这个项目结构,然后修复 main.js 里的 bug」</div>
             </div>
           )}
@@ -1779,7 +1834,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       // 正文段:AssistantSegment 按 text 引用 memo,历史段不变时跳过重渲染
                       return <AssistantSegment key={si} text={seg.text || ''} />;
                     })}
-                    {m.streaming && (m.segments || []).length === 0 && <span className="cursor" aria-hidden="true" />}
+                    {m.streaming && !m.imageJob?.pending && (m.segments || []).length === 0 && <span className="cursor" aria-hidden="true" />}
                   </div>
                   {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表) */}
                   {!m.streaming && !!m.filesChanged?.length && (
@@ -1884,11 +1939,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 const files = Array.from(e.clipboardData?.files || []);
                 if (files.length > 0) { e.preventDefault(); intakeFiles(files); }
               }}
-              placeholder={!connected && !localWorkspace ? '未连接服务器 · 选择本地工作区后即可对话'
-                : connected && !workspace && !localWorkspace ? '请先选择远程工作区或本地工作区'
+              placeholder={!connected && !localWorkspace && !localNoWorkspace ? '未连接服务器 · 选择本地工作区后即可对话'
+                : !workspace && !localWorkspace && !noWorkspace && !localNoWorkspace ? '请先选择远程工作区或本地工作区(也可选「不在工作区对话」)'
+                : noWorkspace && localNoWorkspace ? '不在工作区对话 · 整台服务器 + 整台电脑(请让 AI 使用绝对路径)'
+                : localNoWorkspace ? '不在工作区对话 · 本机全盘(请让 AI 使用绝对路径)'
+                : noWorkspace ? '不在工作区对话 · 整台远程服务器(请让 AI 使用绝对路径)'
                 : connected && !workspace ? '未选远程工作区 · 当前仅限本地工作区对话'
                 : askPending ? '请先在提问面板中作答或取消…'
                 : working ? 'Agent 工作中,发送后将进入队列等待执行…'
+                // 生图对话:技能/文件引用不参与生图(提示词就是原文),占位符改讲本模式的用法
+                : imageGen ? '描述要生成的图片;附带图片则图生图,之后每轮自动基于上一张成图继续修改…'
                 : hasSkillToken ? '输入需求…' : '输入 @ 引用文件、/ 唤起命令与技能菜单…'}
               disabled={!canSend}
               onKeyDown={(e) => {
@@ -1984,16 +2044,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     : undefined;
                   return (
                     <div className="add-menu" role="menu" aria-label="选择上传类型" style={pos}>
-                      <button type="button" role="menuitem" className={`add-menu-item ${multimodal ? '' : 'disabled'}`}
-                        data-tip={multimodal ? undefined : '当前模型未开启多模态(设置 → AI 模型 → 模型「多模态」)'}
+                      <button type="button" role="menuitem" className={`add-menu-item ${canSendImage ? '' : 'disabled'}`}
+                        data-tip={canSendImage ? undefined : imgGateTip}
                         onClick={() => {
-                          if (!multimodal) { toast.warning('当前模型未开启多模态,不支持发送图片'); return; }
+                          if (!canSendImage) { toast.warning(imgGateTip); return; }
                           setAddMenuOpen(false); imgInputRef.current?.click();
                         }}>
                         <span className="am-ico" aria-hidden>🖼</span>
                         <span className="am-main">
                           <span>图片</span>
-                          <span className="am-desc">{multimodal ? 'PNG / JPG / WebP / GIF…' : '当前模型未开启多模态'}</span>
+                          <span className="am-desc">{imageGen ? '作为图生图的参考图(可多张)' : canSendImage ? 'PNG / JPG / WebP / GIF…' : '当前模型不支持图片输入'}</span>
                         </span>
                       </button>
                       <button type="button" role="menuitem" className="add-menu-item"
@@ -2037,12 +2097,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {connected && (
             <div className="wsbar" ref={wsBarRef}>
               <button
-                className={`ws-chip ${workspace ? '' : 'none'}${remoteLocked ? ' locked' : ''}`}
+                className={`ws-chip ${workspace || noWorkspace ? '' : 'none'}${remoteLocked ? ' locked' : ''}`}
                 disabled={remoteLocked}
-                data-tip={remoteLocked ? '该会话已开始对话,远程工作区已锁定;如需更换请新建会话' : undefined}
+                data-tip={remoteLocked ? '该会话已开始对话,远程工作区已锁定;如需更换请新建会话'
+                  : noWorkspace ? `「不在工作区对话」:AI 可读写整台远程服务器(必须传绝对路径),点击切换回某个目录工作区` : undefined}
                 onClick={() => { if (!remoteLocked) { setWsMenuOpen((v) => !v); setLocalWsMenuOpen(false); } }}
               >
-                <span className="ws-chip-path">{remoteLocked ? `🔒 ${lastPathSegment(workspace || '') || '远程工作区'}` : (workspace ? `📂 ${lastPathSegment(workspace)}` : '选择远程工作区')}</span>
+                <span className="ws-chip-path">{remoteLocked ? `🔒 ${remoteChip}` : remoteChip}</span>
                 <span className="ws-chip-arrow">{wsMenuOpen ? '▾' : '▸'}</span>
               </button>
               {wsMenuOpen && (
@@ -2074,18 +2135,25 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       🏠 家目录
                     </button>
                   )}
+                  {/* 「不在工作区对话」:不绑定任何目录,边界放宽到整台远程服务器 */}
+                  <button className={`ws-pick-item ws-pick-action${noWorkspace ? ' on' : ''}`}
+                    data-tip="不绑定工作目录:AI 可在整台远程服务器上读写文件与执行命令(必须使用绝对路径)"
+                    onClick={() => setWorkspace(NO_WORKSPACE)}>
+                    🌐 不在工作区对话({WHOLE_LABEL.remote}){noWorkspace ? ' ✓' : ''}
+                  </button>
                 </div>
               )}
             </div>
           )}
           <div className="wsbar" ref={localWsBarRef}>
             <button
-              className={`ws-chip local ${localWorkspace ? '' : 'none'}${localLocked ? ' locked' : ''}`}
+              className={`ws-chip local ${localWorkspace || localNoWorkspace ? '' : 'none'}${localLocked ? ' locked' : ''}`}
               disabled={localLocked}
-              data-tip={localLocked ? '该本地会话已开始对话,本地工作区已锁定;如需更换请新建会话' : undefined}
+              data-tip={localLocked ? '该本地会话已开始对话,本地工作区已锁定;如需更换请新建会话'
+                : localNoWorkspace ? `「不在工作区对话」:AI 可读写这台电脑的整个「此电脑」(所有盘符,必须传绝对路径),点击切换回某个目录工作区` : undefined}
               onClick={() => { if (!localLocked) { setLocalWsMenuOpen((v) => !v); setWsMenuOpen(false); } }}
             >
-              <span className="ws-chip-path">{localLocked ? `🔒 ${lastPathSegment(localWorkspace || '') || '本地工作区'}` : (localWorkspace ? `🖥 ${lastPathSegment(localWorkspace)}` : '选择本地工作区')}</span>
+              <span className="ws-chip-path">{localLocked ? `🔒 ${localChip}` : localChip}</span>
               <span className="ws-chip-arrow">{localWsMenuOpen ? '▾' : '▸'}</span>
             </button>
             {localWsMenuOpen && (
@@ -2111,6 +2179,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 <div className="ctx-sep" />
                 <button className="ws-pick-item ws-pick-action" onClick={() => { setLocalWsMenuOpen(false); setLocalWsBrowserOpen(true); }}>
                   📁 浏览选择其他本地目录…
+                </button>
+                {/* 「不在工作区对话」:不绑定任何目录,边界放宽到整台电脑(此电脑/所有盘符) */}
+                <button className={`ws-pick-item ws-pick-action${localNoWorkspace ? ' on' : ''}`}
+                  data-tip="不绑定工作目录:AI 可读写这台电脑的任何位置(C 盘、D 盘…统称「此电脑」),必须使用绝对路径"
+                  onClick={() => setLocalWorkspace(NO_WORKSPACE)}>
+                  🌐 不在工作区对话({WHOLE_LABEL.local}){localNoWorkspace ? ' ✓' : ''}
                 </button>
               </div>
             )}

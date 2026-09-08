@@ -10,8 +10,11 @@ export function registerAgent(rpc: RpcModule) {
     // 纯附件消息允许 text 为空,附件按 id 解析,元数据以服务端存储为准
     const hasAttachments = Array.isArray(msg.attachments) && msg.attachments.length > 0;
     if (!msg.text?.trim() && !hasAttachments) throw new Error('指令为空');
-    // 可连服务器对话(操作远程+本地),也可不连服务器仅操作本地工作区
-    if (!ssh.workspace && !localFs.workspace) throw new Error('请先选择远程工作区或本地工作区');
+    // 可连服务器对话(操作远程+本地),也可不连服务器仅操作本地工作区;
+    // 任一侧选了「不在工作区对话」(全盘模式)同样可以对话(边界=整台机器)
+    if (!ssh.workspace && !localFs.workspace && !ssh.noWorkspace && !localFs.noWorkspace) {
+      throw new Error('请先选择远程工作区或本地工作区(或选择「不在工作区对话」)');
+    }
     // 不 await:流式回收,事件经 send 推送;reasoning 为推理等级(default|off|low|high|xhigh|max)
     // 提交到当前活跃会话:该会话空闲时开新轮,运行中自动进入待执行队列(当前轮结束后按序执行)
     // 其他会话的运行不受影响(多会话并行)

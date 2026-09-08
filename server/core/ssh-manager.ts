@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Client } from 'ssh2';
 import type { SFTPWrapper, Stats, ClientChannel, ConnectConfig } from 'ssh2';
-import { SSH, EXEC, FILE } from '../config.ts';
+import { SSH, EXEC, FILE, NO_WORKSPACE } from '../config.ts';
 import type { FsEntry, ChunkReadResult } from './local-fs.ts';
 
 export type ConnStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -67,6 +67,22 @@ export function runWithWorkspace<T>(ws: string | null | undefined, fn: () => T):
   return workspaceScope.run(ws, fn);
 }
 
+// 「不在工作区对话」(全盘模式)作用域:与 workspaceScope 同构——
+// undefined = 作用域外(回落连接级标记);true = 该轮明确处于全盘模式(边界 = 整个远程文件系统)。
+const noWorkspaceScope = new AsyncLocalStorage<boolean | undefined>();
+export function runWithNoWorkspace<T>(v: boolean | undefined, fn: () => T): T {
+  return noWorkspaceScope.run(v, fn);
+}
+
+// 一次性进入「会话工作区绑定」作用域:绑定值为哨兵 NO_WORKSPACE 时,
+// 强制清空工作区(workspace=null)并置全盘标记;绑定值为 null(旧会话未绑定)时
+// 两侧都保持 undefined = 回落连接级——绝不能把 null 直接传给 workspaceScope(会误报"尚未选择工作区")。
+export function runWithWorkspaceBinding<T>(ws: string | null | undefined, fn: () => T): T {
+  if (ws === NO_WORKSPACE) return runWithNoWorkspace(true, () => runWithWorkspace(null, fn));
+  if (ws == null) return runWithNoWorkspace(undefined, () => runWithWorkspace(undefined, fn));
+  return runWithNoWorkspace(false, () => runWithWorkspace(ws, fn));
+}
+
 // 远程路径归一化(兼容 posix / windows 反斜杠),返回不带尾斜杠的绝对路径
 export function normalizeRemote(p: string): string {
   if (!p) return p;
@@ -113,6 +129,9 @@ export class SshConnection extends EventEmitter {
   platform: RemotePlatform = null; // 'win32' | 'posix' | null
   home: string | null = null;     // 远程家目录
   workspace: string | null = null; // 用户选择的工作区(每台服务器独立保存)
+  // 该服务器是否处于「不在工作区对话」(全盘模式):与 workspace 互斥、同样按服务器独立保存,
+  // 边界放宽到整个远程文件系统(见 agent/tools.ts resolveInWorkspace)
+  noWorkspace = false;
   execQueue: Promise<any> = Promise.resolve();
   bgQueue: Promise<any> = Promise.resolve(); // 后台维护任务队列(环境自检/工具安装),与主命令队列隔离
   activeRuns: Map<string, ActiveRun> = new Map(); // runId -> ActiveRun,供 kill/超时终止命令
@@ -626,6 +645,8 @@ export interface ConnSnapshot {
   platform: RemotePlatform;
   home: string | null;
   workspace: string | null;
+  /** 该连接是否处于「不在工作区对话」(全盘模式):为 true 时 workspace 必为 null */
+  noWorkspace: boolean;
   autoReconnect: boolean;
   reason: string | null;
   retry: number;
@@ -639,6 +660,7 @@ export class SshManager extends EventEmitter {
   _platform: RemotePlatform | undefined = undefined;
   _home: string | null | undefined = undefined;
   _workspace: string | null | undefined = undefined;
+  _noWorkspace: boolean | undefined = undefined; // 测试 mock 用的全盘标记回落值
   _hostInfo: SshHostInfo | null | undefined = undefined;
   _sftp: SFTPWrapper | null | undefined = undefined;
 
@@ -662,7 +684,23 @@ export class SshManager extends EventEmitter {
     if (scoped !== undefined) return scoped;
     return this.active ? this.active.workspace : (this._workspace ?? null);
   }
-  set workspace(v: string | null) { this._workspace = v; if (this.active) this.active.workspace = v; }
+  set workspace(v: string | null) {
+    this._workspace = v;
+    if (this.active) this.active.workspace = v;
+    // 与「不在工作区对话」互斥:选了工作区就退出全盘模式
+    if (v) { this._noWorkspace = false; if (this.active) this.active.noWorkspace = false; }
+  }
+  // 「不在工作区对话」(全盘模式):读优先会话作用域,回落活动连接;与 workspace 互斥
+  get noWorkspace(): boolean {
+    const scoped = noWorkspaceScope.getStore();
+    if (scoped !== undefined) return scoped;
+    return this.active ? this.active.noWorkspace : (this._noWorkspace ?? false);
+  }
+  set noWorkspace(v: boolean) {
+    this._noWorkspace = v;
+    if (this.active) this.active.noWorkspace = v;
+    if (v) this.workspace = null; // 进入全盘模式即清空工作区(经 workspace setter 双向同步)
+  }
   get hostInfo(): SshHostInfo | null { return this.active ? this.active.hostInfo : (this._hostInfo ?? null); }
   set hostInfo(v: SshHostInfo | null) { this._hostInfo = v; if (this.active) this.active.hostInfo = v; }
   get sftp(): SFTPWrapper | null { return this.active ? this.active.sftp : (this._sftp ?? null); }
@@ -749,6 +787,20 @@ export class SshManager extends EventEmitter {
     this.emit('status');
   }
 
+  // 复位"测试 mock 回落"字段(实例化后应保持 undefined)。连接期间 setter
+  // (workspace/noWorkspace 等)也会把值写进这些字段;若断开后不清空,active 为 null 时
+  // 回落 getter 会读到残留的远程工作区/全盘标记,导致 agent 新建会话错误继承断线前的
+  // 工作区绑定(会话被归入「远程任务列表」,见 agent._captureBinding)。
+  _resetFallbacks(): void {
+    this._status = undefined;
+    this._platform = undefined;
+    this._home = undefined;
+    this._workspace = undefined;
+    this._noWorkspace = undefined;
+    this._hostInfo = undefined;
+    this._sftp = undefined;
+  }
+
   // 活动连接掉线时自动切到其他存活连接;没有别的连接但本连接在自动重连则保留显示重连状态
   _fallbackActive(): void {
     const cur = this._activeId ? this.conns.get(this._activeId) : null;
@@ -758,6 +810,7 @@ export class SshManager extends EventEmitter {
     }
     if (cur && cur.desired) return; // 自动重连接管,状态随后变 reconnecting
     this._activeId = null;
+    this._resetFallbacks(); // 无任何存活连接:回落字段一并复位,避免断线残留
   }
 
   // 供前端渲染的连接列表 + 当前活动 id
@@ -774,6 +827,7 @@ export class SshManager extends EventEmitter {
         platform: c.platform ?? null,
         home: c.home ?? null,
         workspace: c.workspace ?? null,
+        noWorkspace: !!c.noWorkspace,
         autoReconnect: c.desired,
         reason: c.reason || null,
         retry: c.retry || 0

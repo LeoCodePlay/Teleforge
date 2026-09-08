@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from './api';
 import type { ServerStatus, Session, SshProfileInfo } from './types';
+import { NO_WORKSPACE } from './types';
 import SshConnectModal from './components/SshConnectModal/SshConnectModal';
 import SessionPanel from './components/SessionPanel/SessionPanel';
 import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel';
@@ -87,7 +88,8 @@ export default function App() {
   const llm = useLlm(); // 会话级模型记忆:切换会话时保存/恢复各会话用过的模型(见下方 effect)
   const [status, setStatus] = useState<ServerStatus>({
     status: 'disconnected', host: null, port: null, username: null,
-    platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null
+    platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null,
+    noWorkspace: false, localNoWorkspace: false
   });
   const [tabs, setTabs] = useState<TabItem[]>(() => [...PINNED_TABS, ...loadSavedFileTabs()]);
   const [activeTabId, setActiveTabId] = useState(loadSavedActiveTab);
@@ -709,11 +711,14 @@ export default function App() {
   const [localWs, setLocalWs] = useState<string[]>(loadLocalWs);
 
   // 选择本地工作区:通知服务端切换,记录到历史,并在状态里记住。
-  // sid = 当前会话 id(草稿态为 null):服务端把绑定写到该会话,草稿态不绑定任何会话
+  // sid = 当前会话 id(草稿态为 null):服务端把绑定写到该会话,草稿态不绑定任何会话。
+  // p = NO_WORKSPACE 表示「不在工作区对话」(全盘模式):不写历史记录,状态里工作区置空 + 置全盘标记
   const onSetLocalWorkspace = (p: string, sid?: string | null) =>
     api.request('set_local_workspace', { path: p, sid: sid ?? null }, 20000)
       .then(() => {
-        setStatus((s) => ({ ...s, localWorkspace: p }));
+        const whole = p === NO_WORKSPACE;
+        setStatus((s) => ({ ...s, localWorkspace: whole ? null : p, localNoWorkspace: whole }));
+        if (whole) return;
         setLocalWs((m) => {
           const cur = m || [];
           // 保持原顺序:已存在则原位不动,新路径追加到末尾(不再"最近用的排最前",避免切换乱序)
@@ -725,7 +730,10 @@ export default function App() {
       .catch(() => {});
 
   const onWorkspaceSet = (ws: string) => {
-    setStatus((s) => ({ ...s, workspace: ws }));
+    // 哨兵 = 远程侧「不在工作区对话」:同样不写历史,状态里 workspace 置空 + 置全盘标记
+    const whole = ws === NO_WORKSPACE;
+    setStatus((s) => ({ ...s, workspace: whole ? null : ws, noWorkspace: whole }));
+    if (whole) return;
     // 记录到当前服务器的历史,方便下次连接该服务器时直接切换
     const st = statusRef.current;
     const key = st.host ? `${st.host}:${st.port || 22}` : '';
@@ -952,6 +960,7 @@ export default function App() {
               <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
               localHome={status.localHome} savedLocalWs={localWs}
+              noWorkspace={status.noWorkspace} localNoWorkspace={status.localNoWorkspace}
               remoteLocked={remoteLocked} localLocked={localLocked}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
               onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}

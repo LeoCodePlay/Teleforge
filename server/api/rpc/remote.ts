@@ -1,5 +1,6 @@
 // 远程文件操作消息:list_dir / read_file / write_file / create_dir / delete / copy / set_workspace
 import { sshManager as ssh } from '../../core/ssh-manager.ts';
+import { NO_WORKSPACE } from '../../config.ts';
 import { clearEnvInfo } from '../../agent/tools.ts';
 import { agent } from '../../agent/agent.ts';
 import type { RpcModule } from './router.ts';
@@ -71,18 +72,22 @@ export function registerRemote(rpc: RpcModule) {
 
   rpc.register('set_workspace', async (msg, { reply, emitStatus }) => {
     // 原 ws.js set_workspace case(434-443)逐字复制
-    const st = await ssh.stat(msg.path);
-    if (!st) throw new Error(`目录不存在: ${msg.path}`);
-    if (!st.isDirectory()) throw new Error(`不是目录: ${msg.path}`);
+    // path 为哨兵 NO_WORKSPACE = 「不在工作区对话」:不校验目录,边界放宽到整台服务器
+    const whole = msg.path === NO_WORKSPACE;
+    if (!whole) {
+      const st = await ssh.stat(msg.path);
+      if (!st) throw new Error(`目录不存在: ${msg.path}`);
+      if (!st.isDirectory()) throw new Error(`不是目录: ${msg.path}`);
+    }
     const sid = typeof msg.sid === 'string' && msg.sid ? msg.sid : null;
     // 先校验锁定(已开始对话的会话远程工作区不可改),再改状态,避免校验失败却已切换工作区
     agent.assertRemoteWorkspaceChangeable(sid);
-    ssh.workspace = msg.path;
+    if (whole) ssh.noWorkspace = true; else ssh.workspace = msg.path;
     clearEnvInfo(); // 工作区变化,旧环境快照失效
     // 绑定到当前会话(草稿态 sid 为空则不绑定任何会话,只改连接级工作区;
     // 会话创建时会捕获"当时的连接工作区"作为自己的绑定)
-    agent.updateSessionWorkspace(sid, msg.path);
-    reply({ type: 'workspace', path: msg.path });
+    agent.updateSessionWorkspace(sid, whole ? NO_WORKSPACE : msg.path);
+    reply({ type: 'workspace', path: whole ? null : msg.path, noWorkspace: whole });
     emitStatus();
   });
 }

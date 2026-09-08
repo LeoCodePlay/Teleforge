@@ -43,6 +43,17 @@ export const SETTINGS_FILE      = path.join(DATA_DIR, 'settings.json');
 export const PORT = Number(process.env.PORT || 4000);
 export const HOST = process.env.HOST || '127.0.0.1'; // 默认仅本机访问,避免暴露 ✓
 
+// 「不在工作区对话」哨兵值:作为会话绑定值(SessionMeta.workspace / localWorkspace)与
+// set_workspace / set_local_workspace 的 path 传入,表示该侧不绑定任何目录,
+// 文件边界放宽到整台机器:本机 = 所有盘符(POSIX 为根目录 /),远程 = 整个远程文件系统。
+// 与 null(未绑定/旧数据,回落连接级工作区)严格区分,因此不能用空串代替。
+export const NO_WORKSPACE = 'no-workspace';
+
+/** 该绑定值是否表示「不在工作区对话」(全盘模式) */
+export function isNoWorkspace(v: unknown): boolean {
+  return v === NO_WORKSPACE;
+}
+
 export const SSH = {
   KEEPALIVE_INTERVAL: 10000,   // 10s 心跳,保持连接
   KEEPALIVE_COUNT_MAX: 3,      // 连续丢 3 次心跳判定断开

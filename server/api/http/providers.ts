@@ -3,8 +3,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { aiProviders, type AiProvider } from '../../store/ai-providers-store.ts';
 import { uiState } from '../../store/ui-state-store.ts';
+import { setImageToolConfig, imageToolSummary, IMAGE_QUALITIES, IMAGE_SIZE_OPTIONS } from '../../store/settings-store.ts';
 
-// modelConfig 白名单净化:每模型只保留 contextWindow/maxTokens(正数)与 multimodal(布尔)
+// modelConfig 白名单净化:每模型只保留 contextWindow/maxTokens(正数)与 multimodal/imageGen(布尔)
 function sanitizeModelConfig(mc: unknown): Record<string, any> | null {
   if (!mc || typeof mc !== 'object' || Array.isArray(mc)) return null;
   const out: Record<string, any> = {};
@@ -16,6 +17,7 @@ function sanitizeModelConfig(mc: unknown): Record<string, any> | null {
     if (Number.isFinite(win) && win > 0) e.contextWindow = win;
     if (Number.isFinite(max) && max > 0) e.maxTokens = max;
     if (v.multimodal === true) e.multimodal = true;
+    if (v.imageGen === true) e.imageGen = true;
     if (Object.keys(e).length > 0) out[m] = e;
   }
   return out;
@@ -89,5 +91,50 @@ export default async function registerProviders(app: FastifyInstance) {
     if (!aiProviders.remove(String((request.params as any)?.id))) return reply.code(404).send({ error: '提供商不存在' });
     uiState.remove(String((request.params as any)?.id)); // 联动清理该提供方的选择级状态
     return { userProviders: aiProviders.list() };
+  });
+
+  // ---- 「生图工具」独立配置(generate_image 工具与 imageGen 生图对话的端点来源)----
+  // 与对话提供商解耦:对话可以是任意文本模型,生图另指一个图像端点(可指向 OpenAI
+  // 官方 gpt-image-1、或任意 OpenAI 兼容网关的 gpt-image-2 等)。
+  app.get('/api/image-tool', () => ({
+    imageTool: imageToolSummary(),
+    // 尺寸直接下发 {value,label}:标签是给人看的口径(1K 方图…),避免前端再抄一份枚举
+    options: { qualities: IMAGE_QUALITIES, sizes: IMAGE_SIZE_OPTIONS }
+  }));
+
+  app.put('/api/image-tool', (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      setImageToolConfig((request.body as any)?.imageTool);
+      return { imageTool: imageToolSummary() };
+    } catch (e: any) {
+      return reply.code(400).send({ error: e.message });
+    }
+  });
+
+  // 清除配置(回到"未配置":generate_image 工具会提示用户去配置)
+  app.delete('/api/image-tool', () => {
+    setImageToolConfig(null);
+    return { imageTool: null };
+  });
+
+  // 用当前配置做一次连通性自检(拉图像模型列表,顺带验证 key):生图端点没有 /models
+  // 也能工作,所以这里失败只作提示、不阻断保存。
+  app.post('/api/image-tool/test', async (request: FastifyRequest, reply: FastifyReply) => {
+    const b = (request.body as any) || {};
+    const baseUrl = String(b.baseUrl || '').trim().replace(/\/+$/, '');
+    const apiKey = String(b.apiKey || '').trim();
+    if (!/^https?:\/\//i.test(baseUrl)) return reply.code(400).send({ error: 'Base URL 需以 http:// 或 https:// 开头' });
+    try {
+      const r = await fetch(baseUrl + '/models', {
+        headers: apiKey ? { Authorization: 'Bearer ' + apiKey } : {},
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!r.ok) return reply.code(502).send({ error: `端点返回 HTTP ${r.status},请检查 Base URL 与 API Key` });
+      const j: any = await r.json();
+      const raw = Array.isArray(j?.data) ? j.data.map((m: any) => m?.id) : [];
+      return { ok: true, models: [...new Set(raw.map((m: any) => String(m || '').trim()).filter(Boolean))].sort() };
+    } catch (e: any) {
+      return reply.code(502).send({ error: '连接失败:' + e.message });
+    }
   });
 }

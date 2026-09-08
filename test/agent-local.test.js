@@ -44,5 +44,26 @@ check('system prompt 为纯静态(不含工作区路径)', !sys.includes(root), 
 check('运行时上下文含本地工作区', ctx.includes('本地工作区') && ctx.includes(root), ctx.slice(0, 200));
 check('system prompt 含本地工具规则', sys.includes('run_local_command') || sys.includes('*_local'), '');
 
+// 「不在工作区对话」(全盘模式):会话绑定改为哨兵后,原本会被越界守卫拒绝的绝对路径
+// 可以真实写入(边界 = 整台电脑),运行时上下文同步说明全盘边界与绝对路径要求
+const { NO_WORKSPACE } = await import('../server/config.ts');
+const s2 = agent.createSession('全盘模式会话');
+agent.updateSessionLocalWorkspace(s2.id, NO_WORKSPACE);
+check('全盘模式:本地工作区被清空并置标记', localFs.workspace === null && localFs.noWorkspace === true);
+const outside = path.join(root, '..', 'whole-mode-out.txt');
+let wholeCalls = 0;
+agent.llm = {
+  isMock: false,
+  async chat() {
+    wholeCalls++;
+    if (wholeCalls === 1) return { content: '', toolCalls: [{ id: 'w1', name: 'write_local_file', arguments: JSON.stringify({ path: outside, content: 'whole' }) }] };
+    return { content: '完成', toolCalls: [] };
+  }
+};
+await agent.run('在全盘模式写一个工作区外的文件');
+check('全盘模式:工作区外的绝对路径写入成功', existsSync(path.resolve(outside)), outside);
+const ctxWhole = agent._buildRuntimeContext();
+check('全盘模式:运行时上下文声明全盘边界', ctxWhole.includes('不在工作区对话') && ctxWhole.includes('整台电脑'), ctxWhole.slice(0, 260));
+
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
 process.exit(fail > 0 ? 1 : 0);

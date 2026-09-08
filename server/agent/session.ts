@@ -12,6 +12,7 @@
 //     tool/call        {turn, step, callId, name, arguments}   模型请求的工具调用(arguments 保持原始 JSON 字符串)
 //     tool/result      {turn, step, callId, name, isError, content, ms} 工具执行结果
 //     todo/write       {todos:[{content,status}]}              任务计划整表快照(todo_write 工具写入)
+//     image/generated  {turn,step,mode,prompt,attachments,…}   生图模型一轮成图(仅前端投影,非消息面)
 // - turn/*、step/* 是结构边界,不投影为消息;user/message、assistant/message、
 //   tool/result 三类是"消息面",deriveMessages() 只看它们。
 // - todo/write 是会话状态而非消息(参照 harness 的 sessionProjections):
@@ -44,6 +45,30 @@ export interface SessionEventDataMap {
   'tool/result': { turn: number; step: number; callId: string; name: string; isError: boolean; content: string; ms: number };
   'todo/write': { todos: Array<{ content: string; status: string }> };
   'compaction/done': { summary: string; dropCount?: number; manual?: boolean };
+  /**
+   * 生图模型(imageGen)的一轮成图记录。字节不进日志(与图片附件同规则,只存元数据 id),
+   * 由前端投影为 assistant 气泡的 attachments,并可被后续轮次取回作为图生图参考图。
+   * 本事件不属于"消息面"(deriveMessages 不投影它):图像端点只吃单个 prompt 字符串、
+   * 不吃消息历史,生图轮之间不存在模型侧上下文。
+   */
+  'image/generated': {
+    // 生图对话旁路会带轮次编号;generate_image 工具在工具上下文里拿不到 turn/step,故可选
+    turn?: number; step?: number;
+    /** 本轮实际走的通路:t2i=文生图(generations),i2i=图生图/改图(edits) */
+    mode: 't2i' | 'i2i';
+    /** 提交给图像端点的最终提示词(排查与复现用) */
+    prompt: string;
+    /** 成图的服务端元数据(与附件索引同构,前端按 attachments 渲染) */
+    attachments: Array<Record<string, any>>;
+    /** 作为参考图送出的张数(i2i 时 >0) */
+    refs?: number;
+    /** 上游回显的实际尺寸(部分网关忽略请求的 size) */
+    size?: string;
+    /** 上游回显的实际模型名(网关可能别名路由) */
+    upstreamModel?: string;
+    /** 生成耗时(ms) */
+    ms?: number;
+  };
 }
 
 export type SessionEventType = keyof SessionEventDataMap | string;

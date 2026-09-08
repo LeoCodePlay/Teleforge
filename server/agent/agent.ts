@@ -10,21 +10,22 @@
 //   让用户能在 Agent 工作期间补充/纠正指令。
 // - 多会话并行:每个会话一个运行时(事件日志 + inbox/steer/signal/busy,见 newRuntime),
 //   各会话独立驱动互不阻塞;所有发给前端的事件都带 sid,前端按会话路由显示。
-import { AGENT } from '../config.ts';
+import { AGENT, NO_WORKSPACE } from '../config.ts';
 import fsp from 'node:fs/promises';
 import { LlmClient, isContextOverflowError } from './llm.ts';
+import { lastGeneratedImage, imageCaption, runImageJob } from './image-gen.ts';
 import { compactHistory, summarizeWithLlm, selectCompactRange, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
-import { Session, foldTodos, trimMessagesByBudget } from './session.ts';
+import { Session, foldTodos, trimMessagesByBudget, type SessionEvent } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, type PermissionMode } from './permission.ts';
 import { PERMISSION_MODE_META } from './permission.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
-import { localFs, runWithLocalWorkspace } from '../core/local-fs.ts';
+import { localFs, runWithLocalWorkspaceBinding } from '../core/local-fs.ts';
 import { renderPromptInjectSection } from './prompt-inject.ts';
-import { sshManager as ssh, runWithWorkspace } from '../core/ssh-manager.ts';
+import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.ts';
 import * as sessions from '../store/session-store.ts';
 import { getDefaultPermissionMode as storeDefaultMode, setDefaultPermissionMode as storeSetDefaultMode } from '../store/settings-store.ts';
-import { getAttachment, readImageDataURL, isTextLike, attachmentPath, type AttachmentMeta } from '../store/attachments-store.ts';
+import { getAttachment, readImageDataURL, readImageBytes, saveAttachment, isTextLike, attachmentPath, type AttachmentMeta } from '../store/attachments-store.ts';
 
 // 全局唯一工具注册表:启动时注册全部内置工具与守卫
 const registry = new ToolRegistry();
@@ -146,6 +147,17 @@ async function materializeImageParts(messages: any[]): Promise<any[]> {
   return touched ? out : messages;
 }
 
+// ---- 生图模型(imageGen)----
+// 纯图像端点模型(gpt-image-2 等)在 chat/completions 上会被网关直接拒绝,且没有
+// "多轮上下文"这个概念:/images/* 只接受一个 prompt 字符串。因此开启 imageGen 后
+// 整轮换走 _runImageTurn:一轮 = 一次生图请求 = 一张成图,不参与工具循环与压缩。
+// "多轮对话式生图"由这里在客户端侧造:每轮自动携带上一张成图作为参考图送 /images/edits,
+// 用户说"再亮点""换成夜晚"即作用于上一张图(图像模型本身是指令跟随式的编辑模型)。
+//
+// 另一条(更常用的)路径是 generate_image 工具:对话仍用文本模型,由它读历史、抽参数、
+// 决定文生图还是图生图,再调用生图端点。两条链路共用 image-gen.ts 的执行层。
+// 取参考图/落盘/摘要等公共逻辑见 image-gen.ts(此处不再重复实现)。
+
 
 // 会话日志中最后一条"运行时上下文"快照的内容(供运行时恢复 lastContextText,
 // 避免服务重启/会话切回后对未变化的快照重复追加 user 消息)
@@ -169,8 +181,11 @@ function newRuntime(session) {
     queueSeq: 0,   // 待执行队列项的自增 id(供前端按 id 做立即执行/删除等操作)
     driving: null, // 进行中的 driver promise(同会话并发提交复用同一驱动)
     boundConn: null, // 当前轮绑定的 SSH 连接(切走活动连接后工具仍操作它)
-    workspace: null as string | null, // 会话绑定的远程工作区(执行时经 runWithWorkspace 作用域生效;null=回落连接级)
-    localWorkspace: null as string | null, // 会话绑定的本地工作区(执行时经 runWithLocalWorkspace 作用域生效)
+    // 会话绑定的远程工作区:路径 | NO_WORKSPACE(「不在工作区对话」,边界=整台服务器)
+    // | null(未绑定,执行时回落连接级)。经 runWithWorkspaceBinding 作用域生效。
+    workspace: null as string | null,
+    // 会话绑定的本地工作区:同上,NO_WORKSPACE 时边界=整台电脑(见 local-fs resolveInLocalWorkspace)
+    localWorkspace: null as string | null,
     // 最近一次发给模型的"运行时上下文"快照文本(变化才发新消息,见 _buildRuntimeContext);
     // 从日志恢复,重启/切回会话后不会对未变化的快照重复注入
     lastContextText: lastRuntimeContextText(session.events),
@@ -256,6 +271,19 @@ export function projectEvents(events) {
         ...(Array.isArray(m.tool_calls) && m.tool_calls.length ? { tool_calls: m.tool_calls } : {}),
         ...(m.reasoning_content ? { reasoning_content: m.reasoning_content } : {})
       });
+    } else if (ev.type === 'image/generated') {
+      // 生图模型的一轮成图:投影为 assistant 气泡(正文=摘要文本,附件=成图元数据)。
+      // 前端 turnsToMessages 会把它并入紧邻的 assistant 消息(同一条 run 的多轮合并),
+      // 因此刷新后成图与摘要显示在同一个气泡里。
+      if (!cpPlaced && !isCpMessage(ev)) placeCp();
+      alive = new Set(); // 生图轮不含工具调用
+      out.push({
+        role: 'assistant',
+        content: imageCaption({ mode: d.mode === 'i2i' ? 'i2i' : 't2i', refs: d.refs, size: d.size, count: (d.attachments || []).length || 1 }),
+        time: ev.time,
+        imageJob: { mode: d.mode === 'i2i' ? 'i2i' : 't2i', refs: typeof d.refs === 'number' ? d.refs : undefined, ms: d.ms },
+        ...(Array.isArray(d.attachments) && d.attachments.length ? { attachments: d.attachments } : {})
+      });
     } else if (ev.type === 'tool/result') {
       if (!cpPlaced && !isCpMessage(ev)) placeCp();
       if (!alive.has(d.callId)) continue; // 孤儿工具结果:不投影
@@ -302,6 +330,12 @@ export function messageFaceIndexes(events) {
     } else if (ev.type === 'assistant/message') {
       if (!cpDone && ev.seq > (cp?.dropThroughSeq ?? -1)) placeCp();
       alive = new Set((Array.isArray(d.message?.tool_calls) ? d.message.tool_calls : []).map((t: any) => t.id));
+      out.push(i);
+    } else if (ev.type === 'image/generated') {
+      // 与 projectEvents 严格同构:生图成图也投影为一条 assistant turn,这里必须计数,
+      // 否则删除/回退/分支拿到的下标整体错位(如把用户消息错配成 assistant)。
+      if (!cpDone && ev.seq > (cp?.dropThroughSeq ?? -1)) placeCp();
+      alive = new Set();
       out.push(i);
     } else if (ev.type === 'tool/result') {
       if (!cpDone && ev.seq > (cp?.dropThroughSeq ?? -1)) placeCp();
@@ -372,7 +406,7 @@ export class Agent {
     try {
       const mine = sessions.list(this._connKey);
       const target = mine.find((s) => s.id === sessions.getActive()) || mine[0]
-        || sessions.create('新会话', this.sessionConnKey(), { workspace: ssh.workspace, localWorkspace: localFs.workspace });
+        || sessions.create('新会话', this.sessionConnKey(), this._captureBinding());
       this.sessionId = target.id;
       this._runtimes.set(target.id, newRuntime(new Session(sessions.loadEvents(target.id))));
       sessions.setActive(target.id);
@@ -383,10 +417,10 @@ export class Agent {
     }
   }
 
-  // 会话归属作用域:有远程工作区 = 当前连接作用域(远程任务);否则 = 本地作用域。
-  // 连接了 SSH 但未选远程工作区的会话仍归本地——它只在本机工作(见 createSession)。
+  // 会话归属作用域:有远程工作区(或明确选择「不在工作区对话」=整台服务器)= 当前连接作用域;
+  // 否则 = 本地作用域。连接了 SSH 但两侧都没选的会话仍归本地——它只在本机工作(见 createSession)。
   sessionConnKey() {
-    return ssh.workspace ? this._connKey : 'local';
+    return ssh.workspace || ssh.noWorkspace ? this._connKey : 'local';
   }
 
   /**
@@ -404,9 +438,30 @@ export class Agent {
       rt.localWorkspace = meta.localWorkspace ?? null;
     }
     if (id === this.sessionId) {
-      if (meta.workspace != null) ssh.workspace = meta.workspace;
-      if (meta.localWorkspace != null) localFs.workspace = meta.localWorkspace;
+      if (meta.workspace != null) this._applyRemoteBinding(meta.workspace);
+      if (meta.localWorkspace != null) this._applyLocalBinding(meta.localWorkspace);
     }
+  }
+
+  // 捕获"当前的工作区选择"作为新会话绑定值:全盘模式记为哨兵 NO_WORKSPACE,
+  // 这样在草稿态选了「不在工作区对话」,首条消息创建的会话会继承该模式。
+  _captureBinding(): { workspace: string | null; localWorkspace: string | null } {
+    return {
+      workspace: ssh.noWorkspace ? NO_WORKSPACE : (ssh.workspace ?? null),
+      localWorkspace: localFs.noWorkspace ? NO_WORKSPACE : (localFs.workspace ?? null)
+    };
+  }
+
+  // 把绑定值(路径 / 全盘哨兵)写到活动连接:哨兵 = 清空工作区并置「不在工作区对话」标记
+  _applyRemoteBinding(ws: string) {
+    if (ws === NO_WORKSPACE) ssh.noWorkspace = true;
+    else ssh.workspace = ws;
+  }
+
+  // 把本地绑定值(路径 / 全盘哨兵)写到本地工作区状态
+  _applyLocalBinding(ws: string) {
+    if (ws === NO_WORKSPACE) localFs.noWorkspace = true;
+    else localFs.workspace = ws;
   }
 
   // 当前活跃会话的事件日志(活跃会话必有运行时)
@@ -541,7 +596,7 @@ export class Agent {
   _settleActive() {
     const mine = this.listSessions();
     if (mine.some((s) => s.id === this.sessionId)) return;
-    const target = mine[0] || sessions.create('新会话', this.sessionConnKey(), { workspace: ssh.workspace, localWorkspace: localFs.workspace });
+    const target = mine[0] || sessions.create('新会话', this.sessionConnKey(), this._captureBinding());
     let rt = this._runtimes.get(target.id);
     if (!rt) rt = newRuntime(new Session(sessions.loadEvents(target.id)));
     this._runtimes.set(target.id, rt);
@@ -560,7 +615,7 @@ export class Agent {
   // 新建时捕获"当时的连接工作区"作为会话绑定:之后在新会话里改工作区,
   // 只改本会话的绑定,不串改其他会话的执行工作区。
   createSession(title) {
-    const s = sessions.create(title, this.sessionConnKey(), { workspace: ssh.workspace, localWorkspace: localFs.workspace });
+    const s = sessions.create(title, this.sessionConnKey(), this._captureBinding());
     const rt = newRuntime(new Session());
     rt.workspace = s.workspace ?? null;
     rt.localWorkspace = s.localWorkspace ?? null;
@@ -627,11 +682,11 @@ export class Agent {
     this.assertRemoteWorkspaceChangeable(id); // 已开始对话的会话锁定(防御:RPC 已先校验)
     if (!id) return;
     sessions.setWorkspace(id, ws);
-    // 空会话补选远程工作区后,从本地作用域翻转为当前服务器作用域(归类随工作区走)
+    // 空会话补选远程工作区(含「不在工作区对话」)后,从本地作用域翻转为当前服务器作用域(归类随工作区走)
     if (ws != null && this._connKey !== 'local') sessions.setConnKey(id, this._connKey);
     const rt = this._runtimes.get(id);
     if (rt) rt.workspace = ws;
-    if (id === this.sessionId) ssh.workspace = ws;
+    if (id === this.sessionId && ws != null) this._applyRemoteBinding(ws);
     this.emit('agent', { event: 'sessions_changed' }); // 前端据此把会话移到对应工作区分组
   }
 
@@ -642,7 +697,7 @@ export class Agent {
     sessions.setLocalWorkspace(id, lws);
     const rt = this._runtimes.get(id);
     if (rt) rt.localWorkspace = lws;
-    if (id === this.sessionId) localFs.workspace = lws;
+    if (id === this.sessionId && lws != null) this._applyLocalBinding(lws);
     this.emit('agent', { event: 'sessions_changed' });
   }
 
@@ -1007,10 +1062,11 @@ export class Agent {
     // 不绑任何连接——连接断开不会连带停止它,远程工具也因无工作区而不可用。
     // 同时把会话绑定的远程/本地工作区套上作用域:并行会话各自读到自己绑定的
     // 工作区(rt.workspace 等),互不串改;undefined = 无绑定(旧会话),回落连接级工作区。
+    // 绑定值为哨兵 NO_WORKSPACE 时,runWith*WorkspaceBinding 会强制"无工作区 + 全盘模式"。
     const boundConn = rt.workspace ? ssh.active : null; // 本地模式会话 = null
     return ssh.runWithConn(boundConn, () =>
-      runWithWorkspace(rt.workspace ?? undefined, () =>
-        runWithLocalWorkspace(rt.localWorkspace ?? undefined, () =>
+      runWithWorkspaceBinding(rt.workspace, () =>
+        runWithLocalWorkspaceBinding(rt.localWorkspace, () =>
           this._runTurnInner(rt, runSessionId, input, boundConn))));
   }
 
@@ -1021,6 +1077,13 @@ export class Agent {
     // 附件元数据(submit 时已按服务端索引解析):正文注入与多模态注入都基于它
     const atts: AttachmentMeta[] = Array.isArray(attachments) ? attachments : [];
     const allowVision = !!(this.llm && this.llm.multimodal);
+
+    // 生图模型:整轮旁路(必须在技能注入之前分叉)。纯图像端点模型没有 chat 通道,
+    // system 提示词、工具 schema、上下文压缩、/技能 正文注入对它全部无意义,
+    // 而且用户原文才是提示词——注入技能会把技能正文混进 prompt 污染出图。
+    if (this.llm && this.llm.imageGen) {
+      return this._runImageTurn(rt, runSessionId, { text, attachments: atts });
+    }
 
     // /技能名 [需求](对齐 harness tool-skill 的 leadingInput 识别,扩展为任意位置):
     // 输入里独立成词的 /技能名(行首或空白后)逐个加载正文注入本轮,让 AI 严格按技能指令行动;
@@ -1077,12 +1140,19 @@ export class Agent {
     }
 
     // 附件 -> 模型可见文本:小文本文件内联全文,其他文件给路径说明。
-    // 图片不加文本(多模态模型在请求期注入 image_url;不支持视觉的模型在下面补"无法识别"说明)
+    // 图片不加正文(多模态模型在请求期注入 image_url;不支持视觉的模型在下面补说明)
     const imageAtts = atts.filter((a) => a.kind === 'image');
     let attBlocks = await attachmentTextBlocks(atts);
-    if (imageAtts.length > 0 && !allowVision) {
+    if (imageAtts.length > 0) {
+      // 图片附件 id 必须显式告诉模型:模型看不到 id 就无法把它转交给 generate_image 工具。
+      // 非多模态模型尤其关键——它的字节不会被注入(注入会直接让上游报错),
+      // 但"图生图"仍然要成立:模型只需拿着 id 调工具,参考图由服务端读盘送给图像端点。
       attBlocks += (attBlocks ? '\n\n' : '\n\n') + imageAtts
-        .map((a) => `【图片附件:${a.name}(${fmtSize(a.size)})——当前模型未开启多模态,无法识别图片内容】`)
+        .map((a) => allowVision
+          ? `【图片附件:${a.name}(${fmtSize(a.size)}),附件 id=${a.id}——已随本消息提供视觉内容;需要以它为参考生图时,把该 id 传给 generate_image 的 reference_attachment_ids。】`
+          : `【图片附件:${a.name}(${fmtSize(a.size)}),附件 id=${a.id}——当前模型未开启多模态,你看不到图片内容;`
+          + `但 generate_image 工具能读取它。用户若要求"按这张图/参考这张图/改这张图"生图,`
+          + `请把该 id 原样放进 reference_attachment_ids 调用工具,不要因此拒绝用户。】`)
         .join('\n');
     }
     if (attBlocks) text = String(text || '') + attBlocks;
@@ -1426,6 +1496,117 @@ export class Agent {
   }
 
   /**
+   * 生图模型的一轮(imageGen 旁路):一轮 = 一次 /images/* 请求 = 一张成图。
+   * 路由规则(图像端点只接受单个 prompt 字符串、不吃消息历史,所以"多轮"靠携带参考图实现):
+   *  - 本轮上传了图片        → /images/edits + 上传的图(多张一起送,上游逐张消费)
+   *  - 会话内已有上一张成图  → /images/edits + 自动携带该成图(等价于"把刚才那张改一下")
+   *  - 两者都没有            → /images/generations(文生图)
+   * 与文本轮的三处关键差异:不自动重试(按张计费,重试=重复扣费)、不注入 system/工具、
+   * 不做上下文压缩(没有消息历史可压)。
+   */
+  async _runImageTurn(rt: any, runSessionId: string | null, { text, attachments }: { text: string; attachments: AttachmentMeta[] }): Promise<{ kind: string; error?: any }> {
+    const llm = this.llm;
+    if (!llm) throw new Error('尚未配置 LLM(设置 -> 模型配置)');
+    const session: Session = rt.session;
+    const signal: AbortController = rt.signal;
+    const rawText = String(text || '').trim();
+    const atts: AttachmentMeta[] = Array.isArray(attachments) ? attachments : [];
+    const uploads = atts.filter((a) => a.kind === 'image');
+    const files = atts.filter((a) => a.kind !== 'image');
+    const prev = lastGeneratedImage(session.events);
+    const isFirst = !session.hasUserMessages();
+    const turn = session.nextTurn();
+    let endReason: { kind: string; error?: any } = { kind: 'completed' };
+    let turnOpened = false;
+
+    // start 事件与文本轮共用:前端据此渲染用户气泡 + 一条流式中的 assistant 气泡,
+    // 并推进分支点计数(生图轮同样占两个 turn:用户消息 + 成图消息)
+    this.emit('agent', {
+      event: 'start', text: rawText, sid: runSessionId,
+      ...(atts.length ? { attachments: atts } : {})
+    });
+    try {
+      if (isFirst && runSessionId) {
+        const t = (rawText || (uploads.length ? `发送了 ${uploads.length} 张图片` : '')).replace(/\s+/g, ' ').slice(0, 24);
+        if (t) sessions.rename(runSessionId, t);
+      }
+      session.append('turn/start', { turn }); turnOpened = true;
+      session.append('step/start', { turn, step: 1 });
+      // 原文即提示词,不做技能注入/附件正文合成:日志里存的就是用户说的话
+      session.append('user/message', {
+        content: rawText, source: 'user',
+        ...(atts.length ? { attachments: atts } : {})
+      });
+      if (signal.signal.aborted) throw new Error('已停止');
+      if (files.length) {
+        this.emit('agent', {
+          event: 'notice', sid: runSessionId,
+          text: `生图模型只能接受图片参考,本轮 ${files.length} 个文件附件未使用(${files.map((f) => f.name).join('、')})。`
+        });
+      }
+      // 图像端点 prompt 必填(空串上游 400):纯图无文字时给一个通用创作指令
+      const prompt = rawText || (uploads.length || prev ? '请参考图片进行创作,保持主体与整体构图。' : '请生成一张高质量图片。');
+      // 上传优先:用户这一轮主动给的图就是他要的参考;没给才回落到上一张成图做迭代修改
+      this.emit('agent', {
+        event: 'image_job', sid: runSessionId,
+        mode: uploads.length || prev ? 'i2i' : 't2i', refs: uploads.length || (prev ? 1 : 0), prompt
+      });
+      const job = await runImageJob({
+        llm, prompt,
+        refIds: uploads.map((a) => a.id),
+        useLastImage: uploads.length === 0,
+        events: session.events,
+        signal: signal.signal
+      });
+      if (signal.signal.aborted) throw new Error('已停止');
+      if (job.skipped.length) {
+        this.emit('agent', {
+          event: 'notice', sid: runSessionId,
+          text: `${job.skipped.length} 张参考图不可用(附件已清理或不是图片),已跳过。`
+        });
+      }
+
+      // 成图落盘为附件由 runImageJob 统一完成:字节进附件库、日志只存元数据(与用户上传
+      // 同规则)。这是"多轮迭代"能成立的前提——下一轮要靠这个 id 把成图读回来当参考图。
+      const ms = job.ms;
+      const caption = imageCaption({ mode: job.mode, refs: job.refs, size: job.size, count: job.saved.length });
+      // assistant/message 让切回文本模型时 AI 仍知道这里出过图;image/generated 承载成图元数据
+      session.append('assistant/message', { turn, step: 1, message: { role: 'assistant', content: caption } });
+      session.append('image/generated', {
+        turn, step: 1, mode: job.mode, prompt: job.prompt,
+        attachments: job.saved, refs: job.refs,
+        size: job.size, upstreamModel: job.upstreamModel, ms
+      });
+      rt.live = null;
+      session.append('step/end', { turn, step: 1 });
+      this.emit('agent', {
+        event: 'image_done', sid: runSessionId, mode: job.mode, refs: job.refs, ms,
+        size: job.size || null, revised: job.revisedPrompt || null,
+        attachments: job.saved
+      });
+      this.emit('agent', { event: 'done', text: caption, iters: 1, sid: runSessionId });
+      console.log(`[agent] 生图 ${job.mode} 完成:${job.saved.length} 张,耗时 ${Math.round(ms / 1000)}s,上游尺寸 ${job.size || '未知'}`);
+    } catch (e: any) {
+      if (signal.signal.aborted) {
+        endReason = { kind: 'aborted' };
+        this.emit('agent', { event: 'stopped', sid: runSessionId });
+      } else {
+        endReason = { kind: 'error', error: String(e?.message || e) };
+        this.emit('log', 'error', `生图错误: ${e?.message || e}`);
+        this.emit('agent', { event: 'error', message: e?.message || String(e), sid: runSessionId });
+      }
+    } finally {
+      rt.live = null;
+      if (turnOpened) session.append('turn/end', { turn, reason: endReason });
+      if (runSessionId) {
+        sessions.saveEvents(runSessionId, session.events);
+        this.emit('agent', { event: 'sessions_changed' });
+      }
+    }
+    return endReason;
+  }
+
+  /**
    * 执行一步内的全部工具调用。
    * - 串行模式(AGENT.CONCURRENT_TOOL_CALLS=false 或并发上限=1):逐条执行,保持
    *   "结果紧跟对应调用"的原始语义。
@@ -1554,8 +1735,13 @@ export class Agent {
    */
   _buildRuntimeContext(mode: PermissionMode = DEFAULT_PERMISSION_MODE): string {
     const localMode = !ssh.connected;
-    const ws = ssh.workspace || '(未设置,请提示用户在界面中选择工作区)';
-    const lws = localFs.workspace || '(未设置,请提示用户在界面中选择本地工作区)';
+    // 工作区一行的三种状态:绑定了目录 / 「不在工作区对话」(全盘模式) / 未设置
+    const WHOLE_REMOTE = `未选择工作区·「不在工作区对话」:边界=整台远程服务器文件系统(根 /),`
+      + `所有文件工具必须传绝对路径(如 /etc/hosts),相对路径会被拒绝;命令未 cd 时默认在家目录执行`;
+    const WHOLE_LOCAL = `未选择本地工作区·「不在工作区对话」:边界=整台电脑(${process.platform === 'win32' ? '所有盘符 C:\\、D:\\…' : '根目录 /'}),`
+      + `所有文件工具必须传本机绝对路径(如 ${process.platform === 'win32' ? 'C:\\dir\\a.txt' : '/etc/hosts'} 或 ~/a.txt),相对路径会被拒绝`;
+    const ws = ssh.workspace ? ssh.workspace : (ssh.noWorkspace ? WHOLE_REMOTE : '(未设置,请提示用户在界面中选择工作区)');
+    const lws = localFs.workspace ? localFs.workspace : (localFs.noWorkspace ? WHOLE_LOCAL : '(未设置,请提示用户在界面中选择本地工作区)');
     const sections: string[] = [];
     // 权限模式说明(用户在输入框左下角切换):计划模式收紧为只读,确认/自动编辑下
     // 部分操作会先请求用户批准(拒绝时收到的工具结果会说明原因)

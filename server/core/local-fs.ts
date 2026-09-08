@@ -5,13 +5,29 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { FILE } from '../config.ts';
+import { FILE, NO_WORKSPACE } from '../config.ts';
 
 // 本地工作区作用域:agent 会话一轮运行期间被绑定到它自己的本地工作区。
 // 多会话并行时各自读到自己的工作区;undefined = 未绑定(旧会话),回落全局本地工作区。
 const localWorkspaceScope = new AsyncLocalStorage<string | null | undefined>();
 export function runWithLocalWorkspace<T>(ws: string | null | undefined, fn: () => T): T {
   return localWorkspaceScope.run(ws, fn);
+}
+
+// 「不在工作区对话」(全盘模式)作用域:与 localWorkspaceScope 同构——
+// undefined = 作用域外(回落全局标记);true = 该轮明确处于全盘模式(边界 = 整台电脑)。
+const localNoWorkspaceScope = new AsyncLocalStorage<boolean | undefined>();
+export function runWithLocalNoWorkspace<T>(v: boolean | undefined, fn: () => T): T {
+  return localNoWorkspaceScope.run(v, fn);
+}
+
+// 一次性进入「会话本地工作区绑定」作用域:绑定值为哨兵 NO_WORKSPACE 时,
+// 强制清空本地工作区并置全盘标记;绑定值为 null(旧会话未绑定)时两侧都保持
+// undefined = 回落全局本地工作区(不能直接传 null,否则误报"尚未选择本地工作区")。
+export function runWithLocalWorkspaceBinding<T>(ws: string | null | undefined, fn: () => T): T {
+  if (ws === NO_WORKSPACE) return runWithLocalNoWorkspace(true, () => runWithLocalWorkspace(null, fn));
+  if (ws == null) return runWithLocalNoWorkspace(undefined, () => runWithLocalWorkspace(undefined, fn));
+  return runWithLocalNoWorkspace(false, () => runWithLocalWorkspace(ws, fn));
 }
 
 export interface FsEntry {
@@ -29,13 +45,27 @@ export interface ChunkReadResult {
 
 export class LocalFs {
   private _workspace: string | null = null; // 用户选择的本地工作区绝对路径(可空)
+  private _noWorkspace = false; // 「不在工作区对话」(全盘模式):边界放宽到整台电脑
   // 会话作用域优先:agent 运行期间取该会话绑定的本地工作区;作用域外(undefined)才回落全局值
   get workspace(): string | null {
     const scoped = localWorkspaceScope.getStore();
     if (scoped !== undefined) return scoped;
     return this._workspace;
   }
-  set workspace(v: string | null) { this._workspace = v; }
+  set workspace(v: string | null) {
+    this._workspace = v;
+    if (v) this._noWorkspace = false; // 与「不在工作区对话」互斥:选了目录就退出全盘模式
+  }
+  // 「不在工作区对话」:读优先会话作用域,回落全局值;与 workspace 互斥
+  get noWorkspace(): boolean {
+    const scoped = localNoWorkspaceScope.getStore();
+    if (scoped !== undefined) return scoped;
+    return this._noWorkspace;
+  }
+  set noWorkspace(v: boolean) {
+    this._noWorkspace = v;
+    if (v) this._workspace = null; // 进入全盘模式即清空本地工作区
+  }
   get home() { return os.homedir(); }
   // 各本地终端会话的启动 cwd:重命名目录报 EBUSY 时,若占用者可能是自家终端(停在该目录内),可给出针对性提示
   readonly localTermCwds = new Set<string>();
@@ -175,14 +205,42 @@ export async function listRoots(): Promise<FsEntry[]> {
   return [{ name: '/', type: 'dir', size: 0, mtime: 0 }];
 }
 
-// 把路径解析到本地工作区内;越界/未设工作区报错(与远程 resolveInWorkspace 对称)
+// 把路径解析到本地工作区内;越界/未设工作区报错(与远程 resolveInWorkspace 对称)。
+// 例外:处于「不在工作区对话」(全盘模式)时不报错,改走 resolveWholeLocalPath——
+// 边界放宽到整台电脑(Windows 各盘符/UNC,POSIX 根目录)。
 export function resolveInLocalWorkspace(p: string, { allowRoot = true }: { allowRoot?: boolean } = {}): string {
   const ws = localFs.workspace;
-  if (!ws) throw new Error('尚未选择本地工作区,请先在界面中选择本地目录作为本地工作区');
+  if (!ws) {
+    if (!localFs.noWorkspace) {
+      throw new Error('尚未选择本地工作区,请先在界面中选择本地目录作为本地工作区(或选择「不在工作区对话」让 AI 在本机全盘工作)');
+    }
+    return resolveWholeLocalPath(p);
+  }
   const wsAbs = path.resolve(ws);
   const raw = String(p || '.').trim();
   const abs = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(wsAbs, raw);
   if (abs === wsAbs) return wsAbs;
   if (abs.startsWith(wsAbs + path.sep)) return abs;
   throw new Error(`路径超出本地工作区,被拒绝: ${p}`);
+}
+
+// 「不在工作区对话」下的本机路径解析:边界 = 整台电脑,必须传绝对路径
+// ('~' 展开为家目录);path.resolve 顺带消解 '..',盘符根 'C:' 归一为 'C:\'。
+export function resolveWholeLocalPath(p: string): string {
+  const raw = String(p ?? '').trim();
+  if (!raw) throw new Error('「不在工作区对话」下必须传本机绝对路径(如 C:\\dir\\a.txt)');
+  const expanded = raw === '~' ? os.homedir()
+    : (raw.startsWith('~/') || raw.startsWith('~\\')) ? path.join(os.homedir(), raw.slice(2))
+    : raw;
+  const drive = /^([A-Za-z]):[\\/]?$/.exec(expanded);        // 裸盘符 = 该盘根,与 listDir 归一一致
+  const looksAbs = /^([A-Za-z]:[\\/]|[\\/])/.test(expanded); // 盘符 / 根 / UNC(\\server\share)
+  if (!drive && !looksAbs) throw new Error(`「不在工作区对话」下请传本机绝对路径(如 C:\\dir\\a.txt 或 ~/a.txt):${p}`);
+  return path.resolve(drive ? drive[1] + ':\\' : expanded);
+}
+
+// 是否机器级根(盘符根 C:\ / POSIX 根 / / UNC 共享根 \\server\share):全盘模式下的删除禁区
+export function isLocalMachineRoot(p: string): boolean {
+  const abs = path.resolve(p);
+  if (abs === path.parse(abs).root) return true;
+  return /^\\\\[^\\]+\\[^\\]+\\?$/.test(abs);
 }

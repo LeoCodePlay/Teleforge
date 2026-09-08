@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Session } from '../../types';
+import { NO_WORKSPACE, WHOLE_LABEL } from '../../types';
 import { useLongPress } from '../../hooks/useLongPress';
 import './SessionPanel.scss';
 
@@ -187,8 +188,12 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   // 分组:远程任务 = 绑定了远程工作区的会话(按远程工作区分组);
   // 本地任务 = 无远程工作区的会话(按本地工作区分组)——含未连接时的本地会话,
   // 以及连接了 SSH 但未选远程工作区、仅限本地工作的会话(需求:归本地任务列表)
-  const remoteSessions = mine.filter((s) => s.workspace);
-  const localSessions = mine.filter((s) => !s.workspace);
+  // 仅"已连接服务器"(作用域为服务器键)时分开显示远程任务/本地任务两列表;
+  // 断开连接(本地作用域)后不再展示「远程任务列表」——此时无远程可用,绑定了远程
+  // 工作区的会话(含错误残留绑定)降级归入本地任务分组,避免远程分组在断线后残留。
+  const inRemoteScope = !!scopeKey && scopeKey !== 'local';
+  const remoteSessions = inRemoteScope ? mine.filter((s) => s.workspace) : [];
+  const localSessions = mine.filter((s) => (inRemoteScope ? !s.workspace : true));
   const remoteKey = (ws: string) => `r:${scopeKey}:${ws}`;
   const localKey = (ws: string) => `l:${ws}`;
   const groupSessions = (list: Session[], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string) => {
@@ -270,10 +275,11 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   const totalVisible = mine.length;
   const noTasks = totalVisible === 0;
 
-  // 渲染一组会话(共用分组头/行渲染)
-  const renderGroup = (groups: [string, Session[]][], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string, icon: string, newInGroup: (ws: string | null) => void) =>
+  // 渲染一组会话(共用分组头/行渲染);wholeLabel = 该侧「不在工作区对话」分组的标题
+  const renderGroup = (groups: [string, Session[]][], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string, icon: string, wholeLabel: string, newInGroup: (ws: string | null) => void) =>
     groups.map(([key, list]) => {
-      const label = key.endsWith(`:${UNGROUPED}`) ? UNGROUPED_LABEL : lastPathSegment(wsOf(list[0]) || '');
+      const ws = wsOf(list[0]) || '';
+      const label = key.endsWith(`:${UNGROUPED}`) ? UNGROUPED_LABEL : (ws === NO_WORKSPACE ? `🌐 ${wholeLabel}` : lastPathSegment(ws));
       return (
         <WorkspaceGroup key={key} label={label} icon={icon} sessions={list}
           expanded={isExpanded(key)}
@@ -298,13 +304,13 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
         {remoteGroups.length > 0 && (
           <div className="s-section">
             <div className="s-section-title">远程任务列表</div>
-            {renderGroup(remoteGroups, (s) => s.workspace, remoteKey, '🖥', (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null); else onNew(); })}
+            {renderGroup(remoteGroups, (s) => s.workspace, remoteKey, '🖥', WHOLE_LABEL.remote, (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null); else onNew(); })}
           </div>
         )}
         {localGroups.length > 0 && (
           <div className="s-section">
             <div className="s-section-title">本地任务列表</div>
-            {renderGroup(localGroups, (s) => s.localWorkspace, localKey, '📂', (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws); else onNew(); })}
+            {renderGroup(localGroups, (s) => s.localWorkspace, localKey, '📂', WHOLE_LABEL.local, (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws); else onNew(); })}
           </div>
         )}
         {foreign.length > 0 && (

@@ -118,6 +118,21 @@ export function attachmentUrl(id: string): string {
 // 超 32 条整体清空,简单有界
 const b64Cache = new Map<string, string>();
 
+/** 读取图片附件原始字节(生图模型的图生图参考图需要 multipart 上传,不能用 data URL);失败返回 null */
+export async function readImageBytes(id: string): Promise<{ buf: Buffer; mime: string; name: string } | null> {
+  const meta = getAttachment(id);
+  if (!meta || meta.kind !== 'image') return null;
+  const p = attachmentPath(id);
+  if (!p) return null;
+  try {
+    const buf = await fsp.readFile(p);
+    const mime = /^image\/[a-z0-9.+-]+$/i.test(meta.mime) ? meta.mime : 'image/png';
+    return { buf, mime, name: meta.name };
+  } catch {
+    return null;
+  }
+}
+
 /** 读取图片附件字节并转 base64 data URL(OpenAI image_url 格式);失败返回 null */
 export async function readImageDataURL(id: string): Promise<string | null> {
   const hit = b64Cache.get(id);

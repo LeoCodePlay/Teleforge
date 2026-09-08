@@ -176,18 +176,20 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     ? {
         contextWindow: _lcCfg.contextWindow || FALLBACK_CONTEXT.contextWindow,
         maxTokens: _lcCfg.maxTokens || FALLBACK_CONTEXT.maxTokens,
-        multimodal: _lcCfg.multimodal === true
+        multimodal: _lcCfg.multimodal === true,
+        imageGen: _lcCfg.imageGen === true
       }
     : FALLBACK_CONTEXT;
   const effBaseUrl = provider.baseUrl;
   const effKey = isMock ? '' : apiKey;
 
-  // 统一生效的 llm 下发载荷(baseUrl/key/model + 上下文能力 + 多模态开关)
+  // 统一生效的 llm 下发载荷(baseUrl/key/model + 上下文能力 + 多模态/生图开关)
   const llmPayload = () => ({
     baseUrl: effBaseUrl, apiKey: effKey, model: effModel,
     contextWindow: effModelContext.contextWindow || 0,
     maxTokens: effModelContext.maxTokens || 0,
-    multimodal: effModelContext.multimodal === true
+    multimodal: effModelContext.multimodal === true,
+    imageGen: effModelContext.imageGen === true
   });
 
   // 切换提供商:恢复该条目的 Key 与上次使用的模型(优先后端保存的选择级配置)
@@ -299,7 +301,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       } catch { /* 后端写失败不阻塞 UI,下次变更会重试 */ }
     }, 400);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, apiKey, model, customModel, isMock]);
+  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen, apiKey, model, customModel, isMock]);
 
   // 后端重启/WS 断线重连后:agent.llm 是后端内存态,重启即清空。
   // 前端不刷新时不会重新触发上面的配置 effect,这里监听 open 重连后按当前生效
@@ -310,7 +312,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     });
     return () => { off(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal]);
+  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen]);
 
   // ---- 添加 / 编辑 / 复制 / 删除「我的提供商」(增删改均写入服务端配置文件) ----
   // 添加成功后自动切换为当前使用;返回 true/false 供弹窗决定是否关闭

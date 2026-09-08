@@ -14,8 +14,9 @@ export interface AiProvider {
   models: string[];
   note: string;
   /** 每个模型的能力/参数声明(可选),key = 模型名:
-   *  contextWindow 输入窗口、maxTokens 输出上限、multimodal 是否支持图片输入 */
-  modelConfig?: Record<string, { contextWindow?: number; maxTokens?: number; multimodal?: boolean }>;
+   *  contextWindow 输入窗口、maxTokens 输出上限、multimodal 是否支持图片输入、
+   *  imageGen 是否为生图模型(对话改走 /images/generations 与 /images/edits) */
+  modelConfig?: Record<string, { contextWindow?: number; maxTokens?: number; multimodal?: boolean; imageGen?: boolean }>;
 }
 
 let providers: AiProvider[] | null = null; // 懒加载缓存

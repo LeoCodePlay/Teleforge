@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --line-soft: #26304f; --muted: #8ca0c9; --text: #e6ecf8;
+    --glass-bg-hover: rgba(255,255,255,.08); --r-sm: 6px;
+    --btn-danger-text: #fff; --btn-danger-a: #ef4444; --btn-danger-b: #b91c1c;
+  }
+  html,body{margin:0;background:#0b1020}
+</style>
+<link rel="stylesheet" href="winctl.css">
+</head>
+<body style="display:flex; gap:80px; padding:60px;">
+
+  <div class="winctls" style="outline:1px dashed #f0c030;">
+    <button class="winctl winctl-min" title="最小化"><svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1.1"/></svg></button>
+    <button class="winctl winctl-max" title="最大化"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.1"/></svg></button>
+    <button class="winctl winctl-close" title="关闭"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1 L9 9 M9 1 L1 9" stroke="currentColor" stroke-width="1.1"/></svg></button>
+  </div>
+
+  <div class="winctls" style="outline:1px dashed #f0c030;">
+    <!-- 最大化状态下的还原图标 -->
+    <button class="winctl winctl-min" title="最小化"><svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1.1"/></svg></button>
+    <button class="winctl winctl-max" title="还原"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="3" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.1"/><rect x="3" y="1" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.1"/></svg></button>
+    <button class="winctl winctl-close" title="关闭"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1 L9 9 M9 1 L1 9" stroke="currentColor" stroke-width="1.1"/></svg></button>
+  </div>
+</body>
+</html>

@@ -37,6 +37,44 @@
 }
 .mc-switch.on { border-color: var(--accent-border); background: var(--accent-soft); }
 .mc-switch.on .mc-knob { transform: translateX(13px); background: var(--accent-2); }
+.mc-switch:disabled { opacity: .35; cursor: not-allowed; }
+
+/* 生图开关:开启后整条模型行换成"生图模型"语义 —— 上下文/最大输出对该链路无意义,
+   统一置灰;行尾提示独占一行说明这轮对话将如何路由到 /images/* */
+.mc-ig { cursor: pointer; }
+.mc-ig .mc-field > span, .mc-field.mc-ig > span { color: var(--muted); }
+.model-config-row.ig-on {
+  flex-wrap: wrap;
+  border-color: var(--accent-border);
+  background: linear-gradient(135deg, var(--accent-fill-soft), var(--glass-bg-inset));
+}
+.model-config-row.ig-on .mc-field input:disabled { opacity: .4; }
+.mc-ig-hint {
+  flex: 1 1 100%; margin-top: 2px; font-size: 11px; line-height: 1.5;
+  color: var(--accent-2); opacity: .85;
+}
+
+/* ---- 生图工具卡片:与提供商列表同层,但用左侧 accent 竖条标出"这是另一套配置" ---- */
+.image-tool-card { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.image-tool-card .panel-title { margin-bottom: 10px; }
+.it-body {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--glass-border); border-left: 2px solid var(--accent-border);
+  border-radius: var(--r-sm);
+  background: var(--glass-bg-inset); box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+.it-body .field { display: flex; flex-direction: column; gap: 5px; }
+.it-body .field > label { font-size: 11.5px; color: var(--muted); }
+.it-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.it-grid .mc-field { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.it-grid .mc-field > span { font-size: 11.5px; color: var(--muted); }
+.it-actions { display: flex; align-items: center; gap: 8px; }
+.it-msg { font-size: 12px; line-height: 1.5; padding: 6px 9px; border-radius: var(--r-sm); }
+.it-msg.ok { color: var(--ok, var(--accent-2)); background: var(--accent-fill-soft); }
+.it-msg.err { color: var(--danger, #e06c75); background: var(--danger-fill, rgba(224, 108, 117, .12)); }
+.it-ok { color: var(--accent-2); }
+.it-warn { color: var(--danger, #e06c75); }
 
 /* ---- AI 配置:预置提供商快速切换 chips ---- */
 .provider-chips { display: flex; flex-wrap: wrap; gap: 6px; }

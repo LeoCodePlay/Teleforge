@@ -238,6 +238,16 @@
 /* 历史整表载入时与消息一致不播入场动画 */
 .chat.no-anim .running-row { animation: none; }
 
+/* 生图等待行(挂在 ai 气泡内):图像端点非流式,几十秒没有任何增量可吐,
+   用一条与 running-row 同款的状态行持续声明"仍在生成",避免被误判为卡死 */
+.image-job-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin: 2px 0 8px; color: var(--muted); font-size: 12.5px;
+  animation: msg-in .25s ease-out;
+}
+.image-job-text { user-select: none; color: var(--text); }
+.image-job-hint { font-size: 11.5px; opacity: .72; }
+
 /* 工具调用:单条回复内按组折叠为一条,展开才显示各卡片 */
 .toolrun { margin-top: 8px; min-width: 0; }
 .toolrun-head {
