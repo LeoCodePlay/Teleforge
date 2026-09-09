@@ -31,6 +31,10 @@
    之前渲染过的高度之后依然精确)。会话越长收益越大——滚动、整表布局与悬浮滚动条
    的 scrollHeight 度量不再随每帧遍历全部消息的完整子树走。 */
 .msg { margin-bottom: 14px; display: flex; content-visibility: auto; contain-intrinsic-size: auto 320px; }
+/* 会话切换触底兜底:ChatPanel 切换会话时临时挂 data-ws-settle,取消消息的渲染跳过,
+   做一次全量真实布局让 contain-intrinsic-size:auto 记住各条真实高度;撤下后按记忆
+   估高,切换瞬间即可精确落在真正的底部(配合 ChatPanel 切换兜底 effect) */
+.chat[data-ws-settle="1"] .msg { content-visibility: visible; }
 /* 挂载入场动画只给最新一条消息:历史整表切换/载入时若全部消息同时重放
    msg-in(.25s 淡入+上移),整段会话看起来就从上面"缓缓落下";
    流式追加的最新回复仍保留入场动效,普通消息保持静止。 */

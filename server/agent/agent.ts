@@ -14,7 +14,7 @@ import { AGENT, NO_WORKSPACE } from '../config.ts';
 import fsp from 'node:fs/promises';
 import { LlmClient, isContextOverflowError } from './llm.ts';
 import { lastGeneratedImage, imageCaption, runImageJob } from './image-gen.ts';
-import { compactHistory, summarizeWithLlm, selectCompactRange, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
+import { compactHistory, summarizeWithLlm, selectManualCompactRange, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
 import { Session, foldTodos, trimMessagesByBudget, type SessionEvent } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, type PermissionMode } from './permission.ts';
@@ -831,30 +831,22 @@ export class Agent {
     const msgs = trace.map((t) => t.msg);
     if (msgs.length < 3) return { compacted: false, dropCount: 0 };
 
-    // 手动压缩保留最近一段(比自动压缩更克制:多组对话时至少保留完整最后一组)
+    // 手动压缩保留最近一段(比自动压缩更克制:多组对话时至少保留完整最后一组)。
+    // 组边界只认真实用户消息:runtime_context 快照(user 角色)紧跟真实消息注入,
+    // 若算作组边界,单条消息的深任务会话会被误判为"多组对话"而钳制掉几乎全部可压
+    // 区间(只剩第一条真实消息 ~40 token,摘要模板 ~255 token 必然更大,shrink 校验
+    // 必报"压缩失败")。压缩摘要(seq 指向 compaction/done)与 runtime 快照都不算组边界。
     const ctxWindow = this.llm.contextWindow || 128000;
     const retainTokens = Math.max(Math.floor(ctxWindow * 0.16), 4000);
-    let range = selectCompactRange(msgs, retainTokens);
-    if (!range) {
-      // 位置式选择无可压缩区间(历史很小,全在保留水位内):旧语义兜底——
-      // 至少把除最后一组外的早期对话全部压缩掉,保证 /compact 在小组会话上仍有收益
-      const groupStarts: number[] = [];
-      msgs.forEach((m, i) => { if (m.role === 'user') groupStarts.push(i); });
-      if (groupStarts.length >= 2) {
-        const cut = groupStarts[groupStarts.length - 1];
-        if (cut > 0) range = { drop: msgs.slice(0, cut), recent: msgs.slice(cut) };
-      }
-    }
+    const evBySeq = new Map<number, any>((session.events || []).map((e: any) => [e.seq, e] as [number, any]));
+    const isRealUser = (i: number) => {
+      if (!msgs[i] || msgs[i].role !== 'user') return false;
+      const ev = evBySeq.get(trace[i].seq);
+      return !!ev && ev.type === 'user/message' && (ev.data || {}).source !== 'runtime';
+    };
+    const range = selectManualCompactRange(msgs, retainTokens, isRealUser);
     if (!range) return { compacted: false, dropCount: 0 };
-    // 多组对话:切点不越过最后一组起点(至少保留完整最后一组);
-    // 单组对话(单消息深任务):直接用位置式切点,允许压缩组内早期步骤
-    const firstUserIdx = msgs.findIndex((m) => m.role === 'user');
-    const lastUserIdx = msgs.map((m, i) => (m.role === 'user' ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
-    const keep = firstUserIdx >= 0 && firstUserIdx === lastUserIdx
-      ? range.drop.length
-      : Math.min(range.drop.length, lastUserIdx);
-    if (keep <= 0 || keep >= msgs.length) return { compacted: false, dropCount: 0 };
-    const dropMsgs = msgs.slice(0, keep);
+    const dropMsgs = range.drop;
     if (!dropMsgs.length) return { compacted: false, dropCount: 0 };
 
     let summary = '';
@@ -873,13 +865,22 @@ export class Agent {
     const summaryMsg = summary
       ? `【上下文已手动压缩】为节省上下文窗口,早期对话被压缩为以下摘要(如需细节请让助手展开):\n${summary}`
       : `【上下文已手动压缩】早期 ${dropMsgs.length} 条消息已省略。`;
-    const dropSeqs = trace.slice(0, keep).map((t) => t.seq);
+    const dropSeqs = trace.slice(0, dropMsgs.length).map((t) => t.seq);
     // 非破坏压缩:日志完整保留早期消息(前端显示/刷新后回看始终完整),
     // 只追加压缩检查点,模型历史投影自检查点起跳过被压消息、以摘要顶替。
     session.markCompacted(dropSeqs, summaryMsg, { dropCount: dropMsgs.length, manual: true });
     if (!rt) this._runtimes.set(id, newRuntime(session)); // 压缩结果同步进内存,避免下次载入前被旧快照覆盖
     if (id != null) sessions.saveEvents(id, session.events); // 落盘,重启/切回会话后仍在
     this.emit('agent', { event: 'history_compacted', sid: id, dropCount: dropMsgs.length });
+    // 压缩后立即把仪表盘口径换成「压缩后的模型上下文」:手动压缩不产生新模型请求,
+    // 服务端不会自发广播 context_usage,仪表盘会停留在压缩前的旧值(表现为"压缩了却没变小")。
+    // actual=null:无真实请求,前端按服务端预估显示。
+    this.emit('agent', {
+      event: 'context_usage', sid: id,
+      estimated: measureMessages([{ role: 'system', content: this._systemPrompt('off') }, ...session.deriveMessages({})]),
+      actual: null, output: null,
+      window: (this.llm && this.llm.contextWindow) || 0
+    });
     return { compacted: true, dropCount: dropMsgs.length, summary: summaryMsg };
   }
 
@@ -1303,6 +1304,13 @@ export class Agent {
               event: 'compaction_done', sid: runSessionId,
               dropCount: c.dropCount, manual: false, summary: c.messages[0].content
             });
+            // 同步广播「压缩后的模型上下文」用量:这一步的模型请求紧接着就会发出,
+            // 请求后的 context_usage 自然反映压缩后水位;这里即时更新让仪表盘立即可见下降。
+            this.emit('agent', {
+              event: 'context_usage', sid: runSessionId,
+              estimated: measureMessages([{ role: 'system', content: systemText }, ...historyMsgs]),
+              actual: null, output: null, window: ctxWindow || 0
+            });
           } else if (c.pruned > 0) {
             historyMsgs = c.messages; // pruner 折叠生效(只裁模型当轮可见面,日志不动)
             console.log(`[agent] 上下文超水位,已折叠 ${c.pruned} 条大工具结果(未触发摘要压缩,窗口 ${ctxWindow})`);
@@ -1375,6 +1383,11 @@ export class Agent {
               this.emit('agent', {
                 event: 'compaction_done', sid: runSessionId,
                 dropCount: c.dropCount, manual: false, summary: c.messages[0].content
+              });
+              this.emit('agent', {
+                event: 'context_usage', sid: runSessionId,
+                estimated: measureMessages([{ role: 'system', content: systemText }, ...c.messages]),
+                actual: null, output: null, window: ctxWindow || 0
               });
             }
             step--; // 重试本步(for 循环 step++ 会把它加回原值)

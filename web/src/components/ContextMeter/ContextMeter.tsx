@@ -4,8 +4,9 @@
 // - 鼠标悬浮:弹出横向进度条 + 数字(≈已用/窗口/百分比)+ 分项明细
 // - 口径:优先用服务端 context_usage 事件(实际请求 = provider 上报 prompt_tokens,
 //   预估 = 服务端按"折叠后模型可见面"计算的启发式值);服务端未上报时
-//   才回退到前端对渲染历史的估算(该口径会把 UI 展示用的长结果/思考全算进去,
-//   比真实请求明显偏大,仅作参考)。
+//   才回退到前端估算——同样只算"模型可见面"(压缩后从最后一个压缩标记行起,见
+//   utils/tokens 的 modelFaceMessages,被压历史不再计入);该口径含 UI 展示用的长
+//   结果/思考,比真实请求偏大,仅作参考)。
 // contextWindow <= 0(模型未配置)时不渲染。
 import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -70,6 +71,11 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
   const level = pct >= 95 ? ' danger' : pct >= 80 ? ' warn' : '';
   // 分项明细(遍历全部消息)只在悬浮面板打开时计算,常闭时省掉整段历史的开销
   const breakdown = show && pos ? estimateBreakdown(messages, input) : null;
+  // 最近的压缩标记(仅在弹窗打开时扫描):用于向用户解释"聊天里内容还在,为什么水位降了"——
+  // 压缩是非破坏的,被压早期消息仍可回看,但模型从该标记起只看摘要,不再计入水位。
+  const lastCompaction = show && pos
+    ? [...messages].reverse().find((m) => m.compaction)?.compaction || null
+    : null;
   const segTotal = breakdown ? (breakdown.system + breakdown.tools + breakdown.conversation || 1) : 1;
   const segPct = (n: number) => Math.round((n / segTotal) * 100);
 
@@ -114,6 +120,9 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
                 </>}
               </>}
           </div>
+          {lastCompaction && (
+            <div className="ctx-pop-hint">已压缩 {lastCompaction.dropCount || 0} 条早期消息:模型从压缩标记起只看摘要,聊天里仍可完整回看(不再计入水位)</div>
+          )}
           <div className="ctx-pop-hint">达到 80% 水位时自动压缩早期对话</div>
         </div>,
         document.body

@@ -5,7 +5,7 @@
 import { Session, eventsFromTurns } from '../server/agent/session.ts';
 import {
   estimateTokens, messageTokens, measureMessages, resolveCompactSpec,
-  selectCompactRange, compactHistory, compactionInstruction
+  selectCompactRange, selectManualCompactRange, compactHistory, compactionInstruction
 } from '../server/agent/compact.ts';
 
 let pass = 0, fail = 0;
@@ -96,6 +96,80 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
     br !== null && br.recent.length === 2 && br.recent[0].role === 'assistant' && br.recent[1].role === 'tool'
     && assertValidApiSequence([mk('user', '摘要'), ...br.recent]).length === 0);
   check('compactionInstruction 非空且含保留要求', compactionInstruction().includes('任务'));
+}
+
+// ---- selectManualCompactRange(/compact 手动压缩:位置式切点 + 真实用户组边界钳制) ----
+// 回归背景:runtime_context 快照(user 角色注入消息)紧跟真实用户消息,修复前组边界
+// 识别把它当成第二条用户消息,单条消息的深任务会话被误判为"多组对话"而钳制掉
+// 几乎全部可压区间(实测只剩第一条真实消息 40 token),摘要模板(~255 token)必然
+// 更大,shrink 校验必报「压缩失败:生成的摘要(255 token)不小于被压缩内容(40 token)」。
+{
+  const mk = (role, content, extra = {}) => ({ role, content, ...extra });
+  const bigTool = (id, body) => [
+    mk('assistant', '', { tool_calls: [{ id, function: { name: 'read_file', arguments: '{}' } }] }),
+    mk('tool', body, { tool_call_id: id })
+  ];
+  // isRealUser:仅第 0 条是真实用户消息(第 1 条是 runtime 快照,其余角色非 user)
+  const realUserOnly0 = (i) => i === 0;
+
+  // 核心回归:单条真实消息 + runtime 快照 + 深工具任务——修复前 drop 只剩第 1 条(40 token)
+  const deepTask = [
+    mk('user', '对话生成完图片查看图片的时候，添加支持放大缩小图片查看。'),
+    mk('user', '<runtime_context>运行时上下文快照(注入消息,不是用户发的)</runtime_context>'),
+    ...bigTool('c1', 'x'.repeat(3000)),
+    mk('assistant', '分析1'),
+    ...bigTool('c2', 'x'.repeat(3000)),
+    mk('assistant', '分析2'),
+    ...bigTool('c3', 'x'.repeat(3000)),
+    mk('assistant', '结论')
+  ];
+  const fixed = selectManualCompactRange(deepTask, 60, realUserOnly0);
+  check('修复后单消息深任务可压区间不为 null', fixed !== null);
+  if (fixed) {
+    check('修复后可压区间不再只剩第一条消息(回归点)', fixed.drop.length > 1, `drop=${fixed.drop.length}`);
+    check('修复后可压区间达到最小收益门槛', measureMessages(fixed.drop) >= 1000, `got ${Math.round(measureMessages(fixed.drop))}`);
+    check('修复后切点工具配对完整', assertValidApiSequence([mk('user', '摘要'), ...fixed.recent]).length === 0);
+    check('修复后保留尾部结论', fixed.recent[fixed.recent.length - 1]?.content === '结论');
+  }
+
+  // 多组对话:早期组足够大时,钳制仍保留完整最后一组(切点不越过最后一组起点)
+  const multi = [
+    mk('user', '早期任务'), ...bigTool('m1', 'y'.repeat(3000)), ...bigTool('m2', 'y'.repeat(3000)),
+    mk('user', '最新任务'), ...bigTool('m3', 'z'.repeat(200)), mk('assistant', '收尾')
+  ];
+  const lastRealIdx = multi.findIndex((m, i) => i > 0 && m.role === 'user');
+  const mr = selectManualCompactRange(multi, 60, (i) => i === 0 || i === lastRealIdx);
+  check('多组对话仍有可压区间', mr !== null);
+  if (mr) {
+    check('多组对话保留区以最后一组真实消息开头', mr.recent[0]?.content === '最新任务');
+    check('多组对话可压区间不含最后一组', mr.drop.every((m, i) => i < lastRealIdx));
+  }
+
+  // 多组对话但早期组太小(< 1000 token):回退位置式切点,允许压进最后一组早期步骤
+  const tinyEarly = [
+    mk('user', '你好'), mk('assistant', '你好!'),
+    mk('user', '真正的深任务'), ...bigTool('t1', 'w'.repeat(3000)), ...bigTool('t2', 'w'.repeat(3000)), mk('assistant', '结论')
+  ];
+  const realIdxTiny = [0, 2];
+  const tr = selectManualCompactRange(tinyEarly, 60, (i) => realIdxTiny.includes(i));
+  check('小组早期+大组任务仍有可压区间', tr !== null);
+  if (tr) {
+    check('早期组太小时切点越进最后一组(位置式回退)', tr.drop.length > 2, `drop=${tr.drop.length}`);
+    check('早期组太小时切点工具配对完整', assertValidApiSequence([mk('user', '摘要'), ...tr.recent]).length === 0);
+  }
+
+  // 小会话(全在保留水位内)且早期组低于收益门槛:返回 null(无需压缩),不再让 shrink 校验报错
+  const small = [
+    mk('user', '你好'), mk('assistant', '你好!'),
+    mk('user', '小任务'), mk('assistant', '完成')
+  ];
+  check('小会话早期组无收益返回 null', selectManualCompactRange(small, 999999, (i) => i === 0 || i === 2) === null);
+
+  // 单条消息 + runtime 快照的小会话:真实组只有一组,兜底分支不适用,返回 null
+  const smallSingle = [
+    mk('user', '小任务'), mk('user', '<runtime_context>快照</runtime_context>'), mk('assistant', '完成')
+  ];
+  check('单消息小会话(runtime 快照不算组边界)返回 null', selectManualCompactRange(smallSingle, 999999, realUserOnly0) === null);
 }
 
 // ---- compactHistory ----

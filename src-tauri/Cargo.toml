@@ -1,6 +1,6 @@
 [package]
 name = "teleforge"
-version = "0.1.6"
+version = "0.1.7"
 description = "SSH 远程 AI 编程工具桌面端"
 authors = ["liaozhenqiang"]
 license = "GPL-3.0"

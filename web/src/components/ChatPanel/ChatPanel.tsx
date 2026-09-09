@@ -603,6 +603,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const [dotTip, setDotTip] = useState<{ top: number; left: number; text: string } | null>(null);
   const hasLive = useRef(false); // 用户已发起新对话时置 true,避免历史覆盖新消息
   const justSwitchedRef = useRef(false); // 会话切换后标记一次:绘制完成后再强制滚底+重绘拇指
+  const switchSeqRef = useRef(0); // 会话切换序号:兜底 effect 用它识别"本会话"的兜底;快速切换时旧兜底立即作废且不吞标志
+  const settleSeqRef = useRef(-1); // 已做过"全量真实布局预热"的切换序号:同序号下的批渲染(刷新/流式追加)不重复预热
+  const settledMsgNodesRef = useRef(new WeakSet<Element>()); // 已写入精确 contain-intrinsic-size 的 .msg 节点(随切换重置)
+  const anchoredSidRef = useRef<string | null>(null); // 已成功"锚定到底部"的会话 id:切换兜底据此识别"内容已换会话但标志漏置"
   // 分支点计数器:本会话"消息面 turn"计数,与服务端 projectEvents 投影出的 turns 数组
   // 索引对齐(0 基)。历史载入后以 turns 长度为基准,流式事件逐条递增——
   // 保证"空会话直接连续对话"时每条渲染消息也能拿到准确的分支索引。
@@ -1130,7 +1134,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     saveDrafts(draftsRef.current);
 
     hasLive.current = false; // 切换会话:重置"已有新对话"标记,让新会话历史立即显示
-    justSwitchedRef.current = true; // 切换会话:绘制后兜底重测滚底/拇指,见下方 [messages] 兜底 effect
+    justSwitchedRef.current = true; // 切换会话:标记本轮滚底兜底(未完成不提前消费,见 [messages] 兜底 effect)
+    switchSeqRef.current++; // 切换序号+1:旧会话的兜底据此立即作废,不会吞掉新会话的标志
+    settledMsgNodesRef.current = new WeakSet(); // 会话内容已变:精确高度记录作废,重新测量
     forkTurnRef.current = 0; lastIterRef.current = 0; // 分支点计数器随会话重置
     setTodos([]);
     setAgentState('idle'); setErrorMsg('');
@@ -1386,7 +1392,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (justSwitchedRef.current) stickRef.current = true; // 切换会话总是回到底部
+    if (justSwitchedRef.current) {
+      stickRef.current = true; // 切换会话总是回到底部
+      anchoredSidRef.current = sid; // 正常切换路径:内容已锚定到本会话
+    }
     if (stickRef.current) {
       scrollToBottomNow();
     } else {
@@ -1396,42 +1405,126 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     }
   }, [messages]);
 
-  // 会话切换的兜底(滚到真正的底部):
-  // .msg 用 content-visibility + 320px 兜底占位,首次查看长会话时几乎整屏消息都
-  // 只是估算高度;首帧按估算 scrollHeight 触底的落点只是"假底部",随后浏览器
-  // 真渲染目标区域、图片/字体异步加载,scrollHeight 还会连续变化,单帧 rAF 追不上。
-  // 这里用 ResizeObserver 监听每条消息:切换后只要内容高度仍在变化就重新触底,
-  // 连续 2 次测量一致(或 800ms 超时)即视为稳定收手;用户期间手动离开底部则放弃。
-  // 仅切换后触发一次,不干扰普通流式(流式追加走上方 [messages] 布局 effect 的吸附)。
+  // 会话切换的兜底(精确滚到真正的底部,修复 content-visibility 占位高度塌陷)。
+  // 背景:.msg 用 content-visibility:auto,视口外消息只占估算高度(contain-intrinsic-size
+  // 记忆值 / 320px 兜底)。但 Chrome 对复用消息不会可靠记住真实高度,切换后撤掉预热会
+  // 塌缩回估算高度,scrollHeight 骤缩→scrollTop 冻在"估算底部"→真实底部还在下方N千px,
+  // 用户一眼看到就是"卡在中间没滚到底"。解法:
+  // 1) 预热:临时挂 data-ws-settle 取消全部 .msg 跳过渲染,做一次全量真实布局,测出每条
+  //    消息的真实 clientHeight,立刻把精确值写到 .msg { contain-intrinsic-size: auto H; },
+  //    这样撤预热后每条消息仍占真实几何,不会塌缩;
+  // 2) 收敛:ResizeObserver 监听尺寸(图片/字体异步加载撑高),每次都滚底+写入最新精确值;
+  // 3) 收尾:连续 2 次 scrollHeight 一致视为收敛,最终滚一次后撤标记。
+  // 快速切换保护:每次 [sid] 切换递增 switchSeqRef,旧序号的兜底只撤资源,不消费标志,
+  // 把标志留给新会话;用户手动上滑放弃自动触底。
+  // 兜底补全:切换路径偶发因 RPC/state 竞态漏置 justSwitchedRef(内容已换成新会话但标志
+  // 未设),这里凭「当前内容所属会话 ≠ 已锚定过底部的会话」强制补齐标志,保证任何切换都兜底。
   useEffect(() => {
+    if (!justSwitchedRef.current && anchoredSidRef.current !== sid) {
+      // 自动标记一次:每个 switchSeqRef 保证兜底子例程只整体执行一遍
+      justSwitchedRef.current = true;
+      switchSeqRef.current++;
+      settledMsgNodesRef.current = new WeakSet();
+    }
     if (!justSwitchedRef.current) return;
-    justSwitchedRef.current = false;
     const el = scrollRef.current;
     if (!el) return;
-    let lastH = -1;   // 上次测得的 scrollHeight
-    let same = 0;     // 高度连续未变的次数(>=2 视为稳定)
-    let timer = 0;    // 兜底超时句柄
-    let rid = 0;      // rAF 句柄
+    const seq = switchSeqRef.current; // 本会话的切换序号
+    if (settleSeqRef.current !== seq) { // 预热:每个切换序号只全量真实布局+测高一次
+      settleSeqRef.current = seq;
+      el.dataset.wsSettle = '1';
+      settledMsgNodesRef.current = new WeakSet();
+    }
+    let lastH = -1;      // 上次测得的总 scrollHeight
+    let same = 0;        // 高度连续未变的次数
+    let timer = 0;       // 兜底超时句柄
+    let rid = 0;         // rAF 句柄
     let ro: ResizeObserver | null = null;
-    const stop = () => {
+    const release = () => { // 只撤资源与预热标记,不碰切换标志
       ro?.disconnect();
       cancelAnimationFrame(rid);
       clearTimeout(timer);
+      delete el.dataset.wsSettle;
     };
-    const chip = () => {
-      if (!stickRef.current) { stop(); return; } // 用户已手动上滑离底:放弃自动补滚
+    const done = () => { // 完成:消费切换标志并锚定本会话
+      justSwitchedRef.current = false;
+      anchoredSidRef.current = sid;
+      release();
+    };
+    const finish = () => { // 收敛后收尾:最终滚底→消费切换标志
+      if (switchSeqRef.current !== seq) { release(); return; } // 已切走:交给新会话
+      if (!stickRef.current) { done(); return; }               // 用户已手动离底
+      scrollToBottomNow();
+      done();
+    };
+    const chip = (entries: ResizeObserverEntry[]) => {
+      if (switchSeqRef.current !== seq) { release(); return; } // 快速切换:本会话兜底作废
+      if (!stickRef.current) { done(); return; }               // 用户手动上滑:放弃自动触底
+      // 对每个尺寸变化的子元素,写入最新精确高度到 inline contain-intrinsic-size:
+      // 尺寸变化本身说明内容在变(图片/字体晚到、流式追加),必须无条件刷新——
+      // 不能因"已测过"而跳过,否则晚到图片测到的是加载前的小高度,占位永错
+      if (entries) {
+        for (const entry of entries) {
+          const target = entry.target as HTMLElement;
+          if (!target.classList?.contains('msg')) continue;
+          const h = entry.contentBoxSize?.[0]?.blockSize ?? target.clientHeight;
+          if (h > 0) {
+            target.style.containIntrinsicSize = `auto ${h}px`;
+            settledMsgNodesRef.current.add(target);
+          }
+        }
+      }
+      // 兜底:预热全量真实布局后,首帧把仍未记录的 .msg 一次性测齐(WeakSet 去重,只测一次)
+      for (let i = 0; i < el.children.length; i++) {
+        const m = el.children[i] as HTMLElement;
+        if (!m.classList?.contains('msg') || settledMsgNodesRef.current.has(m)) continue;
+        const h = m.clientHeight;
+        if (h > 0) {
+          m.style.containIntrinsicSize = `auto ${h}px`;
+          settledMsgNodesRef.current.add(m);
+        }
+      }
+      scrollToBottomNow();
       const h = el.scrollHeight;
-      scrollToBottomNow(); // 无论高矮都重滚到底部(幂等)
-      if (h === lastH) { if (++same >= 2) stop(); }
-      else { same = 0; lastH = h; }
+      if (h === lastH) {
+        if (++same >= 2 && same === 2) rid = requestAnimationFrame(finish);
+        return;
+      }
+      same = 0;
+      lastH = h;
     };
-    // 内容尺寸变化(占位高度→真实高度、图片加载撑高)都触发重新触底
+    // 尺寸变化 → 重滚+写精确高度;图片/字体/异步 markdown 高亮撑高都能捕捉到
     ro = new ResizeObserver(chip);
     for (let i = 0; i < el.children.length; i++) ro.observe(el.children[i]);
-    rid = requestAnimationFrame(chip); // 首帧兜底(尺寸没变化的路径也至少补一次)
-    timer = window.setTimeout(stop, 800); // 兜底:最多补滚 800ms,避免长会话持续误触
-    return stop;
+    rid = requestAnimationFrame(() => chip([])); // 首帧:预热后先滚一次,至少测一次全高
+    timer = window.setTimeout(finish, 800); // 兜底:迟迟不收敛(大图片加载)也按时收尾
+    return release;
   }, [messages]);
+
+  // 常驻几何守护:切换兜底只覆盖切换当下,图片/字体/流式内容可能在兜底结束后才撑高
+  // 消息(如末条带图消息,图片加载晚于预热测量)。这里挂一棵常驻 ResizeObserver:
+  // 1) 任何 .msg 尺寸变化都无条件刷新其 inline contain-intrinsic-size,保持滚动几何精确;
+  // 2) 处于吸附底部(stick=true)时立即重新滚底,晚到图片也不会把底部顶走。
+  // MutationObserver 给新挂载的消息补挂观察,避免 [messages] 每次 O(n) 全量重挂。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const t = entry.target as HTMLElement;
+        if (!t.classList?.contains('msg')) continue;
+        const h = entry.contentBoxSize?.[0]?.blockSize ?? t.clientHeight;
+        if (h > 0) t.style.containIntrinsicSize = `auto ${h}px`;
+      }
+      if (scrollRef.current && stickRef.current) scrollToBottomNow();
+    });
+    const mo = new MutationObserver((muts) => {
+      for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) ro.observe(n as Element);
+    });
+    mo.observe(el, { childList: true });
+    for (let i = 0; i < el.children.length; i++) ro.observe(el.children[i]);
+    return () => { mo.disconnect(); ro.disconnect(); };
+  }, []);
 
   // 跳转点悬停提示:取不被裁剪的 fixed 定位,按当前点视口坐标弹出到右侧
   const showDotTip = (e: React.MouseEvent<HTMLButtonElement>, text: string) => {

@@ -16,6 +16,10 @@ export const COMPACT = {
   RETAIN_RATIO: 0.16,        // 保留的比例:压缩后保留最近约 contextWindow×16% 的窗口
   SUMMARY_MAX_TOKENS: 8192,  // 摘要生成请求的输出上限(参照 harness 的 compaction maxTokens)
   MSG_OVERHEAD: 12,          // 每条消息 JSON 结构(role/键名/tool_calls)的近似 token 开销
+  // 手动压缩(/compact)的最小收益门槛:可压区间低于该 token 数时直接判"无需压缩"。
+  // 摘要模板固定 9 个 section(~255 token 起步),区间太小时摘要必然不小于被压内容,
+  // shrink 校验必报"压缩失败"——那是"会话还不需要压缩"的正常状态,不是失败。
+  MANUAL_MIN_GAIN_TOKENS: 1000,
   CHARS_PER_CJK_TOKEN: 1.6,  // 中文近似
   CHARS_PER_ASCII_TOKEN: 3   // 英文/代码/符号近似。4 偏乐观:代码/JSON 实测 ~2.8-3.2,
                               // 十六进制哈希甚至 ~1.5;取 3 让水位判断偏保守(宁可早压不可爆窗)
@@ -109,7 +113,60 @@ export function selectCompactRange(msgs: any[], retainTokens: number): { drop: a
   return { drop, recent: msgs.slice(keep) };
 }
 
-/** 摘要指令:要求把对话历史压缩为紧凑的结构化 checkpoint(照搬 harness 的 COMPACTION_INSTRUCTION,中文版) */
+/**
+ * 手动压缩(/compact)的区间选择:selectCompactRange 位置式切点 + 组边界钳制。
+ * - 组边界只认"真实用户消息"(isRealUser 由调用方回查事件日志,排除 runtime 快照与
+ *   压缩摘要这类 user 角色的注入消息)——runtime_context 快照紧跟真实消息注入,
+ *   若算作组边界,单条消息的深任务会话会被误判为"多组对话"而触发钳制,
+ *   可压区间被压到只剩第一条真实消息(实测 40 token),摘要模板(~255 token)
+ *   必然更大,shrink 校验必报"压缩失败"(修复前 /compact 在此类会话上必挂);
+ * - 多组对话:切点不越过最后一组起点(至少保留完整最后一组);单组(单消息深任务):
+ *   直接用位置式切点,允许压缩组内早期步骤;
+ * - 钳制后早期区间太小(压了不回本)时回退位置式切点:最后一组占满保留水位的深任务,
+ *   同样允许压进组内早期步骤(切点已对齐工具配对边界,保留区仍是最近 retainTokens);
+ * - 位置式无可压缩区间(历史全在保留水位内)时走旧语义兜底:至少把除最后一组外的
+ *   早期对话全部压缩掉,保证小组会话上 /compact 仍有收益;
+ * - 最终防线:可压区间低于 MANUAL_MIN_GAIN_TOKENS 时返回 null(无需压缩),
+ *   而不是让 shrink 校验对着摘要模板的最小体量报错。
+ * @returns 无可压缩区间时返回 null
+ */
+export function selectManualCompactRange(msgs: any[], retainTokens: number, isRealUser: (i: number) => boolean): { drop: any[]; recent: any[] } | null {
+  if (!Array.isArray(msgs) || msgs.length < 3) return null;
+  const realUserIdx: number[] = [];
+  msgs.forEach((_, i) => { if (isRealUser(i)) realUserIdx.push(i); });
+
+  // 兜底分支:位置式无可压缩区间(历史全在保留水位内)
+  let range = selectCompactRange(msgs, retainTokens);
+  if (!range) {
+    if (realUserIdx.length >= 2) {
+      const cut = realUserIdx[realUserIdx.length - 1];
+      if (cut > 0) return finalizeRange(msgs, cut);
+    }
+    return null;
+  }
+
+  // 单组(唯一真实用户消息,或日志里已无真实用户消息):直接用位置式切点
+  const first = realUserIdx.length ? realUserIdx[0] : -1;
+  const last = realUserIdx.length ? realUserIdx[realUserIdx.length - 1] : -1;
+  let keep = first === last
+    ? range.drop.length
+    : Math.min(range.drop.length, last);
+  // 钳制后早期区间无收益:回退位置式切点(压进最后一组的早期步骤)
+  if (keep < range.drop.length && measureMessages(msgs.slice(0, keep)) < COMPACT.MANUAL_MIN_GAIN_TOKENS) {
+    keep = range.drop.length;
+  }
+  return finalizeRange(msgs, keep);
+}
+
+/** 区间落地前的公共校验:切点合法且可压区间达到最小收益门槛,否则返回 null */
+function finalizeRange(msgs: any[], keep: number): { drop: any[]; recent: any[] } | null {
+  if (keep <= 0 || keep >= msgs.length) return null;
+  const drop = msgs.slice(0, keep);
+  if (!drop.length || measureMessages(drop) < COMPACT.MANUAL_MIN_GAIN_TOKENS) return null;
+  return { drop, recent: msgs.slice(keep) };
+}
+
+/** 摘要指令:要求把对话历史压缩成紧凑的结构化 checkpoint(照搬 harness 的 COMPACTION_INSTRUCTION,中文版) */
 export function compactionInstruction(): string {
   return [
     '你现在充当这个 AI 编码助手的压缩引擎。把上面(ABOVE)的对话压缩成一份结构化 checkpoint,让另一个模型在不丢失关键上下文的前提下接续工作。',
