@@ -3,7 +3,9 @@
 //   横向溢出时两端翻页箭头(无滚动条)、点缩略图开灯箱看原图;
 // - MessageAttachments:用户消息内的图片展示(harness MessageImage/ImageGallery 规则)——
 //   单图长边 240px、比例钳制 [0.25,4]、超出裁剪且不放大小图;多图 64px 方块平铺;文件为图标 chip;
-// - Lightbox:全屏遮罩灯箱(图片),Esc 或点击遮罩关闭。
+// - Lightbox:全屏遮罩灯箱(图片),Esc 或点击遮罩关闭;
+//   滚轮/触控板捏合/双击缩放(以指针为中心)、放大后拖拽平移、底部工具条(−/百分比/+/适应),
+//   键盘 + − 0 缩放,百分比按图像原始像素计。
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AttachmentInfo } from '../../types';
 import './Attachments.scss';
@@ -65,6 +67,24 @@ const IconChevronRight = () => (
     <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
+const IconZoomIn = () => (
+  <svg width={15} height={15} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <circle cx="7" cy="7" r="4.4" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M10.4 10.4 14 14M7 5v4M5 7h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+const IconZoomOut = () => (
+  <svg width={15} height={15} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <circle cx="7" cy="7" r="4.4" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M10.4 10.4 14 14M5 7h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+const IconFit = () => (
+  <svg width={15} height={15} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M6 2.5H3.5a1 1 0 0 0-1 1V6M10 2.5h2.5a1 1 0 0 1 1 1V6M6 13.5H3.5a1 1 0 0 1-1-1V10M10 13.5h2.5a1 1 0 0 0 1-1V10"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
 
 /** 灯箱内容源(图片) */
 export interface LightboxSrc {
@@ -72,18 +92,133 @@ export interface LightboxSrc {
   alt: string;
 }
 
+// ---- 灯箱(查看原图 + 放大缩小)----
+// 变换模型:图片居中布局,transform: translate(x,y) scale(s)(transform-origin 为中心)。
+// s 相对「适应窗口」(1=初始适应),平移 x/y 为相对视口中心的像素位移;
+// 指针锚定缩放:缩放前后光标下的图像点保持不动(Q = 视口中心 + offset + s·d)。
+const LB_MIN_SCALE = 0.2;   // 相对适应窗口最多缩小到 20%
+const LB_MAX_SCALE = 8;     // 相对适应窗口最多放大到 8 倍
+const LB_STEP = 1.25;       // 按钮/键盘单档缩放比
+const LB_DBL_SCALE = 2.5;   // 双击放大的目标倍率(相对适应窗口)
+
+const lbClamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
 export function Lightbox({ src, onClose }: { src: LightboxSrc | null; onClose: () => void }) {
+  const [view, setView] = useState({ s: 1, x: 0, y: 0 });
+  // 图像 onLoad 后记录:适应窗口时的布局宽(不受 transform 影响)与原始像素宽(用于「占原图百分比」)
+  const [base, setBase] = useState({ fitW: 0, natW: 0 });
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const dragRef = useRef<{ id: number; x: number; y: number } | null>(null);
+
+  // 切到另一张图:重置缩放与平移
+  useEffect(() => { setView({ s: 1, x: 0, y: 0 }); setBase({ fitW: 0, natW: 0 }); }, [src?.src]);
+
+  /** cx/cy 为 null 时以图像中心为锚(按钮/键盘),否则以指针位置为锚 */
+  const zoomAt = useCallback((cx: number | null, cy: number | null, factor: number) => {
+    setView((v) => {
+      const s = lbClamp(v.s * factor, LB_MIN_SCALE, LB_MAX_SCALE);
+      if (s === v.s) return v;
+      if (cx == null || cy == null) return { s, x: (v.x * s) / v.s, y: (v.y * s) / v.s };
+      const k = (v.s - s) / v.s;
+      return { s, x: v.x + (cx - window.innerWidth / 2 - v.x) * k, y: v.y + (cy - window.innerHeight / 2 - v.y) * k };
+    });
+  }, []);
+  const reset = useCallback(() => setView({ s: 1, x: 0, y: 0 }), []);
+
+  // 平移钳制:图像边缘最多越过视口中心再多留一点余量,防止整张图被拖出屏幕找不回
+  const clampPan = useCallback((x: number, y: number, s: number) => {
+    const el = imgRef.current;
+    if (!el) return { x, y };
+    const mx = Math.max(0, (el.offsetWidth * s - window.innerWidth) / 2) + 48;
+    const my = Math.max(0, (el.offsetHeight * s - window.innerHeight) / 2) + 48;
+    return { x: lbClamp(x, -mx, mx), y: lbClamp(y, -my, my) };
+  }, []);
+
+  // Esc 关闭 + 键盘缩放(+ − 0)。React 合成 wheel 是 passive 无法 preventDefault,
+  // 滚轮缩放单独挂原生监听(同时挡住滚到背后的对话流)。
   useEffect(() => {
     if (!src) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === '+' || e.key === '=') zoomAt(null, null, LB_STEP);
+      else if (e.key === '-' || e.key === '_') zoomAt(null, null, 1 / LB_STEP);
+      else if (e.key === '0') reset();
+    };
+    const el = overlayRef.current;
+    const onWheel = (e: WheelEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.('.lightbox-toolbar')) return;
+      e.preventDefault();
+      // 触控板捏合会伪装成 ctrl+wheel 且 delta 很小,用更敏的系数;单事件倍率封顶防跳变
+      const factor = lbClamp(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0022)), 0.6, 1.7);
+      zoomAt(e.clientX, e.clientY, factor);
+    };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [src, onClose]);
+    el?.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      el?.removeEventListener('wheel', onWheel);
+    };
+  }, [src, onClose, zoomAt, reset]);
+
   if (!src) return null;
+  const zoomed = view.s > 1.02;
+  // 百分比按图像原始像素计(100% = 1 图像像素 : 1 屏幕像素);尺寸未知时退回相对适应窗口
+  const pct = base.fitW > 0 && base.natW > 0
+    ? Math.round((view.s * base.fitW / base.natW) * 100)
+    : Math.round(view.s * 100);
   return (
-    <div className="lightbox" role="dialog" aria-modal="true" aria-label={src.alt} onClick={onClose}>
+    <div ref={overlayRef} className="lightbox" role="dialog" aria-modal="true" aria-label={src.alt} onClick={onClose}>
       <button type="button" className="lightbox-close" aria-label="关闭预览" onClick={onClose}><IconClose /></button>
-      <img src={src.src} alt={src.alt} onClick={(e) => e.stopPropagation()} />
+      <img
+        ref={imgRef}
+        src={src.src}
+        alt={src.alt}
+        className={zoomed ? 'lb-zoomed' : undefined}
+        style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}
+        draggable={false}
+        onLoad={(e) => {
+          const el = e.currentTarget;
+          setBase({ fitW: el.clientWidth, natW: el.naturalWidth });
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          if (zoomed) reset();
+          else zoomAt(e.clientX, e.clientY, LB_DBL_SCALE);
+        }}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          if (!zoomed || e.button !== 0) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+        }}
+        onPointerMove={(e) => {
+          const d = dragRef.current;
+          if (!d || d.id !== e.pointerId) return;
+          const dx = e.clientX - d.x;
+          const dy = e.clientY - d.y;
+          d.x = e.clientX;
+          d.y = e.clientY;
+          setView((v) => ({ ...v, ...clampPan(v.x + dx, v.y + dy, v.s) }));
+        }}
+        onPointerUp={() => { dragRef.current = null; }}
+        onPointerCancel={() => { dragRef.current = null; }}
+      />
+      <div className="lightbox-toolbar" onClick={(e) => e.stopPropagation()}>
+        <button type="button" aria-label="缩小" title="缩小(−)" onClick={() => zoomAt(null, null, 1 / LB_STEP)}>
+          <IconZoomOut />
+        </button>
+        <button type="button" className="lightbox-pct" title="图像原始像素占比,点击恢复适应窗口" onClick={reset}>
+          {pct}%
+        </button>
+        <button type="button" aria-label="放大" title="放大(+)" onClick={() => zoomAt(null, null, LB_STEP)}>
+          <IconZoomIn />
+        </button>
+        <button type="button" aria-label="适应窗口" title="适应窗口(0)" onClick={reset}>
+          <IconFit />
+        </button>
+      </div>
     </div>
   );
 }

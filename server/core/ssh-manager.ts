@@ -835,14 +835,43 @@ export class SshManager extends EventEmitter {
     };
   }
 
+  // 按「会话作用域键」(username@host:port)反查它所属的连接:agent 用它把会话绑定回
+  // 自己的服务器,而不是「界面当前在看的那台」。优先返回可用(非 disconnected)连接;
+  // 该服务器完全不在连接表里时返回 null——调用方据此拒绝执行,绝不拿别的连接顶替。
+  connByUserKey(key: string | null | undefined): SshConnection | null {
+    const k = String(key || '');
+    if (!k || k === 'local') return null;
+    const m = k.match(/^(.+)@([^@:]+):(\d+)$/);
+    if (!m) return null;
+    const [, user, host, port] = m;
+    let offline: SshConnection | null = null;
+    for (const c of this.conns.values()) {
+      const hi = c.hostInfo;
+      if (!hi || hi.username !== user || hi.host !== host || Number(hi.port) !== Number(port)) continue;
+      if (c.status !== 'disconnected') return c;
+      offline = offline || c;
+    }
+    return offline;
+  }
+
+  // 反查连接对象此刻在 conns 里的键。connect() 会把「未绑定配置」的连接改键绑到 profileId
+  // 上(conns.delete(dupKey) → conns.set(key, dup)),而 _hook 只在新建时挂过一次:闭包里的
+  // key 就成了过期键,必须按对象实时反查。
+  _keyOf(conn: SshConnection): string | null {
+    for (const [id, c] of this.conns) if (c === conn) return id;
+    return null;
+  }
+
   _hook(key: string, conn: SshConnection): void {
     conn.on('status', (info: any) => {
-      const wasActive = this._activeId === key;
+      const cur = this._keyOf(conn) || key;
       const becameDisconnected = info?.status === 'disconnected';
       this._fallbackActive();
       // 意外掉线(desired 仍为 true,非用户手动断开):触发全局清理。
       // 任意连接都发(不限于活动连接)——切走服务器后仍在后台运行的会话绑定的是它。
-      if (becameDisconnected && conn.desired) this.emit('connection-lost', key);
+      // 第二参直接带连接对象:即使它此刻已不在 conns 里,订阅方也只该停它名下的会话,
+      // 不该因为「按键查不到」回落成 stopAll(那会把其他服务器上的在跑会话一起中止)。
+      if (becameDisconnected && conn.desired) this.emit('connection-lost', cur, conn);
       this.emit('status');
     });
     conn.on('log', (level: string, message: string) => this.emit('log', level, message));

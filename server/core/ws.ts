@@ -119,9 +119,10 @@ export function setupWs(httpServer: Server) {
   ssh.on('status', emitStatus);
   // 任一连接意外掉线(含后台非活动连接):只停绑定在该连接上的会话(其工具已无法执行),
   // 其他服务器上还在后台运行的会话不受影响,可继续干完。
-  ssh.on('connection-lost', (key: string) => {
+  ssh.on('connection-lost', (key: string, conn?: SshConnection | null) => {
     clearSearchEngine();
-    const lost = key != null ? ssh.conns.get(String(key)) : null;
+    // 连接对象优先(键可能因 connect() 改键而过期);两者都取不到才按全局异常停全部
+    const lost = conn || (key != null ? ssh.conns.get(String(key)) : null);
     if (lost) agent.stopForConn(lost); else agent.stopAll();
     syncAgentScope();
     emitStatus();

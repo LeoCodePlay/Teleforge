@@ -241,7 +241,7 @@ export function clearLocalEnvInfo() { localEnvCache = null; }
 // ---------------- 工具定义 ----------------
 // 每个工具:name/description/parameters(模型可见)+ run(执行)+ timeoutMs(可选,注册表超时依据)
 
-// 生图档位白名单:与 settings-store 的净化白名单、前端「生图工具」面板同源一处定义,
+// 生图档位白名单:与 settings-store 的净化白名单、前端「生图配置」面板同源一处定义,
 // 避免三处各写一份导致枚举漂移。尺寸按用户口径(1K/1.5K/2K/3K/4K 方圆)映射为
 // OpenAI 兼容端点的 WxH 字符串。
 
@@ -897,7 +897,7 @@ const interactionToolDefs: ToolDef[] = [
     // 生图工具:让「文本模型」具备画图能力,这才是真正的对话式生图 ——
     // 文本模型手里有完整对话历史,能把"再亮一点""把帽子换蓝"补全成自包含提示词,
     // 并自行判断走文生图还是图生图、要什么尺寸与质量;生图端点只负责一次性执行。
-    // 端点配置(baseUrl/apiKey/model)与对话模型完全独立,见设置 → AI 模型 → 生图工具。
+    // 端点配置(baseUrl/apiKey/model)与对话模型完全独立,见设置 → 生图配置(独立设置面板)。
     name: 'generate_image',
     description: 'Generate a new image, or edit an existing one, and show the result to the user. '
       + 'Call it whenever the user asks for a picture, illustration, poster, logo, icon or mock-up, '
@@ -921,7 +921,7 @@ const interactionToolDefs: ToolDef[] = [
         quality: {
           type: 'string',
           enum: IMAGE_QUALITIES,
-          description: '画质档位。auto=由上游决定;low/medium/high 越高越慢越贵。省略则用生图工具里的默认值。'
+          description: '画质档位。auto=由上游决定;low/medium/high 越高越慢越贵。省略则用「设置 → 生图配置」里的默认值。'
         },
         size: {
           type: 'string',

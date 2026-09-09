@@ -200,7 +200,7 @@ export class LlmClient {
         if (IMAGES_ONLY_RE.test(text)) {
           throw new Error(
             `模型 ${this.model} 是生图模型,不支持文本对话端点(网关已拒绝)。` +
-            '请在「设置 → AI 模型 → 编辑提供方」里勾选该模型的「生图」开关,该对话将切换为生图对话(文生图 / 图生图)。'
+            '请在「设置 → AI 配置 → 编辑提供方」里勾选该模型的「生图」开关,该对话将切换为生图对话(文生图 / 图生图)。'
           );
         }
         lastErr = new Error(`LLM API ${res.status} [model=${this.model}]: ${text}`);

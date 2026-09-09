@@ -25,6 +25,7 @@ import { ReasoningRow } from '../ReasoningRow/ReasoningRow';
 import { CompactionRow } from './CompactionRow';
 import { FilesChangedCard } from './FilesChangedCard';
 import { CommandCard } from './CommandCard';
+import { matchSlashCommand } from '../../utils/slashCommand';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
 import { IconChevronDownOutline14 } from '../icons/icons';
@@ -37,6 +38,12 @@ import './ChatPanel.scss';
 // 点击「新建」只进入空对话的草稿态,不创建服务端会话、不进入历史列表;
 // 发送首条消息时才真正 session_create,创建后按会话内容出现在历史会话列表。
 export const NEW_SESSION_ID = '__new__';
+
+// 会话级 RPC 的目标会话参数:草稿态(占位 sid)不传,由服务端回落当前活跃会话。
+// 必须显式带上正在查看的会话 id——服务端「活跃会话」会随切服务器/新建会话静默改变,
+// 不带 sid 的停止/清空/队列操作会落到另一个会话上(含另一台服务器上后台跑的会话)。
+const sidArg = (v: string | null | undefined): string | undefined =>
+  (v && v !== NEW_SESSION_ID ? v : undefined);
 
 // 输入草稿缓存:按会话(或"新会话")保存输入框内容,切走再切回可恢复;
 // 存 localStorage,刷新/切换标签页不丢。键 = 会话 id,新会话(尚未创建)用固定键。
@@ -624,7 +631,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     permTouchedRef.current = true; // 用户显式选择(草稿态发送时据此决定是否提交 permission_set)
     setPermMode(mode);
     if (sid == null || sid === NEW_SESSION_ID) return;
-    api.request('permission_set', { mode }, 8000)
+    api.request('permission_set', { mode, sid: sidArg(sid) }, 8000)
       .catch((e) => {
         setPermMode(prev);
         toast.error(`切换权限模式失败: ${(e as Error).message}`);
@@ -634,9 +641,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // ---- 聊天附件(图片/文件):粘贴、拖拽与"+"号上传 ----
   // 草稿附件仅存内存(上传拿到服务端 id 后随 speak 发送,不进输入草稿);
   // 图片缩略图在上传前后都用本地 objectURL 预览(上传完成换服务端 URL 会闪烁,发送时统一回收)。
-  // 多模态开关(设置 → AI 模型 → 模型「多模态」)决定能否添加/发送图片。
+  // 多模态开关(设置 → AI 配置 → 模型「多模态」)决定能否添加/发送图片。
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [lightbox, setLightbox] = useState<LightboxSrc | null>(null);
+  // 当前会话是否有生图请求在途:把"正在生成图片"并入对话流末尾那条统一的运行状态行
+  // (不再在气泡内单独占一行)。image_job 置位,image_done / 轮次收尾时清位回到
+  // 「Agent 正在运行…」。生图是非流式的数十秒等待,这行让"仍在跑"始终可见。
+  const [imgJob, setImgJob] = useState<{ mode: 't2i' | 'i2i'; refs: number } | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const attSeqRef = useRef(0); // 附件本地 key 自增
@@ -655,7 +666,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const canSendImage = multimodal || imageGen || i2iCommand;
   // 被拦下时给用户的指引:两个开关都关、且没用 /图生图 命令时才会走到这里
   const imgGateTip = '当前模型不支持图片输入。可在输入框开头加 /图生图 附参考图走生图工具,'
-    + '或到「设置 → AI 模型」开启该模型的「多模态」/「生图」开关';
+    + '或到「设置 → AI 配置」开启该模型的「多模态」/「生图」开关';
   const attPending = attachments.some((a) => a.uploading); // 仍在上传中(禁发)
   const attFailed = attachments.some((a) => !!a.error);    // 有上传失败项(须先移除)
 
@@ -782,6 +793,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'status':
             setAgentState(m.status === 'running' ? 'working' : 'idle');
             if (m.status !== 'running') {
+              setImgJob(null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
               push((msgs) => { const c = [...msgs]; const l = c[c.length - 1]; if (l?.streaming) l.streaming = false;
               return c; });
             }
@@ -797,6 +809,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setAgentState('working'); setErrorMsg('');
             setTodos([]); // 开启新一轮:上一轮的任务计划清空(对齐 harness 的 standing plan 语义)
             setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
+            setImgJob(null); // 新一轮开始:上一轮的在途生图标记一律作废
             push((msgs) => [...msgs, { role: 'user', content: m.text, attachments: Array.isArray(m.attachments) ? m.attachments : undefined, time: Date.now(), forkTail: Math.max(0, forkTurnRef.current - 1) }]);
             push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: Math.max(0, forkTurnRef.current - 1) }]);
             break;
@@ -894,9 +907,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'image_job':
-            // 生图模型已发出请求。图像端点是非流式的:几十秒内没有任何增量可显示,
-            // 所以把当前 assistant 气泡标成"生成中",并说明走的哪条通路、带了几张参考图,
-            // 避免用户误以为卡死(与文本轮的流式光标是两套反馈)。
+            // 生图请求已发出:把底部运行状态行切成"正在生成图片"。
+            // 图像端点非流式,期间没有任何增量可吐,靠这行持续声明仍在等待。
+            setImgJob({ mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0 });
             push((msgs) => {
               const c = [...msgs];
               const l = c[c.length - 1];
@@ -907,8 +920,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'image_done':
-            // 成图落盘完成:附件元数据挂到当前 assistant 气泡(与历史回放同构,刷新后由
-            // image/generated 事件投影回来),并解除"生成中"态
+            // 成图落盘完成:状态行立刻回到「Agent 正在运行…」(后面可能还有正文要流式),
+            // 附件元数据挂到当前 assistant 气泡(与历史回放同构,刷新后由 image/generated 投影回来)
+            setImgJob(null);
             push((msgs) => {
               const c = [...msgs];
               const l = c[c.length - 1];
@@ -925,6 +939,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'done':
             setAgentState('done');
+            setImgJob(null); // 本轮结束:状态行不再显示"正在生成图片"(成图失败时也不会卡住)
             push((msgs) => {
               const copy = [...msgs];
               const last = copy[copy.length - 1];
@@ -946,7 +961,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'stopped':
-            setAgentState('idle');
+            setAgentState('idle'); setImgJob(null);
             push((msgs) => {
               const c = [...msgs];
               const l = c[c.length - 1];
@@ -961,7 +976,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'error':
-            setAgentState('error'); setErrorMsg(m.message);
+            setAgentState('error'); setErrorMsg(m.message); setImgJob(null);
             push((msgs) => {
               const c = [...msgs];
               const l = c.slice(-1)[0];
@@ -1036,7 +1051,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 手动压缩完成(/compact):后端已把早期消息替换为 compaction/done 摘要事件,
             // 这里整体重拉历史——被压缩的早期消息从视图中消失,压缩摘要以折叠标记行呈现
             // (样式参照 harness:CompactionItem 的标记行,而非用户气泡)。
-            api.request('get_history', {}, 8000)
+            api.request('get_history', { sid: sidArg(activeRef.current) }, 8000)
               .then((h) => {
                 const msgs = turnsToMessages(h.turns || []);
                 histCache.current.set(activeRef.current ?? '', { msgs, todos: Array.isArray(h.todos) ? h.todos : [] });
@@ -1068,7 +1083,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         if (busyRef.current) return; // 该会话仍在运行:补发/实时事件会继续驱动流,无需校准
         const last = msgRef.current[msgRef.current.length - 1];
         if (!last || last.role !== 'assistant' || !last.streaming) return;
-        api.request('get_history', {}, 8000)
+        api.request('get_history', { sid: sidArg(activeRef.current) }, 8000)
           .then((h) => {
             const sid = activeRef.current;
             if (sid == null || sid === NEW_SESSION_ID) return;
@@ -1152,7 +1167,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     const cached = histCache.current.get(target ?? '');
     if (cached) { setSuppressIn(true); setMessages(cached.msgs); setTodos(cached.todos); setSwitching(false); }
     else setSwitching(true);
-    api.request('get_history', {}, 8000)
+    api.request('get_history', { sid: sidArg(target) }, 8000)
       .then((r) => {
         if (!alive || hasLive.current || activeRef.current !== target) return;
         // 历史 turns 长度即该会话已累计的消息面 turn 数,作为后续流式递增的基准
@@ -1198,7 +1213,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       danger: true
     });
     if (!ok) return;
-    api.send('clear_history', {});
+    api.send('clear_history', { sid: sidArg(sid) });
     // 清空后服务端 turns 归零,分支点计数器必须同步重置——
     // 否则下一条新消息的 forkTail 沿用旧计数值,返回/删除时会索引越界报「目标消息不存在」
     forkTurnRef.current = 0; lastIterRef.current = 0;
@@ -1437,8 +1452,33 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const composedInput = composeMentionText(input);
   // 输入中是否已含完整 /技能名 或 @引用(用于占位提示与去重判断)
   const hasSkillToken = /(?:^|\s)(\/[a-z0-9][a-z0-9-]*|@[a-zA-Z0-9_.\-/\\]+)(?=\s|$)/i.test(input);
+  // 发送入口的斜杠命令拦截:与「菜单选中即执行」(pickSlash)共用同一张命令表,
+  // 差别只在输入来自整条文本 —— 手打 /compact 回车、菜单已关闭、带参数、手机 ➤ 按钮发送
+  // 这些路径过去都不执行命令,而是把 "/compact" 当普通消息发给模型(表现为"假压缩")。
+  // 匹配规则见 utils/slashCommand.ts:仅整条输入的首词命中命令名才算命令,技能与路径不误伤。
+  const dispatchSlashFromInput = (): boolean => {
+    const hit = matchSlashCommand(input, slashCommands.map((c) => c.name));
+    if (!hit) return false;
+    const cmd = slashCommands.find((c) => c.name === hit.name);
+    if (!cmd || !cmd.run) return false;
+    closeSlash();
+    // 命令即消费本次输入:与发送一样清掉输入框/草稿/附件,但不产生任何对话消息
+    if (sid === NEW_SESSION_ID) delete draftsRef.current[NEW_DRAFT_KEY];
+    else if (sid) delete draftsRef.current[sid];
+    saveDrafts(draftsRef.current);
+    setInput('');
+    inputValueRef.current = ''; // 同步最新输入,防止随后的草稿保存把已执行命令回写
+    clearAttachments();
+    scrollToBottomNow();
+    Promise.resolve(cmd.run(hit.args)).catch((e) => toast.error((e as Error).message));
+    return true;
+  };
 
   const send = async () => {
+    // 斜杠命令优先于发送:命中已注册系统命令(/compact、/clear、/fork)时执行命令本身并终止,
+    // 绝不把命令词当普通消息上行 speak —— 否则模型会「假装压缩」:前端当场有画面,
+    // 服务端却没有 compaction/done 事件落盘,切换会话重载历史后压缩标记随之消失。
+    if (dispatchSlashFromInput()) return;
     // 工作中仍可发送:服务端会把消息放入待执行队列(当前轮结束后按序自动执行,不打断回复);
     // 提问挂起时禁止发送(须先作答或取消);纯附件消息(无文字)也允许发送
     const atts = attachments.filter((a) => a.att).map((a) => a.att!);
@@ -1472,7 +1512,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       const seededPerm = isPermissionMode(created.permissionMode) ? created.permissionMode : 'confirm';
       if (permTouchedRef.current && permMode !== seededPerm) {
         try {
-          await api.request('permission_set', { mode: permMode }, 8000);
+          await api.request('permission_set', { mode: permMode, sid: sidArg(realSid) }, 8000);
         } catch (e) {
           setPermMode(seededPerm);
           toast.error(`应用权限模式失败,本次按服务端默认「${seededPerm}」执行: ${(e as Error).message}`);
@@ -1492,14 +1532,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setMessages((m) => [...m]);
     // 发送消息的那一刻即通知 App 锁定该会话的工作区(不等服务端 msgCount 落盘回传)
     onSessionTouched?.(realSid);
-    api.send('speak', { text, reasoning, ...(atts.length ? { attachments: atts } : {}) });
+    api.send('speak', { text, reasoning, sid: sidArg(realSid), ...(atts.length ? { attachments: atts } : {}) });
   };
 
   // ---- 待执行队列操作 ----
   // 立即执行:把排队中的消息立即生效(忙碌时打断当前回复即时切换,空闲时直接开新轮)
   const runQueueNow = async (item: QueueItem) => {
     try {
-      const r = await api.request('queue_steer', { id: item.id }, 8000);
+      const r = await api.request('queue_steer', { id: item.id, sid: sidArg(sid) }, 8000);
       setQueue(Array.isArray(r.queue) ? r.queue : []);
       scrollToBottomNow(); // 用户主动执行:回到底部跟进新一轮回复
     } catch (e) { toast.error((e as Error).message); }
@@ -1507,7 +1547,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 编辑:把排队中的消息撤回输入框重新编辑(该条先移出队列,发送后重新排队)
   const editQueueItem = async (item: QueueItem) => {
     try {
-      const r = await api.request('queue_remove', { id: item.id }, 8000);
+      const r = await api.request('queue_remove', { id: item.id, sid: sidArg(sid) }, 8000);
       setQueue(Array.isArray(r.queue) ? r.queue : []);
       updateInput(item.text);
       requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
@@ -1523,7 +1563,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     });
     if (!ok) return;
     try {
-      const r = await api.request('queue_remove', { id: item.id }, 8000);
+      const r = await api.request('queue_remove', { id: item.id, sid: sidArg(sid) }, 8000);
       setQueue(Array.isArray(r.queue) ? r.queue : []);
     } catch (e) { toast.error((e as Error).message); }
   };
@@ -1550,16 +1590,18 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       name: 'compact', kind: 'command',
       description: '压缩当前会话上下文(把早期对话合并为摘要,释放窗口空间)',
       run: async () => {
-        // 运行中直接失败(与 harness runMaintenance 的同步 busy 语义一致),命令卡给失败态
-        if (busy || agentState === 'working') {
-          pushCmd({ state: 'error', text: 'Agent 正在运行,请先停止或等待完成再压缩' });
+        // 是否「正在运行」交给服务端裁决:前端 busy/agentState 由事件流维护,轮次异常收尾
+        // 或切换会话都可能残留在 working。过去在这里本地拒绝,后果是请求从不发往后端
+        // (表现为「压缩没反应、也没落盘」);后端会回「会话正在运行,请先停止或等待完成」,
+        // 命令卡按同一条失败态呈现,语义不变但不再依赖前端视图状态。
+        // 新会话草稿态还没有服务端会话可压缩:明确报错,而不是让请求落到别的会话上
+        if (sid == null || sid === NEW_SESSION_ID) {
+          pushCmd({ state: 'error', text: '当前会话还没有内容,无法压缩;请先发一条消息' });
           return true;
         }
-        // 插入「运行中」命令卡:压缩进行中的可见反馈(替代原先的纯 toast,
-        // 呈现方式对齐 harness 的 CompactionCommandCard 运行行)
         const id = pushCmd({ state: 'running', text: '正在压缩当前会话上下文…' });
         try {
-          const r = await api.request('compact_now', {}, 120000);
+          const r = await api.request('compact_now', { sid: sidArg(sid) }, 120000);
           // 压缩成功时服务端先广播 history_compacted → 前端重拉历史,
           // 命令卡随之被「压缩标记行」(CompactionRow)取代;这里先落完成态兜底,
           // 保证事件重拉失败时用户仍能看到结果(harness:命令卡片折叠进 CompactionItem)
@@ -1699,7 +1741,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
   };
 
-  const stop = () => api.send('stop_agent', {});
+  const stop = () => api.send('stop_agent', { sid: sidArg(sid) });
 
   // ---- 工作区切换(输入框下方):点击弹出下拉,切换/浏览选择工作区 ----
   const [wsBrowserOpen, setWsBrowserOpen] = useState(false);
@@ -1834,7 +1876,21 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       // 正文段:AssistantSegment 按 text 引用 memo,历史段不变时跳过重渲染
                       return <AssistantSegment key={si} text={seg.text || ''} />;
                     })}
-                    {m.streaming && !m.imageJob?.pending && (m.segments || []).length === 0 && <span className="cursor" aria-hidden="true" />}
+                    {m.streaming && (m.segments || []).length === 0 && <span className="cursor" aria-hidden="true" />}
+                    {/* 生图成图放在正文下方:先看完 AI 说了什么,再看它画出来的图。
+                        与用户气泡同一套附件视图(单图大图、多图平铺),点击进灯箱 */}
+                    {!!m.attachments?.length && (
+                      <div className="ai-image-block">
+                        <MessageAttachments items={m.attachments} onOpen={setLightbox} />
+                        {!!m.imageJob && !m.imageJob.pending && (
+                          <div className="ai-image-meta">
+                            {m.imageJob.mode === 'i2i' ? '图生图' : '文生图'}
+                            {m.imageJob.refs ? ` · 参考 ${m.imageJob.refs} 张` : ''}
+                            {m.imageJob.ms ? ` · 耗时 ${Math.round(m.imageJob.ms / 1000)}s` : ''}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表) */}
                   {!m.streaming && !!m.filesChanged?.length && (
@@ -1852,11 +1908,19 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           ))}
           {/* 运行中指示行:agent 工作期间挂在消息列表末尾(StateDot ongoing 像素追光)。
               长耗时步骤(如大文件写入/命令执行)没有文本增量流出,此行让"仍在运行"
-              可见,避免误以为卡死;提问挂起时 agent 在等用户作答,不算运行中 */}
+              可见,避免误以为卡死;提问挂起时 agent 在等用户作答,不算运行中。
+              生图在途时复用同一行改文案(不再在气泡内另起一行),成图返回后自动变回原文案。 */}
           {working && !askPending && !askChecking && (
-            <div className="running-row" role="status" aria-live="polite">
+            <div className={`running-row${imgJob ? ' image-waiting' : ''}`} role="status" aria-live="polite">
               <StateDot state="ongoing" size={12} />
-              <span className="running-text">Agent 正在运行…</span>
+              <span className="running-text">
+                {imgJob
+                  ? imgJob.mode === 'i2i'
+                    ? `正在生成图片(图生图${imgJob.refs > 1 ? ` · 参考 ${imgJob.refs} 张` : ''})…`
+                    : '正在生成图片…'
+                  : 'Agent 正在运行…'}
+              </span>
+              {imgJob && <span className="running-hint">生图为同步等待,通常需 30 秒至数分钟</span>}
             </div>
           )}
         </div>

@@ -103,7 +103,7 @@
 .msg-att-file-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-att-file-meta { font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
 
-/* ---- 灯箱(点击缩略图/消息图片放大) ---- */
+/* ---- 灯箱(点击缩略图/消息图片放大;滚轮/双击缩放,放大后可拖拽平移) ---- */
 .lightbox {
   position: fixed; inset: 0; z-index: 400;
   display: flex; align-items: center; justify-content: center;
@@ -114,9 +114,14 @@
 @keyframes att-fade { from { opacity: 0; } to { opacity: 1; } }
 .lightbox img {
   max-width: min(92vw, 1400px); max-height: 88vh; border-radius: var(--r-md);
-  box-shadow: var(--glass-shadow); cursor: default;
+  box-shadow: var(--glass-shadow);
   animation: glass-pop .18s ease-out;
+  cursor: zoom-in; /* 未放大:双击放大;放大后换 grab(见 .lb-zoomed) */
+  user-select: none; -webkit-user-drag: none; /* 阻止选图/原生拖拽干扰平移 */
+  will-change: transform;
 }
+.lightbox img.lb-zoomed { cursor: grab; }
+.lightbox img.lb-zoomed:active { cursor: grabbing; }
 .lightbox-close {
   position: absolute; top: 16px; right: 16px;
   width: 34px; height: 34px; padding: 0; border-radius: 50%; cursor: pointer;
@@ -126,6 +131,27 @@
   backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
 }
 .lightbox-close:hover { background: var(--glass-bg-hover); }
+/* 底部缩放工具条:− / 百分比(点击=适应) / + / 适应窗口 */
+.lightbox-toolbar {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 2px; padding: 4px;
+  border-radius: 999px; cursor: default;
+  border: 1px solid var(--glass-border-hover);
+  background: var(--glass-bg-strong); color: var(--text);
+  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
+  box-shadow: var(--glass-shadow);
+}
+.lightbox-toolbar button {
+  height: 28px; min-width: 28px; padding: 0 7px; border: none; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--text); cursor: pointer;
+  transition: background .15s;
+}
+.lightbox-toolbar button:hover { background: var(--glass-bg-hover); }
+.lightbox-pct {
+  font-size: 12px; font-family: var(--mono); min-width: 56px;
+  text-align: center; font-variant-numeric: tabular-nums;
+}
 
 /* ---- 输入框左下角"+"上传按钮与菜单 ---- */
 .composer-add-wrap { position: relative; flex: none; }

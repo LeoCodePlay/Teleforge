@@ -4,6 +4,13 @@ import { sshManager as ssh } from '../../core/ssh-manager.ts';
 import { localFs } from '../../core/local-fs.ts';
 import type { RpcModule } from './router.ts';
 
+// 操作目标会话:前端带的 sid 优先。切服务器 / 新建会话都会让服务端「活跃会话」静默改变
+// (syncAgentScope → setConnKey → _settleActive),只按活跃会话投递/停止/清空,就会把
+// 动作落在用户并不在看的会话上(可能就是另一台服务器上正在后台跑的那个)。
+// 缺省(旧客户端未带 sid、内部调用)回落当前活跃会话,行为与从前一致。
+const targetSid = (msg: any): string | undefined =>
+  (typeof msg?.sid === 'string' && msg.sid ? msg.sid : undefined);
+
 export function registerAgent(rpc: RpcModule) {
   rpc.register('speak', async (msg, { reply, send, emitStatus }) => {
     // 原 ws.js speak case(445-458)逐字复制;附件(图片/文件/视频)为后加能力:
@@ -18,19 +25,20 @@ export function registerAgent(rpc: RpcModule) {
     // 不 await:流式回收,事件经 send 推送;reasoning 为推理等级(default|off|low|high|xhigh|max)
     // 提交到当前活跃会话:该会话空闲时开新轮,运行中自动进入待执行队列(当前轮结束后按序执行)
     // 其他会话的运行不受影响(多会话并行)
-    Promise.resolve(agent.submit(agent.sessionId, msg.text || '', {
+    const sid = targetSid(msg) ?? agent.sessionId;
+    Promise.resolve(agent.submit(sid, msg.text || '', {
       reasoning: msg.reasoning || 'default',
       attachments: hasAttachments ? msg.attachments : null
     }))
-      .catch((e) => send({ type: 'agent', event: 'error', message: e.message, sid: agent.sessionId }))
+      .catch((e) => send({ type: 'agent', event: 'error', message: e.message, sid }))
       .finally(() => { emitStatus(); send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId }); });
     emitStatus(); // busy 立即置位,让前端马上显示"停止/暂停"
     reply({ type: 'ok' });
   });
 
   rpc.register('stop_agent', async (msg, { reply, emitStatus }) => {
-    // 原 ws.js stop_agent case(459-463)逐字复制
-    agent.stop();
+    // 按 sid 停止指定会话(缺省=活跃会话):不传 sid 就停不了用户正在看的那个会话
+    agent.stop(targetSid(msg));
     emitStatus();
     reply({ type: 'ok' });
   });
@@ -38,7 +46,8 @@ export function registerAgent(rpc: RpcModule) {
   rpc.register('get_history', async (msg, { reply }) => {
     // 原 ws.js get_history case(210-212)逐字复制
     // permissionMode:当前会话的访问权限模式,前端输入区左下角选择器据此回显
-    reply({ type: 'history', turns: agent.getHistory(), todos: agent.currentTodos(), queue: agent.queueSnapshot(agent.sessionId), permissionMode: agent.getPermissionMode() });
+    const sid = targetSid(msg);
+    reply({ type: 'history', turns: agent.getHistory(sid), todos: agent.currentTodos(sid), queue: agent.queueSnapshot(sid), permissionMode: agent.getPermissionMode(sid) });
   });
 
   rpc.register('permission_get', async (msg, { reply }) => {
@@ -60,15 +69,17 @@ export function registerAgent(rpc: RpcModule) {
 
   rpc.register('clear_history', async (msg, { reply, send }) => {
     // 原 ws.js clear_history case(213-217)逐字复制
-    agent.clearHistory();
+    agent.clearHistory(targetSid(msg));
     reply({ type: 'ok' });
     send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });
 
   rpc.register('compact_now', async (msg, { reply }) => {
     // 原 ws.js compact_now case(219-223)逐字复制
-    // 手动压缩当前会话上下文(/compact 命令:无条件把早期对话压缩成摘要)
-    const r = await agent.compactNow(msg.id);
+    // 手动压缩指定会话上下文(/compact 命令:无条件把早期对话压缩成摘要)。
+    // 按 sid 定位目标会话:命令请求只带 sid,读 msg.id 会永远回落服务端「活跃会话」,
+    // 两者失步时压缩就写进了用户并没在看的那个会话。
+    const r = await agent.compactNow(targetSid(msg));
     reply({ type: 'ok', ...r });
   });
 
@@ -132,11 +143,11 @@ export function registerAgent(rpc: RpcModule) {
 
   rpc.register('queue_steer', async (msg, { reply }) => {
     // 立即执行一条待执行队列消息:忙碌时作为下一步注入当前运行,空闲时直接开新轮
-    reply({ type: 'ok', ...agent.steerQueueItem(msg.id) });
+    reply({ type: 'ok', ...agent.steerQueueItem(msg.id, targetSid(msg)) });
   });
 
   rpc.register('queue_remove', async (msg, { reply }) => {
     // 从待执行队列移除一条消息(编辑=移除后由前端撤回输入框重新编辑)
-    reply({ type: 'ok', ...agent.removeQueueItem(msg.id) });
+    reply({ type: 'ok', ...agent.removeQueueItem(msg.id, targetSid(msg)) });
   });
 }

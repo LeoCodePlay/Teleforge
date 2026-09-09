@@ -1,64 +1,160 @@
 /* ---- QueuePanel 独有样式:待执行消息队列 ----
-   与 ask-panel 同款玻璃卡片(blur-md 磨砂,泛光底 + 琥珀色边框)
-   标识"等待中"语义,与提问(蓝)/任务计划(绿)面板区分 */
+   设计取向:极简「待命轴」。
+   - 卡片是中性薄玻璃(不用彩色整圈描边),只有一道从脉冲点向右渐隐的琥珀发丝光,
+     用来标出「等待中」语义,与提问(蓝)/任务计划(中性)面板区分。
+   - 行内不再放盒中盒、序号珠、状态胶囊:一条贯穿的细轴 + 节点表达顺序,
+     第一条节点常亮 = 下一个执行。操作图标悬浮时才浮现。
+   - 全部颜色取自主题令牌,深浅主题与四套预设自动跟随。 */
+
 .queue-panel {
+  position: relative;
   background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
   backdrop-filter: var(--blur-md);
   -webkit-backdrop-filter: var(--blur-md);
-  border: 1px solid var(--warn-border);
-  border-radius: var(--r-lg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
   box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
   overflow: hidden;
-  animation: ask-in .22s cubic-bezier(.2, .9, .3, 1.2);
+  animation: queue-in .24s cubic-bezier(.2, .9, .3, 1.15);
 }
+@keyframes queue-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+/* 脉冲点发出的一缕光:整块面板唯一的彩色线索(起点与轴同 x) */
+.queue-panel::before {
+  content: ''; position: absolute; top: 0; left: 25px; right: 8%; height: 1px;
+  background: linear-gradient(90deg, var(--amber), transparent 62%);
+  opacity: .45; pointer-events: none;
+}
+
+/* ============ 头部:脉冲点 + 标题 + 计数 + 一句说明 ============ */
 .queue-head {
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 12px; border-bottom: 1px solid var(--line);
-  font-weight: 600; font-size: 13px;
+  display: flex; align-items: center; gap: 7px;
+  /* 左内边距 25px:脉冲点中心落在 29.5px(1 边框 + 25 + 3.5),与下方待命轴(1+8+17+3.5)严格同轴 */
+  padding: 9px 12px 9px 25px;
+  border-bottom: 1px solid var(--line-soft);
 }
-.queue-badge { font-size: 12px; }
-.queue-title { color: var(--amber); }
-.queue-count { color: var(--muted); font-size: 12px; font-weight: 600; }
-.queue-hint { margin-left: auto; font-size: 11px; font-weight: 400; }
+.queue-pulse {
+  flex: none; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--amber);
+  animation: queue-breathe 2.6s ease-in-out infinite;
+}
+@keyframes queue-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 40%, transparent); opacity: 1; }
+  60%      { box-shadow: 0 0 0 5px transparent; opacity: .65; }
+}
+.queue-title {
+  font-size: 12.5px; font-weight: 600; letter-spacing: .2px;
+  color: var(--text-2); white-space: nowrap;
+}
+/* 计数:等宽数字 + 极小字量词,不加底色不加边框 */
+.queue-count {
+  flex: none;
+  font-family: var(--mono); font-size: 11px; font-weight: 400; line-height: 1;
+  color: var(--text-faint);
+}
+.queue-hint {
+  margin-left: auto; min-width: 0;
+  font-size: 11px; font-weight: 400; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ============ 列表:一条待命轴串起所有排队消息 ============ */
 .queue-list {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 8px 10px; max-height: 24vh; overflow-y: auto;
+  list-style: none; margin: 0; padding: 3px 8px 5px;
+  max-height: min(30vh, 232px); overflow-y: auto;
 }
 .queue-item {
+  position: relative;
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 9px; border-radius: var(--r-sm);
-  background: var(--glass-bg-inset);
-  border: 1px solid var(--glass-border);
-  box-shadow: inset 0 1px 0 var(--glass-hi);
-  transition: border-color .18s ease, background .18s ease;
+  /* 左内边距 34px 是「待命轴槽」:轴心 29.5 + 节点半径 3.5 + 8 视觉间隙,
+     文字一律从节点右侧起,任何主题/字号下都不会压到轴上 */
+  padding: 5px 8px 5px 34px;
+  border-radius: var(--r-sm);
+  /* 行不用盒中盒描边:静止完全透明,悬浮才浮出一层薄底 */
+  background: transparent;
+  transition: background .16s ease;
+  animation: queue-item-in .26s cubic-bezier(.2, .9, .3, 1.1) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
 }
-.queue-item:hover { border-color: var(--glass-border-hover); }
-.queue-idx {
-  flex: none; width: 18px; height: 18px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; line-height: 1; color: var(--accent);
-  background: var(--accent-soft);
+@keyframes queue-item-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
 }
+/* 贯穿的轴:首条从节点起笔、末条在节点收笔,单条时无需画线 */
+.queue-item::before {
+  content: ''; position: absolute; left: 20px; top: 0; bottom: 0; width: 1px;
+  background: var(--line-soft); pointer-events: none;
+}
+.queue-item:first-child::before { top: 50%; }
+.queue-item:last-child::before { bottom: 50%; }
+.queue-item:only-child::before { display: none; }
+.queue-item:hover { background: var(--hover-bg); }
+
+/* 轴上节点 */
+.queue-node {
+  position: absolute; left: 17px; top: 50%; margin-top: -3.5px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-faint); opacity: .55;
+  transition: transform .16s ease, background .16s ease, opacity .16s ease;
+}
+.queue-item:hover .queue-node { transform: scale(1.3); opacity: .85; }
+/* 下一个要执行的那条:唯一被点亮的节点,文字同时提亮一档 */
+.queue-item.is-next .queue-node {
+  background: var(--amber); opacity: 1;
+  animation: queue-breathe 2.6s ease-in-out infinite;
+}
+.queue-item.is-next .queue-text { color: var(--text); }
+
 .queue-text {
-  flex: 1; min-width: 0;
-  font-size: 13px; line-height: 1.5; color: var(--text);
+  flex: 1 1 auto; min-width: 0;
+  font-size: 13px; line-height: 1.5; color: var(--text-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color .16s ease;
 }
-/* 附件计数徽标(📎 N):排队消息携带附件时的轻量提示 */
+.queue-item:hover .queue-text { color: var(--text); }
+
+/* 附件:细线回形针 + 等宽数字,无边框无底色 */
 .queue-attach {
-  flex: none; font-size: 11px; color: var(--accent-2); white-space: nowrap;
-  background: var(--accent-soft); border-radius: 999px; padding: 2px 8px;
+  flex: none; display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--mono); font-size: 11px; line-height: 1;
+  color: var(--muted);
 }
-.queue-status {
-  flex: none; font-size: 11px; font-weight: 600; white-space: nowrap;
-  color: var(--amber);
-  background: var(--warn-bg);
-  border: 1px solid var(--warn-border);
-  border-radius: 999px; padding: 2px 8px;
+
+/* ============ 操作:静止完全隐藏,悬浮/键盘聚焦才浮现 ============ */
+.queue-actions {
+  flex: none; display: flex; align-items: center; gap: 1px;
+  margin-right: -4px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .16s ease;
 }
-.queue-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.queue-item:hover .queue-actions,
+.queue-item:focus-within .queue-actions { opacity: 1; pointer-events: auto; }
 .queue-action {
-  width: 26px; height: 26px; border-radius: 8px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  /* 颜色与 hover/active 反馈由 .action-icon 统一提供 */
+  width: 24px; height: 24px; border-radius: 8px; padding: 0;
+  color: var(--text-faint);
+}
+/* 「立即执行」是打断当前轮的动作:悬浮给琥珀色而不是通用蓝 */
+.queue-action.run:hover:not(:disabled) {
+  color: var(--amber); background: var(--warn-bg);
+}
+
+/* ============ 响应式:窄屏先舍弃说明文字,保证消息可读宽度 ============ */
+@media (max-width: 640px) {
+  .queue-hint { display: none; }
+}
+
+/* ============ 触屏:没有 hover,操作图标常显并加大触控目标 ============ */
+@media (hover: none) and (pointer: coarse) {
+  .queue-actions { opacity: 1; pointer-events: auto; }
+  .queue-item { padding-top: 9px; padding-bottom: 9px; }
+  .queue-action { width: 34px; height: 34px; }
+}
+
+/* 降低动效偏好:节点呼吸与入场位移全部让位 */
+@media (prefers-reduced-motion: reduce) {
+  .queue-panel, .queue-item, .queue-pulse, .queue-item.is-next .queue-node {
+    animation: none;
+  }
 }

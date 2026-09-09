@@ -158,7 +158,6 @@ async function materializeImageParts(messages: any[]): Promise<any[]> {
 // 决定文生图还是图生图,再调用生图端点。两条链路共用 image-gen.ts 的执行层。
 // 取参考图/落盘/摘要等公共逻辑见 image-gen.ts(此处不再重复实现)。
 
-
 // 会话日志中最后一条"运行时上下文"快照的内容(供运行时恢复 lastContextText,
 // 避免服务重启/会话切回后对未变化的快照重复追加 user 消息)
 function lastRuntimeContextText(events) {
@@ -181,6 +180,9 @@ function newRuntime(session) {
     queueSeq: 0,   // 待执行队列项的自增 id(供前端按 id 做立即执行/删除等操作)
     driving: null, // 进行中的 driver promise(同会话并发提交复用同一驱动)
     boundConn: null, // 当前轮绑定的 SSH 连接(切走活动连接后工具仍操作它)
+    // 该会话归属的服务器键(username@host:port,取自会话元数据):新一轮开始时按它解析
+    // 连接对象。缺失(旧会话/local 作用域)才回落当前活动连接。
+    connKey: null as string | null,
     // 会话绑定的远程工作区:路径 | NO_WORKSPACE(「不在工作区对话」,边界=整台服务器)
     // | null(未绑定,执行时回落连接级)。经 runWithWorkspaceBinding 作用域生效。
     workspace: null as string | null,
@@ -436,6 +438,7 @@ export class Agent {
     if (rt) {
       rt.workspace = meta.workspace ?? null;
       rt.localWorkspace = meta.localWorkspace ?? null;
+      rt.connKey = meta.connKey ?? null;
     }
     if (id === this.sessionId) {
       if (meta.workspace != null) this._applyRemoteBinding(meta.workspace);
@@ -619,6 +622,7 @@ export class Agent {
     const rt = newRuntime(new Session());
     rt.workspace = s.workspace ?? null;
     rt.localWorkspace = s.localWorkspace ?? null;
+    rt.connKey = s.connKey ?? null;
     this._runtimes.set(s.id, rt);
     this.sessionId = s.id;
     this.emit('agent', { event: 'session_switched', id: s.id });
@@ -685,7 +689,11 @@ export class Agent {
     // 空会话补选远程工作区(含「不在工作区对话」)后,从本地作用域翻转为当前服务器作用域(归类随工作区走)
     if (ws != null && this._connKey !== 'local') sessions.setConnKey(id, this._connKey);
     const rt = this._runtimes.get(id);
-    if (rt) rt.workspace = ws;
+    if (rt) {
+      rt.workspace = ws;
+      // 补选远程工作区后会话翻转到本服务器作用域:运行时同步归属,新一轮据此绑定连接
+      if (ws != null && this._connKey !== 'local') rt.connKey = this._connKey;
+    }
     if (id === this.sessionId && ws != null) this._applyRemoteBinding(ws);
     this.emit('agent', { event: 'sessions_changed' }); // 前端据此把会话移到对应工作区分组
   }
@@ -812,10 +820,12 @@ export class Agent {
    * @returns {Promise<{compacted: boolean, dropCount: number, summary?: string}>}
    */
   async compactNow(id = this.sessionId) {
-    const rt = (id != null ? this._runtimes.get(id) : null) || null;
-    if (!rt) throw new Error('会话不存在');
-    if (rt.busy) throw new Error('会话正在运行,请先停止或等待完成');
-    const session = rt.session;
+    if (id == null) throw new Error('当前没有可压缩的会话');
+    const rt = id != null ? this._runtimes.get(id) : null;
+    if (rt?.busy) throw new Error('会话正在运行,请先停止或等待完成');
+    // 目标会话可能已从内存释放(切走时空闲 runtime 被回收):按该会话自己的磁盘日志重建。
+    // 绝不回落 this.session——那会把用户正在看的另一个会话压缩后写进本 id 的文件。
+    const session = rt ? rt.session : new Session(sessions.loadEvents(id));
     if (!this.llm || this.llm.isMock) throw new Error('尚未配置可用的 LLM,无法生成摘要');
     const trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
     const msgs = trace.map((t) => t.msg);
@@ -867,7 +877,8 @@ export class Agent {
     // 非破坏压缩:日志完整保留早期消息(前端显示/刷新后回看始终完整),
     // 只追加压缩检查点,模型历史投影自检查点起跳过被压消息、以摘要顶替。
     session.markCompacted(dropSeqs, summaryMsg, { dropCount: dropMsgs.length, manual: true });
-    if (id != null) sessions.saveEvents(id, session.events); // 落盘,重启后可恢复
+    if (!rt) this._runtimes.set(id, newRuntime(session)); // 压缩结果同步进内存,避免下次载入前被旧快照覆盖
+    if (id != null) sessions.saveEvents(id, session.events); // 落盘,重启/切回会话后仍在
     this.emit('agent', { event: 'history_compacted', sid: id, dropCount: dropMsgs.length });
     return { compacted: true, dropCount: dropMsgs.length, summary: summaryMsg };
   }
@@ -984,9 +995,9 @@ export class Agent {
    * 会话忙碌时打断当前回复,立即开新轮回复该消息;会话空闲时直接开新轮。
    * 返回最新队列快照供 RPC reply。
    */
-  steerQueueItem(id) {
-    const rt = this._runtimes.get(this.sessionId);
-    if (!rt) throw new Error('当前没有可操作的会话');
+  steerQueueItem(id, sid: string | null | undefined = this.sessionId) {
+    const rt = sid != null ? this._runtimes.get(sid) : null;
+    if (!rt) throw new Error('目标会话不在内存中,请切回该会话后重试');
     const idx = rt.pending.findIndex((p) => p.id === id);
     if (idx < 0) throw new Error('该消息不在待执行队列中');
     const [item] = rt.pending.splice(idx, 1);
@@ -999,20 +1010,20 @@ export class Agent {
       if (rt.signal) { try { rt.signal.abort(); } catch {} }
     } else {
       rt.inbox.push({ text: item.text, reasoning: item.reasoning, attachments: item.attachments || [] });
-      this._drive(rt, this.sessionId); // 不 await:fire-and-forget,与 speak 一致
+      this._drive(rt, sid); // 不 await:fire-and-forget,与 speak 一致
     }
-    this._emitQueue(rt, this.sessionId);
-    return { queue: this.queueSnapshot(this.sessionId) };
+    this._emitQueue(rt, sid);
+    return { queue: this.queueSnapshot(sid) };
   }
 
   // 从待执行队列删除一条消息(编辑=移除后由前端撤回输入框);返回最新队列快照
-  removeQueueItem(id) {
-    const rt = this._runtimes.get(this.sessionId);
-    if (!rt) throw new Error('当前没有可操作的会话');
+  removeQueueItem(id, sid: string | null | undefined = this.sessionId) {
+    const rt = sid != null ? this._runtimes.get(sid) : null;
+    if (!rt) throw new Error('目标会话不在内存中,请切回该会话后重试');
     const idx = rt.pending.findIndex((p) => p.id === id);
     if (idx >= 0) rt.pending.splice(idx, 1);
-    this._emitQueue(rt, this.sessionId);
-    return { queue: this.queueSnapshot(this.sessionId) };
+    this._emitQueue(rt, sid);
+    return { queue: this.queueSnapshot(sid) };
   }
 
   // 兼容旧接口:提交到当前活跃会话(运行中自动进入待执行队列)
@@ -1056,14 +1067,27 @@ export class Agent {
    * 事件全部携带 sid:前端按会话路由显示,多会话并行互不串扰。
    */
   async _runTurn(rt, runSessionId, input) {
-    // 本轮开始时把会话绑定到它所属服务器的连接:之后用户切走/切回其它服务器,
-    // 本轮的模型提示词与所有工具调用仍作用于这台服务器,后台继续运行不中断。
-    // 仅"远程模式会话(绑定了远程工作区)"绑定连接;本地模式会话(无远程工作区)
-    // 不绑任何连接——连接断开不会连带停止它,远程工具也因无工作区而不可用。
-    // 同时把会话绑定的远程/本地工作区套上作用域:并行会话各自读到自己绑定的
-    // 工作区(rt.workspace 等),互不串改;undefined = 无绑定(旧会话),回落连接级工作区。
+    // 本轮开始时把会话绑定到**它自己所属服务器**的连接(按 rt.connKey 解析,而不是
+    // "界面当前在看的那台"):之后用户切走/切回其它服务器,本轮的模型提示词与所有工具
+    // 调用仍作用于这台服务器,后台继续运行不中断。
+    // 为什么不能取 ssh.active:排队消息/后台续轮常在用户切走之后才开始,按活动连接绑定
+    // 会把整轮工具打到另一台服务器上(路径与命令全跑错机器),并且那台服务器一旦断开,
+    // stopForConn 会把这个会话连带中止——表现为"在 B 上操作,A 的对话被中断"。
+    // 归属服务器取不到连接就是没连上:直接报错,不借用别的连接执行。
+    // 仅"远程模式会话(绑定了远程工作区)"绑定连接;本地模式会话不绑任何连接——连接
+    // 断开不会连带停止它,远程工具也因无工作区而不可用。
+    // 同时把会话绑定的远程/本地工作区套上作用域:并行会话各自读到自己绑定的工作区
+    // (rt.workspace 等),互不串改;undefined = 无绑定(旧会话),回落连接级工作区。
     // 绑定值为哨兵 NO_WORKSPACE 时,runWith*WorkspaceBinding 会强制"无工作区 + 全盘模式"。
-    const boundConn = rt.workspace ? ssh.active : null; // 本地模式会话 = null
+    let boundConn = null; // 本地模式会话(无远程工作区)= null:不绑连接,连接断开不连带停止它
+    if (rt.workspace) {
+      boundConn = rt.connKey && rt.connKey !== 'local' ? ssh.connByUserKey(rt.connKey) : ssh.active;
+      if (!boundConn) {
+        const message = `该会话属于服务器 ${rt.connKey},它当前未连接:本轮未执行。请连回该服务器后重试(不会借用其他服务器执行)`;
+        this.emit('agent', { event: 'error', message, sid: runSessionId });
+        return { kind: 'error', error: message };
+      }
+    }
     return ssh.runWithConn(boundConn, () =>
       runWithWorkspaceBinding(rt.workspace, () =>
         runWithLocalWorkspaceBinding(rt.localWorkspace, () =>

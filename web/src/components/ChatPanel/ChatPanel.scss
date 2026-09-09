@@ -238,15 +238,17 @@
 /* 历史整表载入时与消息一致不播入场动画 */
 .chat.no-anim .running-row { animation: none; }
 
-/* 生图等待行(挂在 ai 气泡内):图像端点非流式,几十秒没有任何增量可吐,
-   用一条与 running-row 同款的状态行持续声明"仍在生成",避免被误判为卡死 */
-.image-job-row {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-  margin: 2px 0 8px; color: var(--muted); font-size: 12.5px;
-  animation: msg-in .25s ease-out;
+/* 生图在途时的运行状态行:与「Agent 正在运行…」同一行复用,只换文案 + 追加一句耗时预期,
+   不再在气泡内另起一行(避免两处加载指示同时存在、互相抢注意力) */
+.running-row.image-waiting .running-text { color: var(--accent-2); }
+.running-hint { font-size: 11.5px; opacity: .72; user-select: none; }
+
+/* AI 回复下方的成图块:正文在上、成图在下,图下挂一行通路/耗时元信息 */
+.ai-image-block { margin-top: 10px; min-width: 0; }
+.ai-image-meta {
+  margin-top: 5px; font-size: 11.5px; color: var(--muted);
+  font-family: var(--mono); user-select: none;
 }
-.image-job-text { user-select: none; color: var(--text); }
-.image-job-hint { font-size: 11.5px; opacity: .72; }
 
 /* 工具调用:单条回复内按组折叠为一条,展开才显示各卡片 */
 .toolrun { margin-top: 8px; min-width: 0; }

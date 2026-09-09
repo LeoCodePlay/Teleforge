@@ -1,0 +1,49 @@
+/* ---- 生图配置面板独有样式(设置左侧菜单的独立一项,占据整个内容区) ----
+   配色、圆角、玻璃质感一律走全局令牌,与其它设置面板(主题/技能/工具插件)同配方 */
+
+/* 标题行内的状态字样:已配置点亮 accent,未配置用警示色 */
+.image-gen-panel .ig-on { color: var(--accent-2); }
+.image-gen-panel .ig-off { color: var(--danger, #e06c75); }
+
+/* 一句话说明:紧跟标题,把"这页在配什么"讲清楚 */
+.ig-lead { margin: -4px 0 12px; line-height: 1.6; }
+
+/* ---- 端点配置表单:与提供商列表同款内嵌玻璃卡 ---- */
+.ig-body {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--glass-border); border-left: 2px solid var(--accent-border);
+  border-radius: var(--r-md);
+  background: var(--glass-bg-inset); box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+.ig-body .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0; }
+.ig-body .field > label { font-size: 11.5px; color: var(--muted); margin-bottom: 0; }
+/* 质量 + 尺寸并排一行:两者都是短枚举,竖排会白占两倍高度 */
+.ig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ig-actions { display: flex; align-items: center; gap: 8px; }
+.ig-msg { font-size: 12px; line-height: 1.5; padding: 6px 9px; border-radius: var(--r-sm); }
+.ig-msg.ok { color: var(--ok, var(--accent-2)); background: var(--accent-fill-soft); }
+.ig-msg.err { color: var(--danger, #e06c75); background: var(--danger-fill, rgba(224, 108, 117, .12)); }
+
+/* ---- 两条链路说明:左右两卡;首卡是推荐路径,用 accent 竖条标出主次 ---- */
+.ig-paths-title { margin: 18px 0 8px; }
+.ig-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ig-path {
+  padding: 11px 12px; border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  background: var(--glass-bg-inset); box-shadow: inset 0 1px 0 var(--ins-hl);
+}
+.ig-path:first-child { border-left: 2px solid var(--accent-border); }
+.ig-path-head { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+.ig-path-tag {
+  flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: var(--r-pill);
+  color: var(--accent-2); border: 1px solid var(--accent-border); background: var(--accent-fill-soft);
+}
+.ig-path-tag.alt { color: var(--muted); border-color: var(--glass-border); background: var(--fill-1); }
+.ig-path-name { font-size: 12.5px; font-weight: 600; }
+.ig-path-desc { font-size: 11.5px; line-height: 1.65; color: var(--muted); }
+
+/* 窄屏(移动端设置页):两卡与两列字段各自堆叠,避免出现横向滚动 */
+@media (max-width: 767px) {
+  .ig-paths { grid-template-columns: 1fr; }
+  .ig-grid { grid-template-columns: 1fr; }
+}

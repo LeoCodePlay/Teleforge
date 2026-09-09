@@ -1,7 +1,8 @@
 // 设置面板:左侧菜单 + 右侧内容区
-// 包含「AI 配置」「主题」「技能」「工具插件」「全局指令」「关于与更新」;后续设置项在 MENUS 中追加即可
+// 包含「AI 配置」「生图配置」「主题」「技能」「工具插件」「全局指令」「关于与更新」;后续设置项在 MENUS 中追加即可
 import React, { useState } from 'react';
 import AiConfigPanel from '../AiConfigPanel/AiConfigPanel';
+import ImageGenPanel from '../ImageGenPanel/ImageGenPanel';
 import SkillsPanel from '../SkillsPanel/SkillsPanel';
 import PluginsPanel from '../PluginsPanel/PluginsPanel';
 import PromptInjectPanel from '../PromptInjectPanel/PromptInjectPanel';
@@ -11,6 +12,7 @@ import './SettingsPanel.scss';
 
 const MENUS = [
   { id: 'ai', icon: '🤖', label: 'AI 配置' },
+  { id: 'image', icon: '🖼️', label: '生图配置' },
   { id: 'theme', icon: '🎨', label: '主题' },
   { id: 'skills', icon: '🧩', label: '技能' },
   { id: 'plugins', icon: '🔌', label: '工具插件' },
@@ -46,6 +48,7 @@ export default function SettingsPanel({ onClose, connected = false, initialTab =
           </div>
           <div className="settings-content">
             {active === 'ai' && <AiConfigPanel />}
+            {active === 'image' && <ImageGenPanel />}
             {active === 'theme' && <ThemePanel />}
             {active === 'skills' && <SkillsPanel connected={connected} />}
             {active === 'plugins' && <PluginsPanel />}

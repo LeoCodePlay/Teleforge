@@ -48,15 +48,59 @@
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-weight: 600;
 }
-.s-group-header .s-run { color: var(--green); font-size: 11px; flex: none; animation: s-run-pulse 1.2s ease-in-out infinite; }
+/* 状态呼吸点:用 CSS 实心圆画,不再用 ● 文本字形
+   (字形受基线/行高影响,在 flex 行里永远偏上或偏下;换成定宽圆块,
+    由父级 align-items:center 天然上下居中) */
+.s-run {
+  flex: none; display: inline-block; box-sizing: border-box;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor;
+  animation: s-run-pulse 1.2s ease-in-out infinite;
+}
+.s-group-header .s-run { color: var(--green); width: 6px; height: 6px; }
 .s-group-header .s-group-count {
   flex: none; font-size: 10px; color: var(--muted); background: var(--glass-bg-hover);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 0 5px; line-height: 15px;
 }
-/* 组内新建按钮:悬停分组时才浮现(与行尾 ⋮ 同款交互) */
-.s-group-header .s-group-actions { display: flex; gap: 2px; opacity: 0; transition: opacity .15s ease; }
-.s-group-header:hover .s-group-actions { opacity: 1; }
-.s-group-header .s-group-add { font-size: 13px; line-height: 1; padding: 0 4px; }
+/* ---- 尾部槽:静止显示「运行状态点 + 任务数」,悬停整组时交叉让位给「在此工作区新建会话」按钮。
+      两层叠在同一个 grid 单元格(格宽取二者较大),按钮不再隐形常驻占位,分组头右侧不留空白 ---- */
+.s-group-header .s-group-tail {
+  flex: none; display: inline-grid; align-items: center; justify-items: end; height: 17px;
+  /* 行高锁成计数徽标高(15px 行高 + 2px 描边):20px 按钮居中后略微溢出到分组头 6px 内边距里,
+     这样尾部换装按钮不会把分组头从 31px 撑到 34px,列表密度与改造前完全一致 */
+}
+.s-group-header .s-group-tail > * { grid-area: 1 / 1; }
+.s-group-header .s-group-meta {
+  display: inline-flex; align-items: center; gap: 5px;
+  transition: opacity .15s ease, transform .2s ease;
+}
+/* 组内新建按钮:20px 玻璃胶囊,淡入 + 逆时针旋入(与 .seg/.session-item.active 同源 accent 表面) */
+.s-group-header .s-group-add {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; border-radius: var(--r-pill);
+  color: var(--accent-2); border: 1px solid var(--accent-border);
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 2px 8px var(--shadow-1);
+  opacity: 0; transform: rotate(-90deg) scale(.55); pointer-events: none;
+  transition: opacity .15s ease, transform .24s cubic-bezier(.2, .9, .3, 1.2),
+              color .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+/* 让位条件只有两个:① 悬停分组头;② 键盘 Tab 聚焦到按钮(:has + :focus-visible)。
+   刻意不用 :focus-within —— 它会被鼠标点击「＋」后残留的焦点一直命中,移开鼠标就再也回不到「状态 + 任务数」;
+   两条规则也分开写,避免不支持 :has() 的 WebView2 把整条选择器列表(含 :hover)一起判为无效 */
+.s-group-header:hover .s-group-meta { opacity: 0; transform: scale(.85); pointer-events: none; }
+.s-group-header:has(.s-group-add:focus-visible) .s-group-meta { opacity: 0; transform: scale(.85); pointer-events: none; }
+.s-group-header:hover .s-group-add,
+.s-group-header .s-group-add:focus-visible { opacity: 1; transform: none; pointer-events: auto; }
+.s-group-header .s-group-add:hover:not(:disabled) {
+  color: var(--accent); border-color: var(--accent);
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill));
+  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 14px var(--accent-soft), 0 2px 10px var(--shadow-1);
+}
+.s-group-header .s-group-add:active:not(:disabled) {
+  transform: none; color: var(--accent-2);
+  background: linear-gradient(135deg, var(--accent-fill-soft), var(--accent-fill-soft));
+}
 
 /* ---- 分组内会话行:常驻 DOM,展开/收起高度过渡(grid-template-rows 0fr↔1fr) ---- */
 .s-group-body-wrap {
@@ -90,9 +134,11 @@
 .session-item .s-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .session-item .s-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
 /* 会话运行中徽标(多会话并行:该会话有任务正在后台执行) */
-.session-item .s-run { color: var(--green); font-size: 12px; flex: none; animation: s-run-pulse 1.2s ease-in-out infinite; text-shadow: 0 0 8px var(--ok-border); }
+.session-item .s-run { color: var(--green); box-shadow: 0 0 8px var(--ok-border); }
 /* 待用户操作(模型提问挂起):运行点变黄,提示切回该会话作答/取消 */
-.session-item .s-run.warn { color: var(--amber); text-shadow: 0 0 8px var(--warn-border); }
+.session-item .s-run.warn { color: var(--amber); box-shadow: 0 0 8px var(--warn-border); }
+/* 空闲行:小点隐去但格子照留(7px + 6px 行间距),所有会话标题左边缘严格同列 */
+.session-item .s-run.idle { visibility: hidden; animation: none; }
 @keyframes s-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .session-item .s-actions { display: flex; gap: 2px; }
 /* 三点更多按钮:复用 .action-icon 的透明底/无边框/hover 反馈,仅调字号与留白 */
@@ -134,7 +180,11 @@
 @media (hover: none) and (pointer: coarse) {
   .session-item .s-meta,
   .session-item .s-actions { opacity: 1; }
-  .s-group-header .s-group-actions { opacity: 1; }
+  /* 触屏无悬停:尾部槽不再叠放切换,状态/计数与新建按钮并排常显,触控位加大到 26px */
+  /* 选择器多带一层 .s-group-tail 抬到与 .s-group-header:hover … 同权重,靠后置顺序稳定覆盖 */
+  .s-group-header .s-group-tail { display: inline-flex; gap: 6px; height: auto; }
+  .s-group-header .s-group-tail .s-group-meta { opacity: 1; transform: none; pointer-events: auto; }
+  .s-group-header .s-group-tail .s-group-add { opacity: 1; transform: none; width: 26px; height: 26px; }
   /* 触屏无 hover:箭头常显(占住图标位),保留展开状态指示 */
   .s-group-header .s-group-caret { opacity: 1; }
   .s-group-header .s-group-ico { opacity: 0; }
@@ -146,6 +196,10 @@
   .s-group-body-wrap,
   .s-group-body-wrap .s-group-body,
   .s-group-header .s-group-caret,
-  .s-group-header .s-group-ico { transition: none; }
+  .s-group-header .s-group-ico,
+  .s-group-header .s-group-meta,
+  .s-group-header .s-group-add { transition: none; }
   .s-group-body { transform: none; }
+  /* 不做旋入动画:直接以正位淡入淡出互换 */
+  .s-group-header .s-group-add { transform: none; }
 }

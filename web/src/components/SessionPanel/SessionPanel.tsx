@@ -33,6 +33,15 @@ const MENU_H = 78;
 const UNGROUPED = '__ungrouped__';
 const UNGROUPED_LABEL = '未指定工作区';
 
+// 会话是否绑定了「具体的远程工作区目录」。
+// 「不在工作区对话」在服务端把会话绑定值存成哨兵字符串 NO_WORKSPACE(边界=整台服务器),
+// 它是真值但不是目录:这类会话正是「连着 SSH 却没选远程工作区、只在本地干活」的那批,
+// 按 SessionPanel 下方的分流需求必须归本地任务列表,所以判据不能只看真值。
+// 写成类型谓词是为了让 TS 在调用处把 workspace 收窄成 string。
+function hasRemoteWorkspace(s: Session): s is Session & { workspace: string } {
+  return !!s.workspace && s.workspace !== NO_WORKSPACE;
+}
+
 // 会话行时间格式化(模块级,SessionRow 复用)
 function fmtTime(t: string | number | undefined) {
   if (!t) return '';
@@ -68,9 +77,12 @@ function SessionRow({ session: s, active, running, askWaiting, onSwitch, onMenu,
     <div key={s.id} className={`session-item ${active ? 'active' : ''}`}
       {...lp.bind}
       onClick={(ev) => { if (lp.wasLongPress()) return; onSwitch(s.id); }}>
-      {askWaiting
-        ? <span className="s-run warn" data-tip="等待用户操作">●</span>
-        : running && <span className="s-run" data-tip="任务进行中">●</span>}
+      {/* 状态点常驻占位:空闲行也留一格(仅 visibility 隐藏),
+          否则有/无小点的两行会话标题左边缘会参差不齐 */}
+      <span
+        className={`s-run${askWaiting ? ' warn' : running ? '' : ' idle'}`}
+        {...(askWaiting ? { 'data-tip': '等待用户操作' } : running ? { 'data-tip': '任务进行中' } : {})}
+      />
       {/* 点击始终触发切换请求(含当前会话):重载失败/加载中的会话可再次点击重试,
           而非被 activeId 守卫挡成 no-op */}
       <span className="s-title">
@@ -84,7 +96,8 @@ function SessionRow({ session: s, active, running, askWaiting, onSwitch, onMenu,
   );
 }
 
-// 一个工作区分组:分组头(折叠箭头 + 图标 + 路径名 + 计数 + 组内新建) + 折叠的会话行
+// 一个工作区分组:分组头(折叠箭头 + 图标 + 路径名 + 尾部槽) + 折叠的会话行
+// 尾部槽:静止=「运行状态点 + 任务数」,悬停=「组内新建会话」按钮(两者叠在同一格交叉切换)
 interface WorkspaceGroupProps {
   label: string;
   icon: string;
@@ -111,10 +124,23 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
           <span className="s-group-ico">{icon}</span>
         </span>
         <span className="s-group-title" title={label}>{label}</span>
-        {hasRunning && <span className="s-run" data-tip="有任务进行中">●</span>}
-        <span className="s-group-count">{sessions.length}</span>
-        <span className="s-group-actions" onClick={(e) => e.stopPropagation()}>
-          <button className="s-group-add" data-tip="在此工作区新建会话" onClick={() => onNewInGroup()}>＋</button>
+        {/* 尾部只留一格:「运行状态点 + 任务数」与「在此工作区新建会话」按钮叠放在同一格交叉切换。
+            悬停分组头时按钮旋入、计数淡出;移开则还原——按钮不再隐形常驻占位,右侧不会空出一片 */}
+        <span className="s-group-tail" onClick={(e) => e.stopPropagation()}>
+          <span className="s-group-meta">
+            {hasRunning && <span className="s-run" data-tip="有任务进行中" />}
+            <span className="s-group-count">{sessions.length}</span>
+          </span>
+          <button type="button" className="s-group-add" aria-label="在此工作区新建会话"
+            data-tip="在此工作区新建会话"
+            // 指针抬起即交还焦点:否则点完「＋」后按钮一直持有焦点,尾部让位规则被钉住,
+            // 鼠标移开也回不到「状态点 + 任务数」。键盘 Enter/Space 触发 click 不产生 pointerup,可达性不受影响
+            onPointerUp={(e) => e.currentTarget.blur()}
+            onClick={() => onNewInGroup()}>
+            <svg width={11} height={11} viewBox="0 0 11 11" fill="none" aria-hidden>
+              <path d="M5.5 1.7v7.6M1.7 5.5h7.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            </svg>
+          </button>
         </span>
       </div>
       {/* 展开体常驻 DOM(不卸载),用 grid-template-rows 0fr↔1fr 做高度过渡:
@@ -185,15 +211,16 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   const mine = (sessions || []).filter((s) => !foreign.includes(s) && (s.id === activeId || busyIds.includes(s.id) || (s.msgCount ?? 0) > 0));
   const foreignLabel = (s: Session) => s.connKey === 'local' ? '本地工作区' : String(s.connKey || '');
 
-  // 分组:远程任务 = 绑定了远程工作区的会话(按远程工作区分组);
-  // 本地任务 = 无远程工作区的会话(按本地工作区分组)——含未连接时的本地会话,
-  // 以及连接了 SSH 但未选远程工作区、仅限本地工作的会话(需求:归本地任务列表)
+  // 分组:远程任务 = 绑定了具体远程工作区目录的会话(按该目录分组);
+  // 本地任务 = 没绑定远程目录的会话(按本地工作区分组)——含未连接时的本地会话,
+  // 以及连接了 SSH 但未选远程工作区、仅限本地工作的会话(需求:归本地任务列表);
+  // 远程侧「不在工作区对话」的哨兵绑定(NO_WORKSPACE)按「没绑定远程目录」处理,同样归本地列表
   // 仅"已连接服务器"(作用域为服务器键)时分开显示远程任务/本地任务两列表;
   // 断开连接(本地作用域)后不再展示「远程任务列表」——此时无远程可用,绑定了远程
   // 工作区的会话(含错误残留绑定)降级归入本地任务分组,避免远程分组在断线后残留。
   const inRemoteScope = !!scopeKey && scopeKey !== 'local';
-  const remoteSessions = inRemoteScope ? mine.filter((s) => s.workspace) : [];
-  const localSessions = mine.filter((s) => (inRemoteScope ? !s.workspace : true));
+  const remoteSessions = inRemoteScope ? mine.filter((s) => hasRemoteWorkspace(s)) : [];
+  const localSessions = mine.filter((s) => (inRemoteScope ? !hasRemoteWorkspace(s) : true));
   const remoteKey = (ws: string) => `r:${scopeKey}:${ws}`;
   const localKey = (ws: string) => `l:${ws}`;
   const groupSessions = (list: Session[], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string) => {
@@ -221,7 +248,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     if (!activeId) return;
     const active = mine.find((s) => s.id === activeId);
     if (!active) return;
-    const key = active.workspace
+    const key = hasRemoteWorkspace(active)
       ? remoteKey(active.workspace)
       : localKey(active.localWorkspace || UNGROUPED);
     if (!Object.hasOwn(collapsedMap, key)) saveCollapsed(key, false);
@@ -320,8 +347,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
               <div key={s.id} className="session-item foreign" data-tip="该会话仍在原服务器后台运行"
                 onClick={() => onSwitchForeign?.(s.id, s.connKey || '')}>
                 {askPendingIds.includes(s.id)
-                  ? <span className="s-run warn" data-tip="等待用户操作">●</span>
-                  : <span className="s-run" data-tip="任务进行中">●</span>}
+                  ? <span className="s-run warn" data-tip="等待用户操作" />
+                  : <span className="s-run" data-tip="任务进行中" />}
                 <span className="s-title">
                   {s.title || '新会话'}
                   <span className="s-foreign-badge">📡 {foreignLabel(s)}</span>

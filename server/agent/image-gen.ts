@@ -33,7 +33,7 @@ export interface ImageJobResult {
 
 /** 未配置生图工具时给模型/用户的可操作提示 */
 export const IMAGE_TOOL_MISSING =
-  '生图工具尚未配置。请打开「设置 → AI 模型 → 生图工具」,填写 Base URL、API Key 与模型名'
+  '生图工具尚未配置。请打开「设置 → 生图配置」,填写 Base URL、API Key 与模型名'
   + '(例如 Base URL=https://www.fucheers.top/v1、模型=gpt-image-2;或 OpenAI 官方 https://api.openai.com/v1、模型=gpt-image-1)。'
   + '配置完成后重试即可生图。';
 
