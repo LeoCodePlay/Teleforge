@@ -6,16 +6,21 @@
     <title>Teleforge</title>
     <style>
       html, body { height: 100%; margin: 0; background: #05070f; color: #8ab4f8;
-        display: grid; place-items: center; font-family: system-ui, -apple-system, sans-serif; }
-      .spinner { width: 36px; height: 36px; border: 3px solid #1e2a44;
+        font-family: system-ui, -apple-system, sans-serif; }
+      /* 视口锁定的居中舞台:整组内容垂直居中,动画与文字各自水平居中。
+         用 position:fixed + flex,避免旧写法里 .spinner(块级元素)不受
+         text-align:center 影响而偏左、以及百分比高度解析差异造成的不居中 */
+      .stage { position: fixed; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 16px; }
+      .spinner { flex: none; width: 36px; height: 36px; border: 3px solid #1e2a44;
         border-top-color: #4c8dff; border-radius: 50%;
         animation: spin 0.9s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
-      .tip { margin-top: 16px; font-size: 13px; opacity: 0.75; letter-spacing: 0.05em; }
+      .tip { font-size: 13px; opacity: 0.75; letter-spacing: 0.05em; text-align: center; }
     </style>
   </head>
   <body data-tauri-drag-region>
-    <div style="text-align:center" data-tauri-drag-region>
+    <div class="stage" data-tauri-drag-region>
       <div class="spinner" data-tauri-drag-region></div>
       <div class="tip" data-tauri-drag-region>正在启动后端服务…</div>
     </div>

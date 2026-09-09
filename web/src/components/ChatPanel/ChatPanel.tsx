@@ -1396,17 +1396,41 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     }
   }, [messages]);
 
-  // 会话切换的兜底:首帧布局时内容挂载动画/延迟加载的图片可能在绘制后几帧内
-  // 才把 scrollHeight 撑到最终值,首帧测得的底部与拇指长度会偏小,看起来就像
-  // "滚动条从长到短缓缓过渡"。绘制后下一帧再强制滚底 + 重绘一次拇指,保证
-  // 切换会话后滚动条立即是最终形态(仅会话切换后触发一次,不干扰普通流式)。
+  // 会话切换的兜底(滚到真正的底部):
+  // .msg 用 content-visibility + 320px 兜底占位,首次查看长会话时几乎整屏消息都
+  // 只是估算高度;首帧按估算 scrollHeight 触底的落点只是"假底部",随后浏览器
+  // 真渲染目标区域、图片/字体异步加载,scrollHeight 还会连续变化,单帧 rAF 追不上。
+  // 这里用 ResizeObserver 监听每条消息:切换后只要内容高度仍在变化就重新触底,
+  // 连续 2 次测量一致(或 800ms 超时)即视为稳定收手;用户期间手动离开底部则放弃。
+  // 仅切换后触发一次,不干扰普通流式(流式追加走上方 [messages] 布局 effect 的吸附)。
   useEffect(() => {
     if (!justSwitchedRef.current) return;
     justSwitchedRef.current = false;
-    const id = requestAnimationFrame(() => {
-      if (scrollRef.current) scrollToBottomNow();
-    });
-    return () => cancelAnimationFrame(id);
+    const el = scrollRef.current;
+    if (!el) return;
+    let lastH = -1;   // 上次测得的 scrollHeight
+    let same = 0;     // 高度连续未变的次数(>=2 视为稳定)
+    let timer = 0;    // 兜底超时句柄
+    let rid = 0;      // rAF 句柄
+    let ro: ResizeObserver | null = null;
+    const stop = () => {
+      ro?.disconnect();
+      cancelAnimationFrame(rid);
+      clearTimeout(timer);
+    };
+    const chip = () => {
+      if (!stickRef.current) { stop(); return; } // 用户已手动上滑离底:放弃自动补滚
+      const h = el.scrollHeight;
+      scrollToBottomNow(); // 无论高矮都重滚到底部(幂等)
+      if (h === lastH) { if (++same >= 2) stop(); }
+      else { same = 0; lastH = h; }
+    };
+    // 内容尺寸变化(占位高度→真实高度、图片加载撑高)都触发重新触底
+    ro = new ResizeObserver(chip);
+    for (let i = 0; i < el.children.length; i++) ro.observe(el.children[i]);
+    rid = requestAnimationFrame(chip); // 首帧兜底(尺寸没变化的路径也至少补一次)
+    timer = window.setTimeout(stop, 800); // 兜底:最多补滚 800ms,避免长会话持续误触
+    return stop;
   }, [messages]);
 
   // 跳转点悬停提示:取不被裁剪的 fixed 定位,按当前点视口坐标弹出到右侧

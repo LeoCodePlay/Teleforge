@@ -3593,7 +3593,7 @@ dependencies = [
 
 [[package]]
 name = "teleforge"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",

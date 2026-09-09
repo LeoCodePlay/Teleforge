@@ -1,6 +1,8 @@
 /* 应用启动占位:提供方配置从服务端加载完成前显示,避免 provider 缺失回退为 mock 造成的首帧抖动 */
 .app-boot {
-  height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  /* 锁定视口居中:不用 100vh(移动端地址栏/桌面端百分比高度解析差异会让动画与文字偏上/偏下) */
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
   color: var(--muted); font-size: 13px; letter-spacing: .3px;
 }
 .app-boot-spin {
