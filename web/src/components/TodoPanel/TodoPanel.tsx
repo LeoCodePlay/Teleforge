@@ -1,10 +1,10 @@
 // 任务计划面板(照搬 deepseek-harness 的 TodoPanel):
 // - 位置:对话输入框上方(composer 停靠区),对齐 harness 的 conversation.input.dock
 // - 数据:todo_write 工具写入的整表快照(经 todo_update 事件 / get_history 载入);
-//   生命周期对齐 harness 的 standing plan 语义:turn/end(对话完成)保留列表
-//   供用户阅读,下一次 turn/start(用户发起新一轮)由 ChatPanel 清空——模型随后
-//   写入新计划则替换,本轮不使用计划则保持隐藏
-// - 交互:默认折叠,点击头部展开/收起;折叠时显示进度摘要;列表为空时整体隐藏
+//   生命周期(跨轮存活的 standing plan):清单里还有未完成项就一直显示——用户接着发
+//   消息时面板不消失,后端会把剩余计划拼进新指令让模型按计划继续;全部 completed
+//   (或清单为空)则收起,不再打扰。新一轮不再清空未完成的计划(见 foldTodos)
+// - 交互:默认折叠,点击头部展开/收起;折叠时显示进度摘要;清单为空或已全部完成时整体隐藏
 import React, { useState } from 'react';
 import type { TodoItem } from '../../types';
 import './TodoPanel.scss';
@@ -65,9 +65,11 @@ function progressLabel(todos: TodoItem[]): string {
 
 export default function TodoPanel({ todos }: { todos: TodoItem[] }) {
   const [collapsed, setCollapsed] = useState(true); // 默认折叠
+  // 隐藏条件:没有计划,或计划已全部完成(收尾清单不再占据输入区上方的停靠空间)。
+  // 只要还剩 pending/in_progress 项,面板就跨轮保持显示——与会话端的 foldTodos
+  // (未完成的计划不被新一轮作废)是同一条规则的两侧。
   if (!todos || todos.length === 0) return null;
-  // 注意:不在这里因"全部已完成"而隐藏——对话完成(turn/end)后保留已完成清单
-  // 供用户阅读(对齐 harness);展示/清空的时机交由 ChatPanel 的 turn/start 控制。
+  if (todos.every((t) => t.status === 'completed')) return null;
   return (
     <section className="todo-panel" aria-label="任务计划">
       <button

@@ -215,10 +215,13 @@ export function compactionInstruction(): string {
  *    折叠为头尾摘要(照搬 harness compaction-tool-result-pruner,不保留最近几条),
  *    重测后回到水位内则只返回折叠结果(compacted=false,pruned=N,日志不动);
  * 4) 仍超:选区间 -> 生成摘要(失败降级裁剪)-> 返回 [摘要消息, ...保留区最近消息]。
+ * onStart:确认要压缩(区间已选定)时同步回调一次——摘要要调一次 LLM,可能耗时数十秒,
+ *   上层据此把「正在压缩上下文…」的运行态推给前端;只在真的要压缩时触发,避免未超水位
+ *   的绝大多数步骤留下永不收尾的运行行。
  * force:跳过阈值检查强制执行(上下文爆窗恢复用);retainTokensOverride:覆盖保留水位
  * (爆窗恢复传 0 = 只保留最后一个配对完整节点,最大力度压缩)。
  */
-export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0, force = false, retainTokensOverride }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number; force?: boolean; retainTokensOverride?: number }): Promise<{ messages: any[]; compacted: boolean; dropCount: number; pruned: number }> {
+export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0, force = false, retainTokensOverride, onStart }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number; force?: boolean; retainTokensOverride?: number; onStart?: () => void }): Promise<{ messages: any[]; compacted: boolean; dropCount: number; pruned: number }> {
   const spec = resolveCompactSpec(contextWindow, maxTokens);
   if (!spec.enabled) return { messages, compacted: false, dropCount: 0, pruned: 0 };
   // 水位(照搬 harness):threshold = 窗口×80%,且必须大于保留水位(对齐 harness 的
@@ -246,6 +249,9 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
   const retainTokens = retainTokensOverride === undefined ? spec.retainTokens : Math.max(0, Math.floor(retainTokensOverride));
   const range = selectCompactRange(msgs, retainTokens);
   if (!range) return { messages: msgs, compacted: false, dropCount: 0, pruned: prunedRes.pruned };
+  // 区间已选定 = 确实要压缩了:先同步通知上层(摘要要调一次 LLM,可能几十秒),
+  // 让前端在对话流里插入「正在压缩上下文…」的运行态行。
+  if (typeof onStart === 'function') { try { onStart(); } catch {} }
 
   let summary = '';
   if (llm && !llm.isMock) {

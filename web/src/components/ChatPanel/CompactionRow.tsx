@@ -27,22 +27,28 @@ interface CompactionRowProps {
   dropCount?: number;
   /** 是否手动压缩(/compact 命令);false=运行中自动压缩 */
   manual?: boolean;
+  /** 自动压缩进行中(服务端 compaction_start 投影):本行显示运行态,完成时由
+   *  compaction_done 原地改写为完成态,不再另插一行 */
+  running?: boolean;
 }
 
-export function CompactionRow({ content, dropCount = 0, manual = false }: CompactionRowProps) {
+export function CompactionRow({ content, dropCount = 0, manual = false, running = false }: CompactionRowProps) {
   const { open, toggle } = useDisclosure(false);
   const title = manual ? '手动压缩' : '上下文压缩';
-  const brief = dropCount > 0
-    ? `已压缩 ${dropCount} 条早期消息 · 点击查看压缩摘要`
-    : '早期对话已压缩为摘要 · 点击查看';
+  // 运行态优先:压缩还在进行,既没有条数,也没有可展开的摘要正文
+  const brief = running
+    ? '正在把早期对话压缩为摘要…'
+    : dropCount > 0
+      ? `已压缩 ${dropCount} 条早期消息 · 点击查看压缩摘要`
+      : '早期对话已压缩为摘要 · 点击查看';
   return (
-    <div className="dsh-compaction" data-state={open ? 'open' : 'collapsed'}>
+    <div className="dsh-compaction" data-state={running ? 'running' : open ? 'open' : 'collapsed'}>
       <DisclosureRow
         icon={<IconApiOutline14 size={14} />}
         title={title}
         open={open}
-        expandable
-        expandOnRowClick
+        expandable={!running}
+        expandOnRowClick={!running}
         onToggle={toggle}
         collapsedContent={(
           <>

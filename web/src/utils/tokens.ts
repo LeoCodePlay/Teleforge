@@ -32,7 +32,7 @@ export function modelFaceMessages(msgs: unknown[]): unknown[] {
   const arr = msgs || [];
   let last = -1;
   arr.forEach((m, i) => {
-    if (m && typeof m === 'object' && (m as { compaction?: unknown }).compaction) last = i;
+    if (m && typeof m === 'object' && (m as { compaction?: { running?: boolean } }).compaction && !(m as { compaction?: { running?: boolean } }).compaction?.running) last = i;
   });
   return last >= 0 ? arr.slice(last) : arr;
 }

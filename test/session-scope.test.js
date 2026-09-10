@@ -78,17 +78,45 @@ check('无旧会话后迁移为 0', sessions.migrateLegacy(B) === 0);
 // list() 无参返回全部(旧调用兼容)
 check('list() 无参返回全部会话', sessions.list().length === 3 + 2 + 1 + 1);
 
-// 「不在工作区对话」(全盘模式):连接级选了全盘后新建的会话,绑定记为哨兵而非 null,
-// 并且按"有远程侧工作区"归当前服务器作用域(它是在整台服务器上工作,不是仅本地)
+// 「不在工作区对话」(全盘模式)与本地任务列表同一份(需求核心):
+// 全盘边界没有占用服务器上任何工作区目录 → 这类会话归本地作用域(local),连接前后都留在
+// 同一份本地任务列表里;只有"选了某个具体远程目录"的会话才归那台服务器(远程任务列表)。
+// 必须用真实 SshConnection 造出活动连接:远程绑定只在确实连着服务器时才记录。
 const { NO_WORKSPACE } = await import('../server/config.ts');
-ssh.noWorkspace = true;
-check('全盘模式:连接级工作区被清空且置标记', ssh.workspace === null && ssh.noWorkspace === true,
-  JSON.stringify({ w: ssh.workspace, nw: ssh.noWorkspace }));
-const wholeSession = agent.createSession('整台服务器');
-check('全盘模式:会话绑定记为哨兵', wholeSession.workspace === NO_WORKSPACE, JSON.stringify(wholeSession.workspace));
-check('全盘模式:会话归服务器作用域', wholeSession.connKey === D, JSON.stringify(wholeSession.connKey));
-ssh.workspace = '/srv/d';
-check('选回具体目录后自动退出全盘模式', ssh.noWorkspace === false && ssh.workspace === '/srv/d');
+const W = 'user@w.com:22';
+const localIdsBefore = new Set(sessions.list('local').map((x) => x.id));
+{
+  const conn = new sshMod.SshConnection();
+  conn.status = 'connected';
+  conn.hostInfo = { host: 'w.com', port: 22, username: 'user' };
+  ssh.conns.set(W, conn);
+  ssh._hook(W, conn);
+  ssh._activeId = W;
+  agent.setConnKey(W);
+  ssh.noWorkspace = true;
+  check('全盘模式:连接级工作区被清空且置标记', ssh.workspace === null && ssh.noWorkspace === true,
+    JSON.stringify({ w: ssh.workspace, nw: ssh.noWorkspace }));
+  const wholeSession = agent.createSession('整台服务器');
+  check('全盘模式:会话绑定记为哨兵', wholeSession.workspace === NO_WORKSPACE, JSON.stringify(wholeSession.workspace));
+  check('全盘模式:没占用服务器工作区 → 归本地作用域', wholeSession.connKey === 'local',
+    JSON.stringify(wholeSession.connKey));
+  check('全盘会话在已连接时的本地任务列表里可见',
+    agent.listVisible().some((x) => x.id === wholeSession.id));
+  ssh.workspace = '/srv/w';
+  check('选回具体目录后自动退出全盘模式', ssh.noWorkspace === false && ssh.workspace === '/srv/w');
+  const dirSession = agent.createSession('占用远程目录');
+  check('占用具体远程目录 → 归该服务器作用域(远程任务列表)',
+    dirSession.connKey === W && dirSession.workspace === '/srv/w',
+    JSON.stringify({ c: dirSession.connKey, w: dirSession.workspace }));
+  await ssh.disconnect(W);
+  agent.setConnKey('local'); // 等价于 ws 层 syncAgentScope:断开回到本地作用域
+  const visible = new Set(agent.listVisible().map((x) => x.id));
+  check('断开后本地任务列表与连接前同一份(一个本地会话都不少)',
+    [...localIdsBefore].every((id) => visible.has(id)),
+    JSON.stringify({ before: localIdsBefore.size, visible: visible.size }));
+  check('断开后全盘会话仍在本地任务列表(不因断线消失)', visible.has(wholeSession.id));
+  check('远程工作区会话不混进本地任务列表', !visible.has(dirSession.id));
+}
 localFs.noWorkspace = true;
 check('本地全盘:清空本地工作区并置标记', localFs.workspace === null && localFs.noWorkspace === true);
 
@@ -112,6 +140,80 @@ check('本地全盘:清空本地工作区并置标记', localFs.workspace === nu
   const afterDisconnect = agent.createSession('断开后新建');
   check('断开后新建会话归本地且无远程绑定', afterDisconnect.connKey === 'local' && afterDisconnect.workspace == null,
     JSON.stringify({ c: afterDisconnect.connKey, w: afterDisconnect.workspace }));
+}
+
+// ---- 本轮连接绑定规则(_bindTurnConn)----
+// 需求:local 作用域不是一台服务器,它永远是这台电脑本身——没连服务器时的 local 与连着
+// 服务器时的 local 同一个意思。所以本地作用域的会话绝不能因为"服务器未连接"被拒绝执行
+// (旧实现把带远程绑定的本地会话打成"该会话属于服务器 local,它当前未连接:本轮未执行")。
+{
+  ssh.conns.clear();
+  ssh._activeId = null;
+  const mkRt = (connKey, workspace) => ({ connKey, workspace });
+
+  const r1 = agent._bindTurnConn(mkRt('local', NO_WORKSPACE));
+  check('本地作用域+全盘边界:未连接也照常执行(不再有"服务器 local 未连接")',
+    r1.error === null && r1.boundConn === null && r1.remoteWs === NO_WORKSPACE,
+    JSON.stringify({ e: r1.error, w: r1.remoteWs }));
+
+  const r2 = agent._bindTurnConn(mkRt('local', '/srv/leftover'));
+  check('本地作用域+残留远程目录:不拒绝,且该目录不生效(不会打到别的服务器)',
+    r2.error === null && r2.boundConn === null && r2.remoteWs === null,
+    JSON.stringify({ e: r2.error, w: r2.remoteWs }));
+
+  const r3 = agent._bindTurnConn(mkRt(null, '/srv/legacy'));
+  check('无归属旧会话+远程目录:未连接时不拒绝,按本机继续',
+    r3.error === null && r3.boundConn === null, JSON.stringify({ e: r3.error }));
+
+  const r4 = agent._bindTurnConn(mkRt('user@a.com:22', '/srv/a'));
+  check('服务器作用域+具体目录:那台服务器没连上时拒绝执行(不借用别的服务器)',
+    r4.error !== null && r4.boundConn === null && /user@a\.com:22/.test(r4.error || ''),
+    JSON.stringify({ e: r4.error }));
+}
+{
+  const W2 = 'user@w2.com:22';
+  const conn = new sshMod.SshConnection();
+  conn.status = 'connected';
+  conn.hostInfo = { host: 'w2.com', port: 22, username: 'user' };
+  ssh.conns.set(W2, conn);
+  ssh._hook(W2, conn);
+  ssh._activeId = W2;
+  const r5 = agent._bindTurnConn({ connKey: 'local', workspace: NO_WORKSPACE });
+  check('本地作用域+全盘边界+已连服务器:顺着用当前活动连接(远程全盘仍可用)',
+    r5.error === null && r5.boundConn === conn, JSON.stringify({ e: r5.error }));
+  const r6 = agent._bindTurnConn({ connKey: W2, workspace: '/srv/w2' });
+  check('服务器作用域:按自己的键解析到那台连接',
+    r6.error === null && r6.boundConn === conn && r6.remoteWs === '/srv/w2');
+  await ssh.disconnect(W2);
+}
+
+// ---- 端到端(用户上报的原始现场)----
+// 会话归本地作用域、却带着断线前留下的远程全盘边界,且此刻没有任何 SSH 连接:
+// 旧实现这一轮直接被拒("该会话属于服务器 local,它当前未连接:本轮未执行"),
+// 现在必须照常在本机跑完(mock 模型,只验证绑定/执行门槛)。
+{
+  const { LlmClient } = await import('../server/agent/llm.ts');
+  agent.llm = new LlmClient({ baseUrl: 'http://mock', apiKey: '', model: 'mock' });
+  ssh.conns.clear();
+  ssh._activeId = null;
+  const broken = agent.createSession('断线残留远程边界的本机会话');
+  agent.updateSessionWorkspace(broken.id, NO_WORKSPACE); // 生产路径:local 作用域 + 全盘边界
+  const errors = [];
+  const prevEmit = agent.emit;
+  agent.emit = (ev, payload) => {
+    if (ev === 'agent' && payload?.event === 'error') errors.push(payload.message);
+    prevEmit(ev, payload);
+  };
+  await agent.submit(broken.id, '你好');
+  agent.emit = prevEmit;
+  const events = sessions.loadEvents(broken.id);
+  check('断线时 local 会话照常跑完一轮(不再报"服务器 local 未连接")',
+    errors.length === 0 && events.some((e) => e.type === 'turn/end'),
+    JSON.stringify({ errors, tail: events.map((e) => e.type).slice(-3) }));
+  const meta = sessions.list().find((x) => x.id === broken.id);
+  check('该会话仍归本地作用域(不会被这次对话改判成服务器作用域)',
+    meta?.connKey === 'local' && meta?.workspace === NO_WORKSPACE,
+    JSON.stringify({ c: meta?.connKey, w: meta?.workspace }));
 }
 
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);

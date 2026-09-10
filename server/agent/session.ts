@@ -16,8 +16,9 @@
 // - turn/*、step/* 是结构边界,不投影为消息;user/message、assistant/message、
 //   tool/result 三类是"消息面",deriveMessages() 只看它们。
 // - todo/write 是会话状态而非消息(参照 harness 的 sessionProjections):
-//   foldTodos() 折叠出"当前计划"——最新一次 todo/write 的整表,下一次 turn/start 清空
-//   (turn/end 不清,完成的清单保持可见,直到用户开启新一轮)。
+//   foldTodos() 折叠出"当前计划"——最新一次 todo/write 的整表:未完成的计划跨 turn/start
+//   存活(turn/end 从不清空),面板因此一直显示,模型也接着同一份计划继续做(剩余计划随
+//   新一轮指令送达,见 agent.ts 的 planCarryBlock);只有已全部完成的计划才在新一轮作废。
 
 export interface ToolCall {
   id: string;
@@ -70,6 +71,9 @@ export interface SessionEventDataMap {
     ms?: number;
   };
 }
+
+/** 任务计划整表快照(todo/write 的载荷;foldTodos 的返回类型) */
+export type TodoSnapshot = Array<{ content: string; status: string }>;
 
 export type SessionEventType = keyof SessionEventDataMap | string;
 
@@ -339,17 +343,23 @@ export class Session {
   }
 }
 
+/** 计划中是否还有未完成项(pending / in_progress);空清单视为无待办 */
+export function hasOutstandingTodos(todos: TodoSnapshot | null | undefined): todos is TodoSnapshot {
+  return Array.isArray(todos) && todos.length > 0 && todos.some((t) => t?.status !== 'completed');
+}
+
 /**
  * 折叠事件日志得到"当前任务计划"(参照 harness 的 todos 投影):
- * 最新一次 todo/write 的整表即当前计划;用户开启新一轮(turn/start)即清空,
- * turn/end 不清空——已完成的清单保持可见,直到下一轮重新规划。
+ * 最新一次 todo/write 的整表即当前计划。turn/end 从不清空——本轮跑完的清单保持可见;
+ * turn/start 只作废"已全部完成"的计划,仍有未完成项的计划跨轮存活,于是用户接着发
+ * 消息时面板不消失、模型也接着同一份计划继续做(剩余计划由 agent.ts 拼进新指令)。
  * @returns 当前计划(无则 null)
  */
-export function foldTodos(events: SessionEvent[]): Array<{ content: string; status: string }> | null {
-  let todos: Array<{ content: string; status: string }> | null = null;
+export function foldTodos(events: SessionEvent[]): TodoSnapshot | null {
+  let todos: TodoSnapshot | null = null;
   for (const ev of events || []) {
     if (ev?.type === 'todo/write') todos = Array.isArray(ev.data?.todos) ? ev.data.todos : null;
-    else if (ev?.type === 'turn/start') todos = null;
+    else if (ev?.type === 'turn/start' && !hasOutstandingTodos(todos)) todos = null;
   }
   return todos;
 }

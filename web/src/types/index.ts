@@ -241,7 +241,7 @@ export interface ChatMessage {
   };
   /** 上下文压缩标记(compaction/done 投影消息):dropCount=被压缩消息数,manual=手动压缩。
       渲染为对话流中的折叠「压缩标记行」(样式参照 harness 的 CompactionItem) */
-  compaction?: { dropCount?: number; manual?: boolean };
+  compaction?: { dropCount?: number; manual?: boolean; running?: boolean };
   /** 斜杠命令在对话流中的命令卡片(role='command',本地插入,不持久化):
       压缩中/完成/失败的可见反馈(样式参照 harness 的 GenericCommandCard) */
   command?: { name: string; state: 'running' | 'ok' | 'error'; text?: string };

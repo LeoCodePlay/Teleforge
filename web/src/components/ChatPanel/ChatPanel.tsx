@@ -302,6 +302,13 @@ function collectFileChanges(msg: ChatMessage): FileChangeItem[] {
   // 按路径排序,展示顺序稳定
   return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
+// 运行态压缩行(compaction_start 插入)的收尾兜底:会话已空闲却还挂着「正在压缩…」,
+// 只可能是 compaction_done 在断线/切会话期间漏收(补发窗口有限)。原地摘掉它,
+// 避免界面永远停在一个不会结束的状态;重开会话时由 compaction/done 投影出完成态行。
+function dropStaleCompaction(msgs: ChatMessage[]): ChatMessage[] {
+  return msgs.some((m) => m.compaction?.running) ? msgs.filter((m) => !m.compaction?.running) : msgs;
+}
+
 // 消息结束(完成/停止/出错)或历史回放时,把聚合结果挂到 assistant 消息上
 function attachFileChanges(msg: ChatMessage | undefined) {
   if (msg && msg.role === 'assistant') msg.filesChanged = collectFileChanges(msg);
@@ -788,6 +795,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         histCache.current.delete(activeRef.current ?? ''); // 清空后旧缓存失效,下次切换重新拉取
         setMessages([]);
         setQueue([]); // 历史清空:待执行队列一并复位
+        setTodos([]); // 任务计划一并复位(日志已清空,残留计划会一直显示在面板上)
       }),
       api.on('agent', (m: any) => {
         // 多会话并行:只处理当前活跃会话的事件,其他会话(后台运行中)的流不进入本视图;
@@ -798,7 +806,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setAgentState(m.status === 'running' ? 'working' : 'idle');
             if (m.status !== 'running') {
               setImgJob(null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
-              push((msgs) => { const c = [...msgs]; const l = c[c.length - 1]; if (l?.streaming) l.streaming = false;
+              push((msgs) => { const c = dropStaleCompaction([...msgs]); const l = c[c.length - 1]; if (l?.streaming) l.streaming = false;
               return c; });
             }
             break;
@@ -811,7 +819,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 本轮首条 user/message 计入分支点计数
             forkTurnRef.current += 1; lastIterRef.current = 0;
             setAgentState('working'); setErrorMsg('');
-            setTodos([]); // 开启新一轮:上一轮的任务计划清空(对齐 harness 的 standing plan 语义)
+            // 新一轮:只作废"已全部完成"的计划(面板本就因全完成而隐藏);仍有未完成项
+            // 则原样保留显示——与后端 foldTodos 的跨轮存活规则一致,模型侧由后端把剩余
+            // 计划拼进本轮指令续推;模型若另写新计划,后续 todo_update 会整表替换。
+            setTodos((prev) => (prev.some((t) => t.status !== 'completed') ? prev : []));
             setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
             setImgJob(null); // 新一轮开始:上一轮的在途生图标记一律作废
             push((msgs) => [...msgs, { role: 'user', content: m.text, attachments: Array.isArray(m.attachments) ? m.attachments : undefined, time: Date.now(), forkTail: Math.max(0, forkTurnRef.current - 1) }]);
@@ -1008,18 +1019,36 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               return c;
             });
             break;
-          case 'compaction_done':
-            // 自动压缩完成(上下文超水位/爆窗恢复):在消息流中插入「上下文压缩」标记行,
-            // 披露模型自该处起不再看到被压缩的早期历史(其上的消息保持原样,与 CompactionRow
-            // 的语义一致)。运行中不做整表重拉,避免打断正在流式的输出;刷新/切回会话后
-            // 由 compaction/done 事件在原位投影出同款标记行。流式中的 assistant 不打断,插到它前面。
+          case 'compaction_start':
+            // 自动压缩开始(超水位/爆窗恢复要走摘要):摘要是一次真实的 LLM 请求,可能十几秒
+            // 到几十秒。先在对话流里落一行运行态「正在把早期对话压缩为摘要…」,等 done 原地改写,
+            // 而不是让界面在这段静默里什么都不显示。同一次压缩只保留一条运行行(重复 start 幂等);
+            // 流式中的 assistant 不打断,插到它前面。
             push((msgs) => {
+              if (msgs.some((x) => x.compaction?.running)) return msgs;
               const c = [...msgs];
-              const item = {
-                role: 'user' as const,
+              const item = { role: 'user' as const, content: '', compaction: { running: true } };
+              const last = c[c.length - 1];
+              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
+              else c.push(item);
+              return c;
+            });
+            scrollToBottomNow();
+            break;
+          case 'compaction_done':
+            // 自动压缩完成:把上面那行运行态原地改写为「上下文压缩」完成态(条数 + 可展开摘要),
+            // 不新增一行。从未收到 start(断线漏事件、切走再切回)时回退为原位插入。运行中不做
+            // 整表重拉,避免打断正在流式的输出;刷新/切回会话后由 compaction/done 事件投影同款行。
+            push((msgs) => {
+              const done = {
                 content: m.summary || '【上下文已自动压缩】早期对话已省略。',
                 compaction: { dropCount: Number(m.dropCount) || 0, manual: m.manual === true }
               };
+              let idx = -1;
+              for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].compaction?.running) { idx = i; break; } }
+              const c = [...msgs];
+              if (idx >= 0) { c[idx] = { ...c[idx], ...done }; return c; }
+              const item = { role: 'user' as const, ...done };
               const last = c[c.length - 1];
               if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
               else c.push(item);
@@ -1949,7 +1978,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             <div key={i} className={`msg ${m.role}${m.compaction ? ' compaction-msg' : ''}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
               {m.compaction && (
                 // 上下文压缩标记行(手动/自动):折叠展示摘要,展开看正文(样式参照 harness CompactionItem)
-                <CompactionRow content={m.content || ''} dropCount={m.compaction.dropCount} manual={m.compaction.manual} />
+                <CompactionRow content={m.content || ''} dropCount={m.compaction.dropCount} manual={m.compaction.manual} running={!!m.compaction.running} />
               )}
               {m.command && (
                 // 斜杠命令卡片(/compact 等):运行中/成功/失败的可见反馈(样式参照 harness GenericCommandCard)
@@ -2054,7 +2083,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         <div className="dot-tip" style={{ top: dotTip.top, left: dotTip.left }}>{dotTip.text}</div>
       )}
       {errorMsg && <div className="error">{errorMsg}</div>}
-      {/* 任务计划面板:输入区玻璃面板之外,独立玻璃卡片悬浮(默认折叠,无计划时隐藏) */}
+      {/* 任务计划面板:输入区玻璃面板之外,独立玻璃卡片悬浮(默认折叠;清单还有未完成项就一直显示,含跨轮,全部完成或无计划则隐藏) */}
       <TodoPanel todos={todos} />
       <div className="composer">
         {/* 模型提问面板(ask_user_question):内联显示在输入框上方,无遮罩;作答/取消前锁定输入。

@@ -15,7 +15,7 @@ import fsp from 'node:fs/promises';
 import { LlmClient, isContextOverflowError } from './llm.ts';
 import { lastGeneratedImage, imageCaption, runImageJob } from './image-gen.ts';
 import { compactHistory, summarizeWithLlm, selectManualCompactRange, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
-import { Session, foldTodos, trimMessagesByBudget, type SessionEvent } from './session.ts';
+import { Session, foldTodos, hasOutstandingTodos, trimMessagesByBudget, type SessionEvent, type TodoSnapshot } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, type PermissionMode } from './permission.ts';
 import { PERMISSION_MODE_META } from './permission.ts';
@@ -35,8 +35,23 @@ export { registry as toolRegistry };
 
 // ---- 自动续推
 // 完成判定对齐 harness agent-loop:模型返回 0 个 tool_calls 即本轮结束(completed),
-// 不再注入 goal_round 续推消息。任务计划(todo)只作为前端进度面板展示,
-// 由系统提示词的规则约束模型"清空计划前不得停止",而不是由宿主强行续跑。
+// 不再注入 goal_round 续推消息。任务计划(todo)不由宿主强行续跑:未完成的计划跨轮
+// 存活(见 foldTodos),用户发起新一轮时把剩余计划拼进本轮指令(见 planCarryBlock),
+// 由模型自己接着做完;前端面板在计划全部完成前保持显示,全部完成即收起。
+
+// 跨轮续推提示:上一轮未完成的计划随新一轮的用户指令一并送达模型。
+// 只拼进 content(模型可见面),不拼 display(用户气泡仍只显示自己打的原文)。
+function planCarryBlock(todos: TodoSnapshot): string {
+  const mark = (s: string) => (s === 'in_progress' ? '进行中' : s === 'completed' ? '已完成' : '待办');
+  const left = todos.filter((t) => t?.status !== 'completed').length;
+  const lines = todos.map((t) => `- [${mark(t.status)}] ${t.content}`).join('\n');
+  return `\n\n【上一轮的任务计划尚未完成:共 ${todos.length} 项,还剩 ${left} 项未做】\n${lines}\n`
+    + `请接着这份计划执行:先把上面「进行中」「待办」的项做完,再处理用户本轮的新消息`
+    + `(新要求属于原计划的一部分时,用 todo_write 把它追加进计划)。每完成一项立刻用 `
+    + `todo_write 整表更新状态——面板会在清单全部 completed 时自动收起,只要还有未完成项`
+    + `它就会一直显示,所以清单状态必须与实际进度始终一致。若用户本轮已明确改变或取消了`
+    + `原目标,请用 todo_write 重写这份计划以反映新方向。`;
+}
 
 // ---- repeat-tool-reminder(移植自 harness guard/repeat-tool-reminder)----
 // 连续相同工具+参数调用达到阈值时在下一步注入提醒(advisory,不拦截调用),防模型原地打转。
@@ -200,6 +215,36 @@ function newRuntime(session) {
 
 // 兜底空日志:活跃会话运行时缺失(恢复失败)时投影为空
 const EMPTY_SESSION = new Session();
+
+// 会话作用域键 'local' 的含义:这台电脑本身。它不是一台服务器,也就没有"连没连上"这种状态——
+// 未连接任何服务器时的 local,与连着某台服务器但该会话不用服务器工作区时的 local,是同一个
+// 作用域、同一份任务列表(见 listVisible:本地作用域会话在连接前后都完整可见)。
+// 推论(本轮需求的根):local 作用域的会话永不因为"没有 SSH 连接"而被拒绝执行。
+const LOCAL_SCOPE = 'local';
+
+/**
+ * 会话是否占用了「具体的远程工作区目录」。这是判断"该会话在用服务器工作区"的唯一标准:
+ * - 选了目录 → 归那台服务器作用域(远程任务列表),执行必须绑定那台服务器的连接;
+ * - 没选目录(含「不在工作区对话」= 哨兵 NO_WORKSPACE,它只是远程侧的边界设置,不是目录)
+ *   → 归本地作用域(本地任务列表):连着服务器时按该边界用当前活动连接干活,断开连接就
+ *   照常退回本机继续,不会被"服务器未连接"卡住。
+ * 必须与前端 SessionPanel 的 hasRemoteWorkspace 同一条规则,否则"列在本地任务里的会话"
+ * 会被后端当成远程会话,去要一台根本不存在的服务器。
+ */
+function usesRemoteWorkspace(meta: { workspace?: string | null }): boolean {
+  return !!meta.workspace && meta.workspace !== NO_WORKSPACE;
+}
+
+/**
+ * 本轮实际生效的远程工作区绑定值。具体目录只对"它所属的那台服务器"有意义:作用域不是服务器
+ * (local / 无归属的旧会话)时,这种组合只可能来自断线前的残留,不能拿它去约束另一台服务器
+ * —— 按未绑定处理,回落活动连接自己的工作区。哨兵(全盘边界)与 null(未绑定)原样返回。
+ */
+function effectiveRemoteBinding(rt: { connKey?: string | null; workspace?: string | null }): string | null {
+  const ws = rt.workspace ?? null;
+  if (ws == null || ws === NO_WORKSPACE) return ws;
+  return rt.connKey && rt.connKey !== LOCAL_SCOPE ? ws : null;
+}
 
 // 事件日志 -> 前端消息数组投影(getHistory 的实现,与具体会话无关)。
 // 与 deriveMessages 同款配对过滤:无前置 assistant tool_calls 的孤儿 tool/result
@@ -419,10 +464,13 @@ export class Agent {
     }
   }
 
-  // 会话归属作用域:有远程工作区(或明确选择「不在工作区对话」=整台服务器)= 当前连接作用域;
-  // 否则 = 本地作用域。连接了 SSH 但两侧都没选的会话仍归本地——它只在本机工作(见 createSession)。
+  // 会话归属作用域:只有占用了某台服务器上的具体工作区目录的会话才归该服务器(远程任务列表);
+  // 其余一律归本地作用域。local 不按连接状态区分:没连服务器时的 local,与连着服务器但没用
+  // 服务器工作区时的 local 是同一份本地任务列表(需求)。
+  // 「不在工作区对话」(哨兵 NO_WORKSPACE)没有占用服务器工作区,因此也归本地作用域——
+  // 连着服务器时它照样按全盘边界用远程工具,断开则本机继续(见 _runTurn 的绑定规则)。
   sessionConnKey() {
-    return ssh.workspace || ssh.noWorkspace ? this._connKey : 'local';
+    return this._connKey !== LOCAL_SCOPE && ssh.workspace ? this._connKey : LOCAL_SCOPE;
   }
 
   /**
@@ -441,22 +489,33 @@ export class Agent {
       rt.connKey = meta.connKey ?? null;
     }
     if (id === this.sessionId) {
-      if (meta.workspace != null) this._applyRemoteBinding(meta.workspace);
+      // 远程绑定回写到连接的条件:全盘哨兵随时可写(它就是把当前连接设为全盘边界);
+      // 具体目录只有在该会话确实归属当前这台服务器时才写,否则会把别的服务器的工作区
+      // 盖到活动连接上,串改其他会话的执行目录。
+      if (meta.workspace != null && (meta.workspace === NO_WORKSPACE || meta.connKey === this._connKey)) {
+        this._applyRemoteBinding(meta.workspace);
+      }
       if (meta.localWorkspace != null) this._applyLocalBinding(meta.localWorkspace);
     }
   }
 
   // 捕获"当前的工作区选择"作为新会话绑定值:全盘模式记为哨兵 NO_WORKSPACE,
   // 这样在草稿态选了「不在工作区对话」,首条消息创建的会话会继承该模式。
+  // 没有活动连接时不记远程绑定:此时 ssh.workspace / ssh.noWorkspace 读到的是连接级回落字段的
+  // 残留值(断线没清干净的那份),拿它给本机会话盖一个远程边界,这个会话下一轮就会去要一台
+  // 根本不存在的服务器(用户看到的"该会话属于服务器 local,它当前未连接:本轮未执行")。
   _captureBinding(): { workspace: string | null; localWorkspace: string | null } {
     return {
-      workspace: ssh.noWorkspace ? NO_WORKSPACE : (ssh.workspace ?? null),
+      workspace: ssh.active ? (ssh.noWorkspace ? NO_WORKSPACE : (ssh.workspace ?? null)) : null,
       localWorkspace: localFs.noWorkspace ? NO_WORKSPACE : (localFs.workspace ?? null)
     };
   }
 
-  // 把绑定值(路径 / 全盘哨兵)写到活动连接:哨兵 = 清空工作区并置「不在工作区对话」标记
+  // 把绑定值(路径 / 全盘哨兵)写到活动连接:哨兵 = 清空工作区并置「不在工作区对话」标记。
+  // 没有活动连接时什么都不写:这两个 setter 会连"连接级回落字段"一起写,断线状态下写下去
+  // 就是给下一次连接(甚至换一台服务器)留下幽灵边界,新建会话会错误继承它。
   _applyRemoteBinding(ws: string) {
+    if (!ssh.active) return;
     if (ws === NO_WORKSPACE) ssh.noWorkspace = true;
     else ssh.workspace = ws;
   }
@@ -496,7 +555,7 @@ export class Agent {
     return turns;
   }
 
-  // 当前任务计划(todo/write 投影):最新整表,turn/start 清空(见 foldTodos)
+  // 当前任务计划(todo/write 投影):最新整表;未完成的计划跨 turn/start 存活(见 foldTodos)
   currentTodos(id = this.sessionId) {
     const rt = id != null ? this._runtimes.get(id) : null;
     const events = rt ? rt.session.events : (id != null ? sessions.loadEvents(id) : []);
@@ -674,7 +733,9 @@ export class Agent {
     if (!id) return;
     if (this.sessionStarted(id)) {
       const meta = sessions.list().find((s) => s.id === id);
-      if (meta && (meta.workspace ?? null) == null) {
+      // "本地会话" = 没占用具体远程工作区目录的会话(含「不在工作区对话」的全盘会话):
+      // 它只能在本地工作区干活,开始对话后本地工作区即锁定,与任务列表分组同一标准。
+      if (meta && !usesRemoteWorkspace(meta)) {
         throw new Error('该本地会话已开始对话,本地工作区已锁定,不能修改;如需更换工作区请新建会话');
       }
     }
@@ -686,13 +747,16 @@ export class Agent {
     this.assertRemoteWorkspaceChangeable(id); // 已开始对话的会话锁定(防御:RPC 已先校验)
     if (!id) return;
     sessions.setWorkspace(id, ws);
-    // 空会话补选远程工作区(含「不在工作区对话」)后,从本地作用域翻转为当前服务器作用域(归类随工作区走)
-    if (ws != null && this._connKey !== 'local') sessions.setConnKey(id, this._connKey);
+    // 作用域随"有没有占用具体远程工作区目录"走:选了目录 → 归这台服务器(远程任务列表),
+    // 新一轮据此绑定该服务器的连接;没选目录(清空、或「不在工作区对话」的全盘边界)→ 归本地
+    // 作用域(本地任务列表,连接前后同一份),执行时不绑定任何指定服务器,断线也不挡它。
+    const serverScoped = this._connKey !== LOCAL_SCOPE && usesRemoteWorkspace({ workspace: ws });
+    const scope = serverScoped ? this._connKey : LOCAL_SCOPE;
+    sessions.setConnKey(id, scope);
     const rt = this._runtimes.get(id);
     if (rt) {
       rt.workspace = ws;
-      // 补选远程工作区后会话翻转到本服务器作用域:运行时同步归属,新一轮据此绑定连接
-      if (ws != null && this._connKey !== 'local') rt.connKey = this._connKey;
+      rt.connKey = scope;
     }
     if (id === this.sessionId && ws != null) this._applyRemoteBinding(ws);
     this.emit('agent', { event: 'sessions_changed' }); // 前端据此把会话移到对应工作区分组
@@ -1062,35 +1126,54 @@ export class Agent {
   }
 
   /**
+   * 本轮该绑定哪台服务器的连接,以及实际生效的远程工作区绑定值。要不要绑、绑哪台,取决于
+   * 这个会话到底占用了谁的远程工作区(三种情况):
+   *  1) 占用了某台服务器上的具体目录、且会话归属该服务器 → 必须绑定那台服务器的连接(按
+   *     rt.connKey 解析,而不是"界面当前在看的那台":排队消息与后台续轮常在用户切走之后才
+   *     开始,按活动连接绑定会把整轮工具打到另一台服务器上,路径与命令全跑错机器;那台服务
+   *     器一断,stopForConn 还会连带中止本会话)。取不到那台的连接就是没连上 → 返回 error
+   *     拒绝执行,绝不借用别的服务器(这是刻意约束,不是可以兜底的错误)。
+   *  2) 没归属具体服务器、却带了远程边界(「不在工作区对话」的全盘会话、归属未知的旧会话)
+   *     → 连着服务器就顺着用当前活动连接(全盘边界照常可用),**没连也在本机把这一轮照常
+   *     跑完**。local 不是一台服务器,不存在"服务器 local 未连接"这种拒绝理由。
+   *  3) 完全没用到远程的会话 → 不绑连接:任何连接断开都不会连带停止它,远程工具也因无绑定而不可见。
+   * 单独成方法:让绑定规则能被测试直接断言,不必真的起一轮模型请求。
+   */
+  _bindTurnConn(rt: { connKey?: string | null; workspace?: string | null }):
+    { boundConn: any; remoteWs: string | null; error: string | null } {
+    const remoteWs = effectiveRemoteBinding(rt);
+    if (remoteWs == null) return { boundConn: null, remoteWs, error: null };
+    if (rt.connKey && rt.connKey !== LOCAL_SCOPE) {
+      const conn = ssh.connByUserKey(rt.connKey);
+      return conn
+        ? { boundConn: conn, remoteWs, error: null }
+        : {
+            boundConn: null,
+            remoteWs,
+            error: `该会话的远程工作区在服务器 ${rt.connKey} 上,它当前未连接:本轮未执行。请连回该服务器后重试(不会借用其他服务器执行)`
+          };
+    }
+    // 未指定服务器的会话(local 作用域 / 归属未知的旧会话):有活动连接就用,没有就在本机继续
+    return { boundConn: ssh.active || null, remoteWs, error: null };
+  }
+
+  /**
    * 一轮完整交互(Turn):turn/start -> 若干步(step/start -> 模型请求 ->
    * assistant/message -> 工具调用与结果 -> step/end) -> turn/end。
    * 结束时事件日志落盘;中止/异常时给未闭合的工具调用补结果,保证日志永远可回放。
    * 事件全部携带 sid:前端按会话路由显示,多会话并行互不串扰。
+   * 本轮开跑前先按 _bindTurnConn 的决定绑定连接(该拒绝执行的在这里拒绝);同时把会话绑定
+   * 的远程/本地工作区套上作用域:并行会话各自读到自己绑定的工作区,互不串改(undefined =
+   * 无绑定 = 回落连接级工作区;哨兵 NO_WORKSPACE = 强制"无工作区 + 全盘模式")。
    */
   async _runTurn(rt, runSessionId, input) {
-    // 本轮开始时把会话绑定到**它自己所属服务器**的连接(按 rt.connKey 解析,而不是
-    // "界面当前在看的那台"):之后用户切走/切回其它服务器,本轮的模型提示词与所有工具
-    // 调用仍作用于这台服务器,后台继续运行不中断。
-    // 为什么不能取 ssh.active:排队消息/后台续轮常在用户切走之后才开始,按活动连接绑定
-    // 会把整轮工具打到另一台服务器上(路径与命令全跑错机器),并且那台服务器一旦断开,
-    // stopForConn 会把这个会话连带中止——表现为"在 B 上操作,A 的对话被中断"。
-    // 归属服务器取不到连接就是没连上:直接报错,不借用别的连接执行。
-    // 仅"远程模式会话(绑定了远程工作区)"绑定连接;本地模式会话不绑任何连接——连接
-    // 断开不会连带停止它,远程工具也因无工作区而不可用。
-    // 同时把会话绑定的远程/本地工作区套上作用域:并行会话各自读到自己绑定的工作区
-    // (rt.workspace 等),互不串改;undefined = 无绑定(旧会话),回落连接级工作区。
-    // 绑定值为哨兵 NO_WORKSPACE 时,runWith*WorkspaceBinding 会强制"无工作区 + 全盘模式"。
-    let boundConn = null; // 本地模式会话(无远程工作区)= null:不绑连接,连接断开不连带停止它
-    if (rt.workspace) {
-      boundConn = rt.connKey && rt.connKey !== 'local' ? ssh.connByUserKey(rt.connKey) : ssh.active;
-      if (!boundConn) {
-        const message = `该会话属于服务器 ${rt.connKey},它当前未连接:本轮未执行。请连回该服务器后重试(不会借用其他服务器执行)`;
-        this.emit('agent', { event: 'error', message, sid: runSessionId });
-        return { kind: 'error', error: message };
-      }
+    const { boundConn, remoteWs, error } = this._bindTurnConn(rt);
+    if (error) {
+      this.emit('agent', { event: 'error', message: error, sid: runSessionId });
+      return { kind: 'error', error };
     }
     return ssh.runWithConn(boundConn, () =>
-      runWithWorkspaceBinding(rt.workspace, () =>
+      runWithWorkspaceBinding(remoteWs, () =>
         runWithLocalWorkspaceBinding(rt.localWorkspace, () =>
           this._runTurnInner(rt, runSessionId, input, boundConn))));
   }
@@ -1181,6 +1264,13 @@ export class Agent {
         .join('\n');
     }
     if (attBlocks) text = String(text || '') + attBlocks;
+    // 跨轮续推:本轮开始前若已有一份未完成的计划(上一轮留下的),把它拼进本轮指令,
+    // 让模型接着计划推进,而不是把用户的新消息当成一件完全无关的事从零开始。
+    // 必须在追加 turn/start 之前取:turn/start 会作废已完成的计划(见 foldTodos)。
+    const carryTodos = foldTodos(session.events);
+    if (hasOutstandingTodos(carryTodos)) {
+      text = String(text || '') + planCarryBlock(carryTodos);
+    }
 
     const turnStartSeq = session.seq;
     const turn = session.nextTurn();
@@ -1287,13 +1377,18 @@ export class Agent {
         if (ctxWindow > 0 && historyMsgs.length > 2) {
           const c = await compactHistory({
             messages: historyMsgs, system: systemText, llm: this.llm, signal: signal.signal,
-            contextWindow: ctxWindow, maxTokens: this.llm.maxTokens, reservedTokens
+            contextWindow: ctxWindow, maxTokens: this.llm.maxTokens, reservedTokens,
+            // 确认要压缩即广播「压缩中」:摘要要调一次 LLM,可能几十秒,不能让对话流静默干等
+            onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false })
           });
           if (c.compacted) {
             const dropSeqs = trace.slice(0, c.dropCount).map((t) => t.seq);
             // 非破坏压缩:早期消息完整保留在日志里,只追加检查点;模型历史投影自检查点起
             // 以摘要顶替被压消息(front 端显示完整,刷新后可回看全部早期对话)。
             session.markCompacted(dropSeqs, c.messages[0].content, { dropCount: c.dropCount, manual: false });
+            // 检查点即时落盘:摘要压缩不能等整轮结束才写盘(一轮可能上百步、跑几十分钟),
+            // 否则中途重启/切走就把检查点丢了——重开会话既看不到压缩标记行,模型上下文也退回爆窗边缘。
+            if (runSessionId) sessions.saveEvents(runSessionId, session.events);
             // 重新投影,保证后续爆窗恢复的事件 seq 映射仍然有效
             trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
             historyMsgs = trace.map((t) => t.msg);
@@ -1372,13 +1467,17 @@ export class Agent {
             const c = await compactHistory({
               messages: historyMsgs, system: systemText, llm, signal: signal.signal,
               contextWindow: ctxWindow, maxTokens: llm.maxTokens, reservedTokens,
-              force: true, retainTokensOverride: 0
+              force: true, retainTokensOverride: 0,
+              // 爆窗恢复的摘要压缩一样要调 LLM:先广播「压缩中」,前端不会长时间无反馈
+              onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false })
             });
             if (c.compacted) {
               const dropSeqs = trace.slice(0, c.dropCount).map((t: any) => t.seq);
               // 非破坏压缩(同常规自动压缩):日志完整保留,只追加检查点
               session.markCompacted(dropSeqs, c.messages[0].content, { dropCount: c.dropCount, manual: false });
               historyMsgs = c.messages;
+              // 检查点即时落盘(同常规自动压缩):爆窗恢复后若进程中断/切走,不能把压缩结果丢掉
+              if (runSessionId) sessions.saveEvents(runSessionId, session.events);
               console.log(`[agent] 爆窗恢复:已折叠并压缩早期 ${c.dropCount} 条消息后重试本步`);
               this.emit('agent', {
                 event: 'compaction_done', sid: runSessionId,
@@ -1843,7 +1942,7 @@ export class Agent {
       '5. 写/改/删仅限对应工作区内;绝不能删除工作区根目录;破坏性命令(rm -rf、drop table 等)必须三思。',
       '6. 重要:<runtime_context> 快照与对话历史里已有的环境信息、目录结构和工具结果可直接复用,不要重复探测;只有任务涉及变化时才重新调用。',
       '7. 回答使用用户的提问语言(默认中文)。',
-      '8. 任务规划(强制):复杂多步任务必须先调用 todo_write 建立完整计划(每项一个具体步骤),每完成一项立即标记 completed,允许且只允许一项 in_progress。任务计划全部 completed 之前,不得以文字回复代替执行——必须继续调用工具直到整张清单完成,或你已用工具验证整个目标确实达成。简单单步任务可跳过计划,但同样必须真正执行而不是只描述。',
+      '8. 任务规划(强制):复杂多步任务必须先调用 todo_write 建立完整计划(每项一个具体步骤),每完成一项立即标记 completed,允许且只允许一项 in_progress。任务计划全部 completed 之前,不得以文字回复代替执行——必须继续调用工具直到整张清单完成,或你已用工具验证整个目标确实达成。简单单步任务可跳过计划,但同样必须真正执行而不是只描述。计划是跨轮存活的:用户发新消息时若上一份计划仍有未完成项,该计划会随新指令一并送达,请先接着做完未完成项再处理新要求(目标已变时用 todo_write 重写计划)。',
       '9. 完成判定:宣称完成前,收集证据(读取文件、查看命令输出、检查修改结果)证明整个任务目标已达成,而不是只做了第一步就下结论。若发现遗漏或失败,继续修复直到证据确凿;无法推进时再调用 ask_user_question 或说明原因。',
       '10. 需要用户确认、选择或补充关键信息时,先调用 ask_user_question 向用户提问(可一次多道、带选项/多选/自定义),等用户作答后再继续,不要替用户做应由他决定的取舍;没有歧义时不要滥用。',
       thinkingRule,
