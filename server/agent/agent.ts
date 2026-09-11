@@ -415,6 +415,26 @@ function findTurnEvent(events, idx) {
   return i === undefined ? -1 : i;
 }
 
+// 会话当前"消息面"总长(与 messageFaceIndexes 同口径)。用于把前端的本地分支点计数器
+// 重锚回服务端口径:那个计数器是前端"猜"出来的——请求失败/中止的步不落 assistant/message,
+// 前端却在步开始(iteration)时就 +1;轮末自愈补的工具结果、生图轮的 image/generated 又只有
+// 服务端计数。猜出来的下标一旦漂移,下一条用户消息就带着错的下标去回退/删除,服务端命中的
+// 便不是用户消息(报「目标不是用户消息,无法回退」/「目标消息不存在」)。
+function faceCount(events: any[]): number {
+  return messageFaceIndexes(events).length;
+}
+
+// 生效压缩检查点(标记行)在消息面里的下标。标记行插在"保留区首条消息面之前",会把下标
+// >= 它的既有分支点整体挤后一位 —— 前端据此把已记录的分支点平移 +1。
+// 找不到生效检查点(旧版破坏式压缩遗留/尚未压缩)返回 -1,调用方跳过平移。
+function compactionMarkerAt(events: any[]): number {
+  let cpIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    if (events[i].type === 'compaction/done' && typeof events[i].data?.dropThroughSeq === 'number') cpIdx = i;
+  }
+  return cpIdx < 0 ? -1 : messageFaceIndexes(events).indexOf(cpIdx);
+}
+
 // 事件数组过滤/截断后重排 seq(与 Session 构造对齐:seq = 新数组下标,time 缺失补当前时间)
 function reindexEvents(events) {
   return events.map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
@@ -865,7 +885,9 @@ export class Agent {
       while (j > 0 && events[j - 1].type !== 'turn/start') j--;
       cut = j > 0 ? j - 1 : 0;
     } else {
-      throw new Error('目标不是用户消息,无法回退');
+      // 目标不是用户消息:正常情况下不会发生(前端用 turn_end/compaction_done 广播的
+      // 权威下标对齐本地分支点);真发生了说明前端下标与实际消息面不同步,把定位信息带出来
+      throw new Error(`目标不是用户消息,无法回退(at=${at},消息面数=${messageFaceIndexes(events).length},命中事件=${ev.type})`);
     }
     session.events = reindexEvents(events.slice(0, cut));
     if (this.sessionId) sessions.saveEvents(this.sessionId, session.events);
@@ -1397,7 +1419,10 @@ export class Agent {
             // 重拉,避免打断正在流式的输出);压缩摘要由 compaction/done 事件随历史重放。
             this.emit('agent', {
               event: 'compaction_done', sid: runSessionId,
-              dropCount: c.dropCount, manual: false, summary: c.messages[0].content
+              dropCount: c.dropCount, manual: false, summary: c.messages[0].content,
+              // 标记行在消息面里的下标:它插在保留区首条消息面之前,会把下标 >= at 的既有
+              // 分支点整体挤后一位 —— 前端据此把已记录的分支点平移 +1(见 compactionMarkerAt)
+              at: compactionMarkerAt(session.events)
             });
             // 同步广播「压缩后的模型上下文」用量:这一步的模型请求紧接着就会发出,
             // 请求后的 context_usage 自然反映压缩后水位;这里即时更新让仪表盘立即可见下降。
@@ -1481,7 +1506,9 @@ export class Agent {
               console.log(`[agent] 爆窗恢复:已折叠并压缩早期 ${c.dropCount} 条消息后重试本步`);
               this.emit('agent', {
                 event: 'compaction_done', sid: runSessionId,
-                dropCount: c.dropCount, manual: false, summary: c.messages[0].content
+                dropCount: c.dropCount, manual: false, summary: c.messages[0].content,
+                // 同上:爆窗恢复的压缩检查点同样会把后续分支点挤后一位
+                at: compactionMarkerAt(session.events)
               });
               this.emit('agent', {
                 event: 'context_usage', sid: runSessionId,
@@ -1623,6 +1650,10 @@ export class Agent {
       }
       if (runSessionId) {
         sessions.saveEvents(runSessionId, session.events); // 落盘,重启后可恢复
+        // 权威分支点对齐:轮末(含上面自愈补的工具结果、生图轮的第二个消息面)把服务端
+        // 消息面总长下发给前端。前端那个本地计数器是"猜"的(见 faceCount 注释),失败/中止的轮
+        // 会让它漂移;以服务端口径重锚后,下一轮用户消息才带着正确的下标去回退/删除/分支。
+        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId });
         this.emit('agent', { event: 'sessions_changed' }); // 后台会话结束也刷新前端会话列表
       }
     }
@@ -1736,6 +1767,8 @@ export class Agent {
       if (turnOpened) session.append('turn/end', { turn, reason: endReason });
       if (runSessionId) {
         sessions.saveEvents(runSessionId, session.events);
+        // 同文本轮:把消息面总长下发,前端以服务端口径重锚本地分支点计数(见 faceCount 注释)
+        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId });
         this.emit('agent', { event: 'sessions_changed' });
       }
     }

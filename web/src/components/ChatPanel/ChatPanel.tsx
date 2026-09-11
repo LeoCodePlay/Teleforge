@@ -1005,6 +1005,24 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               return c;
             });
             break;
+          case 'turn_end':
+            // 轮末权威分支点(服务端 _runTurnInner/_runImageTurn 收尾后广播的 faceCount =
+            // 该轮真正落盘后的消息面总长)。本地的 forkTurnRef 只是"猜":请求失败/中止的步,
+            // 前端已按 iteration +1 但服务端不落 assistant/message;轮末自愈补的工具结果、
+            // 生图轮的 image/generated 又只有服务端计数。猜漂了之后,下一条用户消息就带着错的
+            // 下标去回退/删除,服务端命中的不是用户消息 —— 报「目标不是用户消息,无法回退」。
+            // 这里以服务端口径重锚:计数器回到 faceCount,本轮回复气泡的分支点落到轮内最后一个消息面。
+            if (typeof m.faceCount === 'number') {
+              forkTurnRef.current = m.faceCount;
+              push((msgs) => {
+                const c = [...msgs];
+                for (let i = c.length - 1; i >= 0; i--) {
+                  if (c[i].role === 'assistant') { c[i] = { ...c[i], forkTail: Math.max(0, m.faceCount - 1) }; break; }
+                }
+                return c;
+              });
+            }
+            break;
           case 'notice':
             // 通知不打断流式中的 assistant 气泡:插到它前面,
             // 避免后续 text/reasoning 增量找不到目标消息(它们只认末尾的 assistant)
@@ -1039,6 +1057,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 自动压缩完成:把上面那行运行态原地改写为「上下文压缩」完成态(条数 + 可展开摘要),
             // 不新增一行。从未收到 start(断线漏事件、切走再切回)时回退为原位插入。运行中不做
             // 整表重拉,避免打断正在流式的输出;刷新/切回会话后由 compaction/done 事件投影同款行。
+            // m.at = 标记行在服务端消息面里的下标:标记行插在保留区首条消息面之前,会把下标
+            // >= at 的既有分支点整体挤后一位。不平移的话,本轮早先推入的用户/回复气泡会带着旧下标,
+            // 之后回退/删除就命中相邻的错误 turn(要么报错,要么悄悄回退错一轮)。
+            if (typeof m.at === 'number') forkTurnRef.current += 1;
             push((msgs) => {
               const done = {
                 content: m.summary || '【上下文已自动压缩】早期对话已省略。',
@@ -1046,9 +1068,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               };
               let idx = -1;
               for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].compaction?.running) { idx = i; break; } }
-              const c = [...msgs];
-              if (idx >= 0) { c[idx] = { ...c[idx], ...done }; return c; }
-              const item = { role: 'user' as const, ...done };
+              const at = typeof m.at === 'number' ? m.at : -1;
+              // 平移到新下标:标记行之前的分支点不动,之后的 +1(标记行自己占 at)
+              const c = at < 0 ? [...msgs]
+                : msgs.map((x) => (typeof x.forkTail === 'number' && x.forkTail >= at ? { ...x, forkTail: x.forkTail + 1 } : x));
+              if (idx >= 0) { c[idx] = { ...c[idx], ...done, ...(at >= 0 ? { forkTail: at } : {}) }; return c; }
+              const item = { role: 'user' as const, ...done, ...(at >= 0 ? { forkTail: at } : {}) };
               const last = c[c.length - 1];
               if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
               else c.push(item);
