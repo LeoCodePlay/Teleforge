@@ -238,6 +238,8 @@ button.sm { padding: 4px 11px; font-size: 12px; }
   background: var(--err-bg); border: 1px solid var(--err-border);
   color: var(--err-text); padding: 8px 11px; border-radius: var(--r-sm);
   margin: 8px 0; font-size: 12px; cursor: pointer; word-break: break-word;
+  /* 后端错误文案里带「换行 + 提示:…」的可操作指引,保留换行让它单独成行可见 */
+  white-space: pre-wrap;
   box-shadow: inset 0 1px 0 var(--ins-hl), 0 4px 16px var(--btn-danger-glow);
 }
 .okline { color: var(--green); font-size: 12px; margin-top: 6px; text-shadow: 0 0 12px var(--ok-border); }

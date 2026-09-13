@@ -1,8 +1,10 @@
 // 上下文窗口自动压缩(设计参照 dsh 的 compaction-basic 子系统):
 // - 每个模型可在提供方配置里声明 contextWindow(输入上下文长度)与 maxTokens(单次输出上限)。
-// - 每次发请求前估算 token;超过阈值窗口(默认 contextWindow×80%,再扣除输出预留)时,
-//   把早期区间压缩成一段结构化 checkpoint 摘要(调用 LLM,不带工具;思考系列模型默认开启思考),
+// - 每次发请求前估算 token;超过阈值窗口(默认 contextWindow×80%)时,把早期区间压缩成
+//   一段结构化 checkpoint 摘要(调用 LLM,不带工具;思考系列模型默认开启思考),
 //   保留最近约 retainRatio(16%)的窗口。
+//   注:阈值不扣除输出预留——harness 的 compaction-basic 同样按 contextWindow × thresholdRatio
+//   取阈值,不看 maxTokens;唯一的差别是本工具多了"窗口未配置"的降级路径(见 resolveCharBudget)。
 // - 区间选择按"位置"而非"对话组"(见 selectCompactRange):单条消息引发的深工具任务
 //   同样可以中途压缩;切点对齐工具配对边界,压缩后消息序列始终合法。
 // - 摘要生成失败时降级为"直接裁剪"(丢弃早期区间,保留任务锚点),保证对话永不因压缩失败中断。
@@ -12,12 +14,12 @@ import { AGENT } from '../config.ts';
 import type { LlmClient } from './llm.ts';
 
 export const COMPACT = {
-  THRESHOLD_RATIO: 0.8,      // 触发压缩的水位:可用上下文(窗口-输出预留)的 80%
+  THRESHOLD_RATIO: 0.8,      // 触发压缩的水位:contextWindow × 80%(与 harness compaction-basic 同式)
   RETAIN_RATIO: 0.16,        // 保留的比例:压缩后保留最近约 contextWindow×16% 的窗口
-  SUMMARY_MAX_TOKENS: 8192,  // 摘要生成请求的输出上限(参照 harness 的 compaction maxTokens)
+  SUMMARY_MAX_TOKENS: 8192,  // 摘要生成请求的输出上限(参照 harness compaction maxTokens),经 summarizeWithLlm 传给 chat()
   MSG_OVERHEAD: 12,          // 每条消息 JSON 结构(role/键名/tool_calls)的近似 token 开销
   // 手动压缩(/compact)的最小收益门槛:可压区间低于该 token 数时直接判"无需压缩"。
-  // 摘要模板固定 9 个 section(~255 token 起步),区间太小时摘要必然不小于被压内容,
+  // 摘要模板固定 8 个 section(~255 token 起步),区间太小时摘要必然不小于被压内容,
   // shrink 校验必报"压缩失败"——那是"会话还不需要压缩"的正常状态,不是失败。
   MANUAL_MIN_GAIN_TOKENS: 1000,
   CHARS_PER_CJK_TOKEN: 1.6,  // 中文近似
@@ -46,12 +48,49 @@ export function measureMessages(msgs: any[]): number {
 }
 
 /**
+ * 一次请求"固定信封"的拆分用量(system 提示词 / 工具 schema / 历史消息)。
+ * 三处口径必须同源,否则仪表盘与压缩触发点会打架:
+ *  - 压缩水位判定(compactHistory 的 reservedTokens + measureMessages)
+ *  - 绝对地板折叠判定(agent 的 ABS_FLOOR_TOKENS)
+ *  - 前端仪表盘显示的 estimated
+ * 历史教训:仪表盘曾只算 [system, ...history](不含工具 schema),而压缩阈值含
+ * 工具 schema,同一个会话两个数字能差数千 token,用户看到的百分比与实际触发点不符。
+ */
+export interface EnvelopeBreakdown {
+  /** system 提示词的启发式 token */
+  systemTokens: number;
+  /** 工具 schema 的启发式 token(无工具时为 0) */
+  toolsTokens: number;
+  /** 历史消息(模型可见面)的启发式 token */
+  messageTokens: number;
+  /** 三者之和 = 本次请求的预估 token */
+  total: number;
+}
+
+/** 按统一口径拆分测量一次请求的信封 + 历史 */
+export function measureEnvelope(system: string, toolSchemas: unknown[] | null | undefined, messages: any[]): EnvelopeBreakdown {
+  const systemTokens = estimateTokens(system || '');
+  const toolsTokens = toolSchemas && (toolSchemas as any[]).length ? estimateTokens(JSON.stringify(toolSchemas)) : 0;
+  const messageTokens = measureMessages(messages || []);
+  return { systemTokens, toolsTokens, messageTokens, total: systemTokens + toolsTokens + messageTokens };
+}
+
+/**
  * 由模型的 contextWindow/maxTokens 推导压缩水位(照搬 harness compaction-basic 的
  * thresholdRatio/retainRatio):
  * - thresholdTokens:触发压缩的阈值 = 窗口 × 80%(测量口径含固定信封,见 compactHistory);
  * - retainTokens:压缩后保留的最近窗口 = 窗口 × 16%
+ *
+ * maxTokens 不参与阈值计算:harness 的 compaction-basic 同样只按 contextWindow ×
+ * thresholdRatio 取阈值(config.ts 的 resolveCompactSpec 里 maxTokens 只用于摘要调用本身)。
+ * 本工具保留该参数是为了让签名与调用点的意图一致(调用方都在传输出上限),
+ * 并在此之前被误读为"阈值已扣除输出预留"——现已改正注释,行为与 harness 一致。
+ *
+ * @param contextWindow - 模型输入上下文窗口;<=0 表示未配置,压缩整体关闭
+ * @param maxTokens - 单次输出上限(仅供调用点语义对齐,不影响阈值)
  */
 export function resolveCompactSpec(contextWindow: unknown, maxTokens: unknown): { enabled: boolean; thresholdTokens: number; retainTokens: number } {
+  void maxTokens; // 见上方说明:阈值不扣除输出预留(与 harness 同式)
   const win = Number(contextWindow) || 0;
   if (win <= 0) return { enabled: false, thresholdTokens: 0, retainTokens: 0 };
   return {
@@ -214,14 +253,21 @@ export function compactionInstruction(): string {
  * 3) 超水位:先跑无模型免费裁剪——pruner 把 surface 上所有超过 8192 字符的工具结果
  *    折叠为头尾摘要(照搬 harness compaction-tool-result-pruner,不保留最近几条),
  *    重测后回到水位内则只返回折叠结果(compacted=false,pruned=N,日志不动);
- * 4) 仍超:选区间 -> 生成摘要(失败降级裁剪)-> 返回 [摘要消息, ...保留区最近消息]。
+ * 4) 仍超:选区间 -> 生成摘要 -> 返回 [摘要消息, ...保留区最近消息]。
+ *    **摘要不可用时绝不裁剪**:返回 compacted=false 且 messages 原样(failed=true 标明原因),
+ *    由上层提示用户。丢弃早期对话会让模型永久失忆,比"这一步请求超窗"严重得多。
  * onStart:确认要压缩(区间已选定)时同步回调一次——摘要要调一次 LLM,可能耗时数十秒,
  *   上层据此把「正在压缩上下文…」的运行态推给前端;只在真的要压缩时触发,避免未超水位
  *   的绝大多数步骤留下永不收尾的运行行。
+ * onFailure:摘要不可用(生成失败/无收益/为空/mock)时回调一次,带上原因。上层据此把
+ *   已插入的「正在压缩…」运行行收尾为失败态并向用户披露——**不出声地不压缩**是历史缺陷。
  * force:跳过阈值检查强制执行(上下文爆窗恢复用);retainTokensOverride:覆盖保留水位
  * (爆窗恢复传 0 = 只保留最后一个配对完整节点,最大力度压缩)。
+ * @returns compacted=true 表示确实换成了摘要;failed=true 表示曾尝试压缩但摘要不可用
+ *   (此时 messages 与入参完全相同,日志与模型可见面都没变)
  */
-export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0, force = false, retainTokensOverride, onStart }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number; force?: boolean; retainTokensOverride?: number; onStart?: () => void }): Promise<{ messages: any[]; compacted: boolean; dropCount: number; pruned: number }> {
+export async function compactHistory({ messages, system, llm, signal, contextWindow, maxTokens, reservedTokens = 0, force = false, retainTokensOverride, onStart, onFailure }: { messages: any[]; system?: string; llm?: LlmClient; signal?: AbortSignal; contextWindow?: unknown; maxTokens?: unknown; reservedTokens?: number; force?: boolean; retainTokensOverride?: number; onStart?: () => void; onFailure?: (reason: string) => void }): Promise<{ messages: any[]; compacted: boolean; dropCount: number; pruned: number; failed?: boolean; reason?: string }> {
+  let failure = '';
   const spec = resolveCompactSpec(contextWindow, maxTokens);
   if (!spec.enabled) return { messages, compacted: false, dropCount: 0, pruned: 0 };
   // 水位(照搬 harness):threshold = 窗口×80%,且必须大于保留水位(对齐 harness 的
@@ -259,37 +305,53 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
       // 摘要请求防超窗:drop 区间可能比当前请求还大,先把其中大体积工具结果折叠成头尾,
       // 再交给 LLM 汇总——否则摘要请求自己就会 400/被上游截断(摘要并不需要完整文件原文)
       const prunedDrop = pruneToolResults(range.drop, { keepRecent: 0, minChars: 1200, headChars: 900, tailChars: 300 }).messages;
-      summary = await summarizeWithLlm({ llm, system, dropMsgs: prunedDrop, signal });
-      // 提交前校验:摘要必须比被压缩区间更小(参照 harness 的 shrink 校验),
-      // 否则压缩无收益,降级为直接裁剪(只保留任务锚点)
-      if (estimateTokens(summary) >= measureMessages(range.drop)) {
-        console.warn(`[compact] 摘要(${Math.round(estimateTokens(summary))} token)不小于被压缩区间(${Math.round(measureMessages(range.drop))} token),降级为直接裁剪`);
+      summary = await summarizeWithLlm({ llm, system, dropMsgs: prunedDrop, signal, maxTokens: COMPACT.SUMMARY_MAX_TOKENS });
+      // 提交前校验:摘要必须比被压缩区间更小(参照 harness 的 shrink 校验),否则压缩无收益。
+      // 无收益 = 压缩失败,同样不裁剪(见下方"绝不截断"说明)。
+      if (summary && estimateTokens(summary) >= measureMessages(range.drop)) {
         summary = '';
+        failure = `摘要(${Math.round(estimateTokens(summary))} token)不小于被压缩区间(${Math.round(measureMessages(range.drop))} token),压缩无收益`;
+      } else if (!summary) {
+        failure = '摘要为空';
       }
     } catch (e: any) {
-      console.warn(`[compact] 摘要生成失败,降级为直接裁剪: ${e?.message || e}`);
+      failure = `摘要生成失败:${e?.message || e}`;
     }
+  } else if (llm && llm.isMock) {
+    // mock 模式没有摘要能力:按"无可用摘要"处理,不裁剪
+    failure = '当前为 mock 模式,无摘要能力';
+  }
+
+  // ---- 绝不截断 ----
+  // 摘要不可用时(生成失败 / 无收益 / 为空 / mock),绝不能把被压区间直接丢掉:
+  // 丢掉的早期对话无法恢复,模型从此永久失忆——这是比"这一轮请求超窗"严重得多的事故。
+  // 正确处置(与 harness 的 pre-step 压缩失败语义一致):
+  //   1) 消息面完全不动(事件日志本来就没动过),该请求照常发出;
+  //   2) 上报失败原因,由上层提示用户并保留「正在压缩…」行的收尾;
+  //   3) 真超窗时走既有的爆窗恢复路径(isContextOverflowError -> 强制压缩重试),
+  //      那里会以 retainTokensOverride=0 再压一次,仍是"摘要或不动",不是"丢弃"。
+  // 唯一被丢弃的路径只剩用户显式操作:清空历史 / 删除消息 / 回退分支。
+  if (failure || !summary) {
+    console.warn(`[compact] ${failure || '摘要不可用'}(历史保持完整,不裁剪;窗口 ${Number(contextWindow) || '未配置'})`);
+    if (typeof onFailure === 'function') {
+      try { onFailure(failure || '摘要不可用'); } catch { /* 上报失败不阻塞本轮请求 */ }
+    }
+    return { messages, compacted: false, dropCount: 0, pruned: prunedRes.pruned, failed: true, reason: failure || '摘要不可用' };
   }
 
   const summaryMsg = {
     role: 'user',
-    content: summary
-      ? `【上下文已自动压缩】为节省上下文窗口,早期对话被压缩为以下摘要(如需细节请让助手展开):\n${summary}`
-      : `【上下文已自动压缩】早期 ${range.drop.length} 条消息因超出上下文窗口已省略。${preserveOriginalTask(range.drop)}`
+    content: `【上下文已自动压缩】为节省上下文窗口,早期对话被压缩为以下摘要(如需细节请让助手展开):\n${summary}`
   };
   return { messages: [summaryMsg, ...range.recent], compacted: true, dropCount: range.drop.length, pruned: prunedRes.pruned };
 }
 
-/** 摘要生成失败降级裁剪时,至少保留被裁区间的原始任务锚点(第一条 user 消息),避免模型"失忆" */
-function preserveOriginalTask(dropMsgs: any[]): string {
-  const first = (dropMsgs || []).find((m) => m && m.role === 'user' && m.content);
-  return first ? `\n原始任务(降级裁剪时保留,供后续对话回顾):\n${first.content}` : '';
-}
-
 /** 调用 LLM 生成摘要:沿用原始 system 前缀 + 被压缩的历史 + 摘要指令,不带工具。
  *  reasoning 不传(默认档):思考系列模型(DeepSeek v4 / GLM-4.5+/GLM-5.x 等)默认开启深度思考——
- *  此前硬编码 reasoning:'off' 会让 glm-5.3-flash 等强制思考模型返回 400 REASONING_REQUIRED。 */
-export async function summarizeWithLlm({ llm, system, dropMsgs, signal }: { llm: LlmClient; system?: string; dropMsgs: any[]; signal?: AbortSignal }): Promise<string> {
+ *  此前硬编码 reasoning:'off' 会让 glm-5.3-flash 等强制思考模型返回 400 REASONING_REQUIRED。
+ *  maxTokens 显式传 SUMMARY_MAX_TOKENS(8k):摘要请求自己超窗就白跑一次(还会被上游截断成
+ *  残句),给个更小的输出上限既省 token 也降低超窗概率——与 harness 摘要调用显式带 maxTokens 一致。 */
+export async function summarizeWithLlm({ llm, system, dropMsgs, signal, maxTokens }: { llm: LlmClient; system?: string; dropMsgs: any[]; signal?: AbortSignal; maxTokens?: number }): Promise<string> {
   const messages = [
     ...(system ? [{ role: 'system', content: system }] : []),
     ...dropMsgs,
@@ -298,7 +360,8 @@ export async function summarizeWithLlm({ llm, system, dropMsgs, signal }: { llm:
   const res = await llm.chat({
     messages,
     tools: [],
-    signal
+    signal,
+    maxTokens: maxTokens ?? COMPACT.SUMMARY_MAX_TOKENS
   });
   const text = (res && (res.content || '')) || '';
   return text.trim().slice(0, AGENT.HISTORY_BUDGET_CHARS);

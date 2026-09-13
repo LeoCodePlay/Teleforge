@@ -119,6 +119,18 @@
   transition: opacity .16s ease, transform .2s ease;
 }
 .s-group-body-wrap.open .s-group-body { opacity: 1; transform: none; }
+/* ---- 分组内「查看更多」:纯文本入口(底/框/配色沿用全局 button.link),仅定字号与左缩进。
+       左缩进 = 会话行透明描边 1px + 内边距 10px + 状态点 7px + 行内间距 6px = 24px,
+       让文字左边缘与会话标题严格同列(空闲行的状态点只是 visibility:hidden,格子照占,
+       所以这一列在任何会话行上都成立)。改行内边距/点宽时这里要同步重算。
+       用 button 而非 span 只为保住键盘 Tab/Enter 可达。
+       多带一层 .s-group-body 抬特异性:组件样式可能先于 styles.scss 落盘,
+       只写 .s-group-more 会被 button.link 的 padding 反盖 ---- */
+.s-group-body .s-group-more {
+  align-self: flex-start; text-align: left;
+  margin-left: 24px; padding: 2px 0;
+  font: inherit; font-size: 12px; line-height: 18px;
+}
 .session-item {
   display: flex; align-items: center; gap: 6px; padding: 7px 10px;
   height: 33px; box-sizing: border-box;   /* 固定行高:列表行距统一稳定 */
@@ -175,7 +187,10 @@
   .session-item { min-height: 46px; padding: 8px 12px; height: auto; }
   .s-panel { padding: 10px 12px; }
   .s-group-header { padding: 8px 12px; }
+  /* 触控:会话行内边距加大到 12px,同列偏移跟着重算(1+12+7+6),并给足点按高度 */
+  .s-group-body .s-group-more { margin-left: 26px; padding: 4px 0; }
 }
+
 /* 触屏设备:hover 不存在,时间与 ⋮ 操作常显(桌面仍是悬停浮现) */
 @media (hover: none) and (pointer: coarse) {
   .session-item .s-meta,

@@ -1,4 +1,4 @@
-﻿// Agent 工具集:工具定义(name/description/parameters + run)+ 注册与守卫。
+// Agent 工具集:工具定义(name/description/parameters + run)+ 注册与守卫。
 // 定义 的 ToolDefinition:模型可见字段(name/description/parameters)
 // 与宿主执行细节(run/timeoutMs)分离,由 registry.schemas() 白名单投影进模型请求;
 // 执行统一走 registry.execute() 管线(守卫 -> 超时 -> 结构化结果)。
@@ -15,7 +15,8 @@ import { askUserQuestion } from './ask-user.ts';
 import { resolveImageTool, runImageJob, IMAGE_TOOL_MISSING } from './image-gen.ts';
 import { IMAGE_QUALITIES, IMAGE_SIZES } from '../store/settings-store.ts';
 import { webSearch, renderSearchResult } from './web-search.ts';
-import type { ToolDef, ToolRegistry } from './registry.ts';
+import { browserToolDefs } from './browser-tools.ts';
+import type { ToolAccess, ToolDef, ToolRegistry } from './registry.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 内置技能库
@@ -1034,10 +1035,43 @@ export function registerTools(registry: ToolRegistry) {
     'run_command', 'run_local_command'
   ]);
   const withSafety = (def: ToolDef): ToolDef => ({ ...def, concurrencySafe: CONCURRENCY_SAFE_TOOLS.has(def.name) });
+  // 访问类别显式声明(权限守卫判定依据,见 permission.ts):
+  // 用 "名字字面量联合类型" 的 Record 声明,漏一个工具会在 typecheck 阶段报错,
+  // 从而杜绝"新增写类工具忘记登记 → 静默免审批"的 fail-open 事故。
+  const TOOL_ACCESS: Record<
+    'list_directory' | 'read_file' | 'write_file' | 'edit_file' | 'run_command'
+    | 'create_directory' | 'delete_path' | 'search_code' | 'todo_write' | 'skill'
+    | 'skill_copy_builtin' | 'get_workspace_info' | 'web_search' | 'list_local_dir'
+    | 'read_local_file' | 'write_local_file' | 'edit_local_file' | 'create_local_dir'
+    | 'delete_local_path' | 'search_local_code' | 'run_local_command' | 'get_local_info'
+    | 'ask_user_question' | 'generate_image',
+    ToolAccess
+  > = {
+    // 只读探测
+    list_directory: 'read', read_file: 'read', search_code: 'read', get_workspace_info: 'read',
+    web_search: 'read', list_local_dir: 'read', read_local_file: 'read',
+    search_local_code: 'read', get_local_info: 'read',
+    // 宿主协调(任何模式都不拦)
+    todo_write: 'meta', skill: 'meta', ask_user_question: 'meta',
+    // 改变外部状态
+    write_file: 'write', edit_file: 'write', create_directory: 'write', delete_path: 'write',
+    skill_copy_builtin: 'write', write_local_file: 'write', edit_local_file: 'write',
+    create_local_dir: 'write', delete_local_path: 'write',
+    // 生图会落盘新附件(写操作):plan 模式拒绝,其余按模式审批
+    generate_image: 'write',
+    // 命令执行(auto-edit 下仍需审批)
+    run_command: 'command', run_local_command: 'command'
+  };
+  const withAccess = (def: ToolDef): ToolDef => ({ ...def, access: TOOL_ACCESS[def.name as keyof typeof TOOL_ACCESS] });
+  const prepare = (def: ToolDef): ToolDef => withAccess(withSafety(def));
   // 依赖 SSH 的工具打 remote 标记,供本地模式(未连接)下 schemas() 过滤用
-  for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...withSafety(def), remote: true } : withSafety(def));
-  for (const def of interactionToolDefs) registry.register(withSafety(def));
-  for (const def of localToolDefs) registry.register(withSafety(def));
+  for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...prepare(def), remote: true } : prepare(def));
+  for (const def of interactionToolDefs) registry.register(prepare(def));
+  for (const def of localToolDefs) registry.register(prepare(def));
+  // 浏览器预览工具(browser_*):驱动前端「浏览器预览」标签里的真实 Chromium。
+  // 不依赖 SSH(地址解析需要隧道时会自动建),因此不加 remote 标记,本地模式下也可用。
+  // 它们自带 access 声明(见 browser-tools.ts),不参与上面的名字表。
+  for (const def of browserToolDefs) registry.register(withSafety(def));
   // 守卫 1:SSH 连接状态 —— 仅真正依赖 SSH 的远程工具需要连接;本地工具(local_*)、
   // 交互工具与技能/任务清单等非远程工具不受影响,连接断开时绝不误伤本机工具链
   registry.guard((name: string) => (SSH_ONLY_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));

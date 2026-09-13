@@ -208,13 +208,35 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
     check('compactHistory 压缩后消息序列合法', assertValidApiSequence(c.messages).length === 0);
     check('compactHistory dropCount 正确', c.dropCount > 0 && c.dropCount < big.length, `drop=${c.dropCount}`);
   }
-  // 摘要生成失败:降级为纯裁剪,不抛错
+  // 摘要生成失败:**绝不裁剪**——历史原样返回 + 上报失败原因(不能丢上下文)
   {
     const badLlm = { isMock: false, async chat() { throw new Error('模拟摘要请求失败'); } };
-    const c = await compactHistory({ messages: big, system: 'sys', llm: badLlm, signal: null, contextWindow: 5000, maxTokens: 1024 });
-    check('compactHistory 摘要失败降级裁剪不抛错', c.compacted === true);
-    check('compactHistory 降级消息含省略提示', /省略/.test(c.messages[0].content));
-    check('compactHistory 降级结果序列合法', assertValidApiSequence(c.messages).length === 0);
+    let failedReason = null;
+    const c = await compactHistory({
+      messages: big, system: 'sys', llm: badLlm, signal: null, contextWindow: 5000, maxTokens: 1024,
+      onFailure: (r) => { failedReason = r; }
+    });
+    check('摘要失败不抛错(不因压缩失败中断本轮)', true);
+    check('摘要失败不裁剪:compacted=false', c.compacted === false, `compacted=${c.compacted}`);
+    check('摘要失败标记 failed=true 且带原因', c.failed === true && /摘要生成失败/.test(String(c.reason)), `failed=${c.failed} reason=${c.reason}`);
+    check('摘要失败时消息面与入参完全一致(一条都不丢)', c.messages === big, '消息数组必须是原引用,证明未做任何替换/裁剪');
+    check('摘要失败时 onFailure 回报原因', failedReason !== null && /摘要生成失败/.test(String(failedReason)), `got ${failedReason}`);
+    check('摘要失败时 dropCount 为 0(没有"已压缩 N 条"的假象)', c.dropCount === 0, `drop=${c.dropCount}`);
+  }
+
+  // 摘要为空 / 无收益:同样不裁剪(否则等于"压缩失败就丢上下文")
+  for (const [label, content] of [['空摘要', ''], ['摘要过大(无收益)', '超长摘要'.repeat(5000)]]) {
+    const llm = { isMock: false, async chat() { return { content, toolCalls: [], reasoning: '' }; } };
+    const c = await compactHistory({ messages: big, system: 'sys', llm, signal: null, contextWindow: 5000, maxTokens: 1024 });
+    check(`${label}时不裁剪(compacted=false, 消息原样)`, c.compacted === false && c.messages === big, `compacted=${c.compacted}`);
+    check(`${label}时标记 failed=true`, c.failed === true, `failed=${c.failed}`);
+  }
+
+  // mock 模式(无摘要能力)同样不裁剪
+  {
+    const mock = { isMock: true, async chat() { return { content: 'x', toolCalls: [] }; } };
+    const c = await compactHistory({ messages: big, system: 'sys', llm: mock, signal: null, contextWindow: 5000, maxTokens: 1024 });
+    check('mock 模式不裁剪(无摘要能力时保持完整历史)', c.compacted === false && c.messages === big, `compacted=${c.compacted}`);
   }
 }
 

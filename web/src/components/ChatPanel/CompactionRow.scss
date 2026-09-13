@@ -22,3 +22,10 @@
 @media (prefers-reduced-motion: reduce) {
   .dsh-compaction[data-state="running"] .dsh-leading svg { animation: none; }
 }
+
+/* 失败态(compaction_failed 已到,摘要不可用):压缩没能换成摘要,历史保持完整、未做裁剪。
+   必须与"完成态"有可见差别——否则用户会把"没压缩"当成"压缩好了",在毫不知情的情况下
+   继续往上下文窗口上撞。用告警色 + 静态图标(不呼吸,表示已结束),不可展开(没有摘要正文)。 */
+.dsh-compaction[data-state="failed"] .dsh-leading svg { color: var(--warn, #d29922); }
+.dsh-compaction[data-state="failed"] .dsh-summary { color: var(--warn, #d29922); }
+

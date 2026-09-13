@@ -1,0 +1,250 @@
+/* ---- BrowserPanel 独有样式:内置浏览器预览(真实 Chromium 画面 + 输入回传) ----
+   工具条 = 导航簇(前进/后退/刷新)+ 地址栏 + 右侧动作;图标统一用内联 SVG(见 icons.tsx),
+   不再用 ← → ⟳ ↗ 这类随系统字体漂移的文字符号。 */
+
+.bp {
+  display: flex; flex-direction: column; height: 100%; min-height: 0;
+  background: var(--fill-1-lo);
+}
+
+/* ---------- 工具条 ---------- */
+.bp-toolbar {
+  position: relative; display: flex; align-items: center; gap: 8px; flex: none;
+  padding: 8px 10px; border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
+}
+
+/* 导航簇:后退/前进/刷新合成一个分段控件 */
+.bp-nav {
+  flex: none; display: flex; align-items: center; gap: 1px; padding: 2px;
+  border-radius: 11px; border: 1px solid var(--line-soft); background: var(--glass-bg);
+}
+.bp-nav .bp-ico { width: 27px; height: 26px; border-radius: 8px; }
+
+/* 通用图标按钮(导航簇内 / 右侧动作共用)
+   注意:样式表里有全局 `button { padding: 7px 13px; box-shadow: ... }`,
+   必须显式清零 padding/阴影,否则 border-box 下 28px 按钮的内容盒被 padding 吃光,
+   SVG 作为可收缩的替换元素会被压成 0 宽(表现为"图标看不见")。 */
+.bp-ico {
+  flex: none; width: 30px; height: 30px; padding: 0; box-shadow: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px; border: 1px solid transparent; background: transparent;
+  color: var(--muted); cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.bp-ico svg { flex: none; }
+.bp-ico:hover:not(:disabled) { color: var(--text); background: var(--glass-bg-hover); }
+.bp-ico:active:not(:disabled) { transform: translateY(1px); }
+.bp-ico:disabled { opacity: .3; cursor: default; }
+.bp-ico.on {
+  color: var(--accent-2); border-color: var(--accent-border);
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+}
+.bp-ico.spinning svg { animation: bp-spin .9s linear infinite; }
+@keyframes bp-spin { to { transform: rotate(360deg); } }
+
+/* 地址栏:前导 http/https 标识 + 输入框 + 条件出现的「前往」 */
+.bp-addr {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  height: 34px; padding: 0 6px 0 10px; border-radius: 11px;
+  background: var(--glass-bg); border: 1px solid var(--line-soft);
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.bp-addr:hover { border-color: var(--glass-border-hover, var(--line-soft)); }
+.bp-addr:focus-within {
+  border-color: var(--accent-border); background: var(--fill-1);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.bp-addr-ico { flex: none; display: inline-flex; color: var(--muted); }
+.bp-addr.ok .bp-addr-ico { color: var(--green); }
+.bp-addr.err { border-color: var(--red); }
+.bp-addr.err .bp-addr-ico { color: var(--red); }
+.bp-addr input {
+  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text);
+  font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  outline: none; padding: 0;
+}
+.bp-addr input::placeholder { color: var(--muted); }
+.bp-go {
+  flex: none; width: 24px; height: 24px; padding: 0; box-shadow: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 0; cursor: pointer; color: var(--text);
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+}
+.bp-go:hover { filter: brightness(1.18); }
+
+/* 加载进度:工具条底部一条扫光(不占布局,比转圈更轻) */
+.bp-progress {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2px; overflow: hidden;
+  pointer-events: none;
+}
+.bp-progress::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, var(--accent-2), transparent);
+  animation: bp-sweep 1.1s linear infinite;
+}
+@keyframes bp-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* 隧道提示:远程项目经 SSH 端口转发到本机预览(仅远程预览出现) */
+.bp-note {
+  flex: none; padding: 5px 12px; font-size: 11.5px; line-height: 1.45;
+  color: var(--amber-bright, #d9a441);
+  background: rgba(217, 164, 65, .10);
+  border-bottom: 1px solid var(--line-soft);
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------- 画面舞台 ---------- */
+/* 远程页面的视口与这块区域 1:1(见 BrowserPanel 的视口同步),所以画面直接铺满整块 */
+.bp-stage {
+  position: relative; flex: 1 1 auto; min-height: 0; min-width: 0;
+  overflow: hidden; background: var(--fill-1-lo);
+  touch-action: none;
+}
+.bp-frame {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  display: block;
+  cursor: default; user-select: none; -webkit-user-drag: none;
+  touch-action: none;
+}
+/* object-fit 由 JS 每帧按「帧比例 vs 容器比例」决定:等比 → fill 铺满;被钳制 → contain 不变形 */
+
+/* 隐藏输入框:只用来接收键盘/输入法事件,不显示 */
+.bp-ime {
+  position: absolute; left: 0; bottom: 0; z-index: 3; width: 2px; height: 2px;
+  opacity: 0; border: 0; padding: 0; margin: 0; resize: none; pointer-events: none;
+}
+
+/* 操作反馈气泡:复制/粘贴看不到结果,必须给一句回执 */
+.bp-tip {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 5;
+  max-width: 80%; padding: 6px 12px; border-radius: 999px; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  color: var(--text); background: rgba(20, 24, 32, .94);
+  border: 1px solid var(--line-soft); box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+}
+
+/* 右键 / 长按菜单(预览是图片,原生右键菜单没有意义) */
+.bp-menu-mask { position: absolute; inset: 0; z-index: 4; }
+.bp-menu {
+  position: absolute; z-index: 5; min-width: 168px; padding: 4px;
+  display: flex; flex-direction: column; gap: 1px;
+  border-radius: 10px; border: 1px solid var(--line-soft);
+  background: rgba(24, 28, 36, .98); box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+}
+/* 全局 button 有 padding/渐变/阴影,这里必须逐项覆盖 */
+.bp-menu button {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 7px 10px; border: 0; border-radius: 7px;
+  background: transparent; box-shadow: none; color: var(--text);
+  font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.bp-menu button:hover:not(:disabled) { background: var(--glass-bg-hover); box-shadow: none; }
+.bp-menu button:disabled { opacity: .4; cursor: default; }
+.bp-menu-k { flex: none; font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.bp-menu-sep { height: 1px; margin: 4px 6px; background: var(--line-soft); }
+
+/* ---------- 空态:手动打开入口 ---------- */
+.bp-empty {
+  position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 24px; text-align: center; color: var(--muted);
+}
+.bp-empty-ico { display: inline-flex; color: var(--muted); opacity: .55; }
+.bp-empty-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.bp-empty-desc { font-size: 12.5px; line-height: 1.7; max-width: 460px; }
+
+.bp-empty-form {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px;
+  width: min(460px, 92%); padding: 4px 4px 4px 12px;
+  border-radius: 12px; border: 1px solid var(--line-soft); background: var(--glass-bg);
+  transition: border-color .15s, box-shadow .15s;
+}
+.bp-empty-form:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-glow); }
+.bp-empty-form-ico { flex: none; display: inline-flex; color: var(--muted); }
+.bp-empty-form input {
+  flex: 1; min-width: 0; padding: 6px 0; border: 0; background: transparent; color: var(--text);
+  font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; outline: none;
+}
+.bp-empty-form input::placeholder { color: var(--muted); }
+.bp-empty-form button {
+  flex: none; padding: 7px 14px; border-radius: 9px; border: 1px solid var(--accent-border); box-shadow: none;
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  color: var(--text); font-size: 13px; cursor: pointer;
+}
+.bp-empty-form button:hover { filter: brightness(1.12); }
+
+/* 最近地址:手动打开时给几个可直接点的候选 */
+.bp-empty-sug {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px;
+  margin-top: 10px; max-width: min(520px, 92%);
+}
+.bp-empty-sug-label { font-size: 11.5px; opacity: .85; }
+.bp-sug {
+  padding: 4px 10px; border-radius: 999px; cursor: pointer; box-shadow: none;
+  font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text); background: var(--glass-bg); border: 1px solid var(--line-soft);
+}
+.bp-sug:hover { border-color: var(--accent-border); background: var(--glass-bg-hover); }
+
+/* 打开失败浮层:给出原因 + 重试 */
+.bp-overlay-err {
+  position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 2;
+  display: flex; align-items: flex-start; gap: 10px;
+  max-width: min(760px, 94%);
+  padding: 9px 12px; border-radius: 10px;
+  background: rgba(120, 30, 30, .88); color: #fff; font-size: 12.5px;
+  line-height: 1.55; border: 1px solid rgba(255, 255, 255, .18);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+.bp-overlay-err span { flex: 1; min-width: 0; word-break: break-word; }
+.bp-retry {
+  flex: none; padding: 4px 11px; border-radius: 8px; cursor: pointer; font-size: 12px; box-shadow: none;
+  color: #fff; background: rgba(255, 255, 255, .16); border: 1px solid rgba(255, 255, 255, .32);
+}
+.bp-retry:hover { background: rgba(255, 255, 255, .26); }
+
+/* ---------- 状态栏 ---------- */
+.bp-status {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px; border-top: 1px solid var(--line-soft);
+  font-size: 11.5px; color: var(--muted); min-height: 28px;
+  background: var(--fill-1);
+}
+.bp-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.bp-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.bp-dot.err { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.bp-dot.wait { background: var(--amber-bright, #d9a441); animation: bp-pulse 1.2s ease-in-out infinite; }
+@keyframes bp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.bp-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-status-text.err { color: var(--red); }
+.bp-spacer { flex: 1; }
+.bp-title { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-ai {
+  flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+  color: var(--accent, #7aa2f7); border: 1px solid var(--accent-border);
+  background: var(--accent-fill-soft);
+}
+
+/* 触摸端:点按不留高亮、拖动不选中文本(手势全部由 JS 接管) */
+.bp-stage, .bp-frame { -webkit-tap-highlight-color: transparent; }
+.bp-frame { -webkit-touch-callout: none; }
+
+/* ---------- 手机端:更紧凑,隐藏前进/复制/状态栏,把高度留给画面 ---------- */
+@media (max-width: 767px) {
+  .bp-toolbar { padding: 6px 8px; gap: 6px; }
+  .bp-ico { width: 32px; height: 32px; }
+  .bp-nav { padding: 2px; }
+  .bp-nav .bp-ico { width: 30px; height: 30px; }
+  .bp-fwd { display: none; }
+  .bp-copy { display: none; }
+  .bp-addr { height: 32px; padding: 0 5px 0 9px; gap: 6px; }
+  /* ≥16px:否则 iOS Safari 聚焦输入框时会自动放大整个页面 */
+  .bp-addr input { font-size: 16px; }
+  .bp-status { display: none; }
+  .bp-note { padding: 4px 10px; font-size: 11px; }
+  .bp-empty { padding: 16px; gap: 6px; }
+  .bp-empty-desc { font-size: 12.5px; line-height: 1.6; }
+  .bp-empty-form { width: min(100%, 420px); }
+  .bp-empty-form input { font-size: 16px; }
+  .bp-overlay-err { top: 8px; font-size: 12px; padding: 8px 10px; }
+}

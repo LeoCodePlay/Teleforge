@@ -17,6 +17,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true, // 端口占用时报错而非换端口,避免与 tauri.conf.json 的 devUrl 失配
     proxy: {
+      '/ws/browser': { target: 'ws://127.0.0.1:4000', ws: true },
       '/ws/term': { target: 'ws://127.0.0.1:4000', ws: true },
       '/ws': { target: 'ws://127.0.0.1:4000', ws: true },
       '/api': { target: 'http://127.0.0.1:4000', changeOrigin: false }

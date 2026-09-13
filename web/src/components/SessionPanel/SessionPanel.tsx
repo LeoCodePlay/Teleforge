@@ -29,6 +29,11 @@ interface SessionPanelProps {
 const MENU_W = 175;
 const MENU_H = 78;
 
+// 分组内会话的「分页展开」步长:首次展开最多 5 条,超出才在组尾出现「查看更多」文本入口,
+// 点一次再放 10 条,直到全部展开(此时入口自行消失)
+const GROUP_SHOW_FIRST = 5;
+const GROUP_SHOW_STEP = 10;
+
 // 未指定工作区的分组键与显示名
 const UNGROUPED = '__ungrouped__';
 const UNGROUPED_LABEL = '未指定工作区';
@@ -114,6 +119,12 @@ interface WorkspaceGroupProps {
 }
 function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, askPendingIds, onToggle, onNewInGroup, onSwitch, onMenu, onMenuAt }: WorkspaceGroupProps) {
   const hasRunning = sessions.some((s) => busyIds.includes(s.id));
+  // 组内可见条数:首次展开只看前 GROUP_SHOW_FIRST 条(会话按更新时间倒序下发,留下的正是最近活跃的);
+  // 收起分组即复位,下次展开仍回到「首次展开」的样子,不残留上一轮的展开进度
+  const [shownCount, setShownCount] = useState(GROUP_SHOW_FIRST);
+  useEffect(() => { if (!expanded) setShownCount(GROUP_SHOW_FIRST); }, [expanded]);
+  const shown = sessions.slice(0, shownCount);
+  const restCount = sessions.length - shown.length;
   return (
     <div className="s-group">
       <div className={`s-group-header${expanded ? ' open' : ''}`} onClick={onToggle}>
@@ -148,7 +159,7 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
       <div className={`s-group-body-wrap${expanded ? ' open' : ''}`} aria-hidden={!expanded}>
         <div className="s-group-body-clip">
           <div className="s-group-body">
-            {sessions.map((s) => {
+            {shown.map((s) => {
               const running = busyIds.includes(s.id);
               // 有挂起提问(等待用户操作)时运行点变黄;仅非当前会话才显示
               const askWaiting = askPendingIds.includes(s.id) && s.id !== activeId;
@@ -162,6 +173,14 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
                   onMenuAt={onMenuAt} />
               );
             })}
+            {/* 还有没放出来的会话:组尾一个纯文本入口(复用全局 button.link 的「可点击文字」样式,
+                不是胶囊按钮),点一次多放 GROUP_SHOW_STEP 条,全部展开后自动消失 */}
+            {restCount > 0 && (
+              <button type="button" className="link s-group-more"
+                onClick={() => setShownCount((n) => n + GROUP_SHOW_STEP)}>
+                查看更多
+              </button>
+            )}
           </div>
         </div>
       </div>

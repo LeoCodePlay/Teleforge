@@ -9,6 +9,8 @@ import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel';
 import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';
 import ConsolePanel from './components/ConsolePanel/ConsolePanel';
 import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
+import BrowserPanel from './components/BrowserPanel/BrowserPanel';
+import { PREVIEW_EVENT, isPreviewUrl, normalizePreviewInput, previewLabel } from './utils/preview';
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
 import TooltipHost from './components/Tooltip/Tooltip';
 import BottomBar, { type MobileView } from './components/BottomBar/BottomBar';
@@ -28,7 +30,7 @@ const STATUS_LABEL: Record<string, string> = {
   disconnected: '未连接'
 };
 
-type TabKind = 'agent' | 'console' | 'file';
+type TabKind = 'agent' | 'console' | 'file' | 'browser';
 interface TabItem {
   id: string;
   kind: TabKind;
@@ -54,6 +56,12 @@ const SESSIONS_ID = 'sessions';
 // 打开的文件标签持久化:刷新页面后恢复之前打开的文件(固定页不存)。
 // 只存 {id, kind, name, path},dirty 不存——刷新后内容重新加载,未保存修改自然丢弃。
 const FILE_TABS_KEY = 'sshai.fileTabs';
+// 浏览器预览标签持久化:刷新后恢复预览(面板重新 open 一次,服务端会话按 id 复用)
+const BROWSER_TABS_KEY = 'sshai.browserTabs';
+// 预览标签 id 前缀:标签 id = 'preview:' + 服务端浏览器会话 id,避免与固定页/文件路径撞名
+const BROWSER_TAB_PREFIX = 'preview:';
+const browserTabId = (sessionId: string) => BROWSER_TAB_PREFIX + sessionId;
+const browserSessionId = (tabId: string) => (tabId.startsWith(BROWSER_TAB_PREFIX) ? tabId.slice(BROWSER_TAB_PREFIX.length) : tabId);
 const ACTIVE_TAB_KEY = 'sshai.activeTab';
 
 function loadSavedFileTabs(): TabItem[] {
@@ -63,6 +71,21 @@ function loadSavedFileTabs(): TabItem[] {
     return raw
       .filter((t) => t && t.kind === 'file' && typeof t.id === 'string' && typeof t.name === 'string')
       .map((t) => ({ id: t.id, kind: 'file' as const, name: t.name, path: typeof t.path === 'string' ? t.path : t.id, dirty: false, pinnedFile: !!t.pinnedFile }));
+  } catch { return []; }
+}
+
+function loadSavedBrowserTabs(): TabItem[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BROWSER_TABS_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((t) => t && t.kind === 'browser' && typeof t.id === 'string' && t.id.startsWith(BROWSER_TAB_PREFIX))
+      .map((t) => ({
+        id: String(t.id),
+        kind: 'browser' as const,
+        name: typeof t.name === 'string' && t.name ? t.name : '浏览器预览',
+        path: typeof t.path === 'string' ? t.path : ''
+      }));
   } catch { return []; }
 }
 
@@ -91,9 +114,13 @@ export default function App() {
     platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null,
     noWorkspace: false, localNoWorkspace: false
   });
-  const [tabs, setTabs] = useState<TabItem[]>(() => [...PINNED_TABS, ...loadSavedFileTabs()]);
+  const [tabs, setTabs] = useState<TabItem[]>(() => [...PINNED_TABS, ...loadSavedFileTabs(), ...loadSavedBrowserTabs()]);
   const [activeTabId, setActiveTabId] = useState(loadSavedActiveTab);
   const tabsRef = useRef(tabs);
+  // 打开/导航预览标签的函数引用(定义在下方;手机底部栏与全局事件通过 ref 调用,避免提前引用)
+  const ensureBrowserTabRef = useRef<((url?: string, sessionId?: string, opts?: { focus?: boolean }) => void) | null>(null);
+  // 「检测到项目地址」提示(命令输出里发现可预览地址时顶栏出现可点击 chip)
+  const [previewHint, setPreviewHint] = useState<string | null>(null);
   tabsRef.current = tabs;
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const dragTabIdRef = useRef<string | null>(null);
@@ -107,6 +134,10 @@ export default function App() {
         .filter((t) => t.kind === 'file')
         .map((t) => ({ id: t.id, kind: t.kind, name: t.name, path: t.path, pinnedFile: !!t.pinnedFile }));
       localStorage.setItem(FILE_TABS_KEY, JSON.stringify(files));
+      const browsers = tabs
+        .filter((t) => t.kind === 'browser')
+        .map((t) => ({ id: t.id, kind: t.kind, name: t.name, path: t.path }));
+      localStorage.setItem(BROWSER_TABS_KEY, JSON.stringify(browsers));
     } catch {}
     setActiveTabId((cur) => (tabs.some((t) => t.id === cur) ? cur
       : (cur === SESSIONS_ID || cur === FILES_HOME_ID ? cur : tabs[tabs.length - 1]?.id || 'agent')));
@@ -155,6 +186,7 @@ export default function App() {
   // 手机当前视图:由 activeTabId 推导(files 视图 = 文件管理或正在查看的文件)
   const mobileView: MobileView =
     activeTabId === FILES_HOME_ID || tabs.some((t) => t.kind === 'file' && t.id === activeTabId) ? 'files'
+    : tabs.some((t) => t.kind === 'browser' && t.id === activeTabId) ? 'browser'
     : activeTabId === 'agent' ? 'agent' : 'console';
   // 桌面/平板不允许停留在哨兵视图(窗口从手机放大到更大尺寸时兜底回 agent)
   const effActiveTabId = (isDesktopQuery || isTablet) && (activeTabId === SESSIONS_ID || activeTabId === FILES_HOME_ID)
@@ -164,6 +196,13 @@ export default function App() {
   // 否则进文件管理」(浏览器式标签语义);agent/console 直接切到对应视图
   const selectMobileView = (v: MobileView) => {
     if (v === 'agent' || v === 'console') { setActiveTabId(v); return; }
+    if (v === 'browser') {
+      const bs = tabsRef.current.filter((t) => t.kind === 'browser');
+      const target = bs.find((t) => t.id === activeTabId) || bs[bs.length - 1];
+      if (target) { setActiveTabId(target.id); return; }
+      ensureBrowserTabRef.current?.(''); // 还没有预览标签:开一个空的,面板里有地址输入入口
+      return;
+    }
     const files = tabsRef.current.filter((t) => t.kind === 'file');
     const activeFile = files.find((t) => t.id === activeTabId);
     setActiveTabId(activeFile ? activeFile.id : (files[files.length - 1]?.id ?? FILES_HOME_ID));
@@ -435,6 +474,46 @@ export default function App() {
   const connCount = (status.conns || []).filter((c) => c.status === 'connected').length;
   const multiConn = connCount > 1;
 
+  // 全局:聊天/工具卡里的本地地址链接点击 → 用内置预览打开(不跳出系统浏览器);
+  // 以及工具卡「打开预览」按钮派发的自定义事件
+  useEffect(() => {
+    const onPreviewEvent = (e: Event) => {
+      const url = (e as CustomEvent)?.detail?.url;
+      if (url) ensureBrowserTabRef.current?.(String(url));
+    };
+    const onClickCapture = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const a = target && typeof target.closest === 'function'
+        ? (target.closest('a[href]') as HTMLAnchorElement | null) : null;
+      if (!a) return;
+      const href = a.getAttribute('href') || a.href || '';
+      if (!isPreviewUrl(href)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      ensureBrowserTabRef.current?.(href);
+    };
+    window.addEventListener(PREVIEW_EVENT, onPreviewEvent);
+    document.addEventListener('click', onClickCapture, true);
+    return () => {
+      window.removeEventListener(PREVIEW_EVENT, onPreviewEvent);
+      document.removeEventListener('click', onClickCapture, true);
+    };
+  }, []);
+
+  // Agent 事件:AI 打开预览时自动开标签;命令输出里发现地址时顶栏给出可点击提示
+  useEffect(() => {
+    const off = api.on('agent', (m: any) => {
+      if (!m || typeof m.event !== 'string') return;
+      if (m.event === 'browser_open' && m.url) {
+        // AI 自己开预览:建/更新标签但不抢焦点(手机端正在对话时尤其重要),用顶部 chip + 🌐 徽标提示
+        ensureBrowserTabRef.current?.(String(m.url), String(m.id || 'main'), { focus: false });
+        setPreviewHint(String(m.url));
+      }
+      else if (m.event === 'preview_available' && m.url) setPreviewHint(String(m.url));
+    });
+    return () => { off(); };
+  }, []);
+
   // 已保存的 SSH 配置:顶栏连接信息显示「配置名称 · IP」,连接切换/弹窗关闭后刷新
   const [profiles, setProfiles] = useState<SshProfileInfo[]>([]);
   useEffect(() => {
@@ -494,6 +573,39 @@ export default function App() {
     openFileTab(`local:${path}`, path.split(/[\\/]/).filter(Boolean).pop() || path);
   };
 
+  // ---- 浏览器预览标签:AI 或用户点地址时打开;默认复用服务端 'main' 会话(所见即 AI 所控) ----
+  const ensureBrowserTab = (rawUrl?: string, sessionId = 'main', opts?: { focus?: boolean }) => {
+    const url = rawUrl ? (normalizePreviewInput(String(rawUrl)) || '') : '';
+    const id = browserTabId(sessionId);
+    setTabs((prev) => {
+      const hit = prev.find((t) => t.id === id);
+      if (hit) {
+        if (!url || hit.path === url) return prev;
+        return prev.map((t) => (t.id === id ? { ...t, path: url, name: previewLabel(url) } : t));
+      }
+      return [...prev, { id, kind: 'browser' as const, name: url ? previewLabel(url) : '浏览器预览', path: url }];
+    });
+    if (opts?.focus !== false) setActiveTabId(id); // focus=false:AI 自动开预览时不抢走用户当前视图
+  };
+  ensureBrowserTabRef.current = ensureBrowserTab;
+
+  // 预览标签名跟随页面标题(只改标签名,不改 path,避免与面板导航互相触发)
+  const updateBrowserTab = (id: string, s: { url: string; title: string }) => {
+    setTabs((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const name = (s.title || '').trim().slice(0, 32) || previewLabel(s.url || t.path || '') || t.name;
+      return name === t.name ? t : { ...t, name };
+    }));
+  };
+
+  // 预览空面板的「最近地址」候选:刚检测到的地址 + 已打开的预览地址(手动打开时可直接点)
+  const previewSuggestions = useMemo(() => {
+    const list: string[] = [];
+    if (previewHint) list.push(previewHint);
+    for (const t of tabs) if (t.kind === 'browser' && t.path) list.push(t.path);
+    return list;
+  }, [previewHint, tabs]);
+
   const updateTabDirty = (id: string, dirty: boolean) => {
     setTabs((prev) => {
       const cur = prev.find((t) => t.id === id);
@@ -505,7 +617,8 @@ export default function App() {
   // 关闭文件标签:有未保存修改先确认;关闭后激活相邻标签(优先右侧),固定页不可关
   const closeTab = async (id: string) => {
     const t = tabsRef.current.find((x) => x.id === id);
-    if (!t || t.kind !== 'file') return;
+    if (!t || (t.kind !== 'file' && t.kind !== 'browser')) return;
+    if (t.kind === 'browser') api.request('browser_close', { id: browserSessionId(t.id) }, 30000).catch(() => {});
     if (t.dirty) {
       const ok = await confirm({
         title: '关闭标签',
@@ -548,7 +661,7 @@ export default function App() {
       if (from < 0 || to < 0) return prev;
       let at = insertBefore ? to : to + 1;
       if (at > from) at -= 1; // 先移除拖动项,再换算成新数组里的插入下标
-      at = Math.max(prev.filter((t) => t.kind !== 'file').length, at);
+      at = Math.max(prev.filter((t) => t.kind === 'agent' || t.kind === 'console').length, at);
       if (at === from) return prev;
       const next = prev.slice();
       const [moved] = next.splice(from, 1);
@@ -615,7 +728,8 @@ export default function App() {
       });
       if (!ok) { setTabMenu(null); return; }
     }
-    setTabs((prev) => prev.filter((t) => t.kind !== 'file'));
+    for (const b of tabs.filter((t) => t.kind === 'browser')) api.request('browser_close', { id: browserSessionId(b.id) }, 30000).catch(() => {});
+    setTabs((prev) => prev.filter((t) => t.kind === 'agent' || t.kind === 'console'));
     setActiveTabId((cur) => (cur !== 'agent' && cur !== 'console' ? (isPhone ? FILES_HOME_ID : 'agent') : cur));
     setTabMenu(null);
   };
@@ -632,7 +746,8 @@ export default function App() {
       });
       if (!ok) { setTabMenu(null); return; }
     }
-    setTabs((prev) => prev.filter((t) => t.kind !== 'file' || t.id === keepId));
+    for (const b of tabs.filter((t) => (t.kind === 'browser') && t.id !== keepId)) api.request('browser_close', { id: browserSessionId(b.id) }, 30000).catch(() => {});
+    setTabs((prev) => prev.filter((t) => t.kind === 'agent' || t.kind === 'console' || t.id === keepId));
     // 若当前激活的是被关闭的标签,切到保留的标签;固定页/保留标签保持不变
     setActiveTabId((cur) => (cur === keepId || cur === 'agent' || cur === 'console' ? cur : keepId));
     setTabMenu(null);
@@ -640,7 +755,7 @@ export default function App() {
 
   // 单个标签渲染(固定页/文件页共用;固定页不可拖、无关闭钮;置顶文件不可拖但有关闭钮)
   const renderTab = (t: TabItem) => {
-    const fixed = t.kind !== 'file';          // 内置固定页(AI 助手/命令台)
+    const fixed = t.kind === 'agent' || t.kind === 'console'; // 内置固定页(AI 助手/终端);文件与预览标签可拖可关
     const pinned = fixed || !!t.pinnedFile;   // 不参与滚动:pinned 区
     return (
       <div
@@ -648,7 +763,7 @@ export default function App() {
         data-tab-id={t.id}
         className={`btab${activeTabId === t.id ? ' active' : ''}${pinned ? ' pinned' : ''}${draggingId === t.id ? ' dragging' : ''}${t.dirty ? ' dirty' : ''}`}
         draggable={!pinned}
-        title={t.kind === 'file' ? t.path : `${t.name}(固定标签)`}
+        title={t.kind === 'file' || t.kind === 'browser' ? t.path : `${t.name}(固定标签)`}
         onDragStart={(e) => onTabDragStart(e, t.id)}
         onDragOver={(e) => onTabDragOver(e, t.id)}
         onDragEnd={onTabDragEnd}
@@ -657,7 +772,7 @@ export default function App() {
         onAuxClick={(e) => { if (e.button === 1) closeTab(t.id); }}
         onContextMenu={(e) => { if (t.kind === 'file') openTabMenu(e, t); }}
       >
-        <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : tabIcon(t.name)}</span>
+        <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : t.kind === 'browser' ? '🌐' : tabIcon(t.name)}</span>
         <span className="btab-label">{t.name}</span>
         {!fixed && (
           <button
@@ -827,6 +942,14 @@ export default function App() {
                   ? '● 未连接 · 点击 SSH 连接'
                   : `● ${STATUS_LABEL[status.status] || status.status}`}
           </button>
+          {/* 检测到项目地址(命令输出里出现 localhost:端口 等):点击即在浏览器预览标签打开 */}
+          {previewHint && (
+            <button className="ghost edge-toggle preview-chip" data-tip={`点击在预览标签打开 ${previewHint}`}
+              onClick={() => { ensureBrowserTab(previewHint); setPreviewHint(null); }}>
+              🌐 预览 {previewLabel(previewHint)}
+              <span className="preview-chip-x" onClick={(e) => { e.stopPropagation(); setPreviewHint(null); }}>✕</span>
+            </button>
+          )}
           {/* 更新角标:启动时发现新版本后出现,点击直达设置「关于与更新」 */}
           {updateChip && (
             <button className="ghost edge-toggle update-chip" data-tip={`发现新版本 v${updateChip},点击查看`}
@@ -918,13 +1041,20 @@ export default function App() {
           >
             {/* 固定段:AI 编程助手/命令台永远显示;置顶的文件标签同样固定于此,不受文件标签滚动影响 */}
             <div className="tabstrip-pinned">
-              {tabs.filter((t) => t.kind !== 'file' || t.pinnedFile).map(renderTab)}
+              {tabs.filter((t) => t.kind === 'agent' || t.kind === 'console' || (t.kind === 'file' && t.pinnedFile)).map(renderTab)}
             </div>
             {/* 滚动段:普通文件标签可横向滚动(滚轮/拖拽到边缘);用项目悬浮滚动条引擎(不占布局,高度不变)。
                手机端 pinned 段被 CSS 隐藏(见 App.scss),置顶文件也放滚动段保证可见 */}
             <div className="tabstrip-scroll" ref={stripRef} onWheel={onStripWheel}>
-              {tabs.filter((t) => t.kind === 'file' && (!t.pinnedFile || isPhone)).map(renderTab)}
+              {tabs.filter((t) => (t.kind === 'browser' || (t.kind === 'file' && (!t.pinnedFile || isPhone)))).map(renderTab)}
             </div>
+            {/* 手动打开浏览器预览:与浏览器「新建标签」同位,点一下即开预览标签(空面板里可输地址/点最近地址) */}
+            <button
+              className="tabstrip-add"
+              data-tip="打开浏览器预览"
+              aria-label="打开浏览器预览"
+              onClick={() => ensureBrowserTabRef.current?.('')}
+            >＋</button>
           </div>
           {tabMenu && createPortal(
             <div
@@ -955,6 +1085,18 @@ export default function App() {
             document.body
           )}
           <div className="tab-body">
+            {/* 浏览器预览标签页:每个预览常驻挂载(切走仅隐藏);页面本身存活在服务端,切回即恢复 */}
+            {tabs.filter((t) => t.kind === 'browser').map((t) => (
+              <div key={t.id} className={`tab-pane ${effActiveTabId === t.id ? '' : 'hide'}`}>
+                <BrowserPanel
+                  sessionId={browserSessionId(t.id)}
+                  url={t.path}
+                  active={effActiveTabId === t.id}
+                  onState={(s) => updateBrowserTab(t.id, s)}
+                  suggestions={previewSuggestions}
+                />
+              </div>
+            ))}
             {/* ChatPanel 常驻挂载:切走仅 CSS 隐藏(对齐终端/文件面板),手机端底部栏频繁切换不重载会话历史 */}
             <div className={`tab-pane ${effActiveTabId === 'agent' ? '' : 'hide'}`}>
               <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
@@ -964,7 +1106,8 @@ export default function App() {
               remoteLocked={remoteLocked} localLocked={localLocked}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
               onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}
-              onSessionCreated={handleSessionCreated} onSessionTouched={touchSession} />
+              onSessionCreated={handleSessionCreated} onSessionTouched={touchSession}
+              onOpenFile={handleOpenFile} onOpenLocalFile={handleOpenLocalFile} />
             </div>
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
             <div className={`tab-pane ${effActiveTabId === 'console' ? '' : 'hide'}`}>
@@ -1007,6 +1150,7 @@ export default function App() {
         <BottomBar
           view={mobileView}
           fileTabCount={tabs.filter((t) => t.kind === 'file').length}
+          browserTabCount={tabs.filter((t) => t.kind === 'browser').length}
           onSelect={selectMobileView}
         />
       )}

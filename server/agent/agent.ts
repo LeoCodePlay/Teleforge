@@ -14,7 +14,7 @@ import { AGENT, NO_WORKSPACE } from '../config.ts';
 import fsp from 'node:fs/promises';
 import { LlmClient, isContextOverflowError } from './llm.ts';
 import { lastGeneratedImage, imageCaption, runImageJob } from './image-gen.ts';
-import { compactHistory, summarizeWithLlm, selectManualCompactRange, resolveCharBudget, estimateTokens, measureMessages, pruneToolResults } from './compact.ts';
+import { COMPACT, compactHistory, summarizeWithLlm, selectManualCompactRange, resolveCharBudget, estimateTokens, measureMessages, measureEnvelope, pruneToolResults } from './compact.ts';
 import { Session, foldTodos, hasOutstandingTodos, trimMessagesByBudget, type SessionEvent, type TodoSnapshot } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, type PermissionMode } from './permission.ts';
@@ -26,12 +26,15 @@ import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.
 import * as sessions from '../store/session-store.ts';
 import { getDefaultPermissionMode as storeDefaultMode, setDefaultPermissionMode as storeSetDefaultMode } from '../store/settings-store.ts';
 import { getAttachment, readImageDataURL, readImageBytes, saveAttachment, isTextLike, attachmentPath, type AttachmentMeta } from '../store/attachments-store.ts';
+import { extractPreviewUrls } from '../core/browser-manager.ts';
 
 // 全局唯一工具注册表:启动时注册全部内置工具与守卫
 const registry = new ToolRegistry();
 registerTools(registry);
 // 供 ws 层列出/开关工具插件(设置 → 工具插件)
 export { registry as toolRegistry };
+// 「检测到可预览地址」事件去重:同一会话只对同一个地址提醒一次,避免命令重复打印时刷屏
+const announcedPreview = new Map<string, string>();
 
 // ---- 自动续推
 // 完成判定对齐 harness agent-loop:模型返回 0 个 tool_calls 即本轮结束(completed),
@@ -938,9 +941,11 @@ export class Agent {
     let summary = '';
     if (!this.llm.isMock && this.llmConfigured) {
       // 摘要生成失败直接抛错、保留会话原样(对齐 harness compactNow 的 ManualCompactionError:
-      // 手动压缩失败不清空历史,前端命令卡显示失败原因;「降级直接裁剪」只留给自动压缩兜底)
+      // 手动压缩失败不清空历史,前端命令卡显示失败原因)。手动路径**从不**降级裁剪。
       summary = await summarizeWithLlm({
-        llm: this.llm, system: this._systemPrompt('off'), dropMsgs, signal: new AbortController().signal
+        llm: this.llm, system: this._systemPrompt('off'), dropMsgs, signal: new AbortController().signal,
+        // 摘要输出上限:与自动压缩同一常量(harness 的摘要调用同样显式带 maxTokens)
+        maxTokens: COMPACT.SUMMARY_MAX_TOKENS
       });
     }
     // shrink 校验(对齐 harness compaction-basic region.ts):摘要必须比被压缩区间更小,
@@ -948,9 +953,17 @@ export class Agent {
     if (summary && estimateTokens(summary) >= measureMessages(dropMsgs)) {
       throw new Error(`压缩失败:生成的摘要(${Math.round(estimateTokens(summary))} token)不小于被压缩内容(${Math.round(measureMessages(dropMsgs))} token),会话历史保持不变`);
     }
-    const summaryMsg = summary
-      ? `【上下文已手动压缩】为节省上下文窗口,早期对话被压缩为以下摘要(如需细节请让助手展开):\n${summary}`
-      : `【上下文已手动压缩】早期 ${dropMsgs.length} 条消息已省略。`;
+    // 空摘要 = 压缩失败,绝不能退化成"把早期消息丢掉"的通知行:
+    // 那等于用户主动按了压缩,却换来永久丢失早期对话。harness 同样把空摘要当硬失败拒绝
+    // (summarizer.ts 的 "summarization produced no text summary content")。
+    if (!summary) {
+      throw new Error(
+        this.llm.isMock || !this.llmConfigured
+          ? '压缩失败:当前没有可用的模型来生成摘要(mock/未配置),会话历史保持不变'
+          : '压缩失败:模型没有返回任何摘要内容,会话历史保持不变'
+      );
+    }
+    const summaryMsg = `【上下文已手动压缩】为节省上下文窗口,早期对话被压缩为以下摘要(如需细节请让助手展开):\n${summary}`;
     const dropSeqs = trace.slice(0, dropMsgs.length).map((t) => t.seq);
     // 非破坏压缩:日志完整保留早期消息(前端显示/刷新后回看始终完整),
     // 只追加压缩检查点,模型历史投影自检查点起跳过被压消息、以摘要顶替。
@@ -960,13 +973,22 @@ export class Agent {
     this.emit('agent', { event: 'history_compacted', sid: id, dropCount: dropMsgs.length });
     // 压缩后立即把仪表盘口径换成「压缩后的模型上下文」:手动压缩不产生新模型请求,
     // 服务端不会自发广播 context_usage,仪表盘会停留在压缩前的旧值(表现为"压缩了却没变小")。
-    // actual=null:无真实请求,前端按服务端预估显示。
-    this.emit('agent', {
-      event: 'context_usage', sid: id,
-      estimated: measureMessages([{ role: 'system', content: this._systemPrompt('off') }, ...session.deriveMessages({})]),
-      actual: null, output: null,
-      window: (this.llm && this.llm.contextWindow) || 0
-    });
+    // 口径与自动路径一致(measureEnvelope:system + 工具 schema + 历史)——工具 schema 不
+    // 属会话状态,就地按当前注册表重建,否则这里会比真实请求偏小数千 token。actual=null:
+    // 无真实请求,前端按服务端预估显示。
+    {
+      const env = measureEnvelope(
+        this._systemPrompt('off'),
+        registry.schemas({ localOnly: !ssh.connected }),
+        session.deriveMessages({})
+      );
+      this.emit('agent', {
+        event: 'context_usage', sid: id,
+        estimated: env.total, systemTokens: env.systemTokens, toolsTokens: env.toolsTokens, messageTokens: env.messageTokens,
+        actual: null, output: null,
+        window: (this.llm && this.llm.contextWindow) || 0
+      });
+    }
     return { compacted: true, dropCount: dropMsgs.length, summary: summaryMsg };
   }
 
@@ -1131,7 +1153,19 @@ export class Agent {
     try {
       while (rt.inbox.length > 0) {
         const input = rt.inbox.shift();
-        const endReason = await this._runTurn(rt, id, input);
+        let endReason;
+        try {
+          endReason = await this._runTurn(rt, id, input);
+        } catch (e) {
+          // 兜底:轮内的意外异常(如落盘失败)不能让 driver 直接 reject——那会变成未处理的
+          // Promise 拒绝,前端既收不到 error 也收不到 status 变化,界面永远停在「生成中」。
+          const msg = e instanceof Error ? e.message : String(e ?? '未知错误');
+          if (!rt.signal?.signal?.aborted) {
+            this.emit('log', 'error', `Agent 轮次异常: ${msg}`);
+            this.emit('agent', { event: 'error', message: `本轮执行异常:${msg}`, sid: id });
+          }
+          endReason = { kind: 'error', error: msg };
+        }
         // 上一轮正常结束后,待执行队列按 FIFO 自动补齐下一条(一次一条,保持 busy 直至排空);
         // 停止(aborted)只停当前轮,排队项保留,等下次对话正常结束后再执行
         if (endReason && endReason.kind !== 'aborted' && rt.pending.length > 0) {
@@ -1387,13 +1421,13 @@ export class Agent {
         // 请求前按"预估请求 token(历史 + system + 工具 schema)"查地板,超过就先做一轮
         // 保最近的投影折叠(日志不动,只裁模型当轮可见面),与水位裁剪互补。
         const P = AGENT.TOOL_RESULT_PRUNE;
-        if (P.ABS_FLOOR_TOKENS > 0 && measureMessages(historyMsgs) + reservedTokens > P.ABS_FLOOR_TOKENS) {
+        if (P.ABS_FLOOR_TOKENS > 0 && measureEnvelope(systemText, toolSchemas, historyMsgs).total > P.ABS_FLOOR_TOKENS) {
           const r = pruneToolResults(historyMsgs, {
             keepRecent: P.ABS_FLOOR_KEEP_RECENT, minChars: P.ABS_FLOOR_THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
           });
           if (r.pruned > 0) {
             historyMsgs = r.messages;
-            console.log(`[agent] 历史工具结果折叠:${r.pruned} 条(预估请求 ${Math.round(measureMessages(historyMsgs) + reservedTokens + r.charsSaved)} token 超绝对地板 ${P.ABS_FLOOR_TOKENS}),省约 ${r.charsSaved} 字符`);
+            console.log(`[agent] 历史工具结果折叠:${r.pruned} 条(预估请求 ${measureEnvelope(systemText, toolSchemas, historyMsgs).total} token 超绝对地板 ${P.ABS_FLOOR_TOKENS}),省约 ${r.charsSaved} 字符`);
           }
         }
         if (ctxWindow > 0 && historyMsgs.length > 2) {
@@ -1401,7 +1435,17 @@ export class Agent {
             messages: historyMsgs, system: systemText, llm: this.llm, signal: signal.signal,
             contextWindow: ctxWindow, maxTokens: this.llm.maxTokens, reservedTokens,
             // 确认要压缩即广播「压缩中」:摘要要调一次 LLM,可能几十秒,不能让对话流静默干等
-            onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false })
+            onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false }),
+            // 摘要不可用时必须出声:历史上这里静默降级为"直接裁剪",用户看不到任何提示,
+            // 却在无声无息中永久丢掉了早期对话。现在压不动就保持历史完整 + 披露原因。
+            onFailure: (reason) => {
+              this.emit('agent', { event: 'compaction_failed', sid: runSessionId, manual: false, reason });
+              this.emit('agent', {
+                event: 'notice', sid: runSessionId,
+                text: `上下文压缩未完成(${reason}),已保持完整历史、不做任何裁剪。`
+                  + `若后续请求报"超出上下文窗口",可重试或换窗口更大的模型;早期对话不会被丢弃。`
+              });
+            }
           });
           if (c.compacted) {
             const dropSeqs = trace.slice(0, c.dropCount).map((t) => t.seq);
@@ -1426,11 +1470,16 @@ export class Agent {
             });
             // 同步广播「压缩后的模型上下文」用量:这一步的模型请求紧接着就会发出,
             // 请求后的 context_usage 自然反映压缩后水位;这里即时更新让仪表盘立即可见下降。
-            this.emit('agent', {
-              event: 'context_usage', sid: runSessionId,
-              estimated: measureMessages([{ role: 'system', content: systemText }, ...historyMsgs]),
-              actual: null, output: null, window: ctxWindow || 0
-            });
+            // 口径与压缩阈值一致(measureEnvelope:system + 工具 schema + 历史),否则
+            // "压缩后水位"会比真实请求偏小,用户看到虚低的百分比。
+            {
+              const env = measureEnvelope(systemText, toolSchemas, historyMsgs);
+              this.emit('agent', {
+                event: 'context_usage', sid: runSessionId,
+                estimated: env.total, systemTokens: env.systemTokens, toolsTokens: env.toolsTokens, messageTokens: env.messageTokens,
+                actual: null, output: null, window: ctxWindow || 0
+              });
+            }
           } else if (c.pruned > 0) {
             historyMsgs = c.messages; // pruner 折叠生效(只裁模型当轮可见面,日志不动)
             console.log(`[agent] 上下文超水位,已折叠 ${c.pruned} 条大工具结果(未触发摘要压缩,窗口 ${ctxWindow})`);
@@ -1465,8 +1514,15 @@ export class Agent {
               // 否则切回运行中会话时前端整表替换会丢掉已流出的回复(见 getHistory)
               rt.live = { content: stepPartial, reasoning: stepPartialReasoning };
             },
-            // 请求失败进入重试:把「重试第几次」推给前端显示(对齐 harness llm-retry 的 retry 事件语义)
+            // 请求失败进入重试:把「重试第几次」推给前端显示(对齐 harness llm-retry 的 retry 事件语义)。
+            // r.discard=true 表示这次失败前已经流出过增量:重试会重发这一步,所以本地缓冲与前端
+            // 已显示的半成品都要作废回滚,否则重试成功后的正文会和上次的半成品拼在一起重复。
             onRetry: (r) => {
+              if (r.discard && (stepPartial || stepPartialReasoning)) {
+                stepPartial = '';
+                stepPartialReasoning = '';
+                rt.live = null; // 半成品镜像同步清掉,避免切回会话时又被投影出来
+              }
               this.emit('agent', { event: 'retry', ...r, sid: runSessionId });
             }
           });
@@ -1494,7 +1550,17 @@ export class Agent {
               contextWindow: ctxWindow, maxTokens: llm.maxTokens, reservedTokens,
               force: true, retainTokensOverride: 0,
               // 爆窗恢复的摘要压缩一样要调 LLM:先广播「压缩中」,前端不会长时间无反馈
-              onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false })
+              onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false }),
+              // 爆窗恢复时摘要仍不可用:同样不裁剪(宁可这一步失败,也不丢历史)。
+              // 披露原因后继续走到下面 c.compacted 为 false 的分支,由本轮的错误路径收尾。
+              onFailure: (reason) => {
+                this.emit('agent', { event: 'compaction_failed', sid: runSessionId, manual: false, reason });
+                this.emit('agent', {
+                  event: 'notice', sid: runSessionId,
+                  text: `爆窗恢复时上下文压缩未完成(${reason}),已保持完整历史不做裁剪。`
+                    + `本轮可能仍会失败,可换窗口更大的模型重试;早期对话不会被丢弃。`
+                });
+              }
             });
             if (c.compacted) {
               const dropSeqs = trace.slice(0, c.dropCount).map((t: any) => t.seq);
@@ -1510,11 +1576,15 @@ export class Agent {
                 // 同上:爆窗恢复的压缩检查点同样会把后续分支点挤后一位
                 at: compactionMarkerAt(session.events)
               });
-              this.emit('agent', {
-                event: 'context_usage', sid: runSessionId,
-                estimated: measureMessages([{ role: 'system', content: systemText }, ...c.messages]),
-                actual: null, output: null, window: ctxWindow || 0
-              });
+              // 口径同上:与压缩阈值同源(measureEnvelope),避免爆窗恢复后仪表盘虚低
+              {
+                const env = measureEnvelope(systemText, toolSchemas, c.messages);
+                this.emit('agent', {
+                  event: 'context_usage', sid: runSessionId,
+                  estimated: env.total, systemTokens: env.systemTokens, toolsTokens: env.toolsTokens, messageTokens: env.messageTokens,
+                  actual: null, output: null, window: ctxWindow || 0
+                });
+              }
             }
             step--; // 重试本步(for 循环 step++ 会把它加回原值)
             continue;
@@ -1542,19 +1612,24 @@ export class Agent {
         // 累计本轮收到的思考字符
         reasoningChars += (res.reasoning || '').length;
 
-        // 上下文用量广播:estimated = 本次实际发送请求(含 system,折叠后)的启发式估算,
-        // actual = 提供方上报的真实 prompt_tokens(网关不报则为 null)。
-        // 前端仪表盘改为显示这个口径,不再按"渲染历史"估算——两个口径可差几十万 token。
-        const reqTokens = measureMessages(messages);
+        // 上下文用量广播:estimated = 本次实际发送请求(含 system + 工具 schema,折叠后)
+        // 的启发式估算,与压缩水位判定同一口径(measureEnvelope);actual = 提供方上报的
+        // 真实 prompt_tokens(网关不报则为 null)。
+        // 历史教训:此前这里只算 [system, ...history] 不含工具 schema,而压缩阈值含,
+        // 同一会话两个数字能差数千 token,仪表盘百分比与实际触发点不符。
+        const env = measureEnvelope(systemText, toolSchemas, historyMsgs);
         const usage = res.usage || null;
         this.emit('agent', {
           event: 'context_usage', sid: runSessionId,
-          estimated: reqTokens,
+          estimated: env.total,
+          systemTokens: env.systemTokens,
+          toolsTokens: env.toolsTokens,
+          messageTokens: env.messageTokens,
           actual: usage && typeof usage.promptTokens === 'number' ? usage.promptTokens : null,
           output: usage && typeof usage.completionTokens === 'number' ? usage.completionTokens : null,
           window: ctxWindow || 0
         });
-        console.log(`[agent] 请求 ${(this.llm && this.llm.model) || ''}:预估输入 ${Math.round(reqTokens)}${usage && typeof usage.promptTokens === 'number' ? ` / 实际 ${usage.promptTokens}` : ''}${usage && typeof usage.completionTokens === 'number' ? ` / 输出 ${usage.completionTokens}` : ''} token(窗口 ${ctxWindow || '未配置'})`);
+        console.log(`[agent] 请求 ${(this.llm && this.llm.model) || ''}:预估输入 ${env.total}(system ${env.systemTokens} + 工具 ${env.toolsTokens} + 历史 ${env.messageTokens})${usage && typeof usage.promptTokens === 'number' ? ` / 实际 ${usage.promptTokens}` : ''}${usage && typeof usage.completionTokens === 'number' ? ` / 输出 ${usage.completionTokens}` : ''} token(窗口 ${ctxWindow || '未配置'})`);
 
         // 记录本步 assistant 消息(工具调用参数需以 JSON 字符串回传;
         // DeepSeek v4 思考模式下,reasoning_content 必须随历史原样回传,否则 400)
@@ -1626,9 +1701,10 @@ export class Agent {
         }
         this.emit('agent', { event: 'stopped', sid: runSessionId });
       } else {
-        endReason = { kind: 'error', error: String(e.message || e) };
-        this.emit('log', 'error', `Agent 错误: ${e.message}`);
-        this.emit('agent', { event: 'error', message: e.message, sid: runSessionId });
+        const errMsg = e instanceof Error ? e.message : String(e ?? '未知错误');
+        endReason = { kind: 'error', error: errMsg };
+        this.emit('log', 'error', `Agent 错误: ${errMsg}`);
+        this.emit('agent', { event: 'error', message: errMsg, sid: runSessionId });
       }
     } finally {
       rt.live = null; // 本轮收尾(含中止抢救:半成品已落成真实 assistant/message):live 投影缓冲必须清空
@@ -1864,6 +1940,15 @@ export class Agent {
     return { turnConcluded };
   }
 
+  /** 命令输出里发现可预览地址时通知前端(同一会话同一地址只提醒一次,不写会话日志) */
+  _announcePreview(runSessionId: string | null, url: string) {
+    const key = runSessionId || 'local';
+    if (announcedPreview.get(key) === url) return; // 同一会话同一地址只提醒一次
+    announcedPreview.set(key, url);
+    // 前端据此弹出「检测到地址,点击预览」提示;不写入会话日志,不污染对话上下文
+    this.emit('agent', { event: 'preview_available', sid: runSessionId, url });
+  }
+
   /** 提交单个工具结果:落盘 tool/result + 向前端发 tool_result(与工具执行解耦,供并行按序调用) */
   _emitToolResult(session: Session, runSessionId: string | null, turn: number, step: number, tc: any, r: ToolResult) {
     // 结果全量入日志(体量上限由工具层输出 cap 与注册表 spill 策略保证);
@@ -1874,6 +1959,11 @@ export class Agent {
       ...(r.meta !== undefined ? { meta: r.meta } : {}) // 结构化 UI 数据(终端卡 exitCode/cwd 等)
     });
     const short = r.content.length > 4000 ? r.content.slice(0, 4000) + `\n…[结果较多,已折叠展示 ${r.content.length} 字符]…` : r.content;
+    // 命令输出里出现可预览地址(如 vite 打印的 http://localhost:5173)时主动通知前端,
+    // 让用户点一下就能在「浏览器预览」标签里看到跑起来的项目
+    if (!r.isError && (tc.name === 'run_command' || tc.name === 'run_local_command')) {
+      for (const url of extractPreviewUrls(r.content)) this._announcePreview(runSessionId, url);
+    }
     this.emit('agent', {
       event: 'tool_result', tool: tc.name, ok: !r.isError, ms: r.ms, result: short, callId: tc.id, sid: runSessionId,
       ...(r.meta !== undefined ? { meta: r.meta } : {})

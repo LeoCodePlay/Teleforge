@@ -1,12 +1,13 @@
 // 上下文用量指示器(发送按钮左侧,参照 dsh 的 ContextMeter):
 // - 常态:圆形进度环(ring)显示当前上下文占用百分比,颜色随水位变化
 //   (80% 压缩水位前蓝、80-94% 琥珀、>=95% 红)
-// - 鼠标悬浮:弹出横向进度条 + 数字(≈已用/窗口/百分比)+ 分项明细
-// - 口径:优先用服务端 context_usage 事件(实际请求 = provider 上报 prompt_tokens,
-//   预估 = 服务端按"折叠后模型可见面"计算的启发式值);服务端未上报时
-//   才回退到前端估算——同样只算"模型可见面"(压缩后从最后一个压缩标记行起,见
-//   utils/tokens 的 modelFaceMessages,被压历史不再计入);该口径含 UI 展示用的长
-//   结果/思考,比真实请求偏大,仅作参考)。
+// - 鼠标悬浮:只弹出「数值 + 占在哪」——总量(≈已用/窗口/百分比)、一条进度条、
+//   以及 system/工具/对话三处的 token 占用。**不放任何说明性文字**(口径解释、
+//   压缩提示、水位规则等一律不显示,用户要的是数字不是说明书)。
+// - 口径:优先用服务端 context_usage 事件(estimated = 服务端按统一口径
+//   measureEnvelope 算的 system + 工具 schema + 折叠后历史;actual = provider 上报的
+//   prompt_tokens,有则显示 actual);服务端未上报时才回退到前端估算——同样只算
+//   "模型可见面"(压缩后从最后一个压缩标记行起,见 utils/tokens 的 modelFaceMessages)。
 // contextWindow <= 0(模型未配置)时不渲染。
 import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -16,7 +17,7 @@ import './ContextMeter.scss';
 
 /** 服务端 context_usage 事件载荷 */
 export interface ContextUsage {
-  /** 本次实际发送请求(折叠后,含 system)的启发式估算 token */
+  /** 本次实际发送请求(折叠后,含 system 与工具 schema)的启发式估算 token */
   estimated: number;
   /** provider 上报的真实输入 token;未上报为 null */
   actual: number | null;
@@ -24,6 +25,12 @@ export interface ContextUsage {
   output: number | null;
   /** 服务端生效的上下文窗口(与请求时一致) */
   window: number;
+  /** system 提示词分项(与服务端压缩阈值同口径);旧版服务端可能不提供 */
+  systemTokens?: number;
+  /** 工具 schema 分项;旧版服务端可能不提供 */
+  toolsTokens?: number;
+  /** 历史消息分项;旧版服务端可能不提供 */
+  messageTokens?: number;
 }
 
 interface Props {
@@ -69,13 +76,12 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
   const used = hasServer ? serverUsed : SYSTEM_EST + estimateMsgs() + estimateTokens(input as string) + 20;
   const pct = Math.min(100, Math.round((used / win) * 100));
   const level = pct >= 95 ? ' danger' : pct >= 80 ? ' warn' : '';
-  // 分项明细(遍历全部消息)只在悬浮面板打开时计算,常闭时省掉整段历史的开销
-  const breakdown = show && pos ? estimateBreakdown(messages, input) : null;
-  // 最近的压缩标记(仅在弹窗打开时扫描):用于向用户解释"聊天里内容还在,为什么水位降了"——
-  // 压缩是非破坏的,被压早期消息仍可回看,但模型从该标记起只看摘要,不再计入水位。
-  const lastCompaction = show && pos
-    ? [...messages].reverse().find((m) => m.compaction)?.compaction || null
+  // 分项明细:优先用服务端给出的分项(与压缩阈值同源,不会与百分比自相矛盾);
+  // 旧版服务端不发分项时,才在悬浮面板打开时按前端渲染历史估算(遍历全部消息,常闭时省掉开销)。
+  const serverBreakdown = usage && typeof usage.systemTokens === 'number'
+    ? { system: usage.systemTokens, tools: usage.toolsTokens || 0, conversation: usage.messageTokens || 0 }
     : null;
+  const breakdown = serverBreakdown ?? (show && pos ? estimateBreakdown(messages, input) : null);
   const segTotal = breakdown ? (breakdown.system + breakdown.tools + breakdown.conversation || 1) : 1;
   const segPct = (n: number) => Math.round((n / segTotal) * 100);
 
@@ -95,35 +101,20 @@ export default function ContextMeter({ messages, input, contextWindow, usage }: 
       </span>
 
       {show && pos && createPortal(
+        // 只呈现数值与分项:总量/进度条/三处占用。不放任何说明性文字。
         <div className="ctx-pop" style={pos}>
           <div className="ctx-pop-nums">
             ≈ {formatTokens(used)} <span className="muted">/ {formatTokens(win)}</span>
             <span className="ctx-pop-pct">({pct}%)</span>
           </div>
-          {usage && usage.window > 0 && (
-            <div className="ctx-pop-nums ctx-pop-actual">
-              最近一次请求:{usage.actual != null
-                ? <>实际输入 <b>{formatTokens(usage.actual)}</b>{usage.output != null ? ` / 输出 ${formatTokens(usage.output)}` : ''}</>
-                : '提供方未上报实际用量'}
-              {usage.actual != null && <span className="muted">(服务端预估 {formatTokens(usage.estimated)})</span>}
+          <div className="ctx-pop-track"><span className="ctx-pop-fill" style={{ width: pct + '%' }} /></div>
+          {breakdown && (
+            <div className="ctx-pop-segs">
+              <SegRow name="系统提示词" tokens={breakdown.system} pct={segPct(breakdown.system)} cls="sys" />
+              <SegRow name="工具调用" tokens={breakdown.tools} pct={segPct(breakdown.tools)} cls="tool" />
+              <SegRow name="对话消息" tokens={breakdown.conversation} pct={segPct(breakdown.conversation)} cls="conv" />
             </div>
           )}
-          <div className="ctx-pop-track"><span className="ctx-pop-fill" style={{ width: pct + '%' }} /></div>
-          <div className="ctx-pop-segs">
-            {usage && usage.window > 0
-              ? <div className="ctx-pop-hint">以上为服务端实际请求口径(旧工具结果已折叠,不再按前端渲染历史估算)</div>
-              : <>
-                {breakdown && <>
-                  <SegRow name="系统提示词" tokens={breakdown.system} pct={segPct(breakdown.system)} cls="sys" />
-                  <SegRow name="工具调用" tokens={breakdown.tools} pct={segPct(breakdown.tools)} cls="tool" />
-                  <SegRow name="对话消息" tokens={breakdown.conversation} pct={segPct(breakdown.conversation)} cls="conv" />
-                </>}
-              </>}
-          </div>
-          {lastCompaction && (
-            <div className="ctx-pop-hint">已压缩 {lastCompaction.dropCount || 0} 条早期消息:模型从压缩标记起只看摘要,聊天里仍可完整回看(不再计入水位)</div>
-          )}
-          <div className="ctx-pop-hint">达到 80% 水位时自动压缩早期对话</div>
         </div>,
         document.body
       )}
@@ -136,7 +127,7 @@ function SegRow({ name, tokens, pct, cls }: { name: string; tokens: number; pct:
     <div className="ctx-seg">
       <span className="ctx-seg-name">{name}</span>
       <span className="ctx-seg-track"><span className={`ctx-seg-fill ${cls}`} style={{ width: Math.min(100, pct) + '%' }} /></span>
-      <span className="ctx-seg-nums">{formatTokens(tokens)} · {pct}%</span>
+      <span className="ctx-seg-nums">{formatTokens(tokens)}</span>
     </div>
   );
 }

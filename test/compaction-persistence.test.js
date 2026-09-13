@@ -155,4 +155,49 @@ function fillConversation(session, groups) {
     !!out && out.reqId === 42 && out.compacted === true && out.dropCount === 7, `got ${JSON.stringify(out)}`);
 }
 
+// ---- 8: 手动 /compact 的失败必须抛错且**一条历史都不丢**(绝不退化成"丢弃早期消息") ----
+// 历史缺陷:摘要返回空串时,compactNow 会写入一条「早期 N 条消息已省略」的通知行——
+// 用户主动按了压缩,换来的却是永久丢失早期对话,而且看起来"成功了"。
+{
+  // 8a) 摘要为空:必须抛错、历史原样
+  const a = fakeAgent();
+  a.llm = { isMock: false, contextWindow: 8000, maxTokens: 1024, async chat() { return { content: '', toolCalls: [] }; } };
+  const sid = a.createSession('空摘要').id;
+  const session = a._runtimes.get(sid).session;
+  fillConversation(session, 4);
+  const beforeEvents = session.events.length;
+  const beforeMsgs = session.deriveMessages({ budgetChars: Infinity }).length;
+  let err = null;
+  try { await a.compactNow(sid); } catch (e) { err = e; }
+  check('空摘要:compactNow 抛错(不静默成功)', !!err, `err=${err && err.message}`);
+  check('空摘要:错误信息说明历史保持不变', /历史保持不变/.test(String(err?.message)), `msg=${err?.message}`);
+  check('空摘要:事件日志无 compaction/done 检查点', !session.events.some((e) => e.type === 'compaction/done'));
+  check('空摘要:事件数与模型面消息数都没变(未裁剪)', session.events.length === beforeEvents
+    && session.deriveMessages({ budgetChars: Infinity }).length === beforeMsgs,
+  `events=${session.events.length}/${beforeEvents} msgs=${session.deriveMessages({ budgetChars: Infinity }).length}/${beforeMsgs}`);
+
+  // 8b) 摘要请求失败:同样抛错、历史原样
+  const b = fakeAgent();
+  b.llm = { isMock: false, contextWindow: 8000, maxTokens: 1024, async chat() { throw new Error('上游摘要 500'); } };
+  const sid2 = b.createSession('摘要失败').id;
+  const s2 = b._runtimes.get(sid2).session;
+  fillConversation(s2, 4);
+  const before2 = s2.events.length;
+  let err2 = null;
+  try { await b.compactNow(sid2); } catch (e) { err2 = e; }
+  check('摘要失败:compactNow 抛错', !!err2 && /上游摘要 500/.test(String(err2?.message)), `msg=${err2?.message}`);
+  check('摘要失败:事件数不变(未裁剪)', s2.events.length === before2, `${s2.events.length}/${before2}`);
+  check('摘要失败:无 compaction/done 检查点', !s2.events.some((e) => e.type === 'compaction/done'));
+
+  // 8c) 摘要正常时仍然照常成功(确认上面的改动没有把成功路径也堵死)
+  const c = fakeAgent();
+  const sid3 = c.createSession('正常压缩').id;
+  const s3 = c._runtimes.get(sid3).session;
+  fillConversation(s3, 4);
+  const r = await c.compactNow(sid3);
+  check('摘要正常:compactNow 正常成功', r.compacted === true && r.dropCount > 0, JSON.stringify(r));
+  check('摘要正常:模型面首条是压缩摘要', /上下文已手动压缩/.test(s3.deriveMessages({ budgetChars: Infinity })[0]?.content || ''));
+  check('摘要正常:被压早期消息仍完整保留在日志里(非破坏)', s3.events.some((e) => e.type === 'user/message' && e.data.source === 'user'));
+}
+
 finish();

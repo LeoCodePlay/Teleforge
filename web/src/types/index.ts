@@ -182,6 +182,8 @@ export interface FileChangeItem {
   addLines: number;
   /** 删除行数(null=未知,如覆盖写入的大文件未能读取旧内容) */
   delLines?: number | null;
+  /** 变更发生在本机(local_* 工具);缺省 false = 远程服务器。点击打开文件时据此选择远程/本机读取通道 */
+  local?: boolean;
 }
 
 /** 一条网络搜索结果来源(与后端 web-search.ts 的 WebSearchSource 对齐) */
@@ -214,6 +216,9 @@ export interface ChatMessage {
   role: string; // user | assistant | notice
   content?: string;
   segments?: MsgSegment[];
+  /** 本步(iteration 事件)开始时的 segments 下标:模型请求中途失败重试时,把本步已流出、
+      尚未落盘的半成品段整段回滚(截断到这里),避免重试后的正文与半成品拼接重复 */
+  stepSegBase?: number;
   streaming?: boolean;
   /** 消息携带的附件(图片/文件/视频,服务端元数据;图片经 /api/attachments/:id 取字节)。
    *  user 消息 = 用户上传;assistant 消息 = 生图模型本轮生成的成图 */
@@ -238,14 +243,18 @@ export interface ChatMessage {
     error: string;
     /** 状态:scheduled=等待重试(倒计时中) → started=已开始重试 / cancelled=已取消 */
     state: 'scheduled' | 'started' | 'cancelled';
+    /** 本次重试是否作废了上一次已流出的半成品(true 时该气泡的可变段已被回滚) */
+    discard?: boolean;
   };
   /** 上下文压缩标记(compaction/done 投影消息):dropCount=被压缩消息数,manual=手动压缩。
-      渲染为对话流中的折叠「压缩标记行」(样式参照 harness 的 CompactionItem) */
-  compaction?: { dropCount?: number; manual?: boolean; running?: boolean };
+      渲染为对话流中的折叠「压缩标记行」(样式参照 harness 的 CompactionItem)。
+      running=摘要摘要生成中的运行态;failed=摘要不可用(压缩未完成,已保持完整历史不裁剪) */
+  compaction?: { dropCount?: number; manual?: boolean; running?: boolean; failed?: boolean; reason?: string };
   /** 斜杠命令在对话流中的命令卡片(role='command',本地插入,不持久化):
       压缩中/完成/失败的可见反馈(样式参照 harness 的 GenericCommandCard) */
   command?: { name: string; state: 'running' | 'ok' | 'error'; text?: string };
-  /** 命令卡片的本地唯一 id(供异步完成后原地更新;压缩成功时 history_compacted 重拉历史自然移除) */
+  /** 命令卡片的本地唯一 id(供异步完成后原地更新;/compact 成功重拉历史时尾部命令卡会被保留,
+      patchCmd 依它命中并落完成态——见 utils/commandCard 的 mergeTrailingCommandCards) */
   cmdId?: number;
   /** 单轮回复中修改过的文件汇总(write/edit/delete 工具 meta 聚合):渲染回复下方的「N 个文件已更改」卡片 */
   filesChanged?: FileChangeItem[];

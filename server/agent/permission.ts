@@ -13,10 +13,13 @@
 //   作答"允许"放行、"拒绝"返回结构化错误结果,取消/超时/停止的清理路径全部复用。
 import { askUserQuestion } from './ask-user.ts';
 import type { Session } from './session.ts';
-import type { ToolRegistry } from './registry.ts';
+import { DEFAULT_TOOL_ACCESS, type ToolAccess, type ToolDef, type ToolRegistry } from './registry.ts';
 import { getDefaultPermissionMode } from '../store/settings-store.ts';
 
 export type PermissionMode = 'confirm' | 'auto-edit' | 'plan' | 'full-access';
+
+/** 工具访问类别(定义与语义见 registry.ts;此处再导出供既有调用方沿用原导入路径) */
+export type { ToolAccess };
 
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'confirm';
 
@@ -49,6 +52,13 @@ export function foldPermissionMode(events: Array<{ type: string; data?: any }>, 
 }
 
 // ---- 工具访问分类:guard 拦截判定的依据 ----
+// 权威来源是**工具自身的 `access` 声明**(ToolDef.access,见 registry.ts)。
+// 下面两张名单只作为兜底:工具没声明 access 时按名字查表,查不到再 fail-closed 按
+// 'write' 处理——新增写类工具若漏声明,结果是"多要一次审批",而不是"静默放行"。
+//
+// 历史教训:此前 toolAccess() 的兜底分支是 `return 'read'`(fail-open),意味着任何
+// 未登记的新工具(含写类/命令类)都自动免审批,且在 plan 模式下也照样执行。
+//
 // meta:交互/任务清单/技能加载等宿主协调工具,任何模式都不拦
 //       (ask_user_question 绝不能拦:审批弹窗本身就走这条通道,拦了会互相等待死锁)
 // read:只读探测(读文件/列目录/搜索/环境信息/web 搜索),任何模式都不拦
@@ -57,17 +67,34 @@ export function foldPermissionMode(events: Array<{ type: string; data?: any }>, 
 const META_TOOLS = new Set(['todo_write', 'skill', 'ask_user_question']);
 const WRITE_TOOLS = new Set([
   'write_file', 'edit_file', 'create_directory', 'delete_path', 'skill_copy_builtin',
-  'write_local_file', 'edit_local_file', 'create_local_dir', 'delete_local_path'
+  'write_local_file', 'edit_local_file', 'create_local_dir', 'delete_local_path',
+  // 浏览器工具:会改变页面/浏览器状态,plan 模式下不应执行
+  'browser_open', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll',
+  'browser_eval', 'browser_close'
 ]);
 const COMMAND_TOOLS = new Set(['run_command', 'run_local_command']);
+/** 已知只读工具:仅在调用方未提供工具定义(纯名字判定)时用于保持放行语义 */
+const READ_TOOLS = new Set([
+  'list_directory', 'read_file', 'search_code', 'get_workspace_info', 'web_search',
+  'list_local_dir', 'read_local_file', 'search_local_code', 'get_local_info',
+  'browser_snapshot'
+]);
 
-export type ToolAccess = 'meta' | 'read' | 'write' | 'command';
-
-export function toolAccess(name: string): ToolAccess {
+/**
+ * 判定一次工具调用的访问类别。
+ * 优先取工具定义上的 `access` 声明;未声明(或未提供定义)时按名字查兜底名单,
+ * 都不命中则返回 DEFAULT_TOOL_ACCESS('write')——fail-closed。
+ * @param name - 工具名
+ * @param def - 该工具的注册定义(省略时退化为纯名字判定)
+ */
+export function toolAccess(name: string, def?: Pick<ToolDef, 'access'> | null): ToolAccess {
+  if (def && def.access) return def.access;
   if (META_TOOLS.has(name)) return 'meta';
   if (COMMAND_TOOLS.has(name)) return 'command';
   if (WRITE_TOOLS.has(name)) return 'write';
-  return 'read'; // 未登记的只读工具(含未来新增)默认放行;mutating 未登记工具本就该登记
+  if (READ_TOOLS.has(name)) return 'read';
+  // 名单未命中(含未声明 access 的新工具):不假定只读,按最需要审批的一档处理
+  return DEFAULT_TOOL_ACCESS;
 }
 
 // 审批题面的参数摘要:提取各写类工具的关键参数,让用户一眼看到"要动什么"
@@ -95,9 +122,13 @@ function argSummary(name: string, args: any): string {
  * 权限守卫(注册到 ToolRegistry 的 pre-execute guard):
  * 只在工具执行链路里调用(需要 ctx.session/ctx.sid/ctx.signal/ctx.emit),
  * 返回拒绝理由或 undefined(放行)。异步:审批会阻塞到用户作答。
+ * @param name - 工具名
+ * @param args - 已解析的工具参数
+ * @param ctx - 执行上下文(含 session)
+ * @param def - 该工具的注册定义;访问类别优先取自它的 `access` 声明
  */
-export async function permissionGuard(name: string, args: any, ctx?: any): Promise<string | undefined> {
-  const access = toolAccess(name);
+export async function permissionGuard(name: string, args: any, ctx?: any, def?: Pick<ToolDef, 'access'> | null): Promise<string | undefined> {
+  const access = toolAccess(name, def);
   if (access === 'meta' || access === 'read') return undefined; // 只读/协调工具永不拦
   const session: Session | undefined = ctx?.session;
   if (!session) return undefined; // 无会话上下文(理论不发生):fail-open 交由其它守卫兜底
@@ -139,7 +170,8 @@ export async function permissionGuard(name: string, args: any, ctx?: any): Promi
   }
 }
 
-/** 把权限守卫挂到注册表(由 registerTools 在内置守卫之后调用,顺序在高危拦截之后) */
+/** 把权限守卫挂到注册表(由 registerTools 在内置守卫之后调用,顺序在高危拦截之后)。
+ *  守卫从注册表取回工具定义,以便按工具**自己声明**的 access 判定访问类别(fail-closed)。 */
 export function registerPermissionGuard(registry: ToolRegistry): void {
-  registry.guard(async (name: string, args: any, ctx?: any) => permissionGuard(name, args, ctx));
+  registry.guard(async (name: string, args: any, ctx?: any) => permissionGuard(name, args, ctx, registry.get(name)));
 }

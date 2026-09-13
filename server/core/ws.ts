@@ -23,10 +23,14 @@ import { agent, setAgentHub } from '../agent/agent.ts';
 import { clearSearchEngine } from '../agent/tools.ts';
 import { armAskUserDisconnectGrace, disarmAskUserDisconnectGrace } from '../agent/ask-user.ts';
 import { migrateLegacy } from '../store/session-store.ts';
+import { browserManager } from './browser-manager.ts';
 
 export function setupWs(httpServer: Server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
   const termWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
+  // 浏览器预览通道:二进制帧 = 页面画面(JPEG),JSON 帧 = 状态与输入。
+  // 连接时用 ?id=<浏览器标签 id> 订阅某个预览会话(每个预览标签一条连接)。
+  const browserWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
 
   // 同一 http server 上有两个 WSS,必须手动路由 upgrade:
   // 若各自自动监听,非匹配路径的 WSS 会对已升级的 socket abortHandshake(400),
@@ -35,6 +39,8 @@ export function setupWs(httpServer: Server) {
     const pathname = String(req.url || '').split('?')[0];
     if (pathname === '/ws/term') {
       termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws));
+    } else if (pathname === '/ws/browser') {
+      browserWss.handleUpgrade(req, socket, head, (ws) => browserWss.emit('connection', ws, req));
     } else if (pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws));
     } else {
@@ -293,6 +299,89 @@ export function setupWs(httpServer: Server) {
   // 心跳保活:每 30s 向全部连接发 ping,下一轮仍无 pong 的(假死/TCP 半开)直接 terminate,
   // 让浏览器触发 onclose 走前端自动重连,而不是无声无息地双向都收不到数据。
   // 浏览器 WebSocket 对 ping 控制帧自动回 pong,无需前端配合。
+  // ---------- 浏览器预览通道(/ws/browser) ----------
+  // 每个连接订阅一个浏览器标签 id(?id=main)。下行:二进制 JPEG 画面 + JSON 状态;
+  // 上行:input(鼠标/键盘/滚轮/文本)、subscribe(切换订阅)、resize。
+  browserWss.on('connection', (ws: WebSocket, req?: IncomingMessage) => {
+    (ws as any).isAlive = true;
+    ws.on('pong', () => { (ws as any).isAlive = true; });
+    let id = 'main';
+    try { id = new URL(String(req?.url || '/ws/browser'), 'http://127.0.0.1').searchParams.get('id') || 'main'; } catch { /* 保持默认 */ }
+    void browserManager.setViewer(id, true); // 有观看者才推画面(无观看者时服务端停掉 screencast)
+    (ws as any).browserId = id;
+
+    const sendJson = (o: any) => { try { ws.send(JSON.stringify(o)); } catch { /* 忽略 */ } };
+    const pushState = (sid: string) => {
+      const st = browserManager.state(sid);
+      if (st) sendJson({ type: 'browser_state', ...st });
+      else sendJson({ type: 'browser_state', id: sid, closed: true });
+    };
+    const pushFrame = (sid: string) => {
+      const f = browserManager.lastFrame(sid);
+      if (f && ws.readyState === 1) { try { ws.send(f.data, { binary: true } as any); } catch { /* 忽略 */ } }
+    };
+    pushState(id);
+    pushFrame(id);
+
+    ws.on('message', async (raw: any, isBinary: boolean) => {
+      if (isBinary) return;
+      let msg: any;
+      try { msg = JSON.parse(String(raw)); } catch { return; }
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'subscribe') {
+        const prevId = id;
+        id = String(msg.id || 'main');
+        if (prevId !== id) void browserManager.setViewer(prevId, false);
+        (ws as any).browserId = id;
+        void browserManager.setViewer(id, true);
+        pushState(id);
+        pushFrame(id);
+        return;
+      }
+      if (msg.type === 'ping') { sendJson({ type: 'pong' }); return; }
+      if (msg.type === 'input') {
+        try { await browserManager.input(id, msg.event || {}); }
+        catch (e: any) { sendJson({ type: 'browser_error', id, error: e?.message || String(e) }); }
+        return;
+      }
+      if (msg.type === 'viewport' && msg.apply) {
+        try { await browserManager.resize(id, { width: msg.width, height: msg.height }); }
+        catch { /* 忽略 */ }
+      }
+    });
+
+    ws.on('close', () => { try { (ws as any).browserId = null; } catch { /* 忽略 */ } void browserManager.setViewer(id, false); });
+    ws.on('error', () => { try { (ws as any).browserId = null; } catch { /* 忽略 */ } void browserManager.setViewer(id, false); });
+  });
+
+  // 浏览器画面/状态 -> 只推给订阅了该标签的连接(多标签、多浏览器互不干扰)
+  const onBrowserFrame = (f: { id: string; data: Buffer }) => {
+    for (const ws of browserWss.clients) {
+      if ((ws as any).browserId === f.id && ws.readyState === 1) {
+        try { ws.send(f.data, { binary: true } as any); } catch { /* 忽略 */ }
+      }
+    }
+  };
+  const onBrowserState = (st: any) => {
+    const payload = JSON.stringify({ type: 'browser_state', ...st });
+    for (const ws of browserWss.clients) {
+      if (((ws as any).browserId === st?.id || st?.id === '*') && ws.readyState === 1) {
+        try { ws.send(payload); } catch { /* 忽略 */ }
+      }
+    }
+  };
+  const onBrowserClosed = (o: { id: string }) => {
+    const payload = JSON.stringify({ type: 'browser_state', id: o.id, closed: true });
+    for (const ws of browserWss.clients) {
+      if ((ws as any).browserId === o.id && ws.readyState === 1) {
+        try { ws.send(payload); } catch { /* 忽略 */ }
+      }
+    }
+  };
+  browserManager.on('frame', onBrowserFrame);
+  browserManager.on('state', onBrowserState);
+  browserManager.on('closed', onBrowserClosed);
+
   const HEARTBEAT_MS = 30_000;
   const heartbeat = (server: WebSocketServer) => {
     for (const ws of server.clients) {
@@ -301,8 +390,13 @@ export function setupWs(httpServer: Server) {
       try { ws.ping(); } catch {}
     }
   };
-  const heartbeatTimer = setInterval(() => { heartbeat(wss); heartbeat(termWss); }, HEARTBEAT_MS);
-  httpServer.on('close', () => clearInterval(heartbeatTimer));
+  const heartbeatTimer = setInterval(() => { heartbeat(wss); heartbeat(termWss); heartbeat(browserWss); }, HEARTBEAT_MS);
+  httpServer.on('close', () => {
+    clearInterval(heartbeatTimer);
+    browserManager.off('frame', onBrowserFrame);
+    browserManager.off('state', onBrowserState);
+    browserManager.off('closed', onBrowserClosed);
+  });
 
-  return { wss, termWss };
+  return { wss, termWss, browserWss };
 }

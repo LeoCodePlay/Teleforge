@@ -3,20 +3,23 @@
 import React from 'react';
 import './BottomBar.scss';
 
-export type MobileView = 'agent' | 'console' | 'files';
+export type MobileView = 'agent' | 'console' | 'files' | 'browser';
 
 interface BottomBarProps {
   view: MobileView;
   /** 打开的文件标签数(📁 徽标) */
   fileTabCount: number;
+  /** 已打开的浏览器预览标签数(🌐 徽标) */
+  browserTabCount: number;
   onSelect: (v: MobileView) => void;
 }
 
-export default function BottomBar({ view, fileTabCount, onSelect }: BottomBarProps) {
+export default function BottomBar({ view, fileTabCount, browserTabCount, onSelect }: BottomBarProps) {
   const ITEMS: { v: MobileView; icon: string; label: string }[] = [
     { v: 'agent', icon: '💬', label: 'AI助手' },
     { v: 'console', icon: '⌨️', label: '终端' },
     { v: 'files', icon: '📁', label: '文件' },
+    { v: 'browser', icon: '🌐', label: '预览' },
   ];
   return (
     <nav className="bottom-bar" aria-label="主导航">
@@ -27,6 +30,7 @@ export default function BottomBar({ view, fileTabCount, onSelect }: BottomBarPro
           <span className="bb-ico">
             {it.icon}
             {it.v === 'files' && fileTabCount > 0 && <span className="bb-badge">{fileTabCount}</span>}
+            {it.v === 'browser' && browserTabCount > 0 && <span className="bb-badge">{browserTabCount}</span>}
           </span>
           <span className="bb-label">{it.label}</span>
         </button>

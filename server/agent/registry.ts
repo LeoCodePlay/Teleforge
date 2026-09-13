@@ -15,6 +15,20 @@ import { toolSettings } from './tool-settings.ts';
 // 注册表级兜底超时(工具自身可声明更短的 timeoutMs)
 const DEFAULT_TIMEOUT_MS = 660_000;
 
+/**
+ * 工具访问类别(权限守卫判定依据,语义与执行面见 permission.ts):
+ * - meta:    宿主协调工具(任务清单/技能加载/向用户提问),任何模式都不拦
+ * - read:    只读探测(读文件/列目录/搜索/环境信息/web 搜索),任何模式都不拦
+ * - write:   改变外部状态(写文件/编辑/删除/建目录/驱动浏览器),plan 模式拒绝,其余按模式审批
+ * - command: 命令执行(能力上无边界),plan 模式拒绝,auto-edit 下仍需审批
+ * 定义在 registry 侧是因为它是**工具自身的属性**(由工具声明),避免 permission → registry
+ * → permission 的循环依赖;permission.ts 再导出该类型供既有调用方使用。
+ */
+export type ToolAccess = 'meta' | 'read' | 'write' | 'command';
+
+/** 工具未声明 access 时的兜底类别:fail-closed,按最需要审批的一档处理 */
+export const DEFAULT_TOOL_ACCESS: ToolAccess = 'write';
+
 export interface ToolDef {
   name: string;
   description?: string;
@@ -34,6 +48,13 @@ export interface ToolDef {
    * 处理(fail-closed,与 mutating 同样独占)。
    */
   concurrencySafe?: boolean;
+  /**
+   * 访问类别(权限守卫判定依据,见 permission.ts 的 ToolAccess)。
+   * 必须由工具**自己**声明:未声明一律按 'write' 处理(fail-closed)——
+   * 新增写类工具忘记登记时会落到"需要审批"而不是"静默放行"。
+   * 这与同文件 concurrencySafe 的 fail-closed 方向一致(两者此前方向相反)。
+   */
+  access?: ToolAccess;
   [k: string]: any;
 }
 

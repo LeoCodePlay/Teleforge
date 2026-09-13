@@ -44,6 +44,7 @@ Teleforge is a self-hosted, browser-based AI coding tool that spans **remote and
   - `write_file` · `edit_file` (precise text replacement)
   - `run_command` (**streaming output**, timeout, 100k-char truncation: head 60k + tail 40k)
   - `create_directory` / `delete_path` (workspace-confined) · `get_workspace_info` · `search_code` (rg/grep)
+  - `browser_*` — drive the built-in browser preview page (open / snapshot / click / type / wait / screenshot / eval); see **Browser Preview** below
 - **Tool-limited loop** — up to 500 iterations per round; **parallel tool calls** — read-only tools run concurrently in a bounded pool while mutating tools (write/edit/delete) run exclusively to prevent races, with call-issuing order strictly preserved; each tool can be **enabled/disabled persistently** (disabled tools are invisible to the model and rejected by the execution guard).
 - **Long-context management** (layered defenses so long tasks never stall):
   - **Auto-compaction** — live token estimation against the model's `contextWindow`; past the threshold (80% of usable window), **early turns are compressed into a summary** and the run continues. Ranges are chosen positionally and aligned to tool-call pair boundaries — **a deep tool task triggered by a single message can be compacted mid-flight**. If summary generation fails, it degrades to trimming (keeping the original task anchor) so the conversation never breaks.
@@ -60,6 +61,21 @@ Teleforge is a self-hosted, browser-based AI coding tool that spans **remote and
 
 - **Built-in terminal** — a real PTY interactive shell (`/ws/term`, full-duplex).
 - **Command console** — run commands manually with live output & exit code; stop with「⏹」or **Ctrl+C** (SIGINT first, hard-kill fallback).
+
+**Browser Preview (AI-controllable)**
+
+- **One-click preview of a project address** — when the AI starts a dev server and its output prints something like `http://localhost:5173`, a clickable 「🌐 Preview」 chip appears in the top bar; local addresses in chat replies are clickable too. Both open in a **Browser Preview tab** that sits next to the AI Assistant / Terminal / file tabs (draggable, closable, restored after reload).
+- **A real browser picture** — the server drives a real Chromium through Playwright and streams the viewport to the front end as binary JPEG frames via CDP screencast; you can **click, scroll and type (IME included)** in the preview exactly as in a browser (frame streaming stops automatically while nobody is watching).
+- **The AI drives the very same page** — `browser_open / browser_snapshot / browser_click / browser_type / browser_press / browser_scroll / browser_wait / browser_screenshot / browser_eval / browser_close` let the agent open a page, click/type by the `ref` from a snapshot, wait for conditions, take structured page snapshots and full-page screenshots. What you see is what the AI operates (one shared browser session).
+- **Automatic tunnel for remote projects** — with a remote workspace, `localhost:<port>` is forwarded over the existing SSH connection to a local loopback port before previewing (the tunnel is shown in the top bar); in local mode the address is reached directly. Use the `tunnel` argument to force either behavior.
+- **Dependency & browser source** — only `playwright-core` is added (no bundled browser download). Launch order is system Chrome → system Edge → Playwright's bundled Chromium; override with `BROWSER_PREVIEW_EXECUTABLE` (path) or `BROWSER_PREVIEW_CHANNEL=chrome|msedge`, and set `BROWSER_PREVIEW_HEADLESS=0` for a headed browser while debugging. A clear message is shown when no browser can be started.
+
+- **Mobile** — a 「🌐 Preview」 entry in the phone bottom bar (with a count badge). Inside the preview a **finger drag scrolls the page and a tap clicks** (no "drag does nothing" like a mouse-only viewer); the `⌨` button in the toolbar raises the soft keyboard on demand, so tapping the page does not pop it by accident; the address bar uses a 16px font so iOS Safari will not zoom the page on focus.
+
+- **Manual entry point** — the 「＋」 at the right of the tab strip (same place as a browser's "new tab") or the phone's 「🌐 Preview」 bottom-bar item opens a preview tab any time; the empty panel accepts a typed/pasted address and lists the **just-detected address plus recent ones** for one-click open.
+- **Full-bleed & adaptive** — the preview container's size is synced to the remote page's viewport in real time (switching tabs, resizing the window and rotating the screen all re-apply it), so a page **fills the whole tab area by default** with no black bars and no scaling. Only when the container is smaller than the server's minimum viewport (240px) does it fall back to proportional scaling to avoid stretching.
+
+- **Keyboard & clipboard** — click the page and just type (desktop); on phones press the toolbar `⌨` to raise the soft keyboard, and tapping the page afterwards no longer dismisses it. `Ctrl/Cmd+C / V / X / A` are bridged both ways: after drag-selecting text on the remote page, `Ctrl+C` copies the **remote selection into your clipboard**, while `Ctrl+V` types **your clipboard into the remote page**. The preview is a JPEG frame with nothing selectable locally, so copy/paste always goes through the remote page; phones have no shortcuts, so long-press the page (right-click on desktop) for a 复制 / 粘贴 / 剪切 / 全选 menu.
 
 **File Transfer**
 
@@ -150,7 +166,9 @@ Node backend (TypeScript, runs directly on Node 22.18+)
 │   │   └── rpc/            #   WS RPC message router (router.ts aggregates domains, incl. ref.ts @-reference candidates)
 │   ├── core/               # infrastructure
 │   │   ├── ssh-manager.ts  #   SSH connection pool: keepalive / reconnect / SFTP / exec
-│   │   ├── ws.ts           #   WebSocket layer (/ws RPC + /ws/term real PTY)
+│   │   ├── browser-manager.ts #   Browser preview core (Playwright + CDP screencast / input / snapshot)
+│   │   ├── port-tunnel.ts  #   Remote port → local loopback SSH tunnel
+│   │   ├── ws.ts           #   WebSocket layer (/ws RPC + /ws/term real PTY + /ws/browser preview frames)
 │   │   ├── local-fs.ts     #   local filesystem adapter (SFTP-aligned API)
 │   │   ├── local-exec.ts   #   local command execution
 │   │   └── transfer.ts     #   local ↔ remote transfer (per-item progress)
@@ -226,7 +244,7 @@ Covers: SSH connect → platform detection → list directory → read file → 
 
 ## Roadmap
 
-Implemented: built-in terminal (real PTY), multi-server management, upload/download, concurrent sessions, automatic long-task compaction, code editor & media preview, mobile support.
+Implemented: built-in terminal (real PTY), multi-server management, upload/download, concurrent sessions, automatic long-task compaction, code editor & media preview, browser preview (AI-controllable), mobile support.
 
 Planned:
 

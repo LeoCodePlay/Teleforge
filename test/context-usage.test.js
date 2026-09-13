@@ -13,7 +13,7 @@ import { join } from 'node:path';
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-ctxusage-'));
 
 const { Agent } = await import('../server/agent/agent.ts');
-const { measureMessages } = await import('../server/agent/compact.ts');
+const { measureMessages, measureEnvelope } = await import('../server/agent/compact.ts');
 const { modelFaceMessages, estimateMessages, estimateBreakdown } = await import('../web/src/utils/tokens.ts');
 const store = await import('../server/store/session-store.ts');
 
@@ -79,7 +79,13 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   }
   store.saveEvents(sid, session.events);
 
-  const before = measureMessages([{ role: 'system', content: 'sys' }, ...session.deriveMessages({})]);
+  // 口径 = measureEnvelope(system + 工具 schema + 历史),与自动压缩的水位判定同源。
+  // 历史教训:此处曾只算 [system, ...history](不含工具 schema),而压缩阈值含,
+  // 同一会话两个数字能差数千 token(本项目 35 个工具的 schema 约占 5k token),
+  // 仪表盘百分比与真实触发点不符 —— 所以期望值也必须按同一口径构造。
+  const toolSchemas = [{ type: 'function', function: { name: 'fake_tool', description: '占位', parameters: { type: 'object', properties: {} } } }];
+  const envBefore = measureEnvelope('sys', toolSchemas, session.deriveMessages({}));
+  const before = envBefore.total;
   const r = await a.compactNow(sid);
   check('compactNow 报告已压缩', r.compacted === true && r.dropCount > 0, `got ${JSON.stringify(r)}`);
   check('压缩后广播 history_compacted', emitted.some((e) => e.payload?.event === 'history_compacted' && e.payload?.sid === sid));
@@ -89,10 +95,23 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   if (cu) {
     check('context_usage 的 actual 为空(无真实请求,前端按预估显示)', cu.payload.actual === null);
     check('context_usage 的窗口为模型窗口', cu.payload.window === 8000, `got ${cu.payload.window}`);
-    const expect = measureMessages([{ role: 'system', content: 'sys' }, ...session.deriveMessages({})]);
-    check('context_usage 预估 = 压缩后的模型面(含 system)', cu.payload.estimated === expect,
-      `got ${cu.payload.estimated} expect ${expect}`);
-    check('压缩后水位明显下降', cu.payload.estimated < before / 2, `before=${before} after=${cu.payload.estimated}`);
+    // 服务端按真实注册表重建工具 schema,无法在测试里逐字节复现:断言"分项自洽"——
+    // system/tools/历史 三项之和必须等于 estimated(这是防口径漂移的关键不变量)
+    const p = cu.payload;
+    const sum = p.systemTokens + p.toolsTokens + p.messageTokens;
+    check('context_usage 三项分项之和 = estimated(口径自洽,无重复/漏计)',
+      p.estimated === sum, `estimated=${p.estimated} sum=${sum} (${JSON.stringify({ s: p.systemTokens, t: p.toolsTokens, m: p.messageTokens })}`);
+    check('context_usage 分项均为非负数', p.systemTokens > 0 && p.toolsTokens >= 0 && p.messageTokens > 0,
+      `got ${JSON.stringify({ s: p.systemTokens, t: p.toolsTokens, m: p.messageTokens })}`);
+    // 历史分项 = 压缩后的模型面(不含 system / 工具)。
+    // 注意:compactNow 广播时用真实 _systemPrompt(不是测试里替换的 'sys'),所以只能
+    // 断言历史分项本身 = measureMessages(压缩后的 deriveMessages)
+    const faceTokens = measureMessages(session.deriveMessages({}));
+    check('历史分项 = 压缩后的模型面消息', p.messageTokens === faceTokens,
+      `got ${p.messageTokens} expect ${faceTokens}`);
+    // 压缩只压缩历史;system 与工具 schema 是常量,所以水位下降体现在"历史分项大幅下降"
+    check('压缩后历史水位明显下降', p.messageTokens < before / 2,
+      `before=${before} afterHistory=${p.messageTokens} estimated=${p.estimated}`);
   }
 }
 

@@ -180,3 +180,94 @@ export function IconTrashOutline14(props: IconProps) {
     </svg>
   );
 }
+
+// ---- 内置浏览器预览的「浏览器外壳」图标(线性,stroke=currentColor,16 号) ----
+// 预览工具条原来用 ← → ⟳ ↗ ⌨ ↵ 这类文字符号:字形随系统字体漂移、粗细不一。
+// 统一成与图标集同源的内联 SVG,视觉与其他面板一致。
+const LINE = (props: IconProps) => ({
+  width: props.size, height: props.size, className: props.className,
+  viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor',
+  strokeWidth: 1.6, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const
+});
+
+export function IconArrowLeft16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M9.75 3.5 5.25 8l4.5 4.5" />
+    </svg>
+  );
+}
+
+export function IconArrowRight16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M6.25 3.5 10.75 8l-4.5 4.5" />
+    </svg>
+  );
+}
+
+export function IconReload16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M13.2 8a5.2 5.2 0 1 1-1.55-3.7" />
+      <path d="M13.4 2.7v3.1h-3.1" />
+    </svg>
+  );
+}
+
+export function IconExternal16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M9.6 2.6h3.8v3.8" />
+      <path d="M13.4 2.6 8 8" />
+      <path d="M12.2 9.6v2.4a1.4 1.4 0 0 1-1.4 1.4H3.4A1.4 1.4 0 0 1 2 12V4.6a1.4 1.4 0 0 1 1.4-1.4h2.4" />
+    </svg>
+  );
+}
+
+export function IconGlobe16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8" r="5.8" />
+      <path d="M2.4 8h11.2" />
+      <path d="M8 2.2c1.6 1.7 1.6 9.9 0 11.6" />
+      <path d="M8 2.2c-1.6 1.7-1.6 9.9 0 11.6" />
+    </svg>
+  );
+}
+
+export function IconLock16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="3.4" y="7" width="9.2" height="6.6" rx="1.6" />
+      <path d="M5.6 7V5.4a2.4 2.4 0 0 1 4.8 0V7" />
+    </svg>
+  );
+}
+
+export function IconKeyboard16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="1.6" y="4" width="12.8" height="8" rx="1.6" />
+      <path d="M4.2 7h.02M6.6 7h.02M9 7h.02M11.4 7h.02" />
+      <path d="M4.8 9.6h6.4" />
+    </svg>
+  );
+}
+
+export function IconCopy16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="5.6" y="5.6" width="8" height="8" rx="1.6" />
+      <path d="M10.6 5.6V4a1.6 1.6 0 0 0-1.6-1.6H4A1.6 1.6 0 0 0 2.4 4v5a1.6 1.6 0 0 0 1.6 1.6h1.6" />
+    </svg>
+  );
+}
+
+export function IconCheck16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M3.2 8.4 6.4 11.6l6.4-7.2" />
+    </svg>
+  );
+}

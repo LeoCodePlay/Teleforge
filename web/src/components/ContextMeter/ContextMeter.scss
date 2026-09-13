@@ -78,4 +78,4 @@
 .ctx-seg-fill.tool { background: var(--amber-bright); box-shadow: 0 0 6px var(--warn-border); }
 .ctx-seg-fill.conv { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
 .ctx-seg-nums { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
-.ctx-pop-hint { font-size: 10.5px; color: var(--muted); border-top: 1px solid var(--line-soft); padding-top: 6px; }
+/* 注:弹窗只放数值与分项,不放说明性文字,故没有 .ctx-pop-hint 之类的提示行样式 */

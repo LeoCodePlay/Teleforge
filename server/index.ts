@@ -7,6 +7,8 @@ import Fastify from 'fastify';
 import { PORT, HOST } from './config.ts';
 import { setupWs } from './core/ws.ts';
 import { sshManager as ssh } from './core/ssh-manager.ts';
+import { browserManager } from './core/browser-manager.ts';
+import { closeTunnels } from './core/port-tunnel.ts';
 import registerBasic from './api/http/basic.ts';
 import registerProviders from './api/http/providers.ts';
 import registerUiState from './api/http/ui-state.ts';
@@ -19,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '../web/dist');
 
 export async function startApp({ port = PORT, host = HOST, quiet = false } = {}) {
-  // serverFactory 包住自建 http.Server,供 setupWs 在 app.server 上挂 /ws、/ws/term 的 upgrade 路由
+  // serverFactory 包住自建 http.Server,供 setupWs 在 app.server 上挂 /ws、/ws/term、/ws/browser 的 upgrade 路由
   const app = Fastify({
     serverFactory: (handler) => http.createServer(handler),
     bodyLimit: 16 * 1024 * 1024, // 与原先 express.json({ limit: '16mb' }) 一致
@@ -34,7 +36,7 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
   await app.register(registerAttachments);
   await app.register(registerStatic); // 最后注册:静态通配不能影响 API 路由
 
-  const { wss, termWss } = setupWs(app.server);
+  const { wss, termWss, browserWss } = setupWs(app.server);
 
   await app.listen({ port, host });
   if (!quiet) {
@@ -46,18 +48,22 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
     }
     console.log('==============================================');
   }
-  return { app, server: app.server, wss, termWss, port };
+  return { app, server: app.server, wss, termWss, browserWss, port };
 }
 
 // 直接运行时启动
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  startApp().then(({ wss, termWss }) => {
+  startApp().then(({ wss, termWss, browserWss }) => {
     const shutdown = () => {
       console.log('\n正在退出…');
       try { wss.close(); } catch {}
       try { termWss.close(); } catch {}
-      ssh.disconnectAll().finally(() => process.exit(0));
+      try { browserWss.close(); } catch {}
+      closeTunnels();
+      browserManager.closeAll().catch(() => {}).finally(() => {
+        ssh.disconnectAll().finally(() => process.exit(0));
+      });
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);

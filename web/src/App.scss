@@ -37,6 +37,21 @@
   background: var(--warn-bg);
 }
 .update-chip:hover:not(:disabled) { color: var(--amber); background: var(--warn-bg); border-color: var(--warn-border); }
+/* 「检测到项目地址」提示 chip:命令输出出现 localhost:端口 / AI 打开预览时顶栏出现,点击即在预览标签打开 */
+.preview-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  color: var(--accent, #7aa2f7); border-color: var(--accent-border);
+  background: var(--accent-fill-soft);
+}
+.preview-chip:hover:not(:disabled) { color: var(--text); border-color: var(--accent-border); }
+.preview-chip-x { font-size: 10px; opacity: .6; }
+.preview-chip-x:hover { opacity: 1; }
+/* 手机端:顶栏空间紧张,预览 chip 限宽省略,✕ 收起(点 chip 本身就会打开并消失) */
+@media (max-width: 767px) {
+  .preview-chip { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; display: block; padding: 4px 8px; }
+  .preview-chip-x { display: none; }
+}
 .edge-toggle:hover:not(:disabled) {
   color: var(--text); background: var(--glass-bg-hover);
   border-color: var(--glass-border);
@@ -127,6 +142,19 @@ body.splitting * { cursor: row-resize !important; }
    拇指绝对定位悬浮于容器底缘,不占布局空间,滚动时才出现 */
 .tabstrip-scroll .ob-thumb.ob-h { height: 3px; bottom: 0; }
 .tabstrip-scroll .ob-thumb.ob-h:hover { height: 4px; }
+/* 「＋」手动打开浏览器预览:与浏览器「新建标签」同位置,固定在滚动段右侧,不随标签滚动
+   同样要清掉全局 button 的 padding/阴影(border-box 下会吃掉内容盒) */
+.tabstrip-add {
+  flex: none; width: 30px; height: 32px; padding: 0; box-shadow: none; margin-left: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-bottom: none;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 16px; line-height: 1; user-select: none;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.tabstrip-add:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--line-soft); }
+.tabstrip-add:active { transform: translateY(1px); }
 .btab {
   display: flex; align-items: center; gap: 6px;
   flex: 0 0 auto; height: 32px; min-width: 0; max-width: 200px;

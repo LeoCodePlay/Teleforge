@@ -1,6 +1,8 @@
 /* ---- FilesChangedCard 独有样式:AI 回复下方的「N 个文件已更改」长条卡片 ----
    折叠态 = 整行胶囊(圆角/浅背景/细边框),hover 轻微提亮;
-   展开列表以等宽间距排布:文件名(固定) + 路径(弹性省略) + 类型标签 + 行数(右对齐)。 */
+   展开列表以等宽间距排布:文件名(固定) + 路径(弹性省略) + 类型标签 + 行数(右对齐)。
+   可打开的条目整行 hover 高亮 + 手型光标 + 文件名下划线,点击在文件标签页查看
+   (远程/本机各有读取通道);已删除的条目文件不存在,降透明度灰显且不可点击。 */
 .fcc { display: flex; flex-direction: column; min-width: 0; margin: 6px 0 2px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg-soft); overflow: hidden; }
 .fcc-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; transition: background 0.15s ease; }
 .fcc-head:hover { background: var(--hover-bg-hard); }
@@ -10,8 +12,14 @@
 .fcc-chevron { flex: none; color: var(--muted); transition: transform 0.18s ease; }
 .fcc-chevron.flip { transform: rotate(180deg); }
 .fcc-list { list-style: none; margin: 0; padding: 4px 0 8px; border-top: 1px solid var(--line-soft); }
-.fcc-item { display: flex; align-items: baseline; gap: 8px; padding: 4px 12px; font-size: 12.5px; line-height: 18px; white-space: nowrap; }
-.fcc-item:hover { background: var(--hover-bg-hard); }
+.fcc-item { display: block; }
+/* 行布局:按钮与纯展示行共用(fcc-row),两者视觉一致 */
+.fcc-row { display: flex; align-items: baseline; gap: 8px; width: 100%; box-sizing: border-box; padding: 4px 12px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12.5px; line-height: 18px; text-align: left; white-space: nowrap; }
+.fcc-item.openable .fcc-row { cursor: pointer; }
+.fcc-item.openable:hover .fcc-row { background: var(--hover-bg-hard); }
+.fcc-item.openable:hover .fcc-name { text-decoration: underline; text-decoration-color: var(--placeholder); text-underline-offset: 3px; }
+.fcc-item.openable .fcc-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fcc-item.deleted .fcc-row { opacity: 0.5; }
 .fcc-name { flex: none; max-width: 42%; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .fcc-path { flex: 1; min-width: 0; color: var(--muted); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .fcc-kind { flex: none; padding: 0 7px; border-radius: var(--r-pill); font-size: 11px; line-height: 16px; background: var(--fill-1-lo); color: var(--muted); }

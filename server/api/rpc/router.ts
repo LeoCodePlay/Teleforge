@@ -9,6 +9,7 @@ import { registerTransfer } from './transfer.ts';
 import { registerExec } from './exec.ts';
 import { registerAskUser } from './ask-user.ts';
 import { registerRef } from './ref.ts';
+import { registerBrowser } from './browser.ts';
 
 export interface RpcCtx {
   send: (payload: any) => void;
@@ -41,6 +42,7 @@ export function createRpcRouter(ctx: RpcRouterCtx) {
   registerConfig(rpc); registerLocal(rpc); registerRemote(rpc);
   registerTransfer(rpc); registerExec(rpc); registerAskUser(rpc);
   registerRef(rpc);
+  registerBrowser(rpc);
   return {
     // 多浏览器可同时在线:
     // - reply(带 reqId 的最终应答)与带 reqId 的进度事件(delete_progress/transfer_progress 等)

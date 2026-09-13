@@ -5,6 +5,7 @@ import DOMPurify from 'dompurify';
 import { api } from '../../api';
 import { useLlm } from '../../context/llm-context';
 import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, FileChangeItem } from '../../types';
+import { rollbackPartialSegments } from '../../utils/rollbackPartial';
 import { NO_WORKSPACE, WHOLE_LABEL } from '../../types';
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
@@ -26,6 +27,7 @@ import { CompactionRow } from './CompactionRow';
 import { FilesChangedCard } from './FilesChangedCard';
 import { CommandCard } from './CommandCard';
 import { matchSlashCommand } from '../../utils/slashCommand';
+import { mergeTrailingCommandCards } from '../../utils/commandCard';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
 import { IconChevronDownOutline14 } from '../icons/icons';
@@ -278,10 +280,15 @@ function segText(msg: ChatMessage) {
   return (msg.segments || []).filter((s) => s.kind === 'text').reduce((a, s) => a + (s.text || ''), '');
 }
 
+// 注:本步半成品的回滚规则见 utils/rollbackPartial(纯函数,便于单测覆盖)。
+
 // ---- 文件变更汇总:从消息的工具调用 meta 聚合「N 个文件已更改」卡片数据 ----
 // 文件类工具(write/edit/delete × 远程/本地)在 tool_result 附加 card='diff' 的改动卡
 // (path/kind/addLines/delLines);同文件多次操作按路径合并增删行数,kind 删除优先。
 const FILE_CHANGE_KINDS = new Set(['create', 'write', 'edit', 'delete']);
+// 本机文件变更工具(远程侧对应 write_file/edit_file/delete_path):
+// 点击卡片条目打开文件时据此选择「本机文件查看」通道(FileViewer 的 local: 前缀),与文件管理器的打开方式一致
+const LOCAL_FILE_TOOLS = new Set(['write_local_file', 'edit_local_file', 'delete_local_path']);
 function collectFileChanges(msg: ChatMessage): FileChangeItem[] {
   const byPath = new Map<string, FileChangeItem>();
   for (const seg of msg.segments || []) {
@@ -292,8 +299,11 @@ function collectFileChanges(msg: ChatMessage): FileChangeItem[] {
       const kind: FileChangeItem['kind'] = FILE_CHANGE_KINDS.has(m.kind ?? '') ? (m.kind as FileChangeItem['kind']) : 'edit';
       const add = typeof m.addLines === 'number' && Number.isFinite(m.addLines) ? m.addLines : 0;
       const del = typeof m.delLines === 'number' && Number.isFinite(m.delLines) ? m.delLines : null;
-      const cur = byPath.get(m.path);
-      if (!cur) { byPath.set(m.path, { path: m.path, kind, addLines: add, delLines: del }); continue; }
+      const local = LOCAL_FILE_TOOLS.has(t.tool);
+      // 同一路径字符串可能来自远程/本机两侧,按来源分桶避免错误合并;展示路径仍用 m.path
+      const key = (local ? 'local:' : 'remote:') + m.path;
+      const cur = byPath.get(key);
+      if (!cur) { byPath.set(key, { path: m.path, kind, addLines: add, delLines: del, local }); continue; }
       cur.addLines += add;
       cur.delLines = del !== null ? (cur.delLines ?? 0) + del : cur.delLines;
       if (kind === 'delete') cur.kind = 'delete'; // 删除是文件的最终状态
@@ -451,13 +461,17 @@ interface ChatPanelProps {
   onSessionTouched?: (sid: string | null) => void;
   /** 移动端(手机)布局:Enter 改为换行(发送只点按钮),提示文案同步切换 */
   compact?: boolean;
+  /** 打开远程文件(复用 App 的文件标签页);「N 个文件已更改」卡片条目点击时调用 */
+  onOpenFile?: (path: string) => void;
+  /** 打开本机文件(内部自动加 local: 前缀,走本机读取通道) */
+  onOpenLocalFile?: (path: string) => void;
 }
 
 // 模型请求失败进入重试的状态行(照搬 deepseek-harness 的 ModelRetryItem):
 // 单行折叠行,不占大块警示横幅——收起时只显示「等待/已重试模型请求(N/M) · Xs」实时倒计时,
 // 展开可看重试延迟与失败原因。等待中文字带扫光动画,同一失败重试原地更新不堆叠。
 function RetryRow({ data }: { data: NonNullable<ChatMessage['retry']> }) {
-  const { retry, maxRetries, delayMs, error, state } = data;
+  const { retry, maxRetries, delayMs, error, state, discard } = data;
   const scheduledSeconds = Math.max(1, Math.ceil(delayMs / 1000));
   const [seconds, setSeconds] = useState(scheduledSeconds);
 
@@ -485,6 +499,9 @@ function RetryRow({ data }: { data: NonNullable<ChatMessage['retry']> }) {
       <div className="retry-details">
         <div><span className="retry-detail-label">重试延迟：</span>{delayMs}ms</div>
         <div><span className="retry-detail-label">失败原因：</span>{error}</div>
+        {discard ? (
+          <div><span className="retry-detail-label">已回滚：</span>这一步已输出的半成品作废,重试后重新生成</div>
+        ) : null}
       </div>
     </details>
   );
@@ -503,7 +520,7 @@ function markRetryStarted(msgs: ChatMessage[]): ChatMessage[] {
   return msgs;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, onSessionTouched, compact = false }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, onSessionTouched, onOpenFile, onOpenLocalFile, compact = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -658,7 +675,21 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 当前会话是否有生图请求在途:把"正在生成图片"并入对话流末尾那条统一的运行状态行
   // (不再在气泡内单独占一行)。image_job 置位,image_done / 轮次收尾时清位回到
   // 「Agent 正在运行…」。生图是非流式的数十秒等待,这行让"仍在跑"始终可见。
-  const [imgJob, setImgJob] = useState<{ mode: 't2i' | 'i2i'; refs: number } | null>(null);
+  // 按会话记账:状态行只反映「当前活跃会话」的生图进度——切到别的会话必须换回该会话
+  // 自己的文案(通常是「Agent 正在运行…」),切回仍在生图的会话时再恢复「正在生成图片」。
+  const imgJobsRef = useRef(new Map<string, { mode: 't2i' | 'i2i'; refs: number }>());
+  // owner = 这条在途生图标记归属的会话 id(null 表示事件未带 sid):渲染时据此挡掉
+  // 切会话那一帧的旧文案(切会话的复位在 effect 里,晚于提交,会先画一帧)
+  const [imgJob, setImgJob] = useState<{ owner: string | null; mode: 't2i' | 'i2i'; refs: number } | null>(null);
+  // 写入 targetSid 的在途生图标记(null 表示销账);仅当目标会话正是当前查看的会话时,
+  // 才同步到 imgJob 状态驱动状态行,后台会话只改记账表、不改变屏幕上的文案。
+  const setSessionImgJob = (targetSid: string | null | undefined, job: { mode: 't2i' | 'i2i'; refs: number } | null) => {
+    if (targetSid && targetSid !== NEW_SESSION_ID) {
+      if (job) imgJobsRef.current.set(targetSid, job);
+      else imgJobsRef.current.delete(targetSid);
+    }
+    if (!targetSid || targetSid === activeRef.current) setImgJob(job ? { owner: targetSid ?? null, ...job } : null);
+  };
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const attSeqRef = useRef(0); // 附件本地 key 自增
@@ -795,17 +826,25 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         histCache.current.delete(activeRef.current ?? ''); // 清空后旧缓存失效,下次切换重新拉取
         setMessages([]);
         setQueue([]); // 历史清空:待执行队列一并复位
+        setSessionImgJob(activeRef.current, null); // 历史清空:在途生图标记一并销账
         setTodos([]); // 任务计划一并复位(日志已清空,残留计划会一直显示在面板上)
       }),
       api.on('agent', (m: any) => {
+        // 在途生图标记先按会话记账(后台会话也要处理):image_done 若只认活跃会话,
+        // 切走期间完成的生图会在记账表里留成"在途",切回时状态行停在过期的「正在生成图片」
         // 多会话并行:只处理当前活跃会话的事件,其他会话(后台运行中)的流不进入本视图;
         // 新会话草稿态(sid 为占位符或尚未定向)无真实会话,丢弃所有带 sid 的事件,避免串入旧会话流
+        if (m.event === 'image_job' || m.event === 'image_done') {
+          setSessionImgJob(m.sid || activeRef.current, m.event === 'image_job'
+            ? { mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0 }
+            : null);
+        }
         if (m.sid && (activeRef.current == null || activeRef.current === NEW_SESSION_ID || m.sid !== activeRef.current)) return;
         switch (m.event) {
           case 'status':
             setAgentState(m.status === 'running' ? 'working' : 'idle');
             if (m.status !== 'running') {
-              setImgJob(null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
+              setSessionImgJob(activeRef.current, null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
               push((msgs) => { const c = dropStaleCompaction([...msgs]); const l = c[c.length - 1]; if (l?.streaming) l.streaming = false;
               return c; });
             }
@@ -824,17 +863,22 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 计划拼进本轮指令续推;模型若另写新计划,后续 todo_update 会整表替换。
             setTodos((prev) => (prev.some((t) => t.status !== 'completed') ? prev : []));
             setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
-            setImgJob(null); // 新一轮开始:上一轮的在途生图标记一律作废
+            setSessionImgJob(activeRef.current, null); // 新一轮开始:上一轮的在途生图标记一律作废
             push((msgs) => [...msgs, { role: 'user', content: m.text, attachments: Array.isArray(m.attachments) ? m.attachments : undefined, time: Date.now(), forkTail: Math.max(0, forkTurnRef.current - 1) }]);
             push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: Math.max(0, forkTurnRef.current - 1) }]);
             break;
           case 'context_usage':
-            // 服务端每步请求后广播的上下文用量(实际/预估/窗口):仪表盘权威口径
+            // 服务端每步请求后广播的上下文用量(实际/预估/窗口):仪表盘权威口径。
+            // systemTokens/toolsTokens/messageTokens 是服务端给出的分项(与压缩阈值同源),
+            // 旧版服务端不发这三项,前端回退到本地估算分项(见 ContextMeter)。
             setCtxUsage({
               estimated: Number(m.estimated) || 0,
               actual: typeof m.actual === 'number' ? m.actual : null,
               output: typeof m.output === 'number' ? m.output : null,
-              window: Number(m.window) || 0
+              window: Number(m.window) || 0,
+              systemTokens: typeof m.systemTokens === 'number' ? m.systemTokens : undefined,
+              toolsTokens: typeof m.toolsTokens === 'number' ? m.toolsTokens : undefined,
+              messageTokens: typeof m.messageTokens === 'number' ? m.messageTokens : undefined
             });
             break;
           case 'todo_update':
@@ -850,7 +894,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 每次迭代对应一条 assistant/message turn;truncate 重开会重复相同 iter,去重
             if (m.iter !== lastIterRef.current) {
               forkTurnRef.current += 1; lastIterRef.current = m.iter;
-              push((msgs) => { const c = [...msgs]; const l = c[c.length - 1]; if (l?.role === 'assistant') l.forkTail = forkTurnRef.current - 1; return c; });
+              push((msgs) => {
+                const c = [...msgs];
+                const l = c[c.length - 1];
+                if (l?.role === 'assistant') {
+                  l.forkTail = forkTurnRef.current - 1;
+                  // 记录本步起点:这一步的模型请求若中途失败并重试,前端要把本步已流出的半成品整段回滚
+                  l.stepSegBase = (l.segments || []).length;
+                }
+                return c;
+              });
             }
             break;
           case 'text_delta':
@@ -924,7 +977,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'image_job':
             // 生图请求已发出:把底部运行状态行切成"正在生成图片"。
             // 图像端点非流式,期间没有任何增量可吐,靠这行持续声明仍在等待。
-            setImgJob({ mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0 });
+            // 状态行已由事件入口按会话记账(见 api.on('agent') 开头),这里只把 pending 标记挂到气泡上
             push((msgs) => {
               const c = [...msgs];
               const l = c[c.length - 1];
@@ -937,7 +990,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'image_done':
             // 成图落盘完成:状态行立刻回到「Agent 正在运行…」(后面可能还有正文要流式),
             // 附件元数据挂到当前 assistant 气泡(与历史回放同构,刷新后由 image/generated 投影回来)
-            setImgJob(null);
+            // 状态行销账已由事件入口完成(见 api.on('agent') 开头)
             push((msgs) => {
               const c = [...msgs];
               const l = c[c.length - 1];
@@ -954,7 +1007,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'done':
             setAgentState('done');
-            setImgJob(null); // 本轮结束:状态行不再显示"正在生成图片"(成图失败时也不会卡住)
+            setSessionImgJob(activeRef.current, null); // 本轮结束:状态行不再显示"正在生成图片"(成图失败时也不会卡住)
             push((msgs) => {
               const copy = [...msgs];
               const last = copy[copy.length - 1];
@@ -976,7 +1029,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'stopped':
-            setAgentState('idle'); setImgJob(null);
+            setAgentState('idle'); setSessionImgJob(activeRef.current, null);
             push((msgs) => {
               const c = [...msgs];
               const l = c[c.length - 1];
@@ -991,7 +1044,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'error':
-            setAgentState('error'); setErrorMsg(m.message); setImgJob(null);
+            setAgentState('error'); setErrorMsg(m.message); setSessionImgJob(activeRef.current, null);
             push((msgs) => {
               const c = [...msgs];
               const l = c.slice(-1)[0];
@@ -1081,18 +1134,51 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             scrollToBottomNow();
             break;
+          case 'compaction_failed':
+            // 压缩未完成(摘要生成失败 / 无收益 / 为空):服务端**没有**裁剪任何历史。
+            // 必须把上面那行运行态原地改写为失败态:否则「正在压缩…」会一直挂着转圈,
+            // 而用户也完全不知道这一轮其实没压缩成——继续发消息就会直接撞上下文窗口。
+            // 没有收到过 start(断线/切会话漏事件)时同样落一行,保证失败可见。
+            push((msgs) => {
+              const failedItem = {
+                content: '',
+                compaction: { running: false, failed: true, manual: m.manual === true, reason: String(m.reason || '摘要不可用') }
+              };
+              let idx = -1;
+              for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].compaction?.running) { idx = i; break; } }
+              const c = [...msgs];
+              if (idx >= 0) { c[idx] = { ...c[idx], ...failedItem }; return c; }
+              const item = { role: 'user' as const, ...failedItem };
+              const last = c[c.length - 1];
+              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
+              else c.push(item);
+              return c;
+            });
+            scrollToBottomNow();
+            break;
           case 'retry':
             // 模型请求失败进入重试:渲染为 harness 风格的单行状态行(实时倒计时 + 可展开失败详情),
-            // 同一失败的重试原地更新不堆叠;流式 assistant 存在时插到它前面(不打断对话流)
+            // 同一失败的重试原地更新不堆叠;流式 assistant 存在时插到它前面(不打断对话流)。
+            // m.discard=true 表示这次失败前已经流出过内容:重试会重发这一步,必须先把它整段回滚,
+            // 否则重试成功后的正文会和这段半成品拼在一起重复。
             push((msgs) => {
               const c = [...msgs];
               const payload = {
                 retry: Number(m.retry) || 1,
-                maxRetries: Number(m.maxRetries) || 5,
+                maxRetries: Number(m.maxRetries) || 10,
                 delayMs: Number(m.delayMs) || 2000,
                 error: String(m.error || '网络错误').slice(0, 120),
+                discard: m.discard === true,
                 state: 'scheduled' as const
               };
+              if (m.discard === true) {
+                for (let i = c.length - 1; i >= 0; i--) {
+                  const msg = c[i];
+                  if (msg?.role !== 'assistant' || !msg.streaming) continue;
+                  msg.segments = rollbackPartialSegments(msg);
+                  break;
+                }
+              }
               for (let i = c.length - 1; i >= 0; i--) {
                 if (c[i]?.retry) { c[i] = { role: 'notice', retry: payload }; return c; }
               }
@@ -1109,17 +1195,25 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 手动压缩完成(/compact):后端已把早期消息替换为 compaction/done 摘要事件,
             // 这里整体重拉历史——被压缩的早期消息从视图中消失,压缩摘要以折叠标记行呈现
             // (样式参照 harness:CompactionItem 的标记行,而非用户气泡)。
-            api.request('get_history', { sid: sidArg(activeRef.current) }, 8000)
-              .then((h) => {
-                const msgs = turnsToMessages(h.turns || []);
-                histCache.current.set(activeRef.current ?? '', { msgs, todos: Array.isArray(h.todos) ? h.todos : [] });
-                forkTurnRef.current = (h.turns || []).length; // 分支点/删除索引重新对齐压缩后的 turns
-                lastIterRef.current = 0;
-                setSuppressIn(true); // 整表替换:抑制入场动画,压缩瞬间画面保持静止
-                setMessages(msgs);
-                setTodos(Array.isArray(h.todos) ? h.todos : []);
-              })
-              .catch(() => { /* 拉取失败保留当前视图,下次会话切换时会重新载入 */ });
+            // 命令卡是纯前端消息(不持久化),整表替换会把它连同「已压缩 N 条早期消息…」
+            // 完成态一起抹掉;这里把当前列表末尾的命令卡按原样接回,保证 patchCmd(cmdId)
+            // 仍能命中、底部留下成功反馈(见 utils/commandCard 的成因说明)。
+            {
+              const targetSid = activeRef.current; // 本次重拉归属的会话:防止异步响应串到别的会话
+              api.request('get_history', { sid: sidArg(targetSid) }, 8000)
+                .then((h) => {
+                  if (activeRef.current !== targetSid) return; // 重拉期间切走了:丢弃过期结果
+                  const msgs = turnsToMessages(h.turns || []);
+                  histCache.current.set(targetSid ?? '', { msgs, todos: Array.isArray(h.todos) ? h.todos : [] });
+                  forkTurnRef.current = (h.turns || []).length; // 分支点/删除索引重新对齐压缩后的 turns
+                  lastIterRef.current = 0;
+                  setSuppressIn(true); // 整表替换:抑制入场动画,压缩瞬间画面保持静止
+                  // 函数式更新读取最新 messages:命令卡上可能已落下 ok 态(先 patch 后重拉的时序)
+                  setMessages((cur) => mergeTrailingCommandCards(msgs, cur));
+                  setTodos(Array.isArray(h.todos) ? h.todos : []);
+                })
+                .catch(() => { /* 拉取失败保留当前视图,下次会话切换时会重新载入 */ });
+            }
             break;
         }
       })
@@ -1194,6 +1288,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     forkTurnRef.current = 0; lastIterRef.current = 0; // 分支点计数器随会话重置
     setTodos([]);
     setAgentState('idle'); setErrorMsg('');
+    // 切到哪个会话就显示哪个会话的状态:取回该会话自己的在途生图标记;
+    // null 表示没有生图在途——状态行回到「Agent 正在运行…」,不沿用上一个会话的文案
+    setSessionImgJob(target, target && target !== NEW_SESSION_ID ? imgJobsRef.current.get(target) ?? null : null);
     setQueue([]); // 切会话先复位队列,避免串到上一会话;真实队列随 get_history 返回
     clearAttachments(); // 草稿附件不跨会话携带(纯内存,发送时才随消息上行)
 
@@ -1274,6 +1371,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     });
     if (!ok) return;
     api.send('clear_history', { sid: sidArg(sid) });
+    setSessionImgJob(activeRef.current, null); // 清空历史:在途生图标记一并销账
     // 清空后服务端 turns 归零,分支点计数器必须同步重置——
     // 否则下一条新消息的 forkTail 沿用旧计数值,返回/删除时会索引越界报「目标消息不存在」
     forkTurnRef.current = 0; lastIterRef.current = 0;
@@ -1740,13 +1838,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   };
 
   // ---- 命令卡片本地状态(role='command',仅前端可见,不持久化) ----
-  // 系统命令(如 /compact)执行时插入消息流尾部显示「运行中」,异步完成后按 cmdId 原地更新;
-  // 压缩成功时服务端广播 history_compacted 重拉历史,命令卡随之被「压缩标记行」(CompactionRow)
-  // 取代——呈现方式对齐 harness 的 CompactionCommandCard(运行行 + checkpoint 披露)。
+  // 系统命令(如 /compact)执行时插入消息流尾部显示「运行中」,异步完成后按 cmdId 原地更新。
+  // 压缩成功时服务端广播 history_compacted 会重拉并整表替换历史;命令卡不持久化,故重拉时
+  // 按 cmdId 把它接回列表尾部(见 utils/commandCard),让「已压缩 N 条早期消息…」留在底部;
+  // 压缩本身的持久披露由「压缩标记行」(CompactionRow)承担,两者并存(呈现对齐 harness 的
+  // CompactionCommandCard:运行行 + checkpoint 披露)。
   const cmdSeqRef = useRef(0);
   const pushCmd = (cmd: { state: 'running' | 'ok' | 'error'; text?: string }, id?: number) => {
     const cid = id ?? ++cmdSeqRef.current;
-    setMessages((msgs) => [...msgs, { role: 'command', cmdId: cid, command: { name: 'compact', ...cmd } }]);
+    // 只保留最新一条命令卡:再次执行 /compact 时先移除上一条结果,避免底部累积多张卡片。
+    // 压缩成功的持久披露由「压缩标记行」(CompactionRow)承担,命令卡只是本次命令的就地反馈。
+    setMessages((msgs) => [...msgs.filter((m) => !m.command), { role: 'command', cmdId: cid, command: { name: 'compact', ...cmd } }]);
     scrollToBottomNow();
     return cid;
   };
@@ -1979,6 +2081,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
 
   // 发送后等待回答 / agent 工作期间都应允许暂停:busy(服务端 status) 与 agentState 任一命中即视为工作中
   const working = busy || agentState === 'working';
+  // 状态行文案只反映当前会话:imgJob 的 owner 不是当前 sid 时按「无生图在途」渲染,
+  // 切会话瞬态(复位 effect 尚未跑)也不会把上一个会话的「正在生成图片」画到新会话上
+  const rowImgJob = imgJob && (imgJob.owner == null || imgJob.owner === sid) ? imgJob : null;
   // 工作中也允许输入发送(自动进入待执行队列,当前轮结束后按序执行);
   // 发送条件:远程或本地任一侧「有工作区」或「已选择不在工作区对话(全盘模式)」——
   // 连接服务器但未选远程工作区时,只要选了本地工作区即可发起对话(仅限本地工作,会话归本地任务列表);
@@ -2003,7 +2108,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             <div key={i} className={`msg ${m.role}${m.compaction ? ' compaction-msg' : ''}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
               {m.compaction && (
                 // 上下文压缩标记行(手动/自动):折叠展示摘要,展开看正文(样式参照 harness CompactionItem)
-                <CompactionRow content={m.content || ''} dropCount={m.compaction.dropCount} manual={m.compaction.manual} running={!!m.compaction.running} />
+                <CompactionRow content={m.content || ''} dropCount={m.compaction.dropCount} manual={m.compaction.manual} running={!!m.compaction.running} failed={!!m.compaction.failed} reason={m.compaction.reason} />
               )}
               {m.command && (
                 // 斜杠命令卡片(/compact 等):运行中/成功/失败的可见反馈(样式参照 harness GenericCommandCard)
@@ -2065,7 +2170,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   </div>
                   {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表) */}
                   {!m.streaming && !!m.filesChanged?.length && (
-                    <FilesChangedCard items={m.filesChanged} workspace={(connected ? workspace : localWorkspace) ?? undefined} />
+                    <FilesChangedCard
+                      items={m.filesChanged}
+                      workspace={(connected ? workspace : localWorkspace) ?? undefined}
+                      onOpenFile={onOpenFile}
+                      onOpenLocalFile={onOpenLocalFile}
+                    />
                   )}
                   {!m.streaming && (
                     <MessageActions
@@ -2082,16 +2192,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               可见,避免误以为卡死;提问挂起时 agent 在等用户作答,不算运行中。
               生图在途时复用同一行改文案(不再在气泡内另起一行),成图返回后自动变回原文案。 */}
           {working && !askPending && !askChecking && (
-            <div className={`running-row${imgJob ? ' image-waiting' : ''}`} role="status" aria-live="polite">
+            <div className={`running-row${rowImgJob ? ' image-waiting' : ''}`} role="status" aria-live="polite">
               <StateDot state="ongoing" size={12} />
               <span className="running-text">
-                {imgJob
-                  ? imgJob.mode === 'i2i'
-                    ? `正在生成图片(图生图${imgJob.refs > 1 ? ` · 参考 ${imgJob.refs} 张` : ''})…`
+                {rowImgJob
+                  ? rowImgJob.mode === 'i2i'
+                    ? `正在生成图片(图生图${rowImgJob.refs > 1 ? ` · 参考 ${rowImgJob.refs} 张` : ''})…`
                     : '正在生成图片…'
                   : 'Agent 正在运行…'}
               </span>
-              {imgJob && <span className="running-hint">生图为同步等待,通常需 30 秒至数分钟</span>}
+              {rowImgJob && <span className="running-hint">生图为同步等待,通常需 30 秒至数分钟</span>}
             </div>
           )}
         </div>

@@ -37,11 +37,22 @@ assert.equal(toolAccess('run_local_command'), 'command');
 
 // ---- 注册表与异步守卫 ----
 const registry = new ToolRegistry();
-registry.register({ name: 'read_file', run: () => 'content' });
-registry.register({ name: 'write_file', run: () => 'written' });
-registry.register({ name: 'run_command', run: () => 'ran' });
-registry.register({ name: 'todo_write', run: () => 'todo' });
+registry.register({ name: 'read_file', access: 'read', run: () => 'content' });
+registry.register({ name: 'write_file', access: 'write', run: () => 'written' });
+registry.register({ name: 'run_command', access: 'command', run: () => 'ran' });
+registry.register({ name: 'todo_write', access: 'meta', run: () => 'todo' });
+// 未声明 access 的新工具:必须 fail-closed 落到"需要审批"的一档
+registry.register({ name: 'some_new_tool', run: () => 'ok' });
+registry.register({ name: 'another_new_tool', run: () => 'ok' });
 registerPermissionGuard(registry);
+
+// ---- access 声明优先于名字名单 ----
+assert.equal(toolAccess('write_file', registry.get('write_file')), 'write');
+assert.equal(toolAccess('read_file', registry.get('read_file')), 'read');
+assert.equal(toolAccess('run_command', registry.get('run_command')), 'command');
+// 未声明 access:按 DEFAULT_TOOL_ACCESS(fail-closed),而不是当只读放行
+assert.equal(toolAccess('some_new_tool', registry.get('some_new_tool')), 'write');
+assert.equal(toolAccess('brand_new_name', registry.get('another_new_tool')), 'write');
 
 function makeSession(modes = []) {
   const s = new Session();
@@ -110,6 +121,27 @@ const run = (name, session) => registry.execute({
   // 模式即时切换:运行中会话的日志追加 mode 事件后,下一次调用按新模式判定
   sFull.append('permission/mode', { mode: 'plan' });
   assert.equal((await run('write_file', sFull)).isError, true, '运行中切换到 plan 即时生效');
+
+  // ---- fail-closed 回归:未声明 access 的新工具不得静默放行 ----
+  // 历史事故:toolAccess() 兜底分支曾返回 'read',导致新增写类工具忘记登记时
+  // 既免审批、又在 plan 模式下照常执行。以下断言锁死该行为不再退化。
+  assert.equal(toolAccess('some_new_tool'), 'write', '未登记工具名按 write 兜底(fail-closed)');
+
+  // confirm 模式下:未声明 access 的工具必须发起审批,而不是直接执行
+  const sFailClosed = makeSession();
+  const pendingUnknown = run('some_new_tool', sFailClosed);
+  await new Promise((res) => setTimeout(res, 20));
+  const askList = listPendingAsks();
+  assert.equal(askList.length, 1, 'confirm: 未声明 access 的工具必须挂起审批');
+  for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许'] }]);
+  assert.equal((await pendingUnknown).isError, false, 'confirm: 审批允许后放行');
+
+  // plan 模式下:未声明 access 的工具必须直接拒绝(只读放行、未知按写拒绝)
+  const sPlanFail = makeSession(['plan']);
+  const rUnknownPlan = await run('some_new_tool', sPlanFail);
+  assert.equal(rUnknownPlan.isError, true, 'plan: 未声明 access 的工具必须被拒绝');
+  assert.match(rUnknownPlan.content, /计划模式/);
+  assert.equal(listPendingAsks().length, 0, 'plan: 不发审批直接拒绝');
 
   console.log('permission-mode.test.js 全部通过');
   process.exit(0);

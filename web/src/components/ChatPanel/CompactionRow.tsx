@@ -30,25 +30,33 @@ interface CompactionRowProps {
   /** 自动压缩进行中(服务端 compaction_start 投影):本行显示运行态,完成时由
    *  compaction_done 原地改写为完成态,不再另插一行 */
   running?: boolean;
+  /** 压缩未完成(服务端 compaction_failed 投影):摘要不可用,历史已保持完整、未做任何裁剪。
+   *  与 running 的区别是「已结束且没有换来摘要」——必须如实披露,不能让用户以为压缩成功。 */
+  failed?: boolean;
+  /** failed 时的原因(摘要请求失败 / 压缩无收益 / 摘要为空 / mock 模式 …) */
+  reason?: string;
 }
 
-export function CompactionRow({ content, dropCount = 0, manual = false, running = false }: CompactionRowProps) {
+export function CompactionRow({ content, dropCount = 0, manual = false, running = false, failed = false, reason }: CompactionRowProps) {
   const { open, toggle } = useDisclosure(false);
   const title = manual ? '手动压缩' : '上下文压缩';
-  // 运行态优先:压缩还在进行,既没有条数,也没有可展开的摘要正文
+  // 状态优先级:运行中 > 失败 > 完成。失败态既没有条数,也没有可展开的摘要正文。
   const brief = running
     ? '正在把早期对话压缩为摘要…'
-    : dropCount > 0
-      ? `已压缩 ${dropCount} 条早期消息 · 点击查看压缩摘要`
-      : '早期对话已压缩为摘要 · 点击查看';
+    : failed
+      ? `压缩未完成 · 已保持完整历史不做裁剪${reason ? `(${reason})` : ''}`
+      : dropCount > 0
+        ? `已压缩 ${dropCount} 条早期消息 · 点击查看压缩摘要`
+        : '早期对话已压缩为摘要 · 点击查看';
+  const expandable = !running && !failed;
   return (
-    <div className="dsh-compaction" data-state={running ? 'running' : open ? 'open' : 'collapsed'}>
+    <div className="dsh-compaction" data-state={running ? 'running' : failed ? 'failed' : open ? 'open' : 'collapsed'}>
       <DisclosureRow
         icon={<IconApiOutline14 size={14} />}
         title={title}
         open={open}
-        expandable={!running}
-        expandOnRowClick={!running}
+        expandable={expandable}
+        expandOnRowClick={expandable}
         onToggle={toggle}
         collapsedContent={(
           <>

@@ -1,6 +1,8 @@
 // AI 回复下方的「N 个文件已更改」长条卡片:
 // 折叠态 = 一行胶囊(左图标 + 「N 个文件已更改」+ 右侧箭头),点击展开文件列表;
 // 每行 = 文件名(左)· 相对路径(中,省略截断)· 变更类型标签 · 变更行数(右,+新增/-删除)。
+// 行整体可点击:远程改动走 onOpenFile、本机改动走 onOpenLocalFile,复用文件标签页的
+// 文件查看方式(与在文件管理器里点开文件一致);已删除的文件已不在磁盘上,灰显为不可点击。
 // 数据来自当前回复中 write/edit/delete 工具调用(远程/本地)的 card='diff' meta,
 // 由 ChatPanel.collectFileChanges 聚合挂到消息的 filesChanged 字段。
 
@@ -35,7 +37,14 @@ function LineDelta({ item }: { item: FileChangeItem }) {
 
 // memo:items 数组引用未变时跳过重渲染(展开/收起为组件内部状态,不受影响),
 // 历史消息的「N 个文件已更改」卡不在每次流式/输入重渲染中重复构建
-export const FilesChangedCard = memo(function FilesChangedCard({ items, workspace }: { items: FileChangeItem[]; workspace?: string }) {
+export const FilesChangedCard = memo(function FilesChangedCard({ items, workspace, onOpenFile, onOpenLocalFile }: {
+  items: FileChangeItem[];
+  workspace?: string;
+  /** 打开远程文件(由 App 传入:文件标签页 + 远程读取通道) */
+  onOpenFile?: (path: string) => void;
+  /** 打开本机文件(由 App 传入:文件标签页 + local: 本机读取通道) */
+  onOpenLocalFile?: (path: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   if (!items || items.length === 0) return null;
   return (
@@ -55,12 +64,31 @@ export const FilesChangedCard = memo(function FilesChangedCard({ items, workspac
         <ul className="fcc-list">
           {items.map((it) => {
             const rel = relativizeToCwd(it.path, workspace);
-            return (
-              <li key={it.path} className="fcc-item" title={it.path}>
+            const handler = it.local ? onOpenLocalFile : onOpenFile;
+            // 删除后的文件点开只会读到「文件不存在」,灰显为不可点击;
+            // 调用方未提供打开通道时(独立复用组件)同样退化为纯展示行
+            const canOpen = it.kind !== 'delete' && handler !== undefined;
+            const cells = (
+              <>
                 <span className="fcc-name">{baseName(it.path)}</span>
                 <span className="fcc-path">{rel}</span>
                 <span className={`fcc-kind kind-${it.kind}`}>{KIND_LABELS[it.kind]}</span>
                 <LineDelta item={it} />
+              </>
+            );
+            return (
+              <li
+                key={`${it.local ? 'local' : 'remote'}:${it.path}`}
+                className={`fcc-item${canOpen ? ' openable' : ''}${it.kind === 'delete' ? ' deleted' : ''}`}
+                title={canOpen ? `点击打开 ${it.path}` : it.kind === 'delete' ? `${it.path}(已删除)` : it.path}
+              >
+                {canOpen ? (
+                  <button type="button" className="fcc-row" onClick={() => { if (handler) handler(it.path); }}>
+                    {cells}
+                  </button>
+                ) : (
+                  <div className="fcc-row">{cells}</div>
+                )}
               </li>
             );
           })}
