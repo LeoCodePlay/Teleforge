@@ -22,6 +22,43 @@ export interface BrowserState {
   viewport: BrowserViewport;
   /** 最近一次导航/操作失败的说明 */
   error: string | null;
+  /**
+   * 这个预览浏览器归属的会话 id(null = 未绑定:浏览器模式下手动打开、或旧会话遗留的自由预览)。
+   * 一个预览只服务一个对话:只有归属会话的 AI 工具与用户输入能操作它。
+   */
+  ownerSid: string | null;
+  /** 归属会话的标题(供前端左下角显示"已连接的会话"),会话已删除时为 null */
+  ownerTitle: string | null;
+}
+
+// ---------------- 预览浏览器归属:一个预览标签 ↔ 一个对话 ----------------
+// 浏览器会话 id 里直接编入归属会话,做到"谁开的就是谁的":
+//   s_xxx:1   → 归属会话 s_xxx(第 1 个预览),会话内可再开 s_xxx:2、s_xxx:3 …
+//   d_yyy:1   → 归属"新会话草稿"d_yyy;草稿落地为真实会话时由 transferOwner 改名继承
+//   main      → 无归属(旧版共享预览 / 浏览器模式下手动打开),任何会话都不独占
+// 归属在创建时写入后不再改变,因此不会出现"两个对话抢同一个预览"的中间态。
+const SESSION_ID_RE = /^s_[0-9a-z]+$/i;
+const DRAFT_ID_RE = /^d_[0-9a-z]+$/i;
+/** 该 id 是否是一个会话的标识(真实会话 s_… 或新会话草稿 d_…) */
+export function isBrowserOwner(sid: unknown): boolean {
+  const s = String(sid ?? '').trim();
+  return SESSION_ID_RE.test(s) || DRAFT_ID_RE.test(s);
+}
+/** 从浏览器会话 id 里解析归属会话(null = 无归属) */
+export function ownerFromBrowserId(id: unknown): string | null {
+  const s = String(id ?? '').trim();
+  const i = s.indexOf(':');
+  if (i <= 0) return null;
+  return isBrowserOwner(s.slice(0, i)) ? s.slice(0, i) : null;
+}
+/** 某会话的默认预览浏览器 id:同一会话再次打开复用这一个(会话内多开时用 :2、:3 …) */
+export function defaultBrowserIdFor(sid: string): string {
+  return `${String(sid).trim()}:1`;
+}
+/** 浏览器 id → 归属会话是否就是 sid(无归属的预览不对任何会话成立) */
+export function browserOwnedBy(browserId: unknown, sid: unknown): boolean {
+  const owner = ownerFromBrowserId(browserId);
+  return !!owner && !!sid && owner === String(sid).trim();
 }
 
 /** 前端上行的输入事件(坐标一律用 0~1 归一化值,与服务端视口尺寸解耦) */
@@ -149,7 +186,10 @@ export function describeNavError(e: unknown, url: string): string {
   return `打开失败:${raw}`;
 }
 
-interface BrowserSession {  id: string;
+interface BrowserSession {
+  id: string;
+  /** 归属会话 id(null = 无归属的自由预览,见文件头归属说明) */
+  ownerSid: string | null;
   context: BrowserContext;
   page: Page;
   cdp: CDPSession;
@@ -315,6 +355,8 @@ class BrowserManager extends EventEmitter {
   private browser: Browser | null = null;
   private launching: Promise<Browser> | null = null;
   private sessions = new Map<string, BrowserSession>();
+  /** 会话标题查询(会话存储侧注入,避免 core → store 的模块循环依赖;见 setSessionTitleLookup) */
+  private sessionTitleOf: ((sid: string) => string | null) | null = null;
   /** 会话建立前先连上的观看者数(见 setViewer 的记账逻辑) */
   private pendingViewers = new Map<string, number>();
   /** 标题轮询:SPA 路由切换会直接改 document.title,不会触发导航事件,靠轮询兜住 */
@@ -322,6 +364,42 @@ class BrowserManager extends EventEmitter {
 
   /** 浏览器是否已就绪(未启动返回 null,便于前端区分「未打开」与「已关闭」) */
   get active(): boolean { return !!this.browser && this.browser.isConnected(); }
+
+  /** 注入会话标题查询:预览状态里带上归属会话标题,前端左下角直接显示(未注入时只显示会话 id) */
+  setSessionTitleLookup(fn: ((sid: string) => string | null) | null): void {
+    this.sessionTitleOf = fn;
+  }
+
+  /**
+   * 这个会话能否操作指定预览。返回值即"拒绝理由"(可操作时返回 null):
+   *  - 会话不存在 / 预览不存在 → 各自给一句能照着做的提示;
+   *  - 预览有归属且归属不是这个会话 → 明确拒绝,并把归属会话说出来(只提示,不泄露其内容)。
+   * AI 工具与前端输入都走它,保证"一个预览只被一个对话操控"这条规则只有一个实现。
+   */
+  /**
+   * 这个会话能否操作指定预览。返回值即"拒绝理由"(可操作时返回 null):
+   *  - 会话不存在 / 预览不存在 → 各自给一句能照着做的提示;
+   *  - 预览有归属且归属不是这个会话 → 明确拒绝,并把归属会话说出来(只提示,不泄露其内容)。
+   * 判定以会话上记着的归属为准(id 里编的归属只用于建会话时的分配):
+   * 草稿预览改名继承后,id 仍是 `d_xxx:1` 而归属已改成真实会话,若按 id 判定就会把正当的主人挡在门外。
+   * AI 工具与前端输入都走它,保证"一个预览只被一个对话操控"这条规则只有一个实现。
+   */
+  denyReason(id: string, sid: string | null | undefined): string | null {
+    const s = this.sessions.get(String(id || 'main'));
+    if (!s || s.closed) return `浏览器预览不存在或已关闭(${id})。请先打开预览。`;
+    if (s.ownerSid && s.ownerSid !== String(sid ?? '').trim()) {
+      return `预览「${id}」已绑定到另一个会话(${s.ownerSid}),本会话无权操作;`
+        + `请改用本会话自己的预览(默认 ${defaultBrowserIdFor(String(sid || 'sid'))}),或用 browser_open 新开一个。`;
+    }
+    return null;
+  }
+
+  /** 校验归属,不通过即抛错(工具链与 RPC 的写入路径统一从这里进) */
+  private assertOwner(id: string, sid: string | null | undefined): BrowserSession {
+    const reason = this.denyReason(id, sid);
+    if (reason) throw new Error(reason);
+    return this.sessions.get(String(id || 'main')) as BrowserSession;
+  }
 
   /** 取会话画面/状态时用;内部方法不在时抛错 */
   private require(id: string): BrowserSession {
@@ -373,9 +451,67 @@ class BrowserManager extends EventEmitter {
     return [...this.sessions.values()].filter((s) => !s.closed).map((s) => this._stateOf(s));
   }
 
+  /** 某个会话拥有的预览(顺序 = 创建顺序,即浏览器标签从旧到新) */
+  listFor(sid: string | null | undefined): BrowserState[] {
+    const own = this._ownerKey(sid);
+    if (!own) return [];
+    return [...this.sessions.values()]
+      .filter((s) => !s.closed && s.ownerSid === own)
+      .map((s) => this._stateOf(s));
+  }
+
   state(id: string): BrowserState | null {
     const s = this.sessions.get(String(id || 'main'));
     return s && !s.closed ? this._stateOf(s) : null;
+  }
+
+  /**
+   * 归属改名:新会话草稿(d_…)落地成真实会话(s_…)时,把它名下的预览一并继承过去,
+   * 这样"新会话里先开预览、再发第一条消息"不会让预览变成没人认领的孤儿。
+   * @returns 被改名的预览数量
+   */
+  transferOwner(fromSid: string, toSid: string): number {
+    const from = String(fromSid || '').trim();
+    const to = String(toSid || '').trim();
+    if (!from || !to || from === to) return 0;
+    let n = 0;
+    for (const s of [...this.sessions.values()]) {
+      if (s.closed || s.ownerSid !== from) continue;
+      const prevId = s.id;
+      s.ownerSid = to;
+      // 浏览器 id 里编着的归属也一并改掉,保持"id 里的会话就是归属会话"这条不变量:
+      // 否则这个预览顶着草稿 id 活到重启,内存里归属虽然对,重启后按 id 判定就会把主人挡在门外。
+      const next = prevId.startsWith(`${from}:`) ? `${to}:${prevId.slice(from.length + 1)}` : prevId;
+      if (next !== prevId && !this.sessions.has(next)) {
+        this.sessions.delete(prevId);
+        s.id = next;
+        this.sessions.set(next, s);
+        // 改名后画面通道的订阅 key 也要跟着走,否则新连上的前端拿不到"有观看者"的记账
+        if (this.pendingViewers.has(prevId)) {
+          this.pendingViewers.set(next, (this.pendingViewers.get(next) || 0) + (this.pendingViewers.get(prevId) as number));
+          this.pendingViewers.delete(prevId);
+        }
+        // 通知前端:旧 id 的订阅请改订阅到新 id(前端标签 id 同一时刻也由 handleSessionCreated 改名)
+        this.emit('renamed', { from: prevId, to: next, ownerSid: to });
+      }
+      n += 1;
+      this._emitState(s);
+    }
+    return n;
+  }
+
+  /** 关闭某个会话名下的全部预览(会话被删除时调用,不留僵尸浏览器) */
+  async closeFor(sid: string | null | undefined): Promise<number> {
+    const own = this._ownerKey(sid);
+    if (!own) return 0;
+    const ids = [...this.sessions.values()].filter((s) => !s.closed && s.ownerSid === own).map((s) => s.id);
+    for (const id of ids) await this.close(id);
+    return ids.length;
+  }
+
+  private _ownerKey(sid: string | null | undefined): string | null {
+    const s = String(sid ?? '').trim();
+    return s || null;
   }
 
   /** 最近一帧画面(新连上的前端立即有图,不必等下一次重绘) */
@@ -412,28 +548,44 @@ class BrowserManager extends EventEmitter {
 
   /**
    * 打开/复用预览标签并导航到目标地址。
-   * 已存在同 id 会话时只导航,不重建(保留页面状态)。
+   * 已存在同 id 会话时只导航,不重建(保留页面状态);归属校验(见文件头归属说明):
+   *  id 里编着归属会话时,调用会话必须是它,否则直接拒绝——两个对话永远不会共用一个预览。
+   *  ownerSid 只在"新建会话"时写入,已存在的预览不改归属。
    */
-  async open({ id = 'main', url, width, height }: { id?: string; url: string; width?: number; height?: number }): Promise<BrowserState> {
+  async open({ id = 'main', url, width, height, ownerSid }: {
+    id?: string; url: string; width?: number; height?: number; ownerSid?: string | null;
+  }): Promise<BrowserState> {
     const target = normalizePreviewUrl(url);
     if (!target) throw new Error(`不是有效的预览地址:${String(url || '(空)')}`);
+    const sid = this._ownerKey(ownerSid);
+    // id 自带的归属优先(前端按会话生成 id,前端传错 sid 也不会越权:错的那一侧会先被拒)
+    const idOwner = ownerFromBrowserId(id);
+    const owner = idOwner || sid;
+    if (idOwner && sid && idOwner !== sid) throw new Error(this.denyReason(id, sid) as string);
     let s = this.sessions.get(id);
-    if (!s || s.closed) s = await this._createSession(id, width, height);
-    else if (width || height) await this.resize(id, { width, height });
+    if (!s || s.closed) s = await this._createSession(id, width, height, owner);
+    else {
+      const reason = this.denyReason(id, owner ?? sid);
+      if (reason) throw new Error(reason);
+      // 无归属的预览(旧版共享的 main / 浏览器模式下手动打开):第一次带着会话打开时认领它,
+      // 之后它就和别的会话一样被独占 —— 升级后老标签不会被两个对话轮流操控。
+      if (!s.ownerSid && owner) { s.ownerSid = owner; this._emitState(s); }
+      if (width || height) await this.resize(id, { width, height });
+    }
     await this._navigate(s, target);
     return this._stateOf(s);
   }
 
-  async navigate(id: string, url: string): Promise<BrowserState> {
-    const s = this.require(id);
+  async navigate(id: string, url: string, sid?: string | null): Promise<BrowserState> {
+    const s = this.assertOwner(id, sid);
     const target = normalizePreviewUrl(url);
     if (!target) throw new Error(`不是有效的预览地址:${String(url || '(空)')}`);
     await this._navigate(s, target);
     return this._stateOf(s);
   }
 
-  async reload(id: string): Promise<BrowserState> {
-    const s = this.require(id);
+  async reload(id: string, sid?: string | null): Promise<BrowserState> {
+    const s = this.assertOwner(id, sid);
     s.loading = true; s.error = null; this._emitState(s);
     try {
       await s.page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
@@ -447,16 +599,16 @@ class BrowserManager extends EventEmitter {
     return this._stateOf(s);
   }
 
-  async goBack(id: string): Promise<BrowserState> {
-    const s = this.require(id);
+  async goBack(id: string, sid?: string | null): Promise<BrowserState> {
+    const s = this.assertOwner(id, sid);
     try { await s.page.goBack({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }); }
     catch (e: any) { s.error = e?.message || String(e); }
     this._refreshTitle(s);
     return this._stateOf(s);
   }
 
-  async goForward(id: string): Promise<BrowserState> {
-    const s = this.require(id);
+  async goForward(id: string, sid?: string | null): Promise<BrowserState> {
+    const s = this.assertOwner(id, sid);
     try { await s.page.goForward({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }); }
     catch (e: any) { s.error = e?.message || String(e); }
     this._refreshTitle(s);
@@ -477,9 +629,15 @@ class BrowserManager extends EventEmitter {
     return this._stateOf(s);
   }
 
-  async close(id: string): Promise<void> {
+  /** 关闭预览并释放底层页面。sid 非空时校验归属(前端标签只能关自己的预览) */
+  async close(id: string, sid?: string | null): Promise<void> {
     const s = this.sessions.get(String(id || 'main'));
     if (!s) return;
+    // 已 closed 的会话在 sessions 里已摘除;denyReason 只在需要校验归属时用(无归属的预览谁都能关)
+    if (sid != null && s.ownerSid) {
+      const reason = this.denyReason(id, sid);
+      if (reason) throw new Error(reason);
+    }
     s.closed = true;
     this.sessions.delete(s.id);
     if (s.titleTimer) clearTimeout(s.titleTimer);
@@ -500,10 +658,14 @@ class BrowserManager extends EventEmitter {
    * 前端鼠标/键盘输入 → 页面。
    * 关键:必须按到达顺序串行执行。ws 的 message 回调是并发的(Node 不会 await),
    * 若 move 还没落地就执行 down,点击会落在上一个鼠标位置上(表现为"点了没反应")。
+   * sid = 发起输入的前端当前所在会话:只有归属会话能操作该预览(非归属直接抛错,
+   * 由 ws 层回执"已锁定"给前端做提示)。
    */
-  async input(id: string, evt: BrowserInputEvent): Promise<void> {
+  async input(id: string, evt: BrowserInputEvent, sid?: string | null): Promise<void> {
     const s = this.sessions.get(String(id || 'main'));
     if (!s || s.closed || !evt) return;
+    const reason = this.denyReason(id, sid);
+    if (reason) throw new Error(reason);
     return this._enqueue(s, () => this._applyInput(s, evt));
   }
 
@@ -563,16 +725,16 @@ class BrowserManager extends EventEmitter {
     }
   }
 
-  /** 给 AI:页面结构化快照(带 ref 引用) */
-  async snapshot(id: string): Promise<string> {
-    const s = this.require(id);
+  /** 给 AI:页面结构化快照(带 ref 引用);sid = 调用方会话,非归属拒绝 */
+  async snapshot(id: string, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
     const data = await s.page.evaluate(SNAPSHOT_SCRIPT);
     return formatSnapshot(data);
   }
 
   /** 给 AI:点击(ref / CSS 选择器 / 可见文本三选一) */
-  async click(id: string, target: { ref?: string; selector?: string; text?: string }): Promise<string> {
-    const s = this.require(id);
+  async click(id: string, target: { ref?: string; selector?: string; text?: string }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
     return this._enqueue(s, async () => {
       const { ref, selector, text } = target || {};
       let loc = null as any;
@@ -587,8 +749,8 @@ class BrowserManager extends EventEmitter {
   }
 
   /** 给 AI:向输入框填入文本(ref / selector 定位) */
-  async fill(id: string, target: { ref?: string; selector?: string; text: string; submit?: boolean; clear?: boolean }): Promise<string> {
-    const s = this.require(id);
+  async fill(id: string, target: { ref?: string; selector?: string; text: string; submit?: boolean; clear?: boolean }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
     return this._enqueue(s, async () => {
       const { ref, selector, text, submit, clear } = target || {};
       let loc = null as any;
@@ -606,8 +768,8 @@ class BrowserManager extends EventEmitter {
   }
 
   /** 给 AI:按一次按键(Enter/Tab/Escape/ArrowDown/Ctrl+A 等) */
-  async press(id: string, key: string): Promise<string> {
-    const s = this.require(id);
+  async press(id: string, key: string, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
     return this._enqueue(s, async () => {
       await s.page.keyboard.press(String(key || 'Enter'));
       await this._settle(s, 250);
@@ -616,8 +778,8 @@ class BrowserManager extends EventEmitter {
   }
 
   /** 给 AI:滚动页面(像素),scroll_down/scroll_up 两种方向 */
-  async scroll(id: string, { direction = 'down', amount = 600 }: { direction?: string; amount?: number }): Promise<string> {
-    const s = this.require(id);
+  async scroll(id: string, { direction = 'down', amount = 600 }: { direction?: string; amount?: number }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
     return this._enqueue(s, async () => {
       const dy = direction === 'up' ? -Math.abs(Number(amount) || 600) : Math.abs(Number(amount) || 600);
       await s.page.mouse.wheel(0, dy);
@@ -627,8 +789,8 @@ class BrowserManager extends EventEmitter {
   }
 
   /** 给 AI:等待条件(文本出现 / 选择器可见 / URL 变化 / 纯延时) */
-  async waitFor(id: string, opts: { text?: string; selector?: string; url?: string; timeoutMs?: number }): Promise<string> {
-    const s = this.require(id);
+  async waitFor(id: string, opts: { text?: string; selector?: string; url?: string; timeoutMs?: number }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
     const timeout = Math.min(Math.max(Number(opts?.timeoutMs) || 8000, 100), 60_000);
     const { text, selector, url } = opts || {};
     if (selector) await s.page.waitForSelector(String(selector), { state: 'visible', timeout });
@@ -642,8 +804,8 @@ class BrowserManager extends EventEmitter {
   /** 读取远程页面当前选中的文字
    *  预览是一张 JPEG 画面,本地选不中任何东西;用户拖选出来的选区其实在远程页面里,
    *  所以「复制」必须回远程页面取文本,再由前端写进本机剪贴板。 */
-  async selection(id: string): Promise<{ text: string }> {
-    const s = this.require(id);
+  async selection(id: string, sid?: string | null): Promise<{ text: string }> {
+    const s = this.assertOwner(id, sid);
     const text = await s.page.evaluate(() => {
       const win = globalThis as any;
       const doc = win.document;
@@ -662,8 +824,8 @@ class BrowserManager extends EventEmitter {
   }
 
   /** 给 AI:页面内执行表达式并返回 JSON 结果(调试/取数据用) */
-  async evaluate(id: string, expression: string): Promise<string> {
-    const s = this.require(id);
+  async evaluate(id: string, expression: string, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
     const src = String(expression || '').trim();
     if (!src) throw new Error('expression 为空');
     const result = await s.page.evaluate(src);
@@ -674,8 +836,8 @@ class BrowserManager extends EventEmitter {
   }
 
   /** 给 AI:整页截图(PNG),返回缓冲区交给上层落盘为附件 */
-  async screenshot(id: string, { fullPage = false }: { fullPage?: boolean } = {}): Promise<Buffer> {
-    const s = this.require(id);
+  async screenshot(id: string, { fullPage = false }: { fullPage?: boolean } = {}, sid?: string | null): Promise<Buffer> {
+    const s = this.assertOwner(id, sid);
     return await s.page.screenshot({ fullPage: !!fullPage, type: 'png' });
   }
 
@@ -696,14 +858,15 @@ class BrowserManager extends EventEmitter {
     if (this.titlePoller.unref) this.titlePoller.unref();
   }
 
-  private async _createSession(id: string, width?: number, height?: number): Promise<BrowserSession> {
+  /** ownerSid = 该预览归属的会话(新建时写入,之后不变;null = 无归属的自由预览) */
+  private async _createSession(id: string, width?: number, height?: number, ownerSid: string | null = null): Promise<BrowserSession> {
     const b = await this.ensureBrowser();
     const viewport: BrowserViewport = { width: clampDim(width, DEFAULT_WIDTH), height: clampDim(height, DEFAULT_HEIGHT) };
     const context = await b.newContext({ viewport, deviceScaleFactor: 1, ignoreHTTPSErrors: true } as any);
     const page = await context.newPage();
     const cdp = await context.newCDPSession(page);
     const s: BrowserSession = {
-      id, context, page, cdp, viewport,
+      id, ownerSid, context, page, cdp, viewport,
       frame: null, frameWidth: viewport.width, frameHeight: viewport.height,
       title: '', loading: false, error: null, closed: false, titleTimer: null,
       canBack: false, canForward: false, viewers: 0, chain: Promise.resolve()
@@ -830,6 +993,10 @@ class BrowserManager extends EventEmitter {
   private _stateOf(s: BrowserSession): BrowserState {
     let url = '';
     try { url = s.page.url(); } catch { /* 忽略 */ }
+    let ownerTitle: string | null = null;
+    if (s.ownerSid && this.sessionTitleOf) {
+      try { ownerTitle = this.sessionTitleOf(s.ownerSid); } catch { /* 查询失败只少了标题 */ }
+    }
     return {
       id: s.id,
       url,
@@ -838,7 +1005,9 @@ class BrowserManager extends EventEmitter {
       canGoBack: s.canBack,
       canGoForward: s.canForward,
       viewport: { ...s.viewport },
-      error: s.error
+      error: s.error,
+      ownerSid: s.ownerSid,
+      ownerTitle
     };
   }
 

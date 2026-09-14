@@ -26,7 +26,7 @@ import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.
 import * as sessions from '../store/session-store.ts';
 import { getDefaultPermissionMode as storeDefaultMode, setDefaultPermissionMode as storeSetDefaultMode } from '../store/settings-store.ts';
 import { getAttachment, readImageDataURL, readImageBytes, saveAttachment, isTextLike, attachmentPath, type AttachmentMeta } from '../store/attachments-store.ts';
-import { extractPreviewUrls } from '../core/browser-manager.ts';
+import { browserManager, extractPreviewUrls } from '../core/browser-manager.ts';
 
 // 全局唯一工具注册表:启动时注册全部内置工具与守卫
 const registry = new ToolRegistry();
@@ -803,6 +803,8 @@ export class Agent {
     const rt = this._runtimes.get(id);
     if (rt?.busy) throw new Error('会话任务进行中,请先停止再删除');
     this._runtimes.delete(id);
+    // 会话名下的预览浏览器一并回收:预览属于这个对话,对话没了就不该留一个没人认领的浏览器
+    void browserManager.closeFor(id).catch(() => {});
     sessions.remove(id);
     if (id === this.sessionId) this._settleActive();
     this.emit('agent', { event: 'sessions_changed' });
@@ -978,7 +980,7 @@ export class Agent {
     // 无真实请求,前端按服务端预估显示。
     {
       const env = measureEnvelope(
-        this._systemPrompt('off'),
+        this._systemPrompt('off') + (this._browserPreviewSection(id) ? '\n\n' + this._browserPreviewSection(id) : ''),
         registry.schemas({ localOnly: !ssh.connected }),
         session.deriveMessages({})
       );
@@ -1407,11 +1409,15 @@ export class Agent {
         // 结果),仍超再做摘要压缩;窗口未配置时由字符预算兜底裁剪承担最后防线
         // (差异:harness 总能拿到模型窗口,本工具需兼容窗口未配置的提供方)。
         const systemText = this._systemPrompt(reasoning);
+        // 每步都重算「本会话拥有的预览浏览器」:同一轮里模型刚 browser_open 出来的预览,
+        // 下一步请求就能在 system 里看到它,不必等到下一轮(避免重复打开同名预览)。
+        const previewBlock = this._browserPreviewSection(runSessionId);
+        const systemTextFull = previewBlock ? systemText + '\n\n' + previewBlock : systemText;
         const ctxWindow = (this.llm && this.llm.contextWindow) || 0;
         const toolSchemas = useTools ? registry.schemas({ localOnly: !ssh.connected }) : [];
         // 每次请求的固定开销(system 提示词 + 工具 schema)估算:压缩水位按"整次请求"计量,
         // 只量历史会让触发点比真实水位晚一个信封的体量(实测偏差可达数万 token)。
-        const reservedTokens = estimateTokens(systemText) + (toolSchemas.length ? estimateTokens(JSON.stringify(toolSchemas)) : 0);
+        const reservedTokens = estimateTokens(systemTextFull) + (toolSchemas.length ? estimateTokens(JSON.stringify(toolSchemas)) : 0);
         // 先用完整历史投影(不裁剪);折叠/压缩/裁剪都发生在投影副本上,
         // trace 与消息一一对应,供压缩落盘时把消息下标映射回事件 seq。
         let trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
@@ -1421,18 +1427,18 @@ export class Agent {
         // 请求前按"预估请求 token(历史 + system + 工具 schema)"查地板,超过就先做一轮
         // 保最近的投影折叠(日志不动,只裁模型当轮可见面),与水位裁剪互补。
         const P = AGENT.TOOL_RESULT_PRUNE;
-        if (P.ABS_FLOOR_TOKENS > 0 && measureEnvelope(systemText, toolSchemas, historyMsgs).total > P.ABS_FLOOR_TOKENS) {
+        if (P.ABS_FLOOR_TOKENS > 0 && measureEnvelope(systemTextFull, toolSchemas, historyMsgs).total > P.ABS_FLOOR_TOKENS) {
           const r = pruneToolResults(historyMsgs, {
             keepRecent: P.ABS_FLOOR_KEEP_RECENT, minChars: P.ABS_FLOOR_THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
           });
           if (r.pruned > 0) {
             historyMsgs = r.messages;
-            console.log(`[agent] 历史工具结果折叠:${r.pruned} 条(预估请求 ${measureEnvelope(systemText, toolSchemas, historyMsgs).total} token 超绝对地板 ${P.ABS_FLOOR_TOKENS}),省约 ${r.charsSaved} 字符`);
+            console.log(`[agent] 历史工具结果折叠:${r.pruned} 条(预估请求 ${measureEnvelope(systemTextFull, toolSchemas, historyMsgs).total} token 超绝对地板 ${P.ABS_FLOOR_TOKENS}),省约 ${r.charsSaved} 字符`);
           }
         }
         if (ctxWindow > 0 && historyMsgs.length > 2) {
           const c = await compactHistory({
-            messages: historyMsgs, system: systemText, llm: this.llm, signal: signal.signal,
+            messages: historyMsgs, system: systemTextFull, llm: this.llm, signal: signal.signal,
             contextWindow: ctxWindow, maxTokens: this.llm.maxTokens, reservedTokens,
             // 确认要压缩即广播「压缩中」:摘要要调一次 LLM,可能几十秒,不能让对话流静默干等
             onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false }),
@@ -1473,7 +1479,7 @@ export class Agent {
             // 口径与压缩阈值一致(measureEnvelope:system + 工具 schema + 历史),否则
             // "压缩后水位"会比真实请求偏小,用户看到虚低的百分比。
             {
-              const env = measureEnvelope(systemText, toolSchemas, historyMsgs);
+              const env = measureEnvelope(systemTextFull, toolSchemas, historyMsgs);
               this.emit('agent', {
                 event: 'context_usage', sid: runSessionId,
                 estimated: env.total, systemTokens: env.systemTokens, toolsTokens: env.toolsTokens, messageTokens: env.messageTokens,
@@ -1487,7 +1493,7 @@ export class Agent {
         }
         // 兜底字符裁剪:窗口未配置/摘要未触发时按预算裁剪,但永不丢原始任务锚点。
         historyMsgs = trimMessagesByBudget(historyMsgs, resolveCharBudget(ctxWindow));
-        const messages = [{ role: 'system', content: systemText }, ...historyMsgs];
+        const messages = [{ role: 'system', content: systemTextFull }, ...historyMsgs];
         // 多模态注入:模型声明了视觉能力时,把带图片附件的 user 消息升级为
         // content 数组(文本 + image_url);测量/压缩仍走元数据口径的 messages
         const wireMessages = allowVision ? await materializeImageParts(messages) : messages;
@@ -1546,7 +1552,7 @@ export class Agent {
               keepRecent: 0, minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
             }).messages;
             const c = await compactHistory({
-              messages: historyMsgs, system: systemText, llm, signal: signal.signal,
+              messages: historyMsgs, system: systemTextFull, llm, signal: signal.signal,
               contextWindow: ctxWindow, maxTokens: llm.maxTokens, reservedTokens,
               force: true, retainTokensOverride: 0,
               // 爆窗恢复的摘要压缩一样要调 LLM:先广播「压缩中」,前端不会长时间无反馈
@@ -1578,7 +1584,7 @@ export class Agent {
               });
               // 口径同上:与压缩阈值同源(measureEnvelope),避免爆窗恢复后仪表盘虚低
               {
-                const env = measureEnvelope(systemText, toolSchemas, c.messages);
+                const env = measureEnvelope(systemTextFull, toolSchemas, c.messages);
                 this.emit('agent', {
                   event: 'context_usage', sid: runSessionId,
                   estimated: env.total, systemTokens: env.systemTokens, toolsTokens: env.toolsTokens, messageTokens: env.messageTokens,
@@ -1617,7 +1623,7 @@ export class Agent {
         // 真实 prompt_tokens(网关不报则为 null)。
         // 历史教训:此前这里只算 [system, ...history] 不含工具 schema,而压缩阈值含,
         // 同一会话两个数字能差数千 token,仪表盘百分比与实际触发点不符。
-        const env = measureEnvelope(systemText, toolSchemas, historyMsgs);
+        const env = measureEnvelope(systemTextFull, toolSchemas, historyMsgs);
         const usage = res.usage || null;
         this.emit('agent', {
           event: 'context_usage', sid: runSessionId,
@@ -2031,6 +2037,44 @@ export class Agent {
       '',
       ...sections,
       '</runtime_context>'
+    ].join('\n');
+  }
+
+  /**
+   * 本会话拥有的「浏览器预览」清单,注入到 system 末尾(见调用点)。
+   * 目的:让 AI 明确"我有一个可以看/可以操控的预览浏览器",并且知道该用哪个 browser_id。
+   * - 预览浏览器按会话隔离(一个预览只被一个对话操控,见 core/browser-manager.ts 文件头),
+   *   所以这里只列本会话名下的;别的会话的预览既不列出来,传 id 调工具也会被拒绝。
+   * - 每一步模型请求前重算:同一轮里刚 browser_open 出来的预览,下一步就能看到。
+   * - 没有预览时返回空串(system 逐字节稳定,不因无关会话而变)。
+   */
+  _browserPreviewSection(sid: string | null | undefined): string {
+    const id = String(sid ?? '').trim();
+    if (!id) return '';
+    let owned: Array<{ id: string; url: string; title: string; loading: boolean }> = [];
+    try { owned = browserManager.listFor(id) as any; } catch { return ''; }
+    if (!owned.length) return '';
+    // 标题来自用户/模型(会话标题)或页面 <title>,注入前压成单行短文本:
+    // 换行会被拼成"伪造的指令行",超长会白白吃掉上下文预算
+    const oneLine = (s: unknown, max: number) => String(s ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+    const rows = owned.map((b) => {
+      const where = oneLine(b.url, 300) || '(尚未打开地址)';
+      const label = b.title ? ` 「${oneLine(b.title, 80)}」` : '';
+      const state = b.loading ? '(加载中)' : '';
+      return `- browser_id=${b.id} → ${where}${label}${state}`;
+    });
+    return [
+      '<browser_preview>',
+      '你在本会话拥有以下「浏览器预览」——前端标签条里的真实 Chromium 页面,用户能直接看到并操作它:',
+      ...rows,
+      '',
+      '用法与规则:',
+      '- browser_snapshot / browser_click / browser_type / browser_screenshot 等的 browser_id 省略时就是本会话的第一个预览;'
+        + '同一会话里开了多个预览时,按上面的 browser_id 指定其中某一个。',
+      '- 打开/导航新地址用 browser_open(url=…);同一个地址只想刷新用 browser_reload;不再需要时用 browser_close 释放。',
+      '- 每个预览浏览器只属于它所在的对话:别的会话的预览你既看不到也操作不了,不要猜测或传递别人的 browser_id。',
+      '- 页面是真实浏览器渲染的,截图/快照就是用户看到的内容;判断前端改动是否生效,用它验证比读代码更可靠。',
+      '</browser_preview>'
     ].join('\n');
   }
 

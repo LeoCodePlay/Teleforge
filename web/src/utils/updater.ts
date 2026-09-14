@@ -3,7 +3,7 @@
 // - downloadUpdate():下载安装包到 App 数据目录/updates/,期间监听 update-progress 事件回报进度
 // - installUpdate():拉起安装程序并关闭当前应用(Windows)
 // - openExternal():系统默认浏览器打开外部链接
-import { isDesktop } from './desktop';
+import { isDesktop, isTauri } from './desktop';
 
 /** GitHub 仓库 Releases 页(浏览器模式也展示「前往下载」链接) */
 export const UPDATE_REPO_URL = 'https://github.com/LeoCodePlay/Teleforge/releases';
@@ -95,9 +95,13 @@ export function clearDownloadedUpdate(): void {
   try { localStorage.removeItem(DOWNLOAD_KEY); } catch { /* 忽略 */ }
 }
 
-/** 系统浏览器打开外部链接;浏览器模式回落 window.open */
+/**
+ * 系统浏览器打开外部链接。
+ * 判定用 isTauri() 而不是 isDesktop():桌面壳的 dev 模式同样没有可用的 window.open,
+ * 必须走 Rust 的 open_external 命令;纯浏览器模式才回落 window.open。
+ */
 export async function openExternal(url: string): Promise<void> {
-  if (!isDesktop()) {
+  if (!isTauri()) {
     window.open(url, '_blank');
     return;
   }

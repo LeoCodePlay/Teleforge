@@ -10,13 +10,15 @@ import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';
 import ConsolePanel from './components/ConsolePanel/ConsolePanel';
 import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
 import BrowserPanel from './components/BrowserPanel/BrowserPanel';
-import { PREVIEW_EVENT, isPreviewUrl, normalizePreviewInput, previewLabel } from './utils/preview';
+import { PREVIEW_EVENT, isHttpLink, normalizePreviewInput, previewLabel,
+  BROWSER_TAB_PREFIX, allocBrowserId, browserSessionId, browserTabId,
+  newDraftSessionId, ownerOfBrowserId, DRAFT_SESSION_PREFIX } from './utils/preview';
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
 import TooltipHost from './components/Tooltip/Tooltip';
 import BottomBar, { type MobileView } from './components/BottomBar/BottomBar';
 import WindowControls from './components/WindowControls/WindowControls';
 import { isTauri } from './utils/desktop';
-import { getUpdateInfo } from './utils/updater';
+import { getUpdateInfo, openExternal } from './utils/updater';
 import { useIsPhone, useIsTablet, useIsDesktop } from './hooks/useMediaQuery';
 import { useVisualViewportInset } from './hooks/useVisualViewport';
 import { useLlm } from './context/llm-context';
@@ -58,10 +60,7 @@ const SESSIONS_ID = 'sessions';
 const FILE_TABS_KEY = 'sshai.fileTabs';
 // 浏览器预览标签持久化:刷新后恢复预览(面板重新 open 一次,服务端会话按 id 复用)
 const BROWSER_TABS_KEY = 'sshai.browserTabs';
-// 预览标签 id 前缀:标签 id = 'preview:' + 服务端浏览器会话 id,避免与固定页/文件路径撞名
-const BROWSER_TAB_PREFIX = 'preview:';
-const browserTabId = (sessionId: string) => BROWSER_TAB_PREFIX + sessionId;
-const browserSessionId = (tabId: string) => (tabId.startsWith(BROWSER_TAB_PREFIX) ? tabId.slice(BROWSER_TAB_PREFIX.length) : tabId);
+// 预览标签 id 前缀与 token 解析统一在 utils/preview.ts(前后端同一套归属约定),此处不再重复定义
 const ACTIVE_TAB_KEY = 'sshai.activeTab';
 
 function loadSavedFileTabs(): TabItem[] {
@@ -118,7 +117,11 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState(loadSavedActiveTab);
   const tabsRef = useRef(tabs);
   // 打开/导航预览标签的函数引用(定义在下方;手机底部栏与全局事件通过 ref 调用,避免提前引用)
-  const ensureBrowserTabRef = useRef<((url?: string, sessionId?: string, opts?: { focus?: boolean }) => void) | null>(null);
+  const ensureBrowserTabRef = useRef<((url?: string, browserId?: string, opts?: { focus?: boolean; bind?: string }) => void) | null>(null);
+  // 「新会话草稿」占位会话 id:草稿态(还没发送首条消息)下用户已经可以开预览,
+  // 预览先绑到这个占位 id,首条消息落地成真实会话时由服务端/前端一并改名继承(见 handleSessionCreated)。
+  // 用 state 而非 ref:它要作为 props 传给 ChatPanel(随 session_create 一起提交给服务端)。
+  const [draftSid, setDraftSid] = useState<string>(() => newDraftSessionId());
   // 「检测到项目地址」提示(命令输出里发现可预览地址时顶栏出现可点击 chip)
   const [previewHint, setPreviewHint] = useState<string | null>(null);
   tabsRef.current = tabs;
@@ -374,8 +377,17 @@ export default function App() {
     pendingNewRef.current = true;
     setActiveSessionId(NEW_SESSION_ID);
     setSessionSeq((n) => n + 1);
-  };
-  // 切换会话(点击当前会话也会重新触发 session_switch + 重载,用于加载失败/进行中时重试)
+    // 上一轮草稿留下的预览标签(绑在旧草稿 id 上,永远不会再有会话认领它):一并撤掉,
+    // 否则每进一次新会话就多一个打不开的孤儿标签。当前草稿 id 本身的标签照样保留。
+    setTabs((prev) => {
+      const kept = prev.filter((t) => {
+        if (t.kind !== 'browser') return true;
+        const owner = ownerOfBrowserId(browserSessionId(t.id));
+        return !(owner && owner.startsWith(DRAFT_SESSION_PREFIX) && owner !== draftSid);
+      });
+      return kept.length === prev.length ? prev : kept;
+    });
+  };  // 切换会话(点击当前会话也会重新触发 session_switch + 重载,用于加载失败/进行中时重试)
   const switchSession = (id: string) => {
     bumpOp();
     pendingNewRef.current = false;
@@ -409,12 +421,18 @@ export default function App() {
     pendingNewRef.current = false;
     // 草稿期选定的模型固化到真实会话 id,切回该会话时按此恢复
     if (r?.active) llm.rememberSessionModel(String(r.active));
+    // 草稿期用户/AI 开过的预览浏览器改绑到真实会话(服务端已按 transferFrom 同步改名),再换一个新草稿 id 备用
+    if (r?.active) {
+      rebindDraftBrowsers(draftSid, String(r.active));
+      setDraftSid(newDraftSessionId());
+    }
     refreshSessions(r, { forceActive: true });
   };
   const deleteSession = async (id: string) => {
     const ok = await confirm({
       title: '删除会话',
-      message: '删除该会话?其对话记录将被永久删除,不可恢复',
+      message: '删除该会话?其对话记录将被永久删除,不可恢复。'
+        + '该会话名下的预览浏览器会一并关闭(预览只服务于所属对话)。',
       confirmLabel: '删除',
       danger: true
     });
@@ -422,6 +440,8 @@ export default function App() {
     // 删除正打开的会话:先进入新会话草稿态清空聊天视图(删除成功后默认停在新会话,
     // 不采纳服务端收敛出的活跃会话);删除失败(如任务刚启动)则切回原会话恢复视图
     const wasActive = id === activeSessionId;
+    // 该会话名下的预览标签一并撤掉(服务端 deleteSession 里也会关掉对应浏览器)
+    dropBrowserTabsFor(id);
     if (wasActive) newSession();
     bumpOp();
     try {
@@ -474,8 +494,9 @@ export default function App() {
   const connCount = (status.conns || []).filter((c) => c.status === 'connected').length;
   const multiConn = connCount > 1;
 
-  // 全局:聊天/工具卡里的本地地址链接点击 → 用内置预览打开(不跳出系统浏览器);
-  // 以及工具卡「打开预览」按钮派发的自定义事件
+  // 全局:聊天/工具卡里的链接点击统一接管 —— 一律用内置预览标签打开(本地项目地址与公网
+  // 外链都不例外),桌面壳里绝不放行 webview 自己导航(那会把整个应用页面换成目标网页);
+  // Ctrl/Cmd 点击则交给系统默认浏览器;以及工具卡「打开预览」按钮派发的自定义事件
   useEffect(() => {
     const onPreviewEvent = (e: Event) => {
       const url = (e as CustomEvent)?.detail?.url;
@@ -487,9 +508,11 @@ export default function App() {
         ? (target.closest('a[href]') as HTMLAnchorElement | null) : null;
       if (!a) return;
       const href = a.getAttribute('href') || a.href || '';
-      if (!isPreviewUrl(href)) return;
+      if (!isHttpLink(href)) return; // 锚点/相对路径/mailto 等保持原生行为
       e.preventDefault();
       e.stopPropagation();
+      // 先拦住原生导航,再决定去处:内置预览标签(默认)或系统浏览器(Ctrl/Cmd 点击)
+      if (e.metaKey || e.ctrlKey) { void openExternal(href); return; }
       ensureBrowserTabRef.current?.(href);
     };
     window.addEventListener(PREVIEW_EVENT, onPreviewEvent);
@@ -505,14 +528,20 @@ export default function App() {
     const off = api.on('agent', (m: any) => {
       if (!m || typeof m.event !== 'string') return;
       if (m.event === 'browser_open' && m.url) {
-        // AI 自己开预览:建/更新标签但不抢焦点(手机端正在对话时尤其重要),用顶部 chip + 🌐 徽标提示
-        ensureBrowserTabRef.current?.(String(m.url), String(m.id || 'main'), { focus: false });
-        setPreviewHint(String(m.url));
+        // AI 自己开预览:预览归属它所在的会话(事件带 sid,id 里也编着归属会话)。
+        // 只有当前正在看的会话由 AI 开预览才把视图切过去;后台会话的预览只建标签 + 顶栏 chip 提示,
+        // 避免用户正看着对话 A 时被对话 B 的预览标签抢走视图。
+        const sid = String(m.sid || '');
+        const focused = !!sid && sid === activeSessionId;
+        ensureBrowserTabRef.current?.(String(m.url), String(m.id || ''), { focus: focused });
+        if (!focused) setPreviewHint(String(m.url));
       }
       else if (m.event === 'preview_available' && m.url) setPreviewHint(String(m.url));
     });
     return () => { off(); };
-  }, []);
+    // activeSessionId 只用于"要不要抢焦点"的判断:变化时重挂这个监听即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
 
   // 已保存的 SSH 配置:顶栏连接信息显示「配置名称 · IP」,连接切换/弹窗关闭后刷新
   const [profiles, setProfiles] = useState<SshProfileInfo[]>([]);
@@ -573,21 +602,107 @@ export default function App() {
     openFileTab(`local:${path}`, path.split(/[\\/]/).filter(Boolean).pop() || path);
   };
 
-  // ---- 浏览器预览标签:AI 或用户点地址时打开;默认复用服务端 'main' 会话(所见即 AI 所控) ----
-  const ensureBrowserTab = (rawUrl?: string, sessionId = 'main', opts?: { focus?: boolean }) => {
+  // ---- 浏览器预览标签:一个预览绑定一个会话,只有该会话(的 AI 与用户)能操控它 ----
+  // 标签 id 里编着归属会话:`preview:<会话id>:<序号>`(见 utils/preview.ts 与 server/core/browser-manager.ts)。
+  // 归属在"打开它的那一刻"确定,之后不会自动改变:
+  //   - 会话 A 的 AI 调 browser_open → 服务端事件带 A 的 sid 与 id,前后端都记 A 为归属,天然一致;
+  //   - 用户在会话 B 里点链接 → 归到 B(该会话已有预览就在它上面导航,没有就新建一个),
+  //     因此点链接永远只会操作"当前会话自己的预览",碰不到别的会话;
+  //   - 想让一个预览换会话,只有用户明确点面板里的「绑到本会话」(关掉旧浏览器、按新归属重建)。
+  const browserTabsOf = (sid: string | null | undefined): TabItem[] =>
+    !sid ? [] : tabsRef.current.filter((t) => t.kind === 'browser' && ownerOfBrowserId(browserSessionId(t.id)) === sid);
+  /** 目标会话已有的预览 id(复用/改绑时优先用它,避免堆出一串空标签) */
+  const existingBrowserFor = (sid: string): string | null => {
+    const hit = browserTabsOf(sid)[0];
+    return hit ? browserSessionId(hit.id) : null;
+  };
+  /**
+   * 草稿期开的预览改名继承:标签 id 从 `preview:d_xxx:1` 换成 `preview:s_yyy:1`。
+   * 服务端同一时刻也把归属从草稿改到真实会话(见 session_create 的 transferFrom),
+   * 两边一起改名,才不会出现"标签指向一个已不存在的浏览器"或"预览没人认领"。
+   */
+  const rebindDraftBrowsers = (fromSid: string, toSid: string) => {
+    const map = new Map<string, string>();
+    for (const t of tabsRef.current) {
+      if (t.kind !== 'browser') continue;
+      const b = browserSessionId(t.id);
+      if (ownerOfBrowserId(b) !== fromSid) continue;
+      map.set(t.id, browserTabId(toSid + b.slice(fromSid.length)));
+    }
+    if (!map.size) return;
+    setTabs((prev) => prev.map((t) => (map.has(t.id) ? { ...t, id: map.get(t.id) as string } : t)));
+    setActiveTabId((cur) => map.get(cur) || cur);
+  };
+
+  /**
+   * 打开/导航一个预览标签。
+   * 绑定规则(与 utils/preview.ts、server/core/browser-manager.ts 的文件头一致):
+   *  - 显式给了 browserId(服务端 AI 事件):用它,归属由 id 里的会话决定;
+   *  - 否则归到 opts.bind / 当前会话:该会话已有预览就在那个预览上导航,没有才新建一个(默认 :1)。
+   * 一个会话默认只保留一个预览标签(要多个就点标签条 ＋,或让 AI 传新的 browser_id),
+   * 否则点几次链接就把标签条堆满了。
+   */
+  const ensureBrowserTab = (
+    rawUrl?: string,
+    browserId?: string,
+    opts?: { focus?: boolean; bind?: string }
+  ) => {
     const url = rawUrl ? (normalizePreviewInput(String(rawUrl)) || '') : '';
-    const id = browserTabId(sessionId);
+    const sidOfId = ownerOfBrowserId(browserId);
+    const sid = sidOfId || opts?.bind || currentBindSid();
+    const id = browserId
+      ? browserTabId(browserId)
+      : browserTabId(existingBrowserFor(sid) || `${sid}:1`);
+
     setTabs((prev) => {
       const hit = prev.find((t) => t.id === id);
       if (hit) {
         if (!url || hit.path === url) return prev;
+        // 已存在的预览接受新地址:面板按 path 变化重新导航(保留页面里已有的登录态/表单)
         return prev.map((t) => (t.id === id ? { ...t, path: url, name: previewLabel(url) } : t));
       }
       return [...prev, { id, kind: 'browser' as const, name: url ? previewLabel(url) : '浏览器预览', path: url }];
     });
-    if (opts?.focus !== false) setActiveTabId(id); // focus=false:AI 自动开预览时不抢走用户当前视图
+    if (opts?.focus !== false) setActiveTabId(id);
   };
   ensureBrowserTabRef.current = ensureBrowserTab;
+
+  /** 当前"可绑定预览"的会话 id:草稿态用占位 id(首条消息落地后由 handleSessionCreated 改名继承) */
+  const currentBindSid = (): string =>
+    activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : draftSid;
+
+  /** 手动再开一个预览(标签条 ＋ 按钮):同一个会话内多开,各自独立页面 */
+  const openAnotherBrowserTab = () => {
+    const sid = currentBindSid();
+    const id = allocBrowserId(tabsRef.current.map((t) => browserSessionId(t.id)), sid);
+    ensureBrowserTab('', id, { focus: true });
+  };
+
+  /**
+   * 把预览标签改绑到另一个会话:归属写死在服务端,所以改绑 = 关掉旧浏览器、按新归属重建。
+   * 页面状态会丢,只有用户明确要求(点左下角「切到此会话」)时才走这条路。
+   */
+  const bindBrowserTab = async (tabId: string, targetSid: string) => {
+    const tab = tabsRef.current.find((t) => t.id === tabId);
+    if (!tab || tab.kind !== 'browser') return;
+    const oldId = browserSessionId(tab.id);
+    if (ownerOfBrowserId(oldId) === targetSid) return;
+    const newId = existingBrowserFor(targetSid) || `${targetSid}:1`;
+    api.request('browser_close', { id: oldId, sid: ownerOfBrowserId(oldId) || undefined }, 30000).catch(() => {});
+    setTabs((prev) => prev.map((t) => (t.id === tabId
+      ? { ...t, id: browserTabId(newId), path: tab.path, name: tab.name } : t)));
+    setActiveTabId((cur) => (cur === tabId ? browserTabId(newId) : cur));
+    // 重建时把地址带过去:面板挂载后按 path 自行 browser_open(归属由新的会话 id 决定)
+    return newId;
+  };
+
+  /** 会话被删除时撤掉它的预览标签(服务端同时会关掉这些浏览器) */
+  const dropBrowserTabsFor = (sid: string) => {
+    const doomed = new Set(browserTabsOf(sid).map((t) => t.id));
+    if (!doomed.size) return;
+    setTabs((prev) => prev.filter((t) => !doomed.has(t.id)));
+    setActiveTabId((cur) => (doomed.has(cur) ? 'agent' : cur));
+  };
 
   // 预览标签名跟随页面标题(只改标签名,不改 path,避免与面板导航互相触发)
   const updateBrowserTab = (id: string, s: { url: string; title: string }) => {
@@ -598,13 +713,18 @@ export default function App() {
     }));
   };
 
-  // 预览空面板的「最近地址」候选:刚检测到的地址 + 已打开的预览地址(手动打开时可直接点)
+  // 预览空面板的「最近地址」候选:当前会话名下的预览地址 + 刚检测到的地址(手动打开时可直接点)
   const previewSuggestions = useMemo(() => {
     const list: string[] = [];
     if (previewHint) list.push(previewHint);
-    for (const t of tabs) if (t.kind === 'browser' && t.path) list.push(t.path);
+    const mine = activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : draftSid;
+    for (const t of tabs) {
+      if (t.kind !== 'browser' || !t.path) continue;
+      if (ownerOfBrowserId(browserSessionId(t.id)) !== mine) continue;
+      list.push(t.path);
+    }
     return list;
-  }, [previewHint, tabs]);
+  }, [previewHint, tabs, activeSessionId, draftSid]);
 
   const updateTabDirty = (id: string, dirty: boolean) => {
     setTabs((prev) => {
@@ -618,7 +738,11 @@ export default function App() {
   const closeTab = async (id: string) => {
     const t = tabsRef.current.find((x) => x.id === id);
     if (!t || (t.kind !== 'file' && t.kind !== 'browser')) return;
-    if (t.kind === 'browser') api.request('browser_close', { id: browserSessionId(t.id) }, 30000).catch(() => {});
+    // 关预览标签 = 关掉它对应的浏览器会话(带 sid:归属会话才有权关闭)
+    if (t.kind === 'browser') {
+      const bsid = browserSessionId(t.id);
+      api.request('browser_close', { id: bsid, sid: ownerOfBrowserId(bsid) || undefined }, 30000).catch(() => {});
+    }
     if (t.dirty) {
       const ok = await confirm({
         title: '关闭标签',
@@ -728,7 +852,10 @@ export default function App() {
       });
       if (!ok) { setTabMenu(null); return; }
     }
-    for (const b of tabs.filter((t) => t.kind === 'browser')) api.request('browser_close', { id: browserSessionId(b.id) }, 30000).catch(() => {});
+    for (const b of tabs.filter((t) => t.kind === 'browser')) {
+      const bsid = browserSessionId(b.id);
+      api.request('browser_close', { id: bsid, sid: ownerOfBrowserId(bsid) || undefined }, 30000).catch(() => {});
+    }
     setTabs((prev) => prev.filter((t) => t.kind === 'agent' || t.kind === 'console'));
     setActiveTabId((cur) => (cur !== 'agent' && cur !== 'console' ? (isPhone ? FILES_HOME_ID : 'agent') : cur));
     setTabMenu(null);
@@ -746,7 +873,10 @@ export default function App() {
       });
       if (!ok) { setTabMenu(null); return; }
     }
-    for (const b of tabs.filter((t) => (t.kind === 'browser') && t.id !== keepId)) api.request('browser_close', { id: browserSessionId(b.id) }, 30000).catch(() => {});
+    for (const b of tabs.filter((t) => (t.kind === 'browser') && t.id !== keepId)) {
+      const bsid = browserSessionId(b.id);
+      api.request('browser_close', { id: bsid, sid: ownerOfBrowserId(bsid) || undefined }, 30000).catch(() => {});
+    }
     setTabs((prev) => prev.filter((t) => t.kind === 'agent' || t.kind === 'console' || t.id === keepId));
     // 若当前激活的是被关闭的标签,切到保留的标签;固定页/保留标签保持不变
     setActiveTabId((cur) => (cur === keepId || cur === 'agent' || cur === 'console' ? cur : keepId));
@@ -1051,9 +1181,9 @@ export default function App() {
             {/* 手动打开浏览器预览:与浏览器「新建标签」同位,点一下即开预览标签(空面板里可输地址/点最近地址) */}
             <button
               className="tabstrip-add"
-              data-tip="打开浏览器预览"
+              data-tip="打开新的浏览器预览(绑定到当前会话)"
               aria-label="打开浏览器预览"
-              onClick={() => ensureBrowserTabRef.current?.('')}
+              onClick={() => openAnotherBrowserTab()}
             >＋</button>
           </div>
           {tabMenu && createPortal(
@@ -1085,18 +1215,31 @@ export default function App() {
             document.body
           )}
           <div className="tab-body">
-            {/* 浏览器预览标签页:每个预览常驻挂载(切走仅隐藏);页面本身存活在服务端,切回即恢复 */}
-            {tabs.filter((t) => t.kind === 'browser').map((t) => (
-              <div key={t.id} className={`tab-pane ${effActiveTabId === t.id ? '' : 'hide'}`}>
-                <BrowserPanel
-                  sessionId={browserSessionId(t.id)}
-                  url={t.path}
-                  active={effActiveTabId === t.id}
-                  onState={(s) => updateBrowserTab(t.id, s)}
-                  suggestions={previewSuggestions}
-                />
-              </div>
-            ))}
+            {/* 浏览器预览标签页:每个预览常驻挂载(切走仅隐藏);页面本身存活在服务端,切回即恢复。
+                ownerSid = 预览归属的会话(标签 id 里就编着它);不是当前会话时面板锁定、只许看不许动 */}
+            {tabs.filter((t) => t.kind === 'browser').map((t) => {
+              const bsid = browserSessionId(t.id);
+              const ownerSid = ownerOfBrowserId(bsid);
+              const ownerMeta = ownerSid ? sessions.find((s) => s.id === ownerSid) : undefined;
+              const ownerTitle = ownerMeta?.title || '';
+              return (
+                <div key={t.id} className={`tab-pane ${effActiveTabId === t.id ? '' : 'hide'}`}>
+                  <BrowserPanel
+                    sessionId={bsid}
+                    viewerSid={activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null}
+                    ownerSid={ownerSid}
+                    ownerTitle={ownerTitle}
+                    ownerIsCurrent={!ownerSid || ownerSid === activeSessionId}
+                    canSwitchOwner={!!ownerSid && !!ownerMeta && ownerSid !== activeSessionId}
+                    onBindHere={() => { void bindBrowserTab(t.id, currentBindSid()); }}
+                    url={t.path}
+                    active={effActiveTabId === t.id}
+                    onState={(s) => updateBrowserTab(t.id, s)}
+                    suggestions={previewSuggestions}
+                  />
+                </div>
+              );
+            })}
             {/* ChatPanel 常驻挂载:切走仅 CSS 隐藏(对齐终端/文件面板),手机端底部栏频繁切换不重载会话历史 */}
             <div className={`tab-pane ${effActiveTabId === 'agent' ? '' : 'hide'}`}>
               <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
@@ -1106,7 +1249,7 @@ export default function App() {
               remoteLocked={remoteLocked} localLocked={localLocked}
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
               onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}
-              onSessionCreated={handleSessionCreated} onSessionTouched={touchSession}
+              onSessionCreated={handleSessionCreated} onSessionTouched={touchSession} draftSid={draftSid}
               onOpenFile={handleOpenFile} onOpenLocalFile={handleOpenLocalFile} />
             </div>
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}

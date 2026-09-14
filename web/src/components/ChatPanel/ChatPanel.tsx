@@ -457,6 +457,11 @@ interface ChatPanelProps {
   onFork?: (at: number) => void;
   /** 新会话草稿态发送首条消息:ChatPanel 先创建服务端会话,成功后回调让 App 刷新会话列表/active/sessionSeq */
   onSessionCreated?: (r: any) => void;
+  /**
+   * 「新会话草稿」占位会话 id(d_…):草稿期开的浏览器预览绑在它名下,
+   * 创建真实会话时随 session_create 一起提交,服务端把预览归属改名继承过去(否则预览成了没人认领的孤儿)。
+   */
+  draftSid?: string;
   /** 会话发送了首条消息(发送那一刻即回调):App 据此立即锁定会话工作区,不必等服务端 msgCount 落盘回传 */
   onSessionTouched?: (sid: string | null) => void;
   /** 移动端(手机)布局:Enter 改为换行(发送只点按钮),提示文案同步切换 */
@@ -520,7 +525,7 @@ function markRetryStarted(msgs: ChatMessage[]): ChatMessage[] {
   return msgs;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, onSessionTouched, onOpenFile, onOpenLocalFile, compact = false }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, compact = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -615,6 +620,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 用 progRef 标记本次滚动来自代码(只在确实改变 scrollTop 时置位,防止残留标志吞掉真实手势)。
   const stickRef = useRef(true);
   const progRef = useRef(false);
+  // 真实用户滚动输入的"有效期"(performance.now() 时间戳):滚轮、触摸滑动、键盘滚动键、
+  // 拖动自绘滚动条拇指、点击跳转点都会续期。只有落在有效期内的滚动才被当作"用户上滑离底"。
+  // 为什么不能只看 scroll 事件:滚动事件本身分不清来源——切会话时内容整段替换,
+  // .msg 的 content-visibility 占位高度与真实高度不一致,浏览器会自行钳制 scrollTop
+  // (旧 scrollTop 超出新内容高度)或调整滚动锚定,这些都会发 scroll 事件,而且因为
+  // 本组件那次程序化赋值并没有真正改变 scrollTop,progRef 挡不住它们。旧实现把这类
+  // 引擎驱动的滚动误判成用户上滑 → stick=false → 切换会话的触底兜底(chip 与常驻
+  // ResizeObserver 都以 stick 为前提)立刻放弃,界面就停在中间/顶部(实测距真实底部
+  // 2000~8000px,并亮出「回到底部」按钮),这就是"切会话经常没落到底部"的根因。
+  const userScrollUntilRef = useRef(0);
   // 离开底部时显示"回到底部"悬浮按钮(流式期间内容持续增长,靠按钮一键返回)
   const [showJump, setShowJump] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null); // chatwrap:聊天滚动条拇指的宿主(整列高度,含输入区区域)
@@ -1451,12 +1466,21 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     });
   };
 
+  // 用户滚动输入的两种有效期:离散输入(滚轮/触摸/按键/拖拇指)后一段短窗口内的
+  // 滚动事件都算这次手势的产物(惯性滚动会连续发事件但不刷新起点);点跳转点走的是
+  // 平滑滚动,动画本身持续数百毫秒,窗口按动画时长量级给(见 userScrollUntilRef)。
+  const USER_SCROLL_MS = 400;
+  const SMOOTH_SCROLL_MS = 900;
+
   // 点击跳转点:平滑滚动到对应的用户消息
   const jumpToMsg = (i: number) => {
     const el = scrollRef.current;
     const node = userMsgRefs.current[i];
     if (!el || !node) return;
     const top = el.scrollTop + node.getBoundingClientRect().top - el.getBoundingClientRect().top - 12;
+    // 用户主动离底回看:标记为用户滚动,平滑动画期间产生的 scroll 事件才被认成手势
+    // (暂停吸附,避免流式增量把用户拉回底部)
+    userScrollUntilRef.current = performance.now() + SMOOTH_SCROLL_MS;
     el.scrollTo({ top, behavior: 'smooth' });
   };
 
@@ -1485,19 +1509,29 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     updateActiveDot();
   };
 
-  // 对话区 scroll 统一入口:更新跳转点/提示,并据位置维护吸附状态。
-  // 程序化触底(scrollTop 赋值)触发的事件只吞掉标志不改状态;其余一律视为
-  // 用户手势——在底部(含 48px 容差)恢复吸附,离开底部暂停吸附并亮出回底按钮。
-  // 拇指拖拽/滚轮转发/触摸滚动都走原生 scroll 事件,天然被识别为用户手势。
+  // 对话区 scroll 统一入口:更新跳转点/提示,并据位置维护吸附状态。判定顺序:
+  // 1) 位置在底部(含 STICK_EPS 容差):无论来源一律恢复吸附——用户自己滚回底部、
+  //    程序化触底、引擎钳制都适用,「在底部就跟随底部」永远是对的;
+  // 2) progRef:本组件的程序化 scrollTop 赋值,只吞标志不改状态;
+  // 3) 其余滚动只有落在用户输入有效期内(userScrollUntilRef)才认作"用户上滑离底"。
+  //    引擎/布局驱动的滚动(切会话时内容整段替换带来的钳制与滚动锚定)不改变吸附状态,
+  //    否则切换的触底兜底会在第一帧就被误判打断(见 userScrollUntilRef 注释)。
   const onChatScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     updateActiveDot();
     hideDotTip();
-    if (progRef.current) { progRef.current = false; return; }
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_EPS;
-    stickRef.current = atBottom;
-    setShowJump(!atBottom);
+    if (atBottom) {
+      progRef.current = false; // 已在底部:残留的程序化标志一并清掉
+      stickRef.current = true;
+      setShowJump(false);
+      return;
+    }
+    if (progRef.current) { progRef.current = false; return; }
+    if (performance.now() > userScrollUntilRef.current) return; // 非用户滚动:不动吸附状态
+    stickRef.current = false;
+    setShowJump(true);
   };
 
   // 滚动条宿主 = tab-body(对话标签页整个区域):拇指从面板顶部铺到底部、贴最右侧。
@@ -1511,8 +1545,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     const host = (root?.closest('.tab-body') as HTMLElement | null) ?? root?.parentElement ?? null;
     if (!el || !host) return;
     setScrollbarHost(el, host);
+    // 真实用户滚动输入续期(见 userScrollUntilRef):滚轮、触摸滑动、键盘滚动键、
+    // 拖动自绘滚动条拇指都在宿主内,统一在这里登记,onChatScroll 据此区分手势与引擎滚动
+    const markUserScroll = () => { userScrollUntilRef.current = performance.now() + USER_SCROLL_MS; };
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) return; // Ctrl+滚轮 / 触控板捏合缩放:交给浏览器
+      markUserScroll(); // 无论是下面的转发还是落在聊天区上的原生滚动,都是用户手势
       // 自下而上检查目标到宿主的链路:命中聊天滚动区本身(原生滚动)或任何
       // 真实可滚动的内部容器(工具卡片/提问面板/输入框等)时不转发,交给原生处理
       for (let n = e.target as Element | null; n && n !== host; n = n.parentElement) {
@@ -1526,9 +1564,31 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       const dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaMode === 2 ? e.deltaY * el.clientHeight : e.deltaY;
       el.scrollTop += dy;
     };
+    const onTouch = () => markUserScroll();
+    // 键盘滚动键:只有作用在对话滚动区上时才算(输入框里的按键不是滚动输入)
+    const onKey = (e: KeyboardEvent) => {
+      if (!/^(Arrow|Page|Home|End| )/.test(e.key)) return;
+      const t = e.target as Element | null;
+      if (t !== el && !(t && el.contains(t))) return;
+      markUserScroll();
+    };
+    // 拖动自绘滚动条拇指(scrollbar-ui 里 thumb.setPointerCapture 后 move 事件仍指向拇指)
+    const onPointer = (e: PointerEvent) => {
+      if ((e.target as Element | null)?.classList?.contains('ob-thumb')) markUserScroll();
+    };
     host.addEventListener('wheel', onWheel, { passive: false });
+    host.addEventListener('touchstart', onTouch, { passive: true });
+    host.addEventListener('touchmove', onTouch, { passive: true });
+    host.addEventListener('keydown', onKey, true);
+    host.addEventListener('pointerdown', onPointer, true);
+    host.addEventListener('pointermove', onPointer, true);
     return () => {
       host.removeEventListener('wheel', onWheel);
+      host.removeEventListener('touchstart', onTouch);
+      host.removeEventListener('touchmove', onTouch);
+      host.removeEventListener('keydown', onKey, true);
+      host.removeEventListener('pointerdown', onPointer, true);
+      host.removeEventListener('pointermove', onPointer, true);
       setScrollbarHost(el, null);
     };
   }, []);
@@ -1765,7 +1825,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if (sid == null || sid === NEW_SESSION_ID) {
       let created: any;
       try {
-        created = await api.request('session_create', {}, 8000);
+        created = await api.request('session_create', { transferFrom: draftSid || undefined }, 8000);
         realSid = created.active ?? null;
         activeRef.current = realSid; // 立即更新事件路由,不等 App 侧 state 同步
         skipHistoryOnceRef.current = true; // 跳过随后 sid 变化触发的历史回载(消息由事件流渲染)

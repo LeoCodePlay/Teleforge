@@ -9,6 +9,7 @@ import { setupWs } from './core/ws.ts';
 import { sshManager as ssh } from './core/ssh-manager.ts';
 import { browserManager } from './core/browser-manager.ts';
 import { closeTunnels } from './core/port-tunnel.ts';
+import * as sessions from './store/session-store.ts';
 import registerBasic from './api/http/basic.ts';
 import registerProviders from './api/http/providers.ts';
 import registerUiState from './api/http/ui-state.ts';
@@ -19,6 +20,13 @@ import registerStatic from './api/http/static.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '../web/dist');
+
+// 预览浏览器状态里要带上"归属会话标题"(前端左下角显示已连接的会话)。
+// 查询函数在启动时注入浏览器内核,避免 core → store 的模块循环依赖。
+browserManager.setSessionTitleLookup((sid: string) => {
+  const hit = sessions.list().find((s) => s.id === sid);
+  return hit ? (hit.title || '未命名会话') : null;
+});
 
 export async function startApp({ port = PORT, host = HOST, quiet = false } = {}) {
   // serverFactory 包住自建 http.Server,供 setupWs 在 app.server 上挂 /ws、/ws/term、/ws/browser 的 upgrade 路由

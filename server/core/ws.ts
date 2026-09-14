@@ -300,24 +300,33 @@ export function setupWs(httpServer: Server) {
   // 让浏览器触发 onclose 走前端自动重连,而不是无声无息地双向都收不到数据。
   // 浏览器 WebSocket 对 ping 控制帧自动回 pong,无需前端配合。
   // ---------- 浏览器预览通道(/ws/browser) ----------
-  // 每个连接订阅一个浏览器标签 id(?id=main)。下行:二进制 JPEG 画面 + JSON 状态;
-  // 上行:input(鼠标/键盘/滚轮/文本)、subscribe(切换订阅)、resize。
+  // 每个连接订阅一个浏览器标签 id(?id=s_xxx:1),并带上"用户当前所在会话"??sid=…:
+  // 下行:二进制 JPEG 画面 + JSON 状态;上行:input(鼠标/键盘/滚轮/文本)、subscribe(切换订阅)、resize。
+  // 归属校验:预览被某个会话独占(见 core/browser-manager.ts 文件头),sid 不是归属会话时
+  // 输入被拒绝并回执 browser_locked —— 用户仍能看到画面(切过去看一眼很自然),但点不动它。
   browserWss.on('connection', (ws: WebSocket, req?: IncomingMessage) => {
     (ws as any).isAlive = true;
     ws.on('pong', () => { (ws as any).isAlive = true; });
     let id = 'main';
-    try { id = new URL(String(req?.url || '/ws/browser'), 'http://127.0.0.1').searchParams.get('id') || 'main'; } catch { /* 保持默认 */ }
+    let sid = '';
+    try {
+      const q = new URL(String(req?.url || '/ws/browser'), 'http://127.0.0.1').searchParams;
+      id = q.get('id') || 'main';
+      sid = q.get('sid') || '';
+    } catch { /* 保持默认 */ }
     void browserManager.setViewer(id, true); // 有观看者才推画面(无观看者时服务端停掉 screencast)
     (ws as any).browserId = id;
 
     const sendJson = (o: any) => { try { ws.send(JSON.stringify(o)); } catch { /* 忽略 */ } };
-    const pushState = (sid: string) => {
-      const st = browserManager.state(sid);
+    /** 回执:这个预览不属于当前会话 → 前端据此提示并禁用交互 */
+    const sendLocked = (reason: string, which = id) => sendJson({ type: 'browser_locked', id: which, ownerSid: browserManager.state(which)?.ownerSid || null, error: reason });
+    const pushState = (sid0: string) => {
+      const st = browserManager.state(sid0);
       if (st) sendJson({ type: 'browser_state', ...st });
-      else sendJson({ type: 'browser_state', id: sid, closed: true });
+      else sendJson({ type: 'browser_state', id: sid0, closed: true });
     };
-    const pushFrame = (sid: string) => {
-      const f = browserManager.lastFrame(sid);
+    const pushFrame = (sid0: string) => {
+      const f = browserManager.lastFrame(sid0);
       if (f && ws.readyState === 1) { try { ws.send(f.data, { binary: true } as any); } catch { /* 忽略 */ } }
     };
     pushState(id);
@@ -328,9 +337,11 @@ export function setupWs(httpServer: Server) {
       let msg: any;
       try { msg = JSON.parse(String(raw)); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
-      if (msg.type === 'subscribe') {
+      if (msg.type === 'viewer' || msg.type === 'subscribe') {
+        // subscribe:兼容旧前端(切换订阅时顺带带上会话);viewer:只更新"当前所在会话"
         const prevId = id;
-        id = String(msg.id || 'main');
+        if (msg.type === 'subscribe') id = String(msg.id || 'main');
+        if (typeof msg.sid === 'string') sid = msg.sid;
         if (prevId !== id) void browserManager.setViewer(prevId, false);
         (ws as any).browserId = id;
         void browserManager.setViewer(id, true);
@@ -340,7 +351,9 @@ export function setupWs(httpServer: Server) {
       }
       if (msg.type === 'ping') { sendJson({ type: 'pong' }); return; }
       if (msg.type === 'input') {
-        try { await browserManager.input(id, msg.event || {}); }
+        const reason = browserManager.denyReason(id, sid);
+        if (reason) { sendLocked(reason); return; }
+        try { await browserManager.input(id, msg.event || {}, sid); }
         catch (e: any) { sendJson({ type: 'browser_error', id, error: e?.message || String(e) }); }
         return;
       }
@@ -378,9 +391,21 @@ export function setupWs(httpServer: Server) {
       }
     }
   };
+  // 预览改名(草稿会话落地成真实会话:预览 id 从 `d_xxx:1` 改成 `s_yyy:1`):
+  // 订阅了旧 id 的前端连接就地改订阅到新 id,并按新 id 补推一次状态,避免它挂在旧 id 上收不到画面。
+  const onBrowserRenamed = (o: { from: string; to: string }) => {
+    for (const ws of browserWss.clients) {
+      if ((ws as any).browserId !== o.from || ws.readyState !== 1) continue;
+      (ws as any).browserId = o.to;
+      try { ws.send(JSON.stringify({ type: 'browser_renamed', from: o.from, to: o.to })); } catch { /* 忽略 */ }
+      const st = browserManager.state(o.to);
+      if (st) { try { ws.send(JSON.stringify({ type: 'browser_state', ...st })); } catch { /* 忽略 */ } }
+    }
+  };
   browserManager.on('frame', onBrowserFrame);
   browserManager.on('state', onBrowserState);
   browserManager.on('closed', onBrowserClosed);
+  browserManager.on('renamed', onBrowserRenamed);
 
   const HEARTBEAT_MS = 30_000;
   const heartbeat = (server: WebSocketServer) => {
@@ -396,6 +421,7 @@ export function setupWs(httpServer: Server) {
     browserManager.off('frame', onBrowserFrame);
     browserManager.off('state', onBrowserState);
     browserManager.off('closed', onBrowserClosed);
+    browserManager.off('renamed', onBrowserRenamed);
   });
 
   return { wss, termWss, browserWss };

@@ -2,6 +2,7 @@
 import { agent } from '../../agent/agent.ts';
 import { sshManager as ssh } from '../../core/ssh-manager.ts';
 import { localFs } from '../../core/local-fs.ts';
+import { browserManager } from '../../core/browser-manager.ts';
 import type { RpcModule } from './router.ts';
 
 // 操作目标会话:前端带的 sid 优先。切服务器 / 新建会话都会让服务端「活跃会话」静默改变
@@ -94,6 +95,11 @@ export function registerAgent(rpc: RpcModule) {
     // permissionMode:新会话生效的访问权限模式(=全局默认,见 settings-store),
     // 前端草稿态据此对齐权限选择器,避免"用户设了完全访问、新会话却显示变更前确认"
     const s = agent.createSession(msg.title);
+    // "新会话草稿"里已经打开的预览浏览器继承给这个真实会话(前端传草稿 id d_…)。
+    // 没有这一步,草稿期开的预览会变成没人认领的孤儿:新会话无权操作它,用户得手动重开。
+    if (msg.transferFrom) {
+      try { browserManager.transferOwner(String(msg.transferFrom), s.id); } catch { /* 继承失败不影响建会话 */ }
+    }
     emitStatus(); // 新会话已捕获并应用绑定工作区,同步下发状态
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId, created: s, permissionMode: agent.getPermissionMode(s.id) });
   });

@@ -4,7 +4,8 @@
 // AI 操控的是同一个页面(服务端 browser_* 工具驱动的就是这条会话),所见即所控。
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api';
-import { normalizePreviewInput, previewLabel, touchDragDelta } from '../../utils/preview';
+import { normalizePreviewInput, ownerSessionLabel, previewLabel, touchDragDelta } from '../../utils/preview';
+import { openExternal } from '../../utils/updater';
 import {
   IconArrowLeft16, IconArrowRight16, IconCheck16, IconCopy16, IconExternal16,
   IconGlobe16, IconKeyboard16, IconLock16, IconReload16,
@@ -21,8 +22,20 @@ interface PageState {
 }
 
 export interface BrowserPanelProps {
-  /** 服务端浏览器会话 id(与标签 id 相同) */
+  /** 服务端浏览器会话 id(形如 `会话id:序号`,归属会话编在 id 里) */
   sessionId: string;
+  /** 用户当前所在的会话 id:画面通道带着它上报,服务端据此允许/拒绝输入 */
+  viewerSid?: string | null;
+  /** 该预览绑定的会话 id(null = 无归属的共享预览,谁都能操作) */
+  ownerSid?: string | null;
+  /** 归属会话的标题(左下角"已连接的会话"显示用) */
+  ownerTitle?: string;
+  /** 归属会话就是用户当前所在的会话(据此决定是否允许交互) */
+  ownerIsCurrent?: boolean;
+  /** 归属会话是否存在且可切换过去(会话已被删除时为 false) */
+  canSwitchOwner?: boolean;
+  /** 点「绑定到当前会话」:把这个预览改绑给用户当前所在会话(会重建浏览器,页面状态丢失) */
+  onBindHere?: () => void;
   /** 要打开的地址;变化时驱动导航(空 = 未指定,面板显示手动打开入口) */
   url?: string;
   /** 是否为当前可见标签:不可见时断开画面通道以省 CPU */
@@ -35,7 +48,11 @@ export interface BrowserPanelProps {
 
 const EMPTY: PageState = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false, error: null };
 
-export default function BrowserPanel({ sessionId, url, active = true, suggestions = [], onState }: BrowserPanelProps) {
+export default function BrowserPanel({
+  sessionId, viewerSid = null, ownerSid = null, ownerTitle = '',
+  ownerIsCurrent = true, canSwitchOwner = false, onBindHere,
+  url, active = true, suggestions = [], onState
+}: BrowserPanelProps) {
   const [page, setPage] = useState<PageState>(EMPTY);
   const [frame, setFrame] = useState('');
   const [addr, setAddr] = useState('');
@@ -51,6 +68,11 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   const [kbOpen, setKbOpen] = useState(false);
   // 右键 / 长按菜单(位置相对画面舞台):复制·粘贴·全选等操作在手机上没有别的入口
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // 归属锁定:这个预览属于别的会话(或服务端拒绝了本次输入)。锁定 = 只许看,不许点/打字,
+  // 并给出「绑定到当前会话」的出口——预览是别人的对话资产,不能被当前对话顺手改掉。
+  const [ownerLive, setOwnerLive] = useState<{ ownerSid: string | null; ownerTitle: string | null } | null>(null);
+  const [lockedHint, setLockedHint] = useState('');
+  const locked = !ownerIsCurrent;
 
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -67,6 +89,9 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   kbRef.current = kbOpen;
   // 最近一次同步给服务端的视口尺寸(去重:尺寸没变不重复发)
   const lastVpRef = useRef({ width: 0, height: 0 });
+  // 锁定态在原生事件监听(wheel)里也要读到最新值
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
 
   /** 量一次预览容器尺寸;隐藏(display:none)时返回 null,不覆盖已记录的尺寸 */
   const measure = () => {
@@ -126,7 +151,10 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
     const open = () => {
       if (disposed) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${location.host}/ws/browser?id=${encodeURIComponent(sessionId)}`);
+      // ?sid = 用户当前所在会话:服务端拿它校验"这个预览是不是归你"(非归属会话的输入会被拒),
+      // 只影响输入权限,不影响画面订阅(非归属也能看,只是点不动)。
+      const q = `id=${encodeURIComponent(sessionId)}${viewerSid ? `&sid=${encodeURIComponent(viewerSid)}` : ''}`;
+      const ws = new WebSocket(`${proto}://${location.host}/ws/browser?${q}`);
       ws.binaryType = 'blob';
       wsRef.current = ws;
       ws.onopen = () => { attempt = 0; setConn(true); };
@@ -138,12 +166,18 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
             if (m?.type === 'browser_state') {
               if (m.closed) return; // 会话尚未建立(或已被关闭):保持连接,等 browser_open 落地后再接收状态
               setConn(true);
+              // 归属以服务端为准:前端标签 id 只是约定,服务端才是权限的最终裁决者
+              if (m.ownerSid !== undefined) setOwnerLive({ ownerSid: m.ownerSid || null, ownerTitle: m.ownerTitle || null });
               setPage((p) => ({ ...p, url: m.url ?? p.url, title: m.title ?? '', loading: !!m.loading, canGoBack: !!m.canGoBack, canGoForward: !!m.canGoForward, error: m.error ?? null }));
               setPhase((ph) => (m.error ? 'error' : (ph === 'error' ? 'live' : ph)));
               if (m.url) {
                 setDirect((d0) => d0 || m.url);
                 setAddr((a0) => (document.activeElement === addrRef.current ? a0 : String(m.url)));
               }
+            } else if (m?.type === 'browser_locked') {
+              // 服务端明确拒绝:这个预览属于别的会话(前端标签归属过时也会走到这里,例如后端重启后会话换了)
+              setLockedHint(String(m.error || '这个预览属于另一个会话'));
+              if (m.ownerSid !== undefined) setOwnerLive({ ownerSid: m.ownerSid || null, ownerTitle: null });
             }
           } catch { /* 忽略非 JSON 文本帧 */ }
           return;
@@ -167,7 +201,16 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
       setConn(false);
       if (ws) { try { ws.close(); } catch { /* 忽略 */ } }
     };
-  }, [active, sessionId]);
+  }, [active, sessionId, viewerSid]);
+
+  // 用户切换会话后,同一条画面通道要把"我现在在哪个会话"更新给服务端,
+  // 否则输入会被旧会话的归属判定拒掉(服务端只认它记下的 sid)。
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'viewer', sid: viewerSid || '' })); } catch { /* 忽略 */ }
+    }
+  }, [viewerSid, conn]);
 
 
   // ---- 地址变化 → 打开/导航(按 sessionId 复用同一个预览会话) ----
@@ -177,13 +220,16 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
     if (lastNavRef.current === target) return;
     // 隐藏的预览标签不预先加载页面(切到该标签时才真正打开),避免刷新后同时拉起多个站点
     if (!active && !lastNavRef.current) return;
+    // 只对"本会话自己的预览"发起导航:标签归属改了但面板还没重挂载时,别拿旧 id 去打别人的浏览器
+    const ownedByViewer = !ownerSid || !viewerSid || ownerSid === viewerSid;
+    if (!ownedByViewer) { setPhase('idle'); return; }
     lastNavRef.current = target;
     navigatedRef.current = false;
     setAddr(target);
     setDirect(target);
     setPhase('connecting');
     const { width, height } = measure() || sizeRef.current;
-    api.request('browser_open', { id: sessionId, url: target, width: width || undefined, height: height || undefined }, 120000)
+    api.request('browser_open', { id: sessionId, url: target, sid: viewerSid || undefined, width: width || undefined, height: height || undefined }, 120000)
       .then((r) => {
         navigatedRef.current = true;
         setNote(r?.note || null);
@@ -196,7 +242,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
         syncViewport();
       })
       .catch((e) => { setPhase('error'); setPage((p) => ({ ...p, error: (e as Error).message })); });
-  }, [url, sessionId, active]);
+  }, [url, sessionId, active, ownerSid, viewerSid]);
 
   // 标题/地址回传(标签名与持久化)
   useEffect(() => {
@@ -240,6 +286,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (lockedRef.current) return; // 锁定时既不让本机滚动,也不把滚动发给页面
       const { nx, ny } = norm(e.clientX, e.clientY);
       sendInput({ kind: 'wheel', nx, ny, dx: e.deltaX, dy: e.deltaY });
     };
@@ -276,6 +323,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   };
 
   const goto = (raw: string, force = false) => {
+    if (locked) { toast('这个预览属于另一个会话:点左下角「绑定到当前会话」后即可操作'); return; }
     const target = normalizePreviewInput(raw);
     if (!target) return;
     if (!force && target === lastNavRef.current) return;
@@ -284,8 +332,9 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
     setPhase('connecting');
     // 用 browser_open 而不是 browser_navigate:手动打开(空面板)时服务端会话可能还不存在,
     // browser_open 是「有则导航、无则创建」的幂等入口;browser_navigate 只作用于已存在的会话。
+    // 带上 sid = 用户当前会话:服务端据此判断这个预览是否归它所有(非归属会被拒)。
     const { width, height } = measure() || sizeRef.current;
-    api.request('browser_open', { id: sessionId, url: target, width: width || undefined, height: height || undefined }, 120000)
+    api.request('browser_open', { id: sessionId, url: target, sid: viewerSid || undefined, width: width || undefined, height: height || undefined }, 120000)
       .then((r) => {
         setNote(r?.note || null);
         if (r?.direct) setDirect(r.direct);
@@ -298,7 +347,8 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   };
 
   const doAction = (type: 'browser_back' | 'browser_forward' | 'browser_reload') => {
-    api.request(type, { id: sessionId }, 60000).then((r) => {
+    if (locked) { toast('这个预览属于另一个会话,不能操作'); return; }
+    api.request(type, { id: sessionId, sid: viewerSid || undefined }, 60000).then((r) => {
       if (r?.url) setPage((p) => ({ ...p, url: r.url, loading: !!r.loading, error: r.error ?? null }));
       else if (type === 'browser_reload') setPage((p) => ({ ...p, loading: true }));
     }).catch(() => { /* 状态由 WS 推回 */ });
@@ -312,6 +362,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   const clearPress = () => { if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; } };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if (locked) { e.preventDefault(); return; } // 预览不属于当前会话:点不动,只提示怎么改绑
     if (e.button === 2) return; // 右键交给 contextmenu
     // 关键:阻止浏览器默认的「按下就把焦点移到 body」。
     // 否则隐藏输入框立刻失焦 —— 桌面端表现为「打字没反应」,手机端表现为「点一下页面软键盘就被收起」。
@@ -344,6 +395,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (locked) return;
     const t = touchRef.current;
     if (t) {
       // 手指上滑 = 页面向下滚:wheel 的 deltaY 取「上一位置 − 当前位置」(与浏览器原生手势一致)
@@ -363,6 +415,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
+    if (locked) return;
     clearPress();
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* 忽略 */ }
     const { nx, ny } = norm(e.clientX, e.clientY);
@@ -401,8 +454,9 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
 
   /** 复制远程页面里选中的文字到本机剪贴板 */
   const copyRemote = useCallback(async (): Promise<string> => {
+    if (lockedRef.current) { toast('这个预览属于另一个会话,不能读取它的选区'); return ''; }
     try {
-      const r = await api.request('browser_selection', { id: sessionId }, 15000);
+      const r = await api.request('browser_selection', { id: sessionId, sid: viewerSid || undefined }, 15000);
       const text = String(r?.text || '');
       if (!text) { toast('页面上没有选中文字:先拖选一段再复制'); return ''; }
       await navigator.clipboard.writeText(text);
@@ -412,10 +466,11 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
       toast(`复制失败:${(e as Error).message}`);
       return '';
     }
-  }, [sessionId, toast]);
+  }, [sessionId, viewerSid, toast]);
 
   /** 把本机剪贴板内容输入到远程页面(读剪贴板需要权限,失败时提示用 Ctrl+V) */
   const pasteLocal = useCallback(async () => {
+    if (lockedRef.current) { toast('这个预览属于另一个会话,不能往里输入'); return; }
     try {
       const text = await navigator.clipboard.readText();
       if (!text) { toast('本机剪贴板是空的'); return; }
@@ -427,11 +482,13 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   }, [toast, sendInput]);
 
   const cutRemote = useCallback(async () => {
+    if (lockedRef.current) { toast('这个预览属于另一个会话,不能剪切'); return; }
     const text = await copyRemote();
     if (text) sendInput({ kind: 'key', key: 'Backspace' });
   }, [copyRemote, sendInput]);
 
   const selectAllRemote = useCallback(() => {
+    if (lockedRef.current) { toast('这个预览属于另一个会话,不能选择内容'); return; }
     sendInput({ kind: 'key', key: 'a', ctrlKey: true });
     toast('已全选页面内容');
   }, [sendInput, toast]);
@@ -439,6 +496,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
   // ---------- 键盘 ----------
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     e.stopPropagation();
+    if (lockedRef.current) return; // 锁定时键盘不转发(隐藏输入框也不该拿到焦点)
     const k = e.key;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && !e.altKey) {
@@ -462,6 +520,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
     const ta = e.currentTarget;
     const v = ta.value;
     if (!v) return;
+    if (lockedRef.current) { ta.value = ''; return; }
     if (composingRef.current) return; // 输入法组合中:compositionend 统一提交
     sendInput({ kind: 'text', text: v });
     ta.value = '';
@@ -494,17 +553,35 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
     : phase === 'connecting' || page.loading ? '加载中…'
     : conn ? '已连接' : '连接中…';
   const statusKind = page.error ? 'err' : conn ? 'ok' : 'wait';
+  // 左下角显示的「已连接的会话」:优先用服务端确认的归属(前端标签归属可能过时),
+  // 会话已被删除时给出明确说明,而不是显示一个谁也认不出的 id。
+  const ownerLabel = ownerSessionLabel(ownerLive?.ownerSid ?? ownerSid, ownerLive?.ownerTitle || ownerTitle);
+  // 长标题在徽标里放不下:主动截断并加省略号(完整名称仍在 tooltip 里),
+  // 免得被 CSS 挤成"半截字"或被 overflow 硬切掉,看起来像坏了
+  const ownerLabelShort = ownerLabel.length > 14 ? ownerLabel.slice(0, 12) + '…' : ownerLabel;
+  const ownerHint = locked
+    ? lockedHint || `这个预览属于会话「${ownerLabel}」:只有它可以操控,你当前在别的会话`
+    : `这个预览绑定在会话「${ownerLabel}」:你可以直接操作它,该会话的 AI 也能看到并操控它`;
 
   return (
-    <div className="bp">
+    <div className={`bp${locked ? ' locked' : ''}`}>
+      {locked && (
+        <div className="bp-lockbar">
+          <IconLock16 size={13} />
+          <span className="bp-lockbar-text">此预览属于会话「{ownerLabel}」,当前会话只能查看</span>
+          {canSwitchOwner && onBindHere && (
+            <button className="bp-lockbar-btn" onClick={onBindHere}>绑定到当前会话</button>
+          )}
+        </div>
+      )}
       <div className="bp-toolbar">
         <div className="bp-nav" role="group" aria-label="导航">
-          <button className="bp-ico" onClick={() => doAction('browser_back')} disabled={!page.canGoBack}
+          <button className="bp-ico" onClick={() => doAction('browser_back')} disabled={locked || !page.canGoBack}
             data-tip="后退" aria-label="后退"><IconArrowLeft16 size={16} /></button>
-          <button className="bp-ico bp-fwd" onClick={() => doAction('browser_forward')} disabled={!page.canGoForward}
+          <button className="bp-ico bp-fwd" onClick={() => doAction('browser_forward')} disabled={locked || !page.canGoForward}
             data-tip="前进" aria-label="前进"><IconArrowRight16 size={16} /></button>
           <button className={`bp-ico${page.loading ? ' spinning' : ''}`} onClick={() => doAction('browser_reload')}
-            data-tip="刷新" aria-label="刷新"><IconReload16 size={15} /></button>
+            data-tip="刷新" aria-label="刷新" disabled={locked}><IconReload16 size={15} /></button>
         </div>
         <form className={`bp-addr${page.error ? ' err' : conn ? ' ok' : ''}`}
           onSubmit={(e) => { e.preventDefault(); goto(addr, true); }}>
@@ -515,11 +592,12 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
             ref={addrRef}
             value={addr}
             spellCheck={false}
+            readOnly={locked}
             placeholder="输入地址,如 localhost:5173"
             onChange={(e) => setAddr(e.target.value)}
             onFocus={(e) => e.currentTarget.select()}
           />
-          {addrDirty && (
+          {addrDirty && !locked && (
             <button type="submit" className="bp-go" data-tip="前往" aria-label="前往"><IconArrowRight16 size={14} /></button>
           )}
         </form>
@@ -529,12 +607,12 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
         </button>
         {isTouch && (
           <button className={`bp-ico bp-kb${kbOpen ? ' on' : ''}`} onClick={() => setKbOpen((v) => !v)}
-            data-tip={kbOpen ? '收起键盘' : '打开键盘(把输入发送到页面)'} aria-label="键盘">
+            data-tip={kbOpen ? '收起键盘' : '打开键盘(把输入发送到页面)'} aria-label="键盘" disabled={locked}>
             <IconKeyboard16 size={16} />
           </button>
         )}
         <button className="bp-ico bp-out" disabled={!page.url}
-          onClick={() => { const u = direct || page.url; if (u) window.open(u, '_blank', 'noopener'); }}
+          onClick={() => { const u = direct || page.url; if (u) void openExternal(u); }}
           data-tip="在系统浏览器中打开" aria-label="在系统浏览器中打开">
           <IconExternal16 size={16} />
         </button>
@@ -584,7 +662,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
           onCompositionEnd={(e) => {
             composingRef.current = false;
             const v = e.currentTarget.value || e.data || '';
-            if (v) { sendInput({ kind: 'text', text: v }); e.currentTarget.value = ''; }
+            if (v) { if (!lockedRef.current) sendInput({ kind: 'text', text: v }); e.currentTarget.value = ''; }
           }}
         />
         {showEmpty && (
@@ -648,7 +726,7 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
               <button disabled={!page.url} onClick={() => {
                 setMenu(null);
                 const u = direct || page.url;
-                if (u) window.open(u, '_blank', 'noopener');
+                if (u) void openExternal(u);
               }}>在系统浏览器打开</button>
             </div>
           </>
@@ -658,9 +736,20 @@ export default function BrowserPanel({ sessionId, url, active = true, suggestion
       <div className="bp-status">
         <span className={`bp-dot ${statusKind}`} aria-hidden="true" />
         <span className={`bp-status-text${page.error ? ' err' : ''}`} title={page.error || statusText}>{statusText}</span>
+        {/* 左下角:这个预览浏览器连的是哪个会话 —— 一个预览只服务一个对话,归属一眼可见。
+            必须排在 .bp-spacer 之前:spacer 是 flex:1,排在它后面会被推到状态栏最右侧。 */}
+        <span className={`bp-owner${locked ? ' locked' : ''}`} data-tip={ownerHint}>
+          {locked ? <IconLock16 size={12} /> : <IconGlobe16 size={12} />}
+          <span className="bp-owner-label">已连接会话:{ownerLabelShort}</span>
+          {canSwitchOwner && onBindHere && (
+            <button className="bp-owner-btn" onClick={onBindHere} data-tip="把这个预览改绑到当前会话(会重新加载页面)">
+              绑到本会话
+            </button>
+          )}
+        </span>
         <span className="bp-spacer" />
         {page.title && <span className="bp-title" title={page.title}>{page.title}</span>}
-        <span className="bp-ai" title="AI 助手可以操控这个页面的内容(打开/点击/输入/截图)">AI 可操控</span>
+        <span className="bp-ai" title="本会话的 AI 可以操控这个页面(打开/点击/输入/截图)">AI 可操控</span>
       </div>
     </div>
   );
