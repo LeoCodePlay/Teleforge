@@ -28,6 +28,7 @@ import { FilesChangedCard } from './FilesChangedCard';
 import { CommandCard } from './CommandCard';
 import { matchSlashCommand } from '../../utils/slashCommand';
 import { mergeTrailingCommandCards } from '../../utils/commandCard';
+import { mergeAttachments } from '../../utils/mergeAttachments';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
 import { IconChevronDownOutline14 } from '../icons/icons';
@@ -373,8 +374,9 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         if (t.reasoning_content) appendReasoning(prev, t.reasoning_content);
         appendText(prev, t.content);
         appendTools(prev, tools);
-        // 生图成图(image/generated 投影)并入上一条摘要消息:摘要文本 + 成图同处一个气泡
-        if (Array.isArray(t.attachments) && t.attachments.length) prev.attachments = t.attachments;
+        // 生图成图(image/generated 投影)并入上一条摘要消息:摘要文本 + 成图同处一个气泡;
+        // 同一次 run 里多次生图会分多条投影到达,这里必须逐批累加(mergeAttachments)而不是覆盖
+        if (Array.isArray(t.attachments) && t.attachments.length) prev.attachments = mergeAttachments(prev.attachments, t.attachments);
         if (t.imageJob) prev.imageJob = t.imageJob;
         prev.forkTail = ti;
       } else {
@@ -1004,7 +1006,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'image_done':
             // 成图落盘完成:状态行立刻回到「Agent 正在运行…」(后面可能还有正文要流式),
-            // 附件元数据挂到当前 assistant 气泡(与历史回放同构,刷新后由 image/generated 投影回来)
+            // 附件元数据挂到当前 assistant 气泡,并逐批累加(一轮里连续生图多次时,先到的成图不能被后到的覆盖)
             // 状态行销账已由事件入口完成(见 api.on('agent') 开头)
             push((msgs) => {
               const c = [...msgs];
@@ -1012,7 +1014,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               if (l?.role === 'assistant') {
                 c[c.length - 1] = {
                   ...l,
-                  ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
+                  ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: mergeAttachments(l.attachments, m.attachments) } : {}),
                   imageJob: { mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0, ms: Number(m.ms) || 0, pending: false }
                 };
               }
