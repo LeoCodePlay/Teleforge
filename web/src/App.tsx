@@ -946,7 +946,7 @@ export default function App() {
         onDrop={(e) => e.preventDefault()}
         onClick={() => setActiveTabId(t.id)}
         onAuxClick={(e) => { if (e.button === 1) closeTab(t.id); }}
-        onContextMenu={(e) => { if (t.kind === 'file') openTabMenu(e, t); }}
+        onContextMenu={(e) => { if (t.kind === 'file' || t.kind === 'browser') openTabMenu(e, t); }}
       >
         <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : t.kind === 'browser' ? '🌐' : tabIcon(t.name)}</span>
         <span className="btab-label">{t.name}</span>
@@ -1243,7 +1243,7 @@ export default function App() {
               style={{ left: tabMenu.x, top: tabMenu.y }}
               onContextMenu={(e) => e.preventDefault()}
             >
-              {tabMenu.tab.pinnedFile ? (
+              {tabMenu.tab.kind === 'file' && (tabMenu.tab.pinnedFile ? (
                 <button onClick={() => togglePinTab(tabMenu.tab.id)}><span className="ctx-ico">📌</span>取消置顶</button>
               ) : (
                 <button
@@ -1253,11 +1253,11 @@ export default function App() {
                 >
                   <span className="ctx-ico">📌</span>置顶标签
                 </button>
-              )}
-              <div className="ctx-sep" />
+              ))}
+              {tabMenu.tab.kind === 'file' && <div className="ctx-sep" />}
               <button onClick={() => { closeTab(tabMenu.tab.id); setTabMenu(null); }}><span className="ctx-ico">✕</span>关闭当前标签</button>
               <button
-                disabled={tabs.filter((t) => t.kind === 'file' && t.id !== tabMenu.tab.id).length === 0}
+                disabled={tabs.filter((t) => (t.kind === 'file' || t.kind === 'browser') && t.id !== tabMenu.tab.id).length === 0}
                 onClick={() => void closeOtherTabs(tabMenu.tab.id)}
               ><span className="ctx-ico">🗂</span>关闭其它标签</button>
               <button className="danger" onClick={() => void closeAllTabs()}><span className="ctx-ico">🗑</span>关闭全部标签</button>

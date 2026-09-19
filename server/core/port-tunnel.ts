@@ -230,8 +230,8 @@ export async function resolvePreviewUrl(raw: unknown, opts: { tunnel?: boolean }
       throw new Error(`localhost:${remotePort} 打不开:远程服务器(SSH 已连接)与本机都没有服务监听这个端口。\n`
         + '常见原因:项目还没启动;dev server 曾被前台命令启动、随后被命令超时终止(默认 300s);'
         + '改过端口后地址没更新。\n'
-        + `处理:用 run_command(background=true)在远程工作区把项目启动为「运行终端」,`
-        + `用 ss -lntp | grep ${remotePort} 确认端口在监听,再打开预览;`
+        + '处理:建议用 nohup/后台方式在远程工作区跑 dev server(`nohup npm run dev &` 之类),避免 SSH 断开后被杀掉;\n'
+        + `确认端口在监听(使用 ss -lntp | grep ${remotePort}),再用 run_command(background=true) 在「运行终端」启动,然后打开预览;`
         + `若该项目其实跑在本机,请用 tunnel=false 指定直连。`);
     }
   }

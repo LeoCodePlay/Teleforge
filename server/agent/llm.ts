@@ -119,11 +119,12 @@ export class LlmClient {
    */
   async chat({ messages, tools, signal, onDelta, onRetry, reasoning = 'default', maxTokens }: ChatOptions): Promise<ChatResult> {
     if (this.isMock) return mockChat({ messages, tools, signal, onDelta });
-    // 历史 assistant 消息中的 reasoning_content 处理(照搬 harness llm-deepseek serialize 的
-    // passback 规则,DeepSeek thinking_mode 官方规则):reasoning_content 只在带 tool_calls 的
-    // assistant 消息上回传(工具调用轮次模型需要延续思考链);纯文本轮次的 reasoning 会被
-    // 上游忽略,直接剥离省 token。所有模型统一适用。
-    const requestMessages = messages.map(stripReasoningForWire);
+    // 历史 assistant 消息中的 reasoning_content 回传(DeepSeek thinking_mode 官方规则):
+    // 请求带 tools 时,历史里**所有** assistant 轮次(含未发生工具调用的纯文本轮次)的
+    // reasoning_content 都必须完整回传,否则上游 400「must be passed back to the API」;
+    // 请求不带 tools 时才可省略(上游会忽略,剥离省 token)。规则见 prepareMessagesForWire。
+    const hasTools = Array.isArray(tools) && tools.length > 0;
+    const requestMessages = prepareMessagesForWire(messages, { tools: hasTools, model: this.model });
     validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
     const url = `${this.baseUrl}/chat/completions`;
     // 最小兼容请求体:不加 stream_options(部分聚合网关不支持),tools 时显式 tool_choice
@@ -179,6 +180,7 @@ export class LlmClient {
     let lastFailure: LlmFailureInfo | undefined; // 上次失败的分类(是否可重试 / 网关要求的等待)
     let lastPartial = false; // 上次失败时是否已流出增量(重试需回滚这段半成品)
     let truncatedRetries = 0; // 「没有结束标记的截断」已重试次数:只给一次机会,避免不认 [DONE] 的提供方白等预算
+    let degradedReasoning = false; // 已因「reasoning_content 未完整回传」剥离历史 reasoning 降级重试过一次
     let emittedChars = 0;    // 本次尝试已通过 onDelta 吐出的字符数(正文/思考/工具参数)
     let attempt = 0;         // 已发起的请求次数(含首次)
     let idleFired = false;   // 本次尝试是否因长期收不到任何数据被看门狗掐断
@@ -271,8 +273,22 @@ export class LlmClient {
         // (实测 deepseek 网关:429 回 data.retryAfterSeconds=9~29),先解析再动原文
         const retryAfterMs = parseRetryAfterMs(res, rawBody);
         let text = rawBody;
+        // 网关以「历史 reasoning_content 未完整回传」拒绝(DeepSeek thinking mode 400):
+        // 历史中确实存在没有 reasoning_content 的 assistant 消息(网关漏报 / 早期由非思考模型
+        // 产生 / 中途切过模型),只靠回传已有的 reasoning 修不好。降级为「剥离历史里全部
+        // reasoning_content」再重发一次:请求中不再有任何 reasoning 需要回传,上游不会再以此
+        // 拒绝,本轮不至于硬失败(代价是丢掉历史思考链,控制台留痕)。
+        if (!degradedReasoning && (res.status === 400 || res.status >= 500) && REASONING_PASSBACK_RE.test(rawBody)) {
+          degradedReasoning = true;
+          body.messages = messages.map(dropReasoningContent);
+          text += '\n(已剥离历史 reasoning_content 后自动重试一次)';
+          lastFailure = { retryable: true, status: res.status, text: `LLM API ${res.status} [model=${this.model}]: ${text}` };
+          lastErr = new LlmRequestError(lastFailure.text, { retryable: true, status: res.status });
+          console.warn(`[llm] ${this.model} 网关要求 reasoning_content 完整回传,已剥离历史 reasoning 后降级重试`);
+          continue;
+        }
         if (/reasoning_content/i.test(text)) {
-          text += '\n提示:DeepSeek 思考模式要求历史回传完整 reasoning_content。请清空当前会话历史重试,或把推理等级设为 off(关闭思考)。';
+          text += '\n提示:DeepSeek 思考模式要求历史完整回传 reasoning_content(已尝试剥离历史 reasoning 自动重试)。若仍失败,请清空当前会话历史,或把推理等级设为 off(关闭思考)。';
         }
         // 纯图像端点模型被误当文本模型使用:网关会明确拒绝(503 "only supported on
         // /v1/images/...")。这是配置级错误,重试只会白等并给出同样结论,
@@ -609,6 +625,9 @@ function abortError(): Error {
   return e;
 }
 
+// DeepSeek 系(含网关别名 deepseek-flash / deepseek-v4-* 等):思考模式有 reasoning 回传要求
+const isDeepSeek = (m: string) => /^deepseek/i.test(m);
+
 // DeepSeek v4 系列:原生支持思考模式开关 + reasoning_effort(high/max)
 const isDeepSeekV4 = (m: string) => /^deepseek-v4/i.test(m);
 
@@ -628,15 +647,37 @@ const REASONING_EFFORT_RE = /^(o[134](-|$)|gpt-5|grok-3-mini|grok-4)/i;
 // (实测 fucheers:「model gpt-image-2 is only supported on /v1/images/generations and /v1/images/edits」)
 const IMAGES_ONLY_RE = /only supported on\s+\S*\/images\/(generations|edits)/i;
 
-// 发送前的 reasoning_content passback 处理(照搬 harness llm-deepseek serialize.ts):
-// 带 tool_calls 的 assistant 消息保留 reasoning_content(thinking-mode 工具调用轮次要求回传);
-// 其余消息(纯文本 assistant、user/tool)一律剥离——纯文本轮的 reasoning 会被上游忽略,剥离省 token。
+// 网关以「历史 reasoning_content 未完整回传」拒绝的错误文案特征
+// (DeepSeek thinking mode 官方 400:The `reasoning_content` in the thinking mode must be passed back to the API.)
+const REASONING_PASSBACK_RE = /reasoning_content[\s\S]{0,160}?(passed back|thinking mode)|(passed back|thinking mode)[\s\S]{0,160}?reasoning_content/i;
+
+/** 剥离单条消息的 reasoning_content(仅用于「请求不带 tools」的路径:上游会忽略,剥离省 token) */
 function stripReasoningForWire(m: any): any {
   if (!m || typeof m !== 'object') return m;
   if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return m;
   if (!('reasoning_content' in m)) return m;
   const { reasoning_content, ...rest } = m;
   return rest;
+}
+
+/** 无条件剥离单条消息的 reasoning_content(降级重试用:请求里不再有任何 reasoning 需要回传) */
+function dropReasoningContent(m: any): any {
+  if (!m || typeof m !== 'object' || !('reasoning_content' in m)) return m;
+  const { reasoning_content, ...rest } = m;
+  return rest;
+}
+
+/**
+ * 发送前的 reasoning_content 处理(DeepSeek thinking_mode 官方规则):
+ * - 请求带 tools:历史里所有 assistant 轮次(含未发生工具调用的纯文本轮次)的 reasoning_content
+ *   都必须完整回传,否则上游 400「reasoning_content ... must be passed back to the API」;
+ *   因此对 DeepSeek 系模型原样放行,一条都不剥。
+ * - 请求不带 tools:reasoning_content 会被上游忽略,剥离省 token。
+ * 非 DeepSeek 提供方对未知字段的容忍度不一,维持原有的「只留 tool_calls 轮」剥离行为。
+ */
+function prepareMessagesForWire(messages: any[], { tools, model }: { tools: boolean; model: string }): any[] {
+  if (tools && isDeepSeek(model)) return messages;
+  return messages.map(stripReasoningForWire);
 }
 
 // 发送前校验 messages 结构,尽早暴露问题而不是收到 400
