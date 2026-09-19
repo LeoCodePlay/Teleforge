@@ -113,6 +113,8 @@ function argSummary(name: string, args: any): string {
       return `执行命令 \`${s(args?.command).slice(0, 160)}\``;
     case 'skill_copy_builtin':
       return `复制内置技能到本机技能目录(${s(args?.name)})`;
+    case 'subagent':
+      return `派发子代理「${s(args?.description) || '未命名'}」做只读调研`;
     default:
       return '';
   }

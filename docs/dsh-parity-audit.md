@@ -67,7 +67,7 @@
 
 | 项 | A | B |
 |---|---|---|
-| 预算 | `LLM_RETRY{BUDGET_MS:180000, MAX_ATTEMPTS:10, BASE_DELAY_MS:1000, MAX_DELAY_MS:30000}`,可用环境变量覆盖(`llm.ts:467-472`) | `llm-retry` 插件,`policy{mode, initialDelayMs, maxDelayMs, jitterRatio}`,并且 **`providerRetryAfterMs > maxDelayMs` 时单独处理**(`llm-retry/src/index.ts:197`) |
+| 预算 | `LLM_RETRY{BUDGET_MS:600000, MAX_ATTEMPTS:20, IDLE_MS:60000, BASE_DELAY_MS:1000, MAX_DELAY_MS:30000}`,可用环境变量覆盖(`llm.ts:467-472`) | `llm-retry` 插件,`policy{mode, initialDelayMs, maxDelayMs, jitterRatio}`,并且 **`providerRetryAfterMs > maxDelayMs` 时单独处理**(`llm-retry/src/index.ts:197`) |
 | 退避 | 指数 × 2,与 `Retry-After`/`retryAfterSeconds` 取大,±10% 抖动(`llm.ts:502-506`) | 指数 + `jitterRatio` 抖动(`:60-62`) |
 | 可重试判定 | `status>=500 || 408/409/425/429`(`llm.ts:509-512`) | 按 `LlmError.code` / failure 分类 |
 | 流中断重试 | 是,`discard=true` 让上层回滚半成品(`llm.ts:258-271`, `agent.ts:1486-1493`) | 由 `assistant/chunk` 日志天然支持重放 |
@@ -138,7 +138,7 @@
 
 | 能力域 | B 的包 | 对 A 的价值 |
 |---|---|---|
-| 子代理 / 委派 | `subagent/*`(in-process / fork / spawn / DSH-SDK / ACP / Claude Code / Codex 六种 provider)、`tool-subagent{,-control,-report}` | 高:远程探索类任务可并行化 |
+| 子代理 / 委派 | `subagent/*`(in-process / fork / spawn / DSH-SDK / ACP / Claude Code / Codex 六种 provider)、`tool-subagent{,-control,-report}` | 高:远程探索类任务可并行化。**A 已落地 in-process 只读版**(`subagent` 工具 + `agent/subagent.ts`;只有一种 provider、只读白名单、无后台/续聊,见 `docs/superpowers/plans/2026-09-19-subagent-in-process.md`) |
 | 工作流批量编排 | `workflow/*` + `tool-workflow`(worker-thread 执行 JS 脚本) | 中 |
 | Ralph 循环 | `workflow/tool-ralph` | 低-中 |
 | 后台任务 | `jobs/*` + `tool-jobs`(`job_output`/`job_kill`) | 高:长命令不该阻塞 step |
@@ -259,7 +259,7 @@
 | 26 | 无沙箱 seam,边界只在各工具实现内逐个检查 | `tools.ts:37-56` | `sandbox/*`, `docs/architecture.md:100-102` | 中-高 |
 | 27 | 无审批白名单/记住放行,`confirm` 下每次都弹窗 | `permission.ts:99-140` | (待确认) | 中 |
 | 28 | 无工具呈现模式(`native`/`code` Code Mode) | 模型永远看全量 schema | `core/tools/src/index.ts:656`, `:1055` | 中 |
-| 20 | 无 MCP / 子代理 / 后台任务 / 持久终端 / LSP / code-mode / goal | 全缺 | 各对应包 | 高(能力面) |
+| 20 | 无 MCP / 后台任务 / 持久终端 / LSP / code-mode / goal(子代理已有 in-process 只读版) | 子代理已有 `subagent` 工具 + `agent/subagent.ts`;其余全缺 | 各对应包 | 高(能力面) |
 | 21 | 无 plan/mode 事件与 `exit_plan_mode` 工具,计划模式只是 guard 拒绝 | `permission.ts:107-111` | `plan/plan-mode/src/index.ts:225`, `:306` | 中-高 |
 | 22 | 无会话标题 LLM 策略 / 统计 / 遥测 / 检索 | 无 | `session-title*`, `session-stats`, `session-telemetry`, `session-query` | 中 |
 
@@ -304,6 +304,7 @@
 17. 在驱动循环里引入三个 waterfall 钩子(`agent/pre-step` / `agent/request` / `agent/request-error`)与一个 serial 钩子 `agent/turn-stopping`;把现有"工具不支持降级"和"爆窗恢复"改写为 `agent/request-error` 的默认监听器,证明钩子可用。
 18. 权限拆为 sandbox/approval 两个 seam,审批答案器可替换(为后续无人值守/自动化铺路)。
 19. 按需补能力:优先级建议 **持久终端 → 后台任务(job_*) → 子代理 → MCP → plan/exit_plan_mode 工具**。每一项都应对齐 B 的 seam 三段式(Service Definition / Provider / Consumer),而不是直接塞进 `tools.ts`。
+    - **子代理:✅ 首版已落地**(`agent/subagent.ts` 的自带循环 + `subagent` 工具 + 只读白名单;事件面复用 `tool/call`/`tool/result` 所以前端零改动;测试 `test/subagent.test.js`)。跨 provider / 写能力 / 后台续聊 / 过程 UI 仍待做(见设计文档第 5 节)。
 
 ### 阶段 5:可选(仅当需要与 B 生态互通)
 
@@ -462,3 +463,105 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
 - `test/compaction-persistence.test.js` 新增第 8 组:手动 `/compact` 在**空摘要**与
   **摘要抛错**下都必须抛错且事件数与模型面消息数都不变;并保留一个**成功路径对照**
   (确认改动没把正常压缩也堵死)。
+
+---
+
+## 13. 压缩必须留在消息记录里(#本轮)
+
+### 13.1 问题
+
+1. **压缩停了会弹一条 ⚠ 提示**。摘要失败 / 无收益 / 被用户按停时,服务端追加一条
+   `kind: 'compaction'` 的 notice(「上下文压缩未完成…」)。用户明确不要这条:压缩停了不需要
+   弹提示——它既打断阅读,又和"这件事已经结束、历史没动"的事实不成比例。
+2. **中途压过多次时,记录里只剩最后一次**。显示投影只取"生效检查点"(日志中最后一条带
+   `dropThroughSeq` 的 `compaction/done`),一次长对话里压过好几次时,刷新 / 切走再切回后早期
+   每一次压缩的痕迹全部消失:用户只看到上下文忽然变短,却查不到"什么时候压过、压掉了什么"
+   ——即"静默压缩"。
+
+### 13.2 改动
+
+| 文件 | 改动 |
+|---|---|
+| `server/agent/agent.ts`(常规自动压缩 / 爆窗恢复的 `onFailure`) | 删除 `kind: 'compaction'` 的 notice;改为 `session.append('compaction/failed', { reason, manual })` 并**立即落盘**(失败常伴随轮次被停止/异常收尾,等轮末写会丢),实时事件带 `persisted: true` 供前端同步分支点计数器 |
+| `server/agent/session.ts` | 新增 `compaction/failed` 事件类型:只进显示面,`deriveMessages` 不投影(不进模型上下文) |
+| `server/agent/agent.ts`(`projectEvents`) | 每个带 `dropThroughSeq` 的 `compaction/done` **各投影一条**压缩标记行(按事件顺序、插在各自保留区首条消息面之前);`compaction/failed` 投影为一行安静的「上下文压缩 · 未完成(原因)」 |
+| `server/agent/agent.ts`(`messageFaceIndexes`) | 与投影严格同构:每个检查点各占一条标记行(下标 = 检查点事件本身,删除/回退它 = 取消那次压缩)、失败行就地占位;顺手修掉 runtime 快照处 `alive` 复位口径与 `projectEvents` 不一致的隐患 |
+| `server/agent/agent.ts`(`rewindToBefore`) | 压缩失败行与检查点行一样支持"回退到它之前" |
+| `web/src/components/ChatPanel/ChatPanel.tsx` | `compaction_failed` 带 `persisted` 时同步 `forkTurnRef`(与 notice/retry 同规则) |
+
+`CompactionRow` 的失败态(「压缩未完成 · 已保持完整历史不做裁剪(原因)」、不可展开)保留:它是**记录**里的
+披露,不是提示。
+
+### 13.3 现在的语义
+
+- 压缩中:`compaction_start` → 对话流里一行运行态「正在把早期对话压缩为摘要…」(仅实时,不落盘)。
+- 压缩成功:`compaction/done` 检查点落盘 → 记录里一条「上下文压缩 · 已压缩 N 条早期消息」标记行,
+  **每次压缩各一条**(刷新/切回后同样完整)。
+- 压缩未完成:`compaction/failed` 落盘 → 记录里一条「上下文压缩 · 未完成(原因)」标记行,不再弹 ⚠。
+- 模型面不变:仍只遵循**最后一条**检查点(`deriveMessagesWithTrace`),显示投影的完整性与模型可见面互不影响。
+
+### 13.4 验证
+
+- `test/compaction-visibility.test.js` 场景 2:断言**不再**有 `kind: 'compaction'` 的 notice、失败已落盘为
+  `compaction/failed`、投影里出现失败行、失败行不进模型面、投影与消息面下标仍然同构。
+- `test/compaction-persistence.test.js` 新增第 9 组:两次压缩**各留一条**标记行(顺序 + 摘要正文)、
+  失败行可见且不进模型面、模型面仍只遵循最新检查点、第一条标记行的下标命中第一次压缩的检查点事件。
+- `test/branch-point-index.test.js`:前端计数器模拟补上 `compaction_failed`(persisted) 的口径。
+- `npm test` 全链 30 组用例 0 失败;`npx tsc --noEmit`(前端)干净。
+
+
+---
+
+## 14. 权限守卫此前从未挂载(本轮修复)+ 子代理首版
+
+### 14.1 `registerPermissionGuard` 从未被调用(安全回归)
+
+**问题**:`permission.ts` 导出了 `registerPermissionGuard(registry)`,但全仓(HEAD 与工作区)
+只有**定义**与测试里的调用——生产启动路径从未挂载它。后果:confirm / auto-edit / plan 三个档位
+在真实运行时**全部是空操作**:写文件、执行命令、plan 模式下的一切变更照常执行,连审批弹窗都不会出现。
+`test/permission-mode.test.js` 自己手挂守卫,所以单测是绿的,掩盖了这个接线缺口
+(这是"测了机制、没测接线"的典型盲区)。
+
+**改动**:`server/agent/agent.ts` 在 `registerTools(registry)` 之后补上
+`registerPermissionGuard(registry)`——守卫执行时需要从注册表取回工具自己声明的 `access`,
+所以必须在注册之后挂载。
+
+**连带修正**(三个测试原本依赖"守卫没挂"这一事实,现改为显式声明各自的权限前提):
+- `test/multi-server-binding.test.js`:会话建好后 `permission_set = full-access`(该用例验证的是
+  会话归属哪台服务器,与权限门控无关;否则 mock 脚本里的 write_file 会挂起等待审批,轮次永不结束)。
+- `test/image-tool.test.js`:Agent 上 `setPermissionMode('full-access')`(generate_image 是 write)。
+- `test/tool-parallel.test.js`:并发测试桩显式声明 `access: 'read'`,并注明 access 与并发语义无关。
+
+**验证**:`plan` 档下 `subagent`/`write_file` 被直接拒绝(理由文案来自 permission.ts);
+`confirm` 档下挂起审批;**全量 `npm test` 全绿**(含 e2e / 多服务器绑定 / 浏览器预览 / 压缩系列)。
+
+### 14.2 子代理首版(in-process 只读版)
+
+- 工具:`subagent`(`description` + `objective`/`scope`/`deliverable`/`context`/`prompt` + 可选 `provider`,声明 `access:'write'`、`mutating:true`,并行池独占)。
+  提示词由**父对话自己生成**:`prompt`(≥60 字符)或 `objective`+`scope`(各 ≥6 字符)二选一,
+  `composeSubagentPrompt()` 校验并按 `【任务目标】/【边界(必须遵守)】/【回传要求】/【已知线索】` 标注拼接;
+  写不清就返回结构化错误(附模板),而不是把模糊任务丢给子代理。
+  `provider` 枚举只有 `internal`(默认):**用本项目自己的 agent 循环与工具栈执行**
+  (同一 `LlmClient`、同一 SSH/本地工作区绑定、同一个 `ToolRegistry`),不调用外部 agent;
+  传其它值直接报错「未接入外部 agent 提供商」——外部 provider 只在用户明确要求时才应使用,本期尚未接入。
+- 运行时:`server/agent/subagent.ts` 的 `runSubagent()`——独立内存会话 + 只读工具白名单
+  (`SUBAGENT_TOOLS`)+ 有界循环(`AGENT.SUBAGENT.MAX_STEPS/RESULT_MAX_CHARS/TIMEOUT_MS`)。
+- 事件面:复用 `tool/call`/`tool/result`(父会话只多一条),子代理的中间步骤不回传也不落父日志。
+- 前端:工具卡标题「子代理」,摘要取 `description`(不把整段 prompt 当摘要)。
+- 设计与取舍:`docs/superpowers/specs/2026-09-19-subagent-in-process-design.md`;
+  实施计划:`docs/superpowers/plans/2026-09-19-subagent-in-process.md`;测试:`test/subagent.test.js`。
+- 面板:每次派发落一份运行记录(`data/subagents/<runId>.json`,含完整对话),工具卡行尾「查看会话」
+  打开**统一活动面板**(`ActivityDock`:一个胶囊 + 一个抽屉,内分「运行终端」「子代理」两个分区,
+  各自按有无内容决定是否出现,两边都空则整块不显示,且只挂在 AI 对话标签页);
+  子代理分区为左列派发记录 + 右侧对话(含加载/空/错误态与手机单栏);`subagent_list` / `subagent_get`
+  两个 RPC + `subagent_changed` 事件驱动实时刷新;面板只读,无删除/重跑/续聊入口。
+- 明确没做(留给后续):跨 provider / 写能力 / 后台与续聊 / 子代理用量计入仪表盘。
+
+### 14.3 类型检查基线(如实记录)
+
+`npm run typecheck` 在当前工作区**并非全绿**:`tsc -p tsconfig.server.json` 有 78 行报错
+(77 行在 `server/agent/agent.ts`,1 行在 `server/store/attachments-store.ts`);在 HEAD
+(干净的 v0.2.2)上跑同一命令是 74 行——也就是说这 74 行是**既有基线**,多出的 4 行来自本工作区
+未提交的在制品(`endReason = { kind: 'aborted', cause: stopCause }` 与 `{kind,error}` 类型不符,
+TS2353)。本轮新增/改动的文件(`server/agent/subagent.ts`、`tools.ts`、`permission.ts`、
+`web/src/utils/toolRowModel.ts`、`config.ts`)**不产生任何新的类型错误**。

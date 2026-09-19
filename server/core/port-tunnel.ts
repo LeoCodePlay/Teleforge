@@ -130,7 +130,7 @@ export async function ensureRemoteTunnel(conn: any, remoteHost: string, remotePo
       const body = `远程服务没有响应:${reason}\n\n`
         + `隧道:本机 127.0.0.1 → 远程 ${remoteHost}:${remotePort}\n`
         + '常见原因:该项目还没启动;dev server 被前台命令超时杀掉(默认 300s);服务只监听在别的地址。\n'
-        + '处理:在远程工作区重新以后台方式启动项目(例如 nohup npm run dev > /tmp/dev.log 2>&1 &),'
+        + '处理:用 run_command(background=true)在远程工作区把项目启动为「运行终端」(输出实时显示在对话右上角),'
         + '确认端口在监听后再打开预览。\n';
       const buf = Buffer.from(body, 'utf8');
       try {
@@ -230,7 +230,7 @@ export async function resolvePreviewUrl(raw: unknown, opts: { tunnel?: boolean }
       throw new Error(`localhost:${remotePort} 打不开:远程服务器(SSH 已连接)与本机都没有服务监听这个端口。\n`
         + '常见原因:项目还没启动;dev server 曾被前台命令启动、随后被命令超时终止(默认 300s);'
         + '改过端口后地址没更新。\n'
-        + `处理:在远程工作区以后台方式启动项目(例如 nohup npm run dev > /tmp/dev.log 2>&1 &),`
+        + `处理:用 run_command(background=true)在远程工作区把项目启动为「运行终端」,`
         + `用 ss -lntp | grep ${remotePort} 确认端口在监听,再打开预览;`
         + `若该项目其实跑在本机,请用 tunnel=false 指定直连。`);
     }

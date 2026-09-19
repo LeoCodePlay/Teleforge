@@ -6,8 +6,12 @@
 // 命令模型(对齐 harness CommandDescriptor):name(不含斜杠) + description 摘要。
 // 系统命令由宿主注册;技能命令来自技能目录(模型可调用者注入,与 harness skill trigger 一致)。
 import type { RefObject } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import './SlashMenu.scss';
+
+/** 菜单最多渲染的候选行数:父组件做 ↑↓ 导航时必须按同一上限截取,否则高亮会落到未渲染的行上 */
+export const SLASH_MENU_MAX = 50;
 
 export interface SlashItem {
   name: string;
@@ -71,14 +75,46 @@ export function rankSlashItems(items: SlashItem[], rawQuery: string): SlashItem[
 }
 
 export default function SlashMenu({ items, query, active, onPick, onClose, onActiveChange, anchorRef }: SlashMenuProps) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
   const list = rankSlashItems(items, query);
-  const shown = list.slice(0, 50); // 候选行上限,避免超长目录压垮菜单
+  const shown = list.slice(0, SLASH_MENU_MAX); // 候选行上限,避免超长目录压垮菜单
+
+  // 高亮越界时夹回可见范围(过滤后候选变少、或超过渲染上限),否则高亮消失、Enter 落空
+  useLayoutEffect(() => {
+    if (shown.length === 0) {
+      if (active !== -1) onActiveChange(-1);
+    } else if (active < 0 || active > shown.length - 1) {
+      onActiveChange(Math.min(Math.max(active, 0), shown.length - 1));
+    }
+  }, [active, shown.length, onActiveChange]);
+
+  // 过滤词变化:候选重排,滚动位置回到顶部,避免停在上一次滚到的位置
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (box) box.scrollTop = 0;
+  }, [query]);
+
+  // ↑↓ 切换高亮时把选中行滚入可视区:菜单可视高度只有约 7 行,不跟随就会把高亮切到看不见的地方。
+  // 只调整菜单自身的 scrollTop,不用 scrollIntoView —— 菜单是 portal 到 body 的 fixed 层,
+  // scrollIntoView 会连带滚动页面/外层滚动容器。
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const rows = box.querySelectorAll<HTMLElement>('[role="option"]');
+    const el = active >= 0 ? rows[active] : undefined;
+    if (!el) return;
+    const boxRect = box.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    if (elRect.top < boxRect.top) box.scrollTop -= boxRect.top - elRect.top;
+    else if (elRect.bottom > boxRect.bottom) box.scrollTop += elRect.bottom - boxRect.bottom;
+  }, [active, shown.length]);
+
   // portal 到 body:嵌在 composer-box(backdrop-filter)内时 Chromium 不应用 backdrop-filter,玻璃模糊失效;
   // 坐标按输入卡位置计算(左右各缩进 12px,悬于输入卡上方 6px),每次渲染重算以跟随输入卡尺寸变化
   const r = anchorRef.current?.getBoundingClientRect();
   const pos = r ? { left: r.left + 12, width: r.width - 24, top: r.top - 6 } : undefined;
   return createPortal(
-    <div className="slash-menu" role="listbox" aria-label="命令菜单" style={pos}>
+    <div className="slash-menu" ref={boxRef} role="listbox" aria-label="命令菜单" style={pos}>
       {shown.length === 0 ? (
         <div className="slash-empty">没有匹配的命令或技能 · Esc 关闭</div>
       ) : shown.map((it, i) => (

@@ -1,11 +1,28 @@
 // 本地文件操作消息:list_local_dir / read_local_file / write_local_file / create_local_dir /
-//                  local_delete / local_copy / set_local_workspace
+//                  local_delete / local_copy / local_rename / set_local_workspace / local_reveal
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { localFs } from '../../core/local-fs.ts';
 import { NO_WORKSPACE } from '../../config.ts';
 import { clearLocalEnvInfo } from '../../agent/tools.ts';
 import { agent } from '../../agent/agent.ts';
 import type { RpcModule } from './router.ts';
+
+/**
+ * 用系统文件管理器打开本地路径(Windows 资源管理器 / macOS 访达 / Linux 文件管理器)。
+ * explorer.exe 打开成功也会返回非 0 退出码,所以只按「能否 spawn」判定成败,不看退出码;
+ * detached + unref:文件管理器是独立窗口,不该跟着本服务一起退出。
+ */
+function revealInFileManager(target: string): Promise<void> {
+  const cmd = process.platform === 'win32' ? 'explorer.exe'
+    : process.platform === 'darwin' ? 'open'
+      : 'xdg-open';
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, [target], { detached: true, stdio: 'ignore' });
+    child.once('error', (e) => reject(new Error(`调用 ${cmd} 失败: ${e.message}`)));
+    child.once('spawn', () => { child.unref(); resolve(); });
+  });
+}
 
 export function registerLocal(rpc: RpcModule) {
   rpc.register('list_local_dir', async (msg, { reply }) => {
@@ -77,6 +94,17 @@ export function registerLocal(rpc: RpcModule) {
       }
       throw e;
     }
+  });
+
+  // 在资源管理器里打开一个本地目录(任务列表分组菜单「在资源管理器打开」)。
+  // 远程工作区在本地没有对应目录,前端对这类分组已把入口置灰,不会发到这里
+  rpc.register('local_reveal', async (msg, { reply }) => {
+    const target = String(msg.path || '').trim();
+    if (!target) throw new Error('缺少路径');
+    const st = await localFs.stat(target);
+    if (!st) throw new Error(`目录不存在: ${target}`);
+    await revealInFileManager(target);
+    reply({ type: 'ok' });
   });
 
   rpc.register('set_local_workspace', async (msg, { reply, emitStatus }) => {

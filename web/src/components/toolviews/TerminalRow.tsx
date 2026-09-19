@@ -2,6 +2,7 @@
 // run_command / run_local_command 专属展开体——StateDot 状态 + 命令提示行
 // (工作目录 $ command)+ 退出码/信号胶囊 + 输出文本。
 // 结构化字段来自 tool_result 的 meta(card:'terminal'),缺失时从 args/content 解析兜底。
+// 另:card='ai_term' = 该命令以 background=true 拉起为「运行终端」,输出在运行终端面板实时展示。
 
 import React from 'react';
 import type { ToolCallInfo } from '../../types';
@@ -23,25 +24,46 @@ function parseExitFromContent(result?: string | null): number | string | null {
   return m ? m[1].trim() : null;
 }
 
+/** 工作目录提示:仅取末段目录名(harness 语义:短提示即可,完整路径在命令里) */
+function shortDir(cwd: string): string {
+  return cwd ? `~/${cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''}` : '$';
+}
+
 export function TerminalCard({ call }: { call: ToolCallInfo }) {
   const meta = call.meta || {};
   const args = parseArgs(call.args);
   const command = String(meta.command ?? args.command ?? '');
   const cwd = String(meta.cwd ?? '');
+
+  // 运行终端卡:background=true 的命令输出不在此展示(实时输出在「运行终端」面板),
+  // 这里只标注「已拉起为后台运行终端」,避免把它误读成一条没有输出的已结束命令。
+  if (meta.card === 'ai_term') {
+    const st = meta.state === 'running' ? 'running' : meta.state === 'failed' ? 'failed' : 'exited';
+    return (
+      <div className="dsh-terminal" data-running={st === 'running' || undefined}>
+        <div className="dsh-term-header">
+          <StateDot state={st === 'running' ? 'ongoing' : st === 'failed' ? 'error' : 'done'} />
+          <span className="dsh-term-prompt">{shortDir(cwd)} <b>{command}</b></span>
+          <span className="dsh-term-pill" data-error={st === 'failed' || undefined}>
+            {st === 'running' ? '后台运行 · 右上角「运行终端」' : st === 'failed' ? '已中止' : '已结束'}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   const running = call.ok === undefined;
   const exitCode = running ? null : (meta.exitCode ?? parseExitFromContent(call.result));
   const signal = meta.signal ?? null;
   const timedOut = !!meta.timedOut;
   const output = running ? null : String(call.result ?? '').replace(/^\[退出码[^\]]*\]\n?/, '');
   const failed = !running && (Number(exitCode) !== 0 || signal || timedOut);
-  // 工作目录提示:仅取末段目录名(harness 语义:短提示即可,完整路径在命令里)
-  const shortCwd = cwd ? `~/${cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''}` : '$';
   return (
     <div className="dsh-terminal" data-running={running || undefined}>
       <div className="dsh-term-header">
         <StateDot state={running ? 'ongoing' : failed ? 'error' : 'done'} />
         <span className="dsh-term-prompt">
-          {shortCwd} <b>{command}</b>
+          {shortDir(cwd)} <b>{command}</b>
         </span>
         {!running && (exitCode != null || signal || timedOut) && (
           <span className="dsh-term-pill" data-error={failed || undefined}>

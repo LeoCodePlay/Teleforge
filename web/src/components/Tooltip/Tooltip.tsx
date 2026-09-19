@@ -4,7 +4,8 @@
 // 悬停(hover)或键盘聚焦时统一渲染液态玻璃风格气泡。不在元素外包壳,零布局侵入。
 // 可选扩展属性:
 //   data-tip-ellipsis 仅当元素文本被省略号截断(scrollWidth > clientWidth)时弹出,否则静默;
-//   data-tip-follow    气泡跟随鼠标位置出现在指针旁边(而非目标元素居中)。
+//   data-tip-follow    气泡跟随鼠标位置出现在指针旁边(而非目标元素居中);
+//   data-tip-wide      长内容气泡放宽到 420px(任务列表悬停展示的完整提问)。
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './Tooltip.scss';
@@ -174,7 +175,7 @@ export default function TooltipHost() {
 
   return createPortal(
     tip ? (
-      <div ref={boxRef} className="tip-host" role="tooltip"
+      <div ref={boxRef} className={`tip-host${tip.el.hasAttribute('data-tip-wide') ? ' wide' : ''}`} role="tooltip"
         style={{
           left: pos?.x ?? 0,
           top: pos?.y ?? 0,

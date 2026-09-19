@@ -1,0 +1,103 @@
+/* ---- ActivityDock:对话区右上角一个胶囊 + 右侧抽屉(运行终端 / 子代理 两个分区) ----
+   只使用主题 token,与 AiTermPanel 同一套观感:圆角沿用 --r-pill/--r-md,
+   颜色只用主题 token(--glass-* / --line-soft / --accent / --green / --amber / --red / --muted)。
+   本组件挂在 agent 的 tab-pane 内,切到其它标签页时随 pane 一起隐藏。 */
+
+.dock-fab {
+  position: absolute; top: 12px; right: 14px; z-index: 30;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px 6px 10px;
+  border-radius: var(--r-pill);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  color: var(--text-2, var(--muted));
+  font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+}
+.dock-fab:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.dock-fab:active { transform: translateY(1px); }
+.dock-fab-ico { display: inline-flex; color: var(--accent); }
+.dock-fab-count {
+  min-width: 18px; padding: 0 5px; height: 18px; line-height: 18px;
+  border-radius: var(--r-pill); text-align: center;
+  font-family: var(--mono); font-size: 11px;
+  background: var(--glass-bg-inset); border: 1px solid var(--line-soft); color: var(--text);
+}
+/* 有东西在跑:边框 + 计数着色 + 追光小点,不加外发光 */
+.dock-fab.live { border-color: var(--accent-border); }
+.dock-fab.live .dock-fab-count { color: var(--accent); border-color: var(--accent-border); background: var(--accent-fill-soft); }
+.dock-fab.on { color: var(--text); border-color: var(--accent-border); background: var(--glass-bg-hover); }
+
+.dock-backdrop {
+  position: absolute; inset: 0; z-index: 31;
+  background: var(--mask-bg);
+  animation: dock-fade .16s ease-out;
+}
+@keyframes dock-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.dock-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 32;
+  width: min(760px, 78vw);
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: linear-gradient(160deg, var(--bar-tint-a), var(--bar-tint-b));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  border-left: 1px solid var(--line-soft);
+  box-shadow: var(--glass-shadow-lg);
+  transform: translateX(103%);
+  visibility: hidden; pointer-events: none;
+  transition: transform .24s ease, visibility .24s ease;
+}
+.dock-drawer.open { transform: none; visibility: visible; pointer-events: auto; }
+
+.dock-head {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line-soft);
+}
+.dock-title { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.dock-title svg { color: var(--accent); }
+.dock-head-gap { flex: 1; }
+
+.dock-tabs { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; }
+.dock-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: var(--r-pill); cursor: pointer;
+  background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--muted);
+  font-size: 12px; white-space: nowrap;
+  transition: color .14s ease, border-color .14s ease, background .14s ease;
+}
+.dock-tab:hover { color: var(--text); background: var(--glass-bg-hover); }
+.dock-tab.on { color: var(--text); border-color: var(--accent-border); background: var(--accent-fill-soft); }
+.dock-tab-count {
+  min-width: 16px; padding: 0 5px; border-radius: var(--r-pill);
+  font-family: var(--mono); font-size: 11px; text-align: center;
+  background: var(--glass-bg-inset); border: 1px solid var(--line-soft);
+}
+
+.dock-body { flex: 1; display: flex; min-height: 0; }
+.dock-pane { flex: 1; min-width: 0; min-height: 0; display: none; flex-direction: column; }
+.dock-pane.on { display: flex; }
+
+/* 嵌进来的子面板:去掉它们各自的外壳留白,填满分区 */
+.dock-pane .aiterm-embedded { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.dock-pane .sa-cols { flex: 1; min-height: 0; }
+
+/* ---- 手机(<768):抽屉占满,胶囊只留图标 ---- */
+@media (max-width: 767px) {
+  .dock-fab { top: 8px; right: 10px; padding: 6px 10px; }
+  .dock-fab-text { display: none; }
+  .dock-fab.on { display: none; }
+  .dock-backdrop { display: none; }
+  .dock-drawer { width: 100%; border-left: none; transform: translateY(102%); }
+  .dock-drawer.open { transform: none; }
+  .dock-head { padding: 8px 10px; gap: 8px; }
+  .dock-title { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-fab, .dock-tab, .dock-drawer { transition: none; }
+  .dock-backdrop { animation: none; }
+}

@@ -4,15 +4,15 @@
 // 2) compaction_done 广播时,压缩检查点已经在磁盘上(不等整轮结束的 finally 落盘),
 //    中途重启/切走也不会丢标记行与模型面治理;
 // 3) 没真的压缩就绝不发 start(避免界面挂着永不收尾的运行行);
-// 4) 摘要生成失败(降级直接裁剪)同样成对收尾。
-// 注意:本测试写会话历史,需在临时 DATA_DIR 里隔离运行。
+// 4) 摘要生成失败(或轮次被停止)时不再弹 ⚠ 提示,但必须在记录里落一行「压缩未完成」
+//    (compaction/failed):刷新/切回会话后仍能看到"这次没压成、历史没动"。
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-compaction-visibility-'));
 
-const { Agent } = await import('../server/agent/agent.ts');
+const { Agent, projectEvents, messageFaceIndexes } = await import('../server/agent/agent.ts');
 const { compactHistory } = await import('../server/agent/compact.ts');
 const sessions = await import('../server/store/session-store.ts');
 const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
@@ -121,7 +121,16 @@ async function main() {
     const failed = events.filter(([, p]) => p && p.event === 'compaction_failed').map(([, p]) => p).pop();
     check('failed 携带原因(摘要生成失败)', /失败/.test(String(failed?.reason || '')), `reason=${failed?.reason}`);
     check('failed 明确是自动压缩(manual=false)', failed?.manual === false);
-    check('failed 之后给用户一条可见提示(notice)', names.includes('notice'), names.join(','));
+    // 新语义:压缩停止不再弹 ⚠ notice(用户明确不要),失败本身落盘成一行安静的记录。
+    check('不再弹压缩失败的 ⚠ notice', !events.some(([, p]) => p?.event === 'notice' && p?.kind === 'compaction'), names.join(','));
+    const diskFail = sessions.loadEvents(agent.sessionId).find((ev) => ev.type === 'compaction/failed');
+    check('失败已落盘(compaction/failed)', !!diskFail && /失败/.test(String(diskFail.data?.reason || '')), JSON.stringify(diskFail));
+    const failedRows = projectEvents(sessions.loadEvents(agent.sessionId));
+    check('落盘的失败行投影成记录里一行「压缩未完成」', failedRows.some((t) => t.role === 'user' && t.compaction?.failed === true), JSON.stringify(failedRows.filter((t) => t.compaction)));
+    check('失败行不进模型上下文(仍是显示面)', agent.getHistory().some((t) => t.compaction?.failed === true) && !agent.session.deriveMessages({ budgetChars: Infinity }).some((m) => Object.prototype.hasOwnProperty.call(m, 'compaction')), JSON.stringify(failedRows.filter((t) => t.compaction)));
+    const diskForFaces = sessions.loadEvents(agent.sessionId);
+    check('投影与消息面下标仍然同构', projectEvents(diskForFaces).length === messageFaceIndexes(diskForFaces).length,
+      `turns=${projectEvents(diskForFaces).length} faces=${messageFaceIndexes(diskForFaces).length}`);
     // 关键:事件日志里不得出现压缩检查点,历史一条都不能少
     const disk = sessions.loadEvents(agent.sessionId);
     check('磁盘日志无 compaction/done 检查点(未压缩就不该有检查点)',

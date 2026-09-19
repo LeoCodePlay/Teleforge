@@ -86,6 +86,9 @@ async function main() {
   const s0 = await ws.request('session_list', {});
   const sidA = s0.active;
   await ws.request('set_workspace', { path: '/src', sid: sidA });
+  // 本测试验证的是"会话归属哪台服务器",与权限门控无关:显式切到完全访问。
+  // 否则默认 confirm 档下,mock 脚本里的 write_file 会挂起等待审批,轮次永远不结束。
+  await ws.request('permission_set', { mode: 'full-access' });
   check('前置:会话已绑定服务器 A 的工作区 /src', Boolean(sidA), JSON.stringify(s0));
 
   // ---- S1:排队轮次在「切到 B 之后」开始,工具必须仍作用于 A ----

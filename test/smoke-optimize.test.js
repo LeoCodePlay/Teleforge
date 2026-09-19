@@ -78,5 +78,21 @@ check('isConcurrencySafe fail-closed', toolRegistry.isConcurrencySafe('smoke_pro
 unregister();
 check('注销后重建投影内容一致', JSON.stringify(toolRegistry.schemas({ localOnly: true })) === JSON.stringify(s1));
 
+// ---- 2b. pruneToolResults 的缓存友好窗口(条数上限 + 字符预算 + 攒批) ----
+const wide = [mk('user', 'q0')];
+for (let i = 1; i <= 8; i++) {
+  wide.push(mk('assistant', '', { tool_calls: [{ id: `k${i}`, function: { name: 'read_file', arguments: '{}' } }] }));
+  wide.push(mk('tool', `R${i} `.repeat(1500), { tool_call_id: `k${i}` })); // 每条 4500 字符,索引 = 2i
+}
+const win = pruneToolResults(wide, { keepRecent: 4, keepRecentChars: 5000, minChars: 1200, headChars: 900, tailChars: 300 });
+check('字符预算先于条数上限生效(8 条里只保最近 2 条)', win.pruned === 6, `got ${win.pruned}`);
+check('折叠点=最老的那条结果(index 2)', win.firstPrunedIndex === 2, `got ${win.firstPrunedIndex}`);
+check('窗口内结果原样(R7/R8 未折叠)', win.messages[14].content === 'R7 '.repeat(1500) && win.messages[16].content === 'R8 '.repeat(1500));
+check('折叠点之后的结果已被折叠', win.messages[12].content.includes('早期工具结果已折叠'));
+check('不改原数组(事件日志完整)', wide[2].content === 'R1 '.repeat(1500));
+const batched = pruneToolResults(wide, { keepRecent: 4, keepRecentChars: 5000, minChars: 1200, headChars: 900, tailChars: 300, minSaveChars: 100000 });
+check('收益不足攒批门槛时整轮不折', batched.pruned === 0 && batched.firstPrunedIndex === -1 && batched.messages === wide);
+const noBudget = pruneToolResults(wide, { keepRecent: 4, minChars: 1200, headChars: 900, tailChars: 300 });
+check('只给条数上限时退回旧语义(保最近 4 条)', noBudget.pruned === 4, `got ${noBudget.pruned}`);
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
 process.exit(fail ? 1 : 0);

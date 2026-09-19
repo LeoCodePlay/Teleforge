@@ -52,22 +52,25 @@ export default function DirBrowser({ initial, home, onClose, onPick }: DirBrowse
           </div>
           {home && <button className="link" onClick={() => load(home)}>📁 家目录 {home}</button>}
           {error && <div className="error">✕ {error}</div>}
-          <div className="dirlist">
-            {!loadingPath && entries.length === 0 && <div className="muted">(空目录)</div>}
-            {entries.filter((e) => e.type === 'dir').map((e) => {
-              const fp = dir(e.name);
-              return (
-                <div key={e.name} className="dirlink"
-                  onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}
-                  onDoubleClick={() => load(fp)}>
-                  <span>📁 {e.name}</span>
-                  {loadingPath === fp && <span className="spinner-inline" />}
-                </div>
-              );
-            })}
-            {entries.filter((e) => e.type !== 'dir').slice(0, 50).map((e) => (
-              <div key={e.name} className="dirlink muted2 disabled" onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}>📄 {e.name}</div>
-            ))}
+          <div className="dirlist-wrap">
+            <div className="dirlist">
+              {!loadingPath && entries.length === 0 && <div className="muted">(空目录)</div>}
+              {entries.filter((e) => e.type === 'dir').map((e) => {
+                const fp = dir(e.name);
+                return (
+                  <div key={e.name} className="dirlink"
+                    onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}
+                    onDoubleClick={() => load(fp)}>
+                    <span>📁 {e.name}</span>
+                    {loadingPath === fp && <span className="spinner-inline" />}
+                  </div>
+                );
+              })}
+              {entries.filter((e) => e.type !== 'dir').slice(0, 50).map((e) => (
+                <div key={e.name} className="dirlink muted2 disabled" onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}>📄 {e.name}</div>
+              ))}
+            </div>
+            {/* 加载蒙版与列表同级(而非列表内部):滚动容器内的绝对定位元素会随内容滚走,底部必然漏出缺口 */}
             {loadingPath && (
               <div className="dirlist-loading"><span className="spinner" />加载中…</div>
             )}

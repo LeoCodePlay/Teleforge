@@ -24,6 +24,22 @@ import { clearSearchEngine } from '../agent/tools.ts';
 import { armAskUserDisconnectGrace, disarmAskUserDisconnectGrace } from '../agent/ask-user.ts';
 import { migrateLegacy } from '../store/session-store.ts';
 import { browserManager } from './browser-manager.ts';
+import { aiTerms } from './ai-term.ts';
+
+/**
+ * 兜底修复 node-pty(Windows/ConPTY)已知崩溃:见 microsoft/node-pty#827。
+ * 终端就绪前调用 resize() 会被 node-pty 排进内部延迟队列,待首个 data 事件统一执行;
+ * 若此时进程已退出,WindowsPtyAgent.resize 会抛 "Cannot resize a pty that has already
+ * exited"。该异常发生在 socket 'data' 回调中,调用点的 try/catch 抓不到,会直接崩掉进程。
+ * 这里包住 agent.resize,让延迟执行路径上的异常也被吞掉(进程已退出时 resize 本就无意义)。
+ */
+function hardenPtyResize(term: IPty): void {
+  const agent = (term as any)?._agent;
+  if (agent && typeof agent.resize === 'function') {
+    const raw = agent.resize.bind(agent);
+    agent.resize = (cols: number, rows: number) => { try { raw(cols, rows); } catch { /* pty 已退出 */ } };
+  }
+}
 
 export function setupWs(httpServer: Server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
@@ -92,6 +108,12 @@ export function setupWs(httpServer: Server) {
         if (event === 'agent' && payload?.event === 'status') emitStatus();
       }
     }
+  });
+
+  // AI 运行终端 -> 前端(全局广播:任何浏览器都能看到同一批被 AI 拉起的项目终端)
+  // start/output/exit/removed 四种事件;前端按 id 归并,输出直接写进只读 xterm。
+  aiTerms.setHub({
+    emit: (event: string, payload: any) => send({ type: 'ai_term', event, ...payload })
   });
 
   // SSH 状态 -> 前端(活动连接字段 + 全部连接列表,前端据此做多连接管理与快速切换;
@@ -238,6 +260,7 @@ export function setupWs(httpServer: Server) {
           env: process.env as NodeJS.ProcessEnv
         });
       } catch (e: any) { sendJson({ type: 'error', error: `打开本地终端失败: ${e.message}` }); return; }
+      hardenPtyResize(term); // 防止「就绪前 resize + 进程已退出」拖垮整个服务进程(node-pty#827)
       localPty = term;
       localFs.localTermCwds.add(cwd); // 记录终端启动目录:重命名该目录(或其祖先)报 EBUSY 时提示终端占用
       term.onData((d: string) => { if (ws.readyState === 1) { try { ws.send(Buffer.from(d)); } catch {} } });

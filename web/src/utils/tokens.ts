@@ -32,9 +32,32 @@ export function modelFaceMessages(msgs: unknown[]): unknown[] {
   const arr = msgs || [];
   let last = -1;
   arr.forEach((m, i) => {
-    if (m && typeof m === 'object' && (m as { compaction?: { running?: boolean } }).compaction && !(m as { compaction?: { running?: boolean } }).compaction?.running) last = i;
+    // 只有"真正压成"的标记行才是模型面的起点:失败行(compaction.failed)没有压掉任何东西,
+    // 模型仍看得到它之前的全部历史——把它当起点会让水位凭空变小(没压成却显示变小)。
+    if (m && typeof m === 'object') {
+      const c = (m as { compaction?: { running?: boolean; failed?: boolean } }).compaction;
+      if (c && !c.running && !c.failed) last = i;
+    }
   });
-  return last >= 0 ? arr.slice(last) : arr;
+  if (last < 0) return arr;
+  // 标记行按事件日志原位投影:自动压缩时它夹在「本轮用户消息」与「回复」之间,
+  // 手动压缩时它在日志末尾。ChatPanel 会把服务端下发的 compaction.retainedFrom 换算成
+  // 「保留区首条消息」在本数组里的下标(modelFaceFrom),这里按它还原模型可见面:
+  // [摘要标记行, ...保留区及之后的所有消息]。
+  const marker = arr[last] as { compaction?: { modelFaceFrom?: number } };
+  const from = marker?.compaction?.modelFaceFrom;
+  // 显示面专用行(压缩失败/运行中标记、提示行、重试记录)不进模型上下文,必须从估算里剔除;
+  // 否则压缩标记行之后的失败行会把水位算高,与真实请求口径(服务端 deriveMessages)不一致。
+  const displayOnly = (x: unknown) => {
+    if (!x || typeof x !== 'object') return false;
+    const c = (x as { compaction?: { failed?: boolean; running?: boolean } }).compaction;
+    if (c && (c.failed || c.running)) return true;
+    return (x as { role?: string }).role === 'notice';
+  };
+  if (typeof from === 'number' && from >= 0 && from <= arr.length) {
+    return [marker, ...arr.slice(from).filter((x) => x !== marker && !displayOnly(x))];
+  }
+  return arr.slice(last).filter((x) => !displayOnly(x));
 }
 
 /**

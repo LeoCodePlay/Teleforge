@@ -24,6 +24,8 @@ const registerSlowTool = (extra = {}) => toolRegistry.register({
   description: 'test',
   parameters: { type: 'object', properties: { name: { type: 'string' }, ms: { type: 'integer' } }, required: ['name', 'ms'] },
   concurrencySafe: true,
+  // 只为并发语义造的测试桩,不改任何状态:显式声明 read,避免默认 confirm 档下的审批弹窗
+  access: 'read',
   ...extra,
   async run({ name, ms }) {
     running++; maxRunning = Math.max(maxRunning, running);
@@ -123,6 +125,8 @@ async function main() {
       description: 'test',
       parameters: { type: 'object', properties: { name: { type: 'string' }, ms: { type: 'integer' } }, required: ['name', 'ms'] },
       // 未声明 concurrencySafe:未知/未声明一律按不安全处理,必须独占执行
+      // (access 与并发无关,显式声明 read 避免走审批)
+      access: 'read',
       async run({ name, ms }) {
         running++; maxRunning = Math.max(maxRunning, running);
         await sleep(ms);

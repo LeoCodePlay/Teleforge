@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from './api';
 import type { ServerStatus, Session, SshProfileInfo } from './types';
@@ -10,6 +10,7 @@ import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';
 import ConsolePanel from './components/ConsolePanel/ConsolePanel';
 import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
 import BrowserPanel from './components/BrowserPanel/BrowserPanel';
+import ActivityDock from './components/ActivityDock/ActivityDock';
 import { PREVIEW_EVENT, isHttpLink, normalizePreviewInput, previewLabel,
   BROWSER_TAB_PREFIX, allocBrowserId, browserSessionId, browserTabId,
   newDraftSessionId, ownerOfBrowserId, DRAFT_SESSION_PREFIX } from './utils/preview';
@@ -265,6 +266,14 @@ export default function App() {
   // ---- 历史会话状态 ----
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  // 右侧子代理面板:open=抽屉展开;runId=卡片上「查看会话」指定的那次派发
+  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
+  const [subagentRunId, setSubagentRunId] = useState<string | null>(null);
+  const openSubagentPanel = useCallback((runId?: string) => {
+    setSubagentRunId(runId ?? null);
+    setSubagentPanelOpen(true);
+  }, []);
+  const closeSubagentPanel = useCallback(() => setSubagentPanelOpen(false), []);
   const [sessionSeq, setSessionSeq] = useState(0); // 会话切换/新建后自增,触发 ChatPanel 重载
   // 模型提问挂起的会话集合(ask_user_question):会话在后台提问、用户不在当前会话时,
   // 会话列表的运行点显示为黄色"待用户操作";切回后提问面板展示并可作答。
@@ -452,6 +461,43 @@ export default function App() {
       if (wasActive) switchSession(id);
       toast.error(`删除会话失败: ${(e as Error).message}`);
     }
+  };
+
+  // 删除整个工作区分组(任务列表右键 / 触屏长按分组头):一次删掉组内全部对话,
+  // 并按用户选择把该工作区从工作区历史记录里一并移除(只删记录,不碰磁盘上的目录)
+  const deleteGroup = async (ids: string[], ws: string | null, local: boolean) => {
+    if (!ids.length) return;
+    const ok = await confirm({
+      title: '删除分组',
+      message: `删除该分组的 ${ids.length} 个对话?其对话记录将被永久删除,不可恢复。`
+        + '这些对话名下的预览浏览器会一并关闭。'
+        + (ws ? '该工作区也会从工作区历史记录中移除(不影响远程/本地目录本身)。' : ''),
+      confirmLabel: '删除分组',
+      danger: true
+    });
+    if (!ok) return;
+    // 删的正好是当前打开的会话:与单删一致,先进新会话草稿态清空聊天视图(失败再切回原会话)
+    const wasActive = !!activeSessionId && ids.includes(activeSessionId);
+    const prevActive = activeSessionId;
+    for (const id of ids) dropBrowserTabsFor(id);
+    if (wasActive) newSession();
+    bumpOp();
+    try {
+      const r = await api.request('session_delete_group', { ids }, 15000);
+      for (const id of ids) llm.forgetSessionModel(id); // 清理这些会话的模型记忆残留
+      refreshSessions(r); // 草稿态下 refreshSessions 只刷新列表,不会拉回服务端收敛的会话
+      if (ws) (local ? onDeleteLocalWs : onDeleteWs)(ws);
+      toast.success(`已删除 ${ids.length} 个对话`);
+    } catch (e) {
+      if (wasActive && prevActive) switchSession(prevActive);
+      toast.error(`删除分组失败: ${(e as Error).message}`);
+    }
+  };
+
+  // 分组菜单「在资源管理器打开」:交给本机服务调系统文件管理器打开该本地工作区目录。
+  // 目录不存在(已被删/改名)时由服务端报错,这里翻成 toast
+  const revealGroup = (path: string) => {
+    api.request('local_reveal', { path }, 8000).catch((e) => toast.error(`打开失败: ${(e as Error).message}`));
   };
 
   const statusRef = useRef(status);
@@ -1115,6 +1161,8 @@ export default function App() {
                 onSwitchForeign={(id, key) => { switchForeignSession(id, key); setDrawerOpen(false); }}
                 onRename={renameSession}
                 onDelete={deleteSession}
+                onDeleteGroup={deleteGroup}
+                onRevealGroup={revealGroup}
               />
             </div>
             <div className="side-divider" onPointerDown={startSideSplit} />
@@ -1158,6 +1206,8 @@ export default function App() {
                 onSwitchForeign={(id, key) => { switchForeignSession(id, key); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
                 onRename={renameSession}
                 onDelete={deleteSession}
+                onDeleteGroup={deleteGroup}
+                onRevealGroup={revealGroup}
               />
             </aside>
           </>
@@ -1215,6 +1265,8 @@ export default function App() {
             document.body
           )}
           <div className="tab-body">
+            {/* AI 运行终端悬浮层:只展示被 AI 拉起的项目终端(background=true),
+                悬浮胶囊贴对话区右上角,点开为右侧只读终端抽屉;手机端折叠为图标并全屏展开 */}
             {/* 浏览器预览标签页:每个预览常驻挂载(切走仅隐藏);页面本身存活在服务端,切回即恢复。
                 ownerSid = 预览归属的会话(标签 id 里就编着它);不是当前会话时面板锁定、只许看不许动 */}
             {tabs.filter((t) => t.kind === 'browser').map((t) => {
@@ -1242,6 +1294,15 @@ export default function App() {
             })}
             {/* ChatPanel 常驻挂载:切走仅 CSS 隐藏(对齐终端/文件面板),手机端底部栏频繁切换不重载会话历史 */}
             <div className={`tab-pane ${effActiveTabId === 'agent' ? '' : 'hide'}`}>
+              {/* 运行与子代理:一个悬浮胶囊 + 右侧抽屉(两个分区各自按需显示);
+                  挂在 agent 这个 pane 里,所以切到终端/文件/预览标签页时整块面板不显示 */}
+              <ActivityDock
+                active={effActiveTabId === 'agent'}
+                sid={activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null}
+                subagentRunId={subagentRunId}
+                onOpenSubagent={openSubagentPanel}
+                onCloseSubagent={closeSubagentPanel}
+              />
               <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
               localHome={status.localHome} savedLocalWs={localWs}
@@ -1250,7 +1311,8 @@ export default function App() {
               onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
               onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}
               onSessionCreated={handleSessionCreated} onSessionTouched={touchSession} draftSid={draftSid}
-              onOpenFile={handleOpenFile} onOpenLocalFile={handleOpenLocalFile} />
+              onOpenFile={handleOpenFile} onOpenLocalFile={handleOpenLocalFile}
+              onOpenSubagent={openSubagentPanel} />
             </div>
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
             <div className={`tab-pane ${effActiveTabId === 'console' ? '' : 'hide'}`}>

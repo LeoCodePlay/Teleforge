@@ -272,12 +272,17 @@ async function engineTest() {
   check('两个会话的预览互不干扰', opened.meta.browserId !== openedB.meta.browserId
     && browserManager.listFor(A).length === 1 && browserManager.listFor(B).length === 1);
 
-  // system 注入:让 AI 知道"我有一个预览浏览器、用哪个 id、别的会话的碰不得"
+  // 预览清单注入:让 AI 知道"我有一个预览浏览器、用哪个 id、别的会话的碰不得"。
+  // 位置是 runtime_context user 快照,不是 system——system 必须逐字节稳定,
+  // 否则页面标题/加载态一变就换掉请求前缀,提供方前缀缓存整段失效。
   const { agent } = await import('../server/agent/agent.ts');
   const block = agent._browserPreviewSection(A);
-  check('AI 的 system 里能看到本会话预览', block.includes('<browser_preview>') && block.includes(String(opened.meta.browserId)), block.slice(0, 120));
+  check('AI 能在上下文里看到本会话预览', block.includes('<browser_preview>') && block.includes(String(opened.meta.browserId)), block.slice(0, 120));
   check('注入内容说明归属规则', block.includes('只属于它所在的对话'), block.slice(-160));
-  check('没有预览的会话不注入(不污染 system)', agent._browserPreviewSection('s_none999') === '');
+  check('没有预览的会话不注入', agent._browserPreviewSection('s_none999') === '');
+  check('预览走 runtime_context 快照', agent._buildRuntimeContext(undefined, A).includes('<browser_preview>'));
+  check('预览不进 system(前缀缓存不失效)', !agent._systemPrompt('default').includes('<browser_preview>')
+    && !agent._systemPrompt('off').includes('<browser_preview>'));
 
   const closed = await tool('browser_close').run({}, ctx(A));
   check('browser_close 不传 id 关闭本会话预览', closed.meta.closed === true && browserManager.listFor(A).length === 0);
@@ -305,4 +310,7 @@ try {
 }
 
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
-if (fail) process.exit(1);
+// 必须显式退出:本测试起过 WS 服务/浏览器连接,事件循环里仍有句柄(浏览器进程、定时器),
+// 只靠 "没有 pending work 就自然退出" 会永远挂着 —— 成功时进程不退出会卡死整条 npm test 链
+// (后面的 preview-url / command-card-merge 永远跑不到),也会在系统里留下僵死的 node 进程。
+process.exit(fail ? 1 : 0);

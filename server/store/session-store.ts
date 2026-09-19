@@ -3,16 +3,27 @@
 // - 每个会话一个文件 data/sessions/<id>.json:
 //     v2:{ version: 2, ts, events:[SessionEvent...] }  事件溯源日志(现行格式,见 agent/session.js)
 //     v1:{ version: 1, ts, turns:[...] }               旧消息数组,读取时自动迁移为事件
-// - 零依赖(Node 内置 fs),原子写(临时文件 + rename)防损坏
+// - 零依赖(Node 内置 fs),原子写(临时文件 + rename)防损坏,见 store/atomic-write.ts
 import fs from 'node:fs';
 import path from 'node:path';
 import { eventsFromTurns } from '../agent/session.ts';
 import { DATA_DIR, SESSIONS_FILE as INDEX_FILE, SESSIONS_DIR } from '../config.ts';
+import { writeFileAtomic } from './atomic-write.ts';
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 const ID_RE = /^s_[0-9a-z]+$/;
 const MAX_EVENTS = 50_000; // 单会话安全上限(防外部改大;超限只保留尾部事件)
+
+// 落盘 I/O 失败(磁盘被占用、写满)只告警不抛出:会话文件每次事件都会重写,一次抖动
+// 不该打断正在跑的 agent 回合,下一次落盘会把这批事件一并写全。同类告警限流 10s 一条。
+let lastIoWarnAt = 0;
+function warnIoFailure(what: string, err: unknown): void {
+  const now = Date.now();
+  if (now - lastIoWarnAt < 10_000) return;
+  lastIoWarnAt = now;
+  console.warn(`[session-store] ${what}落盘失败(本次跳过,后续落盘会重试): ${(err as Error)?.message ?? err}`);
+}
 
 export interface SessionMeta {
   id: string;
@@ -21,6 +32,12 @@ export interface SessionMeta {
   createdAt: number;
   updatedAt: number;
   msgCount: number;
+  /**
+   * 会话最后一次"用户发消息"的时间(事件日志里最后一条 source='user' 的 user/message)。
+   * 任务列表的活跃排序以它为准:AI 回复只推进 updatedAt,不改 lastUserAt,否则每轮回复
+   * 都会把会话顶到最前,列表顺序一直变。缺省(旧索引 / 尚无用户消息)时回退 updatedAt。
+   */
+  lastUserAt?: number;
   /**
    * 会话绑定的远程工作区(连接服务器时执行目录)。
    * 三种取值:目录路径 / NO_WORKSPACE(「不在工作区对话」,边界=整台服务器)
@@ -51,9 +68,7 @@ function readIndex(): SessionIndex {
 function writeIndex(idx: SessionIndex) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const body = JSON.stringify({ version: 1, active: idx.active || null, sessions: idx.sessions }, null, 0);
-  const tmp = INDEX_FILE + '.tmp';
-  fs.writeFileSync(tmp, body, 'utf8');
-  fs.renameSync(tmp, INDEX_FILE);
+  writeFileAtomic(INDEX_FILE, body);
 }
 
 function fileFor(id: string): string {
@@ -75,13 +90,20 @@ function readEvents(id: string): any[] {
 
 function writeEventsFile(id: string, events: any[]) {
   const body = JSON.stringify({ version: 2, ts: Date.now(), events }, null, 0);
-  const tmp = fileFor(id) + '.tmp';
-  fs.writeFileSync(tmp, body, 'utf8');
-  fs.renameSync(tmp, fileFor(id));
+  writeFileAtomic(fileFor(id), body);
 }
 
 /**
- * 会话元数据列表(按最近更新倒序)。
+ * 任务列表活跃排序键:以"用户最后发消息的时间"(lastUserAt)为准,而不是最后一次事件
+ * 落盘时间(updatedAt)——AI 回复会不断推进 updatedAt,若用它排序,列表会随每轮回复重排。
+ * 无用户消息(刚创建的空会话)或旧索引缺该字段时回退 updatedAt/createdAt,保证顺序稳定。
+ */
+export function activeAt(s: SessionMeta): number {
+  return s.lastUserAt || s.updatedAt || s.createdAt || 0;
+}
+
+/**
+ * 会话元数据列表(按用户最近发消息倒序)。
  * 作用域键:服务器 = `username@host:port`,本地模式 = 'local'。
  * 传入时只返回该作用域的会话;缺省返回全部(旧调用兼容)。
  * 无归属(connKey 缺失)的存量会话不算进任何作用域,待首次连接服务器时由 migrateLegacy 归属。
@@ -89,7 +111,7 @@ function writeEventsFile(id: string, events: any[]) {
 export function list(connKey?: string | null): SessionMeta[] {
   const idx = readIndex();
   const rows = connKey == null ? idx.sessions : idx.sessions.filter((s) => s.connKey === connKey);
-  return [...rows].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return [...rows].sort((a, b) => activeAt(b) - activeAt(a));
 }
 
 /**
@@ -147,20 +169,77 @@ export function loadEvents(id: string): any[] {
   return exists(id) ? readEvents(id) : [];
 }
 
+/** 事件日志里最后一次用户发消息的时间(source='user');没有用户消息时返回 0 */
+function lastUserMessageTime(events: any[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.type === 'user/message' && e?.data?.source === 'user') return Number(e.time) || 0;
+  }
+  return 0;
+}
+
+// ---------------- 首条用户提问(任务列表悬停提示) ----------------
+// 前端侧栏会话行的标题只是首条提问的前 24 字(见 agent.ts 的自动命名),悬停时展示更多内容:
+// 这里从事件日志取第一条 user/message(source='user')的正文,压平空白后按 TIP_PROMPT_MAX 截断。
+// 因此按会话 id 缓存,避免每次会话列表推送都重读全部会话文件;保存会话时按实际首条提问
+// 与缓存的差异失效(首次落盘、回退删掉首条都会变),删除会话时直接清理。
+const TIP_PROMPT_MAX = 300;
+const firstPromptCache = new Map<string, string>();
+
+/** 从事件日志提取首条用户提问(压平空白后按上限截断);没有用户消息时返回空串 */
+function extractFirstPrompt(events: any[]): string {
+  for (const e of events) {
+    if (e?.type === 'user/message' && e?.data?.source === 'user') {
+      // display = 用户原文(技能注入只改 content,见 agent.ts 的 user/message 落盘),
+      // 优先用它,否则 /技能 会话会把整段注入指令当成用户的提问。
+      const raw = e.data.display;
+      const text = String(raw != null && raw !== '' ? raw : e.data.content || '').replace(/\s+/g, ' ').trim();
+      return text.length > TIP_PROMPT_MAX ? text.slice(0, TIP_PROMPT_MAX) + '…' : text;
+    }
+  }
+  return '';
+}
+
+export function firstPrompt(id: string): string {
+  const cached = firstPromptCache.get(id);
+  if (cached !== undefined) return cached;
+  const text = extractFirstPrompt(readEvents(id));
+  // 只缓存非空结果:会话刚创建时首条用户消息还没落盘,若把空串也缓存住,
+  // 之后消息写入也不会重算,悬停提示永远回退成 24 字标题(只有一行)。
+  if (text) firstPromptCache.set(id, text);
+  return text;
+}
+
 /** 保存会话事件日志并更新索引元数据 */
 export function saveEvents(id: string, events: any[]): void {
   const idx = readIndex();
   const s = idx.sessions.find((x) => x.id === id);
   if (!s) throw new Error(`会话不存在: ${id}`);
   const clean = Array.isArray(events) ? events : [];
-  writeEventsFile(id, clean);
+  try {
+    writeEventsFile(id, clean);
+  } catch (e) {
+    warnIoFailure(`会话 ${id}`, e);
+    return; // 事件日志都没落盘,索引里的 msgCount/updatedAt 也不必更新
+  }
   s.updatedAt = Date.now();
+  // 活跃排序看的是"用户最后发消息的时间",不是事件最后落盘时间:AI 回复(assistant/tool
+  // 事件)只推进 updatedAt,不改 lastUserAt,任务列表因此不会随每轮回复重排。
+  const lastUserAt = lastUserMessageTime(clean);
+  if (lastUserAt > (s.lastUserAt || 0)) s.lastUserAt = lastUserAt;
   // 有内容的消息数(user 消息 + 压缩检查点)。非破坏压缩下早期 user 消息仍完整保留在
   // 日志里,msgCount 真实反映历史体量;压缩检查点(compaction/done)也计入,保证压缩后
   // 会话不被前端"空会话"过滤规则隐藏。
   s.msgCount = clean.filter((e: any) =>
     (e?.type === 'user/message' && e.data?.source === 'user') || e?.type === 'compaction/done').length;
-  writeIndex(idx);
+  try {
+    writeIndex(idx);
+  } catch (e) {
+    warnIoFailure('会话索引', e);
+  }
+  // 首条提问可能随本次保存变化(会话首次落盘用户消息、回退删掉首条提问、/技能 会话修正
+  // display),与缓存不一致就失效重算,否则悬停提示会一直停在空串或旧提问上。
+  if (firstPromptCache.get(id) !== extractFirstPrompt(clean)) firstPromptCache.delete(id);
 }
 
 export function rename(id: string, title: string): void {
@@ -204,6 +283,7 @@ export function remove(id: string): void {
   if (i < 0) return; // 不存在则视为已删除
   idx.sessions.splice(i, 1);
   if (idx.active === id) idx.active = null;
+  firstPromptCache.delete(id);
   writeIndex(idx);
   try { fs.unlinkSync(fileFor(id)); } catch {}
 }
@@ -253,3 +333,19 @@ function repairStaleMsgCounts(): number {
   return n;
 }
 repairStaleMsgCounts();
+
+// ---------------- 存量索引回填 ----------------
+// lastUserAt 是后加字段:旧索引没有它,首次升级时从事件日志补上,否则这些会话的活跃排序
+// 会回退到 updatedAt(=最后一次事件落盘时间,含 AI 回复),与新版排序口径不一致。
+function backfillLastUserAt(): number {
+  const idx = readIndex();
+  let n = 0;
+  for (const s of idx.sessions) {
+    if (s.lastUserAt || (s.msgCount ?? 0) <= 0) continue; // 无用户消息的会话(含空会话)无需回填,少读一批文件
+    const t = lastUserMessageTime(readEvents(s.id));
+    if (t > 0) { s.lastUserAt = t; n++; }
+  }
+  if (n) writeIndex(idx);
+  return n;
+}
+backfillLastUserAt();

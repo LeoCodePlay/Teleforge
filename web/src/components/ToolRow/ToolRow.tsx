@@ -28,6 +28,8 @@ export interface ToolRowProps {
   /** 文件路径链接(展开/摘要点击打开文件) */
   filePath?: string | undefined;
   onOpenFile?: ((path: string) => void) | undefined;
+  /** 折叠态行尾入口(如子代理的「查看会话」):不触发展开,直接执行 */
+  trailingAction?: { label: string; onClick: () => void } | undefined;
   /** 专属卡片渲染(由各 toolview 传入,替代 IN/OUT 通用卡) */
   card?: ReactNode | null;
   inspect?: (() => void) | undefined;
@@ -67,6 +69,7 @@ export function ToolRow({
   onOpenFile,
   card,
   inspect,
+  trailingAction,
   children,
 }: ToolRowProps) {
   const { open, toggle } = useDisclosure(false);
@@ -108,6 +111,15 @@ export function ToolRow({
               </span>
             )}
             {suffix !== null && <span className="dsh-summarySuffix">{suffix}</span>}
+            {trailingAction !== undefined && (
+              <button
+                type="button"
+                className="dsh-rowAction"
+                onClick={(e) => { e.stopPropagation(); trailingAction.onClick(); }}
+              >
+                {trailingAction.label}
+              </button>
+            )}
           </>
         )}
       >

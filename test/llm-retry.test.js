@@ -6,6 +6,8 @@ process.env.LLM_RETRY_BASE_DELAY_MS = '20';
 process.env.LLM_RETRY_MAX_DELAY_MS = '60';
 process.env.LLM_RETRY_BUDGET_MS = '6000';
 process.env.LLM_RETRY_MAX_ATTEMPTS = '10';
+// 静默看门狗压到 250ms:验证「网关接了连接却一个字节都不发」不再永远卡住
+process.env.LLM_STREAM_IDLE_MS = '250';
 
 import http from 'node:http';
 const { LlmClient, LLM_RETRY, isRetryableLlmError, LlmRequestError } = await import('../server/agent/llm.ts');
@@ -25,6 +27,15 @@ const server = http.createServer((req, res) => {
     seen.push(JSON.parse(body || '{}'));
     const step = script.shift() || { type: 'ok', text: '默认回复' };
     if (step.type === 'hang') return; // 不响应:用于验证「等待期间用户停止」
+    if (step.type === 'silent') { // 已建立连接(头部已发)却一个字节都不发:网关假死
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      return;
+    }
+    if (step.type === 'json200') { // 200 但不是 SSE(网关把错误包成 JSON 返回)
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(step.body ?? '{"error":{"message":"upstream busy"}}');
+      return;
+    }
     if (step.type === 'status') {
       res.writeHead(step.code, { 'Content-Type': 'application/json', ...(step.headers || {}) });
       res.end(step.body ?? '{}');
@@ -97,6 +108,8 @@ seen = [];
 }
 
 // 4) 无结束标记([DONE]/finish_reason)就关闭:当作截断重试一次,第二次仍如此则接受
+//    但必须带 truncated 标记 —— 上层据此在对话里留下"回复可能不完整"的可见记录,
+//    绝不能再像从前那样静默当成正常完成。
 script = [{ type: 'eof', text: '被截断的回答' }, { type: 'eof', text: '第二次仍无结束标记' }];
 seen = [];
 {
@@ -104,6 +117,39 @@ seen = [];
   check('无结束标记的截断先重试一次', seen.length === 2, String(seen.length));
   check('重试后仍无结束标记则接受结果(不无限重试)', res.content === '第二次仍无结束标记', JSON.stringify(res.content));
   check('截断重试也带 discard', retries.length === 1 && retries[0].discard === true, JSON.stringify(retries));
+  check('接受的结果带 truncated 标记(上层必须向用户披露)', res.truncated === true, JSON.stringify(res.truncated));
+}
+
+// 4b) 正常收到 [DONE] + finish_reason:不带 truncated 标记(不能被误报成截断)
+script = [{ type: 'ok', text: '完整回答' }];
+{
+  const { res } = await run(mkClient());
+  check('正常收尾的结果不带 truncated 标记', res.truncated !== true && res.content === '完整回答', JSON.stringify(res));
+}
+
+// 4c) 200 但不是 SSE(网关把错误包成 JSON):必须重试,且错误里带原始报文片段
+script = [{ type: 'json200', body: '{"error":{"message":"upstream busy"}}' }, { type: 'ok', text: '恢复后的回答' }];
+seen = [];
+{
+  const { res, retries } = await run(mkClient());
+  check('非 SSE 的 200 响应会重试', res.content === '恢复后的回答' && seen.length === 2, String(seen.length));
+  check('错误里带上原始报文片段(可排查)', /不是 SSE/.test(String(retries[0]?.error || '')) && /upstream busy/.test(String(retries[0]?.error || '')), String(retries[0]?.error));
+}
+
+// 4d) 空响应(正文/思考/工具调用全空):不再被当成「模型没话说」静默收尾
+script = Array.from({ length: 12 }, () => ({ type: 'ok' })); // 只有 finish_reason + [DONE],没有任何内容
+seen = [];
+{
+  let err = null;
+  await run(mkClient()).catch((e) => { err = e; });
+  check('持续空响应最终报错(不静默完成)', /空响应/.test(String(err?.message)), String(err?.message));
+  check('空响应确实重试过多次', seen.length > 1, String(seen.length));
+}
+script = [{ type: 'ok' }, { type: 'ok', text: '补上的回答' }];
+seen = [];
+{
+  const { res } = await run(mkClient());
+  check('空响应后重试成功', res.content === '补上的回答', JSON.stringify(res.content));
 }
 
 // 5) 429 限流:尊重网关给的 retryAfterSeconds / Retry-After
@@ -180,6 +226,15 @@ seen = [];
   setTimeout(() => ac.abort(), 30);
   const e = await p;
   check('挂起的请求被停止后立刻返回', /已停止/.test(String(e?.message)), String(e?.message));
+}
+
+// 11) 网关假死(接了连接却一个字节都不发):静默看门狗把「永远卡在生成中」变成可重试的中断
+script = [{ type: 'silent' }, { type: 'ok', text: '看门狗恢复' }];
+seen = [];
+{
+  const { res, retries } = await run(mkClient());
+  check('静默超时后自动重试并成功', res.content === '看门狗恢复' && seen.length === 2, String(seen.length));
+  check('看门狗错误说明「没有收到任何数据」', /没有收到任何数据/.test(String(retries[0]?.error || '')), String(retries[0]?.error));
 }
 
 console.warn = realWarn;

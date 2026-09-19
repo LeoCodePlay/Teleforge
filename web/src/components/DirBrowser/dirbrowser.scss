@@ -1,6 +1,11 @@
 /* ---- 目录浏览弹窗(DirBrowser/LocalDirBrowser 共享)独有样式 ---- */
+/* 蒙版定位层:加载蒙版必须是滚动容器的兄弟节点,不能放进 .dirlist 内部——
+   滚动容器内绝对定位子元素的包含块是滚动内容的 padding box,列表一滚动
+   蒙版就跟着内容上移,可视区底部漏出没遮住的缺口(目录项多时尤其明显)。
+   蒙版挂在这一层,以整个列表盒为基准,不入滚动、不留缝 */
+.dirlist-wrap { position: relative; margin-top: 8px; }
 .dirlist {
-  position: relative; max-height: 340px; min-height: 180px; overflow-y: auto; overflow-x: hidden; margin-top: 8px;
+  max-height: 340px; min-height: 180px; overflow-y: auto; overflow-x: hidden;
   border: 1px solid var(--glass-border); border-radius: var(--r-sm);
   padding: 6px; background: var(--glass-bg-inset);
 }
@@ -10,7 +15,7 @@
 .dirlink.disabled { opacity: .6; cursor: default; }
 .spinner-inline { width: 12px; height: 12px; flex: none; border: 1.5px solid var(--accent); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 .dirlist-loading {
-  position: absolute; inset: 6px; z-index: 5; display: flex; flex-direction: column;
+  position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 8px;
   color: var(--muted); font-size: 12px;
   background: var(--code-bg-soft); backdrop-filter: var(--blur-sm);

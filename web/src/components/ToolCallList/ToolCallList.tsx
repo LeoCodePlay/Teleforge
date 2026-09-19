@@ -14,28 +14,31 @@ import { WebSearchRow } from '../toolviews/WebSearchRow';
 import { SkillRow } from '../toolviews/SkillRow';
 import { GenericToolCard } from '../toolviews/GenericToolCard';
 import { BrowserRow } from '../toolviews/BrowserRow';
+import { SubagentRow } from '../toolviews/SubagentRow';
 import './ToolCallList.scss';
 
 interface ToolCallListProps {
   tools: ToolCallInfo[];
   workspace?: string;
   onOpenFile?: (path: string) => void;
+  /** 打开右侧子代理面板,回看这次派发的完整对话(runId 来自 tool/result 的 meta) */
+  onOpenSubagent?: (runId: string) => void;
 }
 
 // memo:按 tools 数组引用判定。ChatPanel 的 tool_call/tool_result 事件走不可变更新,
 // 只有工具组真实变化时本列表才重渲染;流式文本/输入变化不再牵动全部历史的工具卡。
-export const ToolCallList = memo(function ToolCallList({ tools, workspace, onOpenFile }: ToolCallListProps) {
+export const ToolCallList = memo(function ToolCallList({ tools, workspace, onOpenFile, onOpenSubagent }: ToolCallListProps) {
   if (!tools || tools.length === 0) return null;
   return (
     <div className="dsh-tooltree">
       {tools.map((call, i) => (
-        <ToolCallBranch key={call.id ?? i} call={call} workspace={workspace} onOpenFile={onOpenFile} />
+        <ToolCallBranch key={call.id ?? i} call={call} workspace={workspace} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} />
       ))}
     </div>
   );
 });
 
-function ToolCallBranch({ call, workspace, onOpenFile }: { call: ToolCallInfo; workspace?: string; onOpenFile?: (path: string) => void }) {
+function ToolCallBranch({ call, workspace, onOpenFile, onOpenSubagent }: { call: ToolCallInfo; workspace?: string; onOpenFile?: (path: string) => void; onOpenSubagent?: (runId: string) => void }) {
   const name = call.tool || '';
   const inspect = undefined; // 轨迹跳转当前项目无对应面板,预留
   let view: React.ReactNode;
@@ -55,6 +58,9 @@ function ToolCallBranch({ call, workspace, onOpenFile }: { call: ToolCallInfo; w
     view = <WebSearchRow call={call} inspect={inspect} />;
   } else if (name === 'skill') {
     view = <SkillRow call={call} inspect={inspect} />;
+  } else if (name === 'subagent') {
+    // 子代理:父会话只留一条结论,行尾给「查看会话」进右侧面板看过程
+    view = <SubagentRow call={call} onOpenSubagent={onOpenSubagent} />;
   } else if (name.startsWith('browser_')) {
     view = <BrowserRow call={call} inspect={inspect} />;
   } else {

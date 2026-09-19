@@ -218,3 +218,25 @@
   /* 不做旋入动画:直接以正位淡入淡出互换 */
   .s-group-header .s-group-add { transform: none; }
 }
+
+/* ---- 工作区分组拖拽排序:跟手虚影 ---- */
+/* 顺序实时交换(指针越过谁的中线,被拖分组就立刻让位),所以不画插入指示线;
+   被拖起的那组由 hook 用行内 transform 跟着指针走,这里只负责「浮起来」的观感:
+   抬起一层(盖住其余分组)、半透明、更大更深的投影 */
+.s-group.dragging {
+  position: relative; z-index: 30; opacity: .82;
+}
+.s-group.dragging > .s-group-header {
+  border-color: var(--accent-border);
+  background: var(--glass-bg-hover);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .42), inset 0 1px 0 var(--btn-sheen);
+  transform: scale(1.02);
+}
+.s-list.reordering, .s-list.reordering .s-group-header { cursor: grabbing; }
+/* 触屏:分组头长按弹分组菜单(见 useGroupReorder 的 onLongPress),同时不选中文本 */
+.s-group-header { -webkit-touch-callout: none; }
+
+/* 分组菜单的「拖动排序」:触屏专用入口——桌面按住分组头就能拖,不需要它 */
+@media (hover: hover) and (pointer: fine) {
+  .ctxmenu .s-group-menu-reorder { display: none; }
+}

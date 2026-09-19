@@ -362,6 +362,37 @@ export class SshConnection extends EventEmitter {
   // ---------- 交互式终端(PTY) ----------
   // 打开远程交互式 shell(xterm-256color PTY),供命令台真实终端使用。
   // 返回 ssh2 的双工 stream:data=输出,write=键盘输入,setWindow=尺寸变化,close=结束
+  // ---------- AI 运行终端:非交互 PTY 执行 ----------
+  // 在带 PTY 的通道里执行单条命令(只读):输出是真实终端流,命令退出时通道 close,
+  // 由此可靠拿到退出码。登记进 activeRuns,可用 kill(runId) 发 SIGINT 再兜底关闭。
+  ptyExec(cmd: string, opts: {
+    runId?: string; cols?: number; rows?: number;
+    onData?: (d: Buffer) => void;
+    onExit?: (code: number | null, signal: string | null) => void;
+  } = {}): Promise<ClientChannel> {
+    const { runId, cols = 120, rows = 30, onData, onExit } = opts;
+    return new Promise<ClientChannel>((resolve, reject) => {
+      if (!this.connected || !this.client) return reject(new Error('SSH 未连接'));
+      this.client.exec(cmd, { pty: { term: 'xterm-256color', cols, rows, width: 0, height: 0, modes: {} } } as any, (err, stream) => {
+        if (err) return reject(err);
+        const id = runId || `pty-${(this._runSeq = (this._runSeq || 0) + 1)}`;
+        const run: ActiveRun = { id, stream, done: false, stopped: false, killTimer: null };
+        this.activeRuns.set(id, run);
+        stream.on('data', (d: Buffer) => { try { onData?.(d); } catch {} });
+        stream.stderr?.on('data', (d: Buffer) => { try { onData?.(d); } catch {} });
+        // ssh2:PTY 通道 close 参数为 (code, signal);部分版本可能为 null
+        stream.on('close', (code: any, signal: any) => {
+          run.done = true;
+          if (run.killTimer) clearTimeout(run.killTimer);
+          this.activeRuns.delete(id);
+          try { onExit?.(typeof code === 'number' ? code : null, typeof signal === 'string' ? signal : null); } catch {}
+        });
+        stream.on('error', () => {});
+        resolve(stream);
+      });
+    });
+  }
+
   shell({ cols = 80, rows = 24 }: { cols?: number; rows?: number } = {}): Promise<ClientChannel> {
     return new Promise((resolve, reject) => {
       if (!this.connected || !this.client) return reject(new Error('SSH 未连接'));
@@ -891,6 +922,7 @@ export class SshManager extends EventEmitter {
   exec(cmd: string, o?: ExecOptions) { return this._act('exec', cmd, o); }
   execBackground(cmd: string, o?: ExecOptions) { return this._act('execBackground', cmd, o); }
   shell(o?: any) { return this._act('shell', o); }
+  ptyExec(cmd: string, o?: any) { return this._act('ptyExec', cmd, o); }
   kill(runId: string, o?: any) { return this.active ? this.active.kill(runId, o) : false; }
   cdCommand(cmd: string) { return this.active ? this.active.cdCommand(cmd) : cmd; }
 

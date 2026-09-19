@@ -11,6 +11,8 @@ import { registerExec } from '../server/api/rpc/exec.ts';
 import { registerAskUser } from '../server/api/rpc/ask-user.ts';
 import { registerRef } from '../server/api/rpc/ref.ts';
 import { registerBrowser } from '../server/api/rpc/browser.ts';
+import { registerAiTerm } from '../server/api/rpc/ai-term.ts';
+import { registerSubagent } from '../server/api/rpc/subagent.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -31,16 +33,18 @@ const scratchRpc = () => {
 
 const GOLDEN = {
   ssh:      ['connect', 'disconnect', 'conn_disconnect', 'conn_switch', 'ssh_profiles_list', 'ssh_profile_save', 'ssh_profile_delete'],
-  agent:    ['speak', 'stop_agent', 'get_history', 'permission_get', 'permission_default_get', 'permission_set', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
+  agent:    ['speak', 'stop_agent', 'get_history', 'permission_get', 'permission_default_get', 'permission_set', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_delete_group', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
   skills:   ['skills_list', 'skill_get', 'skill_save', 'skill_delete', 'skill_copy_builtin'],
   config:   ['llm', 'get_status', 'tools_list', 'tool_toggle', 'prompt_inject_get', 'prompt_inject_set'],
-  local:    ['list_local_dir', 'read_local_file', 'write_local_file', 'create_local_dir', 'local_delete', 'local_copy', 'local_rename', 'set_local_workspace'],
+  local:    ['list_local_dir', 'read_local_file', 'write_local_file', 'create_local_dir', 'local_delete', 'local_copy', 'local_rename', 'set_local_workspace', 'local_reveal'],
   remote:   ['list_dir', 'read_file', 'write_file', 'create_dir', 'delete', 'copy', 'rename', 'set_workspace'],
   transfer: ['local_to_remote', 'remote_to_local'],
   exec:     ['run_command', 'stop_command'],
   'ask-user': ['ask_user_answer', 'ask_user_cancel', 'ask_user_list'],
   ref:      ['ref_candidates'],
-  browser:  ['browser_list', 'browser_open', 'browser_navigate', 'browser_back', 'browser_forward', 'browser_reload', 'browser_resize', 'browser_info', 'browser_selection', 'browser_close', 'browser_close_all']
+  browser:  ['browser_list', 'browser_open', 'browser_navigate', 'browser_back', 'browser_forward', 'browser_reload', 'browser_resize', 'browser_info', 'browser_selection', 'browser_close', 'browser_close_all'],
+  'ai-term': ['ai_term_list', 'ai_term_log', 'ai_term_resize', 'ai_term_delete'],
+  'subagent': ['subagent_list', 'subagent_get']
 };
 
 // 各模块 golden:逐个注册到 scratch,类型清单一致
@@ -55,7 +59,9 @@ for (const [name, fn, types] of [
   ['exec', registerExec, GOLDEN.exec],
   ['ask-user', registerAskUser, GOLDEN['ask-user']],
   ['ref', registerRef, GOLDEN.ref],
-  ['browser', registerBrowser, GOLDEN.browser]
+  ['browser', registerBrowser, GOLDEN.browser],
+  ['ai-term', registerAiTerm, GOLDEN['ai-term']],
+  ['subagent', registerSubagent, GOLDEN.subagent]
 ]) {
   const rpc = scratchRpc();
   fn(rpc);
@@ -70,7 +76,7 @@ const router = createRpcRouter({
   emitStatus() {},
   syncAgentScope() {}
 });
-check('router 注册全部 71 种类型', JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
+check(`router 注册全部 ${ALL_TYPES.length} 种类型`, JSON.stringify(sorted(router.types())) === JSON.stringify(sorted(ALL_TYPES)),
   `缺/多: ${sorted(router.types()).filter((t) => !ALL_TYPES.includes(t)).join(',') || '(无)'}`);
 
 // 重复注册被拒

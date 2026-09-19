@@ -1,52 +1,411 @@
-/* ---- AboutPanel(关于与更新)独有样式:版本卡 + 配置目录 + 更新进度 ---- */
+/* ---- AboutPanel(关于与更新)----
+   结构:版本卡(应用标识 / 版本事实 / 配置目录)+ 更新区(状态行 / 版本迁移 / 变更日志 / 进度)
+   圆角体系:区块 --r-lg,行与按钮 --r-sm,进度条轨道 --r-pill(与全站设置页一致)
+   颜色全部取自主题 token,浅色主题与自定义主题自动跟随 */
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ================= 版本卡 ================= */
 .about-card {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px; margin-bottom: 14px; border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border-radius: var(--r-lg);
   background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
   border: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 var(--glass-hi);
 }
-.about-logo img { width: 38px; height: 38px; border-radius: 10px; display: block; }
-.about-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.about-name { font-weight: 700; font-size: 14px; color: var(--text); }
-.about-ver { font-size: 12px; color: var(--muted); font-family: var(--mono); }
-.about-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
-.about-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
-.about-datadir {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; border-radius: var(--r-sm);
-  background: var(--code-bg); border: 1px solid var(--line-soft);
+.about-id {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
 }
-.about-datadir code {
-  font-size: 11.5px; font-family: var(--mono); color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
+.about-logo {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: var(--r-md);
+  display: block;
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 14px var(--shadow-1);
 }
-.about-datadir code::-webkit-scrollbar { display: none; }
+.about-id-text {
+  min-width: 0;
+}
+.about-name {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  color: var(--text);
+}
+.about-tagline {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 58ch;
+}
 
+/* 版本事实行:当前版本 / 许可 / 更新源,竖线分隔,与区块留白对齐 */
+.about-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+.fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.fact dt,
+.fact dd {
+  margin: 0;
+  display: inline;
+}
+.fact + .fact::before {
+  content: '';
+  width: 1px;
+  height: 11px;
+  margin-right: 3px;
+  background: var(--line-strong);
+}
+.fact dd {
+  font-weight: 600;
+  color: var(--text);
+}
+.fact-link {
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--accent-2);
+  cursor: pointer;
+}
+.fact-link:hover:not(:disabled) {
+  background: none;
+  border: none;
+  box-shadow: none;
+  text-decoration: underline;
+}
+.fact-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-radius: 4px;
+}
+
+/* 配置与数据目录 */
+.about-dir {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.about-dir-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.about-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.about-dir-row code {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  color: var(--text);
+  /* 路径过长时保留尾部(盘符 + 目录名),正文仍是 LTR 阅读顺序 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+.about-dir-hint {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ================= 更新区 ================= */
 .about-update {
-  margin-top: 14px; padding: 12px 14px; border-radius: var(--r-md);
-  border: 1px solid var(--warn-border);
-  background: linear-gradient(135deg, var(--warn-bg), transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--r-lg);
+  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
 }
-.about-update .panel-title { margin-bottom: 8px; }
-.update-notes {
-  max-height: 200px; overflow-y: auto;
-  font-size: 12px; line-height: 1.6; color: var(--text);
-  background: var(--code-bg); border: 1px solid var(--line-soft);
-  border-radius: var(--r-sm); padding: 10px 12px;
-  white-space: pre-wrap; word-break: break-word;
+.about-update-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.update-progress { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.about-update-title {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  color: var(--text-2);
+}
+
+/* ---- 状态行:检查结果 / 进度 / 失败都在同一位置更新,主操作右对齐 ---- */
+.up-status {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 13px;
+  border-radius: var(--r-md);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+.up-status-icon {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 3px var(--glass-bg-hover);
+}
+.up-status-text { flex: 1; min-width: 0; }
+.up-status-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.up-status-desc {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.up-status button { flex: none; white-space: nowrap; }
+
+/* 状态语义色(与全站状态语义一致:绿=无需操作,琥珀=待处理,红=失败) */
+.up-status.ready .up-status-icon { background: var(--green); box-shadow: 0 0 0 3px var(--ok-bg); }
+.up-status.downloaded .up-status-icon { background: var(--green); box-shadow: 0 0 0 3px var(--ok-bg); }
+.up-status.downloaded { border-color: var(--ok-border); background: linear-gradient(135deg, var(--ok-bg), transparent); }
+.up-status.error .up-status-icon { background: var(--red); box-shadow: 0 0 0 3px var(--err-bg); }
+.up-status.error { border-color: var(--err-border); }
+.up-status.error .up-status-desc { color: var(--err-text); }
+/* 菱形:正在进行的检查(旋转动画在下方 reduced-motion 块里统一关闭) */
+.up-status.checking .up-status-icon {
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: spin 1s linear infinite;
+}
+/* 呼吸:下载 / 安装进行中 */
+.up-status.downloading .up-status-icon,
+.up-status.installing .up-status-icon {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+/* ---- 版本迁移:当前 → 最新 ---- */
+.up-migrate {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+.up-ver {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-soft);
+  background: var(--glass-bg-inset);
+}
+.up-ver-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.up-ver b {
+  font-size: 15px;
+  color: var(--text);
+}
+.up-ver.to {
+  border-color: var(--accent-border);
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+}
+.up-ver.to b { color: var(--accent-2); }
+.up-arrow {
+  align-self: center;
+  flex: none;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+/* ---- 变更日志:折叠标题 + 可滚动正文 ---- */
+.up-notes {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--code-bg-soft);
+  overflow: hidden;
+}
+.up-notes > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.up-notes > summary::-webkit-details-marker { display: none; }
+.up-notes > summary:hover { background: var(--glass-bg-hover); color: var(--accent-2); }
+.up-notes > summary:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent-soft); }
+.up-notes-caret {
+  flex: none;
+  display: inline-block;
+  font-size: 13px;
+  color: var(--muted);
+  transform: rotate(0deg);
+  transition: transform .18s ease;
+}
+.up-notes[open] .up-notes-caret { transform: rotate(90deg); }
+.up-notes-file {
+  margin-left: auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.up-notes-body {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 10px 13px 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+/* 正文复用全站 .md 排版,这里只覆盖需要更紧凑/更受限的部分 */
+.up-notes-body h1,
+.up-notes-body h2,
+.up-notes-body h3 { font-size: 13.5px; margin: 10px 0 5px; }
+.up-notes-body h1:first-child,
+.up-notes-body h2:first-child,
+.up-notes-body h3:first-child { margin-top: 0; }
+.up-notes-body p { margin: 5px 0; }
+.up-notes-body li { margin: 3px 0; }
+.up-notes-body img { max-width: 100%; height: auto; }
+.up-notes-empty {
+  padding: 10px 13px 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---- 下载进度 ---- */
+.up-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
 .up-bar {
-  flex: 1; height: 8px; border-radius: 4px; overflow: hidden;
-  background: var(--glass-bg-inset); border: 1px solid var(--line-soft);
+  height: 6px;
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  background: var(--progress-track);
 }
 .up-fill {
-  height: 100%; border-radius: 4px; transition: width .2s ease;
+  height: 100%;
+  border-radius: var(--r-pill);
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   box-shadow: 0 0 10px var(--accent-soft);
+  transition: width .2s ease;
 }
-.up-pct { flex: none; font-size: 12px; color: var(--muted); font-family: var(--mono); min-width: 44px; text-align: right; }
-.update-actions { display: flex; gap: 8px; margin-top: 12px; }
-.update-actions .primary { box-shadow: none; }
+.up-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.up-meta .grow { flex: 1; }
+.up-pct { color: var(--text); min-width: 38px; text-align: right; }
+
+/* ---- 浏览器 / 开发模式降级说明 ---- */
+.up-fallback {
+  padding: 11px 13px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--line-dash);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.up-fallback-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.up-fallback-desc {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.up-fallback button { align-self: flex-start; white-space: nowrap; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+/* ---- 窄屏:版本迁移堆叠、状态行按钮换行、内边距收紧 ---- */
+@media (max-width: 560px) {
+  .about-card,
+  .about-update { padding: 13px; }
+  .up-status { flex-wrap: wrap; }
+  .up-status button { width: 100%; }
+  .up-migrate { flex-direction: column; gap: 8px; }
+  .up-arrow { transform: rotate(90deg); align-self: flex-start; padding-left: 12px; }
+  .up-notes-body { max-height: 200px; }
+}
+
+/* ---- 减少动态效果:状态指示与进度过渡全部静态化 ---- */
+@media (prefers-reduced-motion: reduce) {
+  .up-status-icon,
+  .up-status.checking .up-status-icon,
+  .up-status.downloading .up-status-icon,
+  .up-status.installing .up-status-icon { animation: none; }
+  .up-status.checking .up-status-icon { border-radius: 50%; }
+  .up-fill { transition: none; }
+  .up-notes-caret { transition: none; }
+}

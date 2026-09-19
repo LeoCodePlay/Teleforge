@@ -17,6 +17,9 @@ export interface ChatResult {
   finishReason?: string;
   /** 提供方在上游流中上报的用量(有则取最后一次非空);网关不报则为 null */
   usage?: { promptTokens?: number; completionTokens?: number } | null;
+  /** 上游流没有正常结束标记(finish_reason / [DONE])就断了,且已重试到不再重试:
+   *  正文可能只写了一半,调用方不能把它当作正常完成,必须向用户披露(见 chat 的截断处理) */
+  truncated?: boolean;
 }
 
 export interface LlmOptions {
@@ -165,8 +168,8 @@ export class LlmClient {
       body.reasoning_effort = map[reasoning] || 'high';
     }
     // 失败重试策略(见文件末尾 LLM_RETRY):网络抖动、网关 5xx、限流 429、以及「流已经建立
-    // 但中途被掐断/被截断」一律重试 —— 按指数退避并尊重网关给的 Retry-After /
-    // retryAfterSeconds,单次 chat 调用的重试总预算约 3 分钟。
+    // 但中途被掐断/被截断/返回空响应」一律重试 —— 按指数退避并尊重网关给的 Retry-After /
+    // retryAfterSeconds,单次 chat 调用的重试总预算默认 10 分钟、最多 20 次请求。
     // - 用户中止立即停止,不重试;
     // - 鉴权/余额/参数这类「重试也不会变好」的错误不空等,直接给出可操作提示;
     // - 关键:流已吐过内容后失败同样重试。重试会重发这一步,所以必须先作废「已流出但尚未
@@ -178,6 +181,8 @@ export class LlmClient {
     let truncatedRetries = 0; // 「没有结束标记的截断」已重试次数:只给一次机会,避免不认 [DONE] 的提供方白等预算
     let emittedChars = 0;    // 本次尝试已通过 onDelta 吐出的字符数(正文/思考/工具参数)
     let attempt = 0;         // 已发起的请求次数(含首次)
+    let idleFired = false;   // 本次尝试是否因长期收不到任何数据被看门狗掐断
+    let deadlineFired = false; // 本次尝试是否因重试总预算用尽被 deadline 掐断
     const startedAt = Date.now();
     const trackedDelta = (d: { kind: string; text?: string; index?: number }) => {
       if (d.text) emittedChars += d.text.length;
@@ -212,6 +217,34 @@ export class LlmClient {
       }
       emittedChars = 0; // 每次尝试独立计数
       attempt++;
+      // 单次尝试的取消控制器:外层 signal(用户停止)、静默看门狗、预算 deadline 合并成一路。
+      // idleMs 不超过剩余预算,deadline 则直接钉在「预算用尽」那一刻:前者管「一个字节都不来」,
+      // 后者管「一直有数据在流却永远不结束」——两条合起来保证总时长不超预算,且一次尝试
+      // 吃不掉整轮预算(否则就成了「只重试 1 次就放弃」)。
+      const budgetLeftMs = Math.max(250, LLM_RETRY.BUDGET_MS - (Date.now() - startedAt));
+      const idleMs = Math.min(LLM_RETRY.IDLE_MS, budgetLeftMs);
+      const attemptAc = new AbortController();
+      idleFired = false;
+      deadlineFired = false;
+      const onOuterAbort = () => attemptAc.abort();
+      signal?.addEventListener('abort', onOuterAbort, { once: true });
+      if (signal?.aborted) attemptAc.abort();
+      let watchdog: ReturnType<typeof setTimeout> | null = null;
+      let deadline: ReturnType<typeof setTimeout> | null = null;
+      const kick = () => {
+        if (watchdog) clearTimeout(watchdog);
+        watchdog = setTimeout(() => { idleFired = true; attemptAc.abort(); }, idleMs);
+      };
+      const stopWatchdog = () => {
+        if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+        if (deadline) { clearTimeout(deadline); deadline = null; }
+        signal?.removeEventListener('abort', onOuterAbort);
+      };
+      const attemptAbortError = () => (deadlineFired
+        ? new Error(`LLM API 重试总预算已用尽(本次请求超过 ${Math.round(LLM_RETRY.BUDGET_MS / 1000)}s 仍未结束)`)
+        : new Error(`LLM API ${Math.round(idleMs / 1000)}s 内没有收到任何数据(连接已被网关中断)`));
+      kick();
+      deadline = setTimeout(() => { deadlineFired = true; attemptAc.abort(); }, budgetLeftMs);
       let res: Response;
       try {
         res = await fetch(url, {
@@ -221,15 +254,18 @@ export class LlmClient {
             Authorization: `Bearer ${this.apiKey}`
           },
           body: JSON.stringify(body),
-          signal
+          signal: attemptAc.signal
         });
       } catch (e) {
+        stopWatchdog();
         if (signal?.aborted) throw abortError();
-        lastErr = e; // 连接层错误(undici terminated / fetch failed / ECONNRESET 等):瞬态,重试
-        lastFailure = { retryable: true, text: errText(e) };
+        // 连接层错误(undici terminated / fetch failed / ECONNRESET 等)与静默/预算超时:都是瞬态,重试
+        lastErr = idleFired || deadlineFired ? attemptAbortError() : e;
+        lastFailure = { retryable: true, text: errText(lastErr) };
         continue;
       }
       if (!res.ok) {
+        stopWatchdog(); // HTTP 层就失败:本次尝试的看门狗/监听必须摘干净,否则会串到下一次尝试
         const rawBody = (await res.text()).slice(0, 2000);
         // 网关把「还要等多久」放在 Retry-After 头或 body 的 retryAfterSeconds 里
         // (实测 deepseek 网关:429 回 data.retryAfterSeconds=9~29),先解析再动原文
@@ -259,9 +295,27 @@ export class LlmClient {
       }
       try {
         if (!res.body) throw new Error('LLM API 未返回响应流');
-        return await parseSse(res.body, { signal, onDelta: trackedDelta, tolerateMissingEnd: truncatedRetries > 0 });
+        const out = await parseSse(res.body, {
+          signal: attemptAc.signal,
+          onDelta: trackedDelta,
+          onActivity: kick,
+          tolerateMissingEnd: truncatedRetries > 0
+        });
+        stopWatchdog();
+        // 空响应(正文、思考、工具调用全空)几乎都是网关抽风(200 + 错误 JSON、空 SSE 流)。
+        // 旧行为把它当成模型没话说直接收尾,界面表现为对话毫无征兆地停住且没有任何报错;
+        // 这里按可重试失败处理,重试到预算耗尽就给出可读错误,而不是静默结束。
+        if (!out.content && !out.reasoning && out.toolCalls.length === 0) {
+          lastErr = new Error('LLM API 返回空响应(正文、思考与工具调用均为空)');
+          lastFailure = { retryable: true, text: errText(lastErr) };
+          console.warn(`[llm] ${this.model} 返回空响应,将重试`);
+          continue;
+        }
+        return out;
       } catch (e) {
+        stopWatchdog();
         if (signal?.aborted) throw abortError();
+        if (idleFired || deadlineFired) e = attemptAbortError();
         // 流中断:无论有没有吐出过内容都重试。吐过内容的这次尝试整体作废
         // (onRetry 带 discard,上层丢弃半成品并回滚前端显示),历史里不会留下残句。
         lastErr = e;
@@ -419,9 +473,11 @@ function toFriendlyLlmError(
   ctx?: { attempts?: number; elapsedMs?: number; budgetExhausted?: boolean }
 ): Error {
   const msg = errText(e);
+  // 预算用尽必须写出来:否则用户只看到「重试 N 次仍失败」,分不清是次数用尽还是时间用尽
+  const budgetNote = `重试总预算 ${Math.round(LLM_RETRY.BUDGET_MS / 1000)}s 已用尽`;
   const tried = ctx?.attempts && ctx.attempts > 1
-    ? `已自动重试 ${ctx.attempts - 1} 次(共 ${Math.max(1, Math.round((ctx.elapsedMs || 0) / 1000))}s)`
-    : '';
+    ? `已自动重试 ${ctx.attempts - 1} 次(共 ${Math.max(1, Math.round((ctx.elapsedMs || 0) / 1000))}s${ctx.budgetExhausted ? ',预算已用尽' : ''})`
+    : (ctx?.budgetExhausted ? budgetNote : '');
   // 确定的账号/入参类错误:重试不会变好,给可操作指引而不是让用户干等
   if (failure && !failure.retryable) {
     const hint = permanentErrorHint(failure.status);
@@ -434,7 +490,7 @@ function toFriendlyLlmError(
   }
   // 连接层/流层中断
   const low = msg.toLowerCase();
-  const hint = /terminated|未收到 finish_reason/i.test(low) ? '连接被服务端/网关中断' : '网络连接异常';
+  const hint = /terminated|未收到 finish_reason|不是 sse|返回空响应|没有收到任何数据|重试总预算已用尽/i.test(low) ? '连接被服务端/网关中断' : '网络连接异常';
   const head = `${tried ? `${tried}仍失败,` : ""}本轮已停止重试`;
   return new Error(`模型连接中断:${hint}(${msg})。${head};可直接发消息让我接着做,或切换模型/检查网络后重试`);
 }
@@ -460,18 +516,26 @@ function retryExhaustedHint(status: number, tried: string): string {
 }
 
 // ---------------- 失败重试策略 ----------------
-// 一次 chat 调用的重试总预算默认 3 分钟、最多 10 次请求;退避 1s→2s→4s→…封顶 30s,
+// 一次 chat 调用的重试总预算默认 10 分钟、最多 20 次请求;退避 1s→2s→4s→…封顶 30s,
 // 并与网关给的 Retry-After/retryAfterSeconds 取较大值,叠加 ±10% 抖动避免多会话同时撞车。
+// 预算是硬上限:单次尝试的静默超时与 deadline 都按剩余预算收敛,所以「重试了很多次仍是
+// 连不上」不会退化成「只重试 1 次就放弃」,也不会等得比承诺更久。
 // 可用环境变量覆盖(联调/按需调优):LLM_RETRY_BUDGET_MS、LLM_RETRY_MAX_ATTEMPTS、
-// LLM_RETRY_BASE_DELAY_MS、LLM_RETRY_MAX_DELAY_MS。
+// LLM_RETRY_BASE_DELAY_MS、LLM_RETRY_MAX_DELAY_MS、LLM_STREAM_IDLE_MS。
 const envNum = (v: string | undefined, fallback: number): number => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 };
 
 export const LLM_RETRY = {
-  BUDGET_MS: envNum(process.env.LLM_RETRY_BUDGET_MS, 180_000),
-  MAX_ATTEMPTS: envNum(process.env.LLM_RETRY_MAX_ATTEMPTS, 10),
+  BUDGET_MS: envNum(process.env.LLM_RETRY_BUDGET_MS, 600_000),
+  // 单次尝试的静默超时:从发起请求到首个字节、以及流中任意两次数据之间的最长间隔。
+  // 超时即按可重试的流中断处理——把永远卡在生成中变成一次可见的重试或报错。
+  // 60s:上游真的在生成时最长可静默数十秒,而已经死掉的连接 60s 内一定没有任何字节。
+  // 这个值必须远小于 BUDGET_MS——两者相等时,一次「网关假死」就能吃掉整轮预算,
+  // 用户看到的就是「只重试 1 次就放弃」。
+  IDLE_MS: envNum(process.env.LLM_STREAM_IDLE_MS, 60_000),
+  MAX_ATTEMPTS: envNum(process.env.LLM_RETRY_MAX_ATTEMPTS, 20),
   BASE_DELAY_MS: envNum(process.env.LLM_RETRY_BASE_DELAY_MS, 1_000),
   MAX_DELAY_MS: envNum(process.env.LLM_RETRY_MAX_DELAY_MS, 30_000)
 };
@@ -600,10 +664,13 @@ function validateMessages(messages: any[]): void {
   }
 }
 
-async function parseSse(stream: ReadableStream, { signal, onDelta, tolerateMissingEnd = false }: { signal?: AbortSignal; onDelta?: (d: { kind: string; text?: string; index?: number }) => void; tolerateMissingEnd?: boolean }): Promise<ChatResult> {
+async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, tolerateMissingEnd = false }: { signal?: AbortSignal; onDelta?: (d: { kind: string; text?: string; index?: number }) => void; onActivity?: () => void; tolerateMissingEnd?: boolean }): Promise<ChatResult> {
   const reader = stream.getReader();
   const dec = new TextDecoder();
   let buf = '';
+  let rawHead = '';       // 报文头部片段:非 SSE 响应(如 200 + JSON 错误体)时带进错误信息
+  let sawData = false;    // 是否收到过 data: 行(区分流被截断与压根不是 SSE)
+  let truncated = false;  // 流没有结束标记就结束了(tolerateMissingEnd 分支)
   let content = '';
   let reasoning = ''; // 思考通道输出(DeepSeek/GLM/Qwen 等推理模型);回传规则见 chat() 的 passback
   let finishReason = ''; // 最后一个非空 finish_reason(stop/length/tool_calls 等)
@@ -643,21 +710,31 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, tolerateMissi
       if (signal?.aborted) throw new Error('已停止');
       const { done, value } = await reader.read();
       if (done) {
-        // 流被关闭却没有任何 finish_reason(也没有 [DONE],否则上面已 return):
-        // 说明响应被网关/中间层截断,不是正常的 max_tokens 截断。抛出交给 chat() 重试,
-        // 避免"回答写到一半无声停住、本轮却记为 completed"。
-        // tolerateMissingEnd:该提供方一致不发结束标记时不再反复重试(见 chat 的 truncatedRetries)。
-        if (!finishReason && !tolerateMissingEnd) {
-          throw new Error('LLM API 响应流被中断(未收到 finish_reason 或 [DONE])');
+        if (!finishReason) {
+          // 一个 data: 行都没收到:这不是被截断的流,而是根本不像 SSE(例如网关返回
+          // 200 + JSON 错误体)。把原始报文片段带进错误,否则用户只看到对话停了。
+          if (!sawData) {
+            const snippet = (rawHead.trim() || '(空响应体)').replace(/\s+/g, ' ').slice(0, 300);
+            throw new Error(`LLM API 返回的不是 SSE 事件流,无法解析:${snippet}`);
+          }
+          // 有事件但没有结束标记:响应被网关/中间层截断。tolerateMissingEnd 时不再反复
+          // 重试(见 chat 的 truncatedRetries),但必须把结果标成 truncated:上层据此在对话里
+          // 留下回复可能不完整的可见记录,绝不静默当成正常完成。
+          if (!tolerateMissingEnd) throw new Error('LLM API 响应流被中断(未收到 finish_reason 或 [DONE])');
+          truncated = true;
         }
         break;
       }
-      buf += dec.decode(value, { stream: true });
+      const chunkText = dec.decode(value, { stream: true });
+      if (rawHead.length < 400) rawHead = (rawHead + chunkText).slice(0, 400);
+      onActivity?.(); // 收到任何字节(含 SSE 心跳注释)都重置静默看门狗
+      buf += chunkText;
       let nl;
       while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
         if (!line.startsWith('data:')) continue;
+        sawData = true;
         const data = line.slice(5).trim();
         if (data === '[DONE]') return finish();
         try {
@@ -691,7 +768,7 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, tolerateMissi
     const usage = lastUsage
       ? { promptTokens: lastUsage.prompt_tokens, completionTokens: lastUsage.completion_tokens }
       : null;
-    return { content, toolCalls, reasoning, finishReason, usage };
+    return { content, toolCalls, reasoning, finishReason, usage, ...(truncated ? { truncated: true } : {}) };
   }
   return finish();
 }
@@ -713,7 +790,8 @@ async function mockChat({ messages, tools, signal, onDelta }: { messages: any[];
   const lastUserIdx = messages.map((m) => m.role).lastIndexOf('user');
   const turnMsgs = lastUserIdx >= 0 ? messages.slice(lastUserIdx) : messages;
   const toolMsgs = turnMsgs.filter((m) => m.role === 'tool');
-  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+  // 用户真正说的那句:跳过运行时上下文快照(它以 <runtime_context> 开头,同为用户角色)
+  const lastUser = [...messages].reverse().find((m) => m.role === 'user' && !/^<runtime_context>/.test(String(m.content || '').trim()));
   const ws = extractWorkspace(messages);
   await sleep(80, signal);
 
@@ -722,6 +800,31 @@ async function mockChat({ messages, tools, signal, onDelta }: { messages: any[];
     name,
     arguments: typeof args === 'string' ? args : JSON.stringify(args)
   });
+
+  // 子代理内部:只读脚本(白名单里没有写/命令工具,别让 mock 去撞墙)
+  const isSubagent = messages.some((m) => m.role === 'system' && String(m.content).includes('你是一个子代理'));
+  if (isSubagent) {
+    if (toolMsgs.length === 0) return { content: '', toolCalls: [mk('get_local_info', {})] };
+    onDelta?.({ kind: 'text', text: '已列出目录,给出结论。' });
+    return { content: '结论:目录可读,未发现异常。', toolCalls: [] };
+  }
+  // 父代理:用户明确说"派个子代理"时走一次 subagent 调用(联调用;默认脚本不受影响)
+  const wantsSub = /派[个一]?子代理|派发子代理/.test(String(lastUser?.content || ''));
+  if (wantsSub) {
+    if (toolMsgs.length === 0) {
+      onDelta?.({ kind: 'text', text: '好的,我派一个子代理去看看。' });
+      return {
+        content: '好的,我派一个子代理去看看。',
+        toolCalls: [mk('subagent', {
+          description: '看工作区目录',
+          objective: '列出工作区目录并确认 note.txt 是否存在',
+          scope: '只读本机工作区;不要写文件、不要执行命令',
+          deliverable: '结论 + 证据'
+        })]
+      };
+    }
+    return { content: '子代理已给出结论,本轮结束。', toolCalls: [] };
+  }
 
   let result: any;
   switch (toolMsgs.length) {

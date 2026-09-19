@@ -102,7 +102,7 @@ async function openTarget(args: any, { emit, sid: callSid }: any) {
     // 直接把可操作的诊断交给模型,别让它再去 browser_open 撞一次(以前这里会变成
     // 一个浏览器侧的"空响应"错误,模型和用户都看不出真正原因)。
     throw new Error(`${e?.message || e}\n`
-      + '请先在远程工作区把项目以后台方式启动起来(推荐 `nohup npm run dev > /tmp/dev.log 2>&1 &`),'
+      + '请先用 run_command 的 background=true 在远程工作区把项目启动为「运行终端」(不要用 nohup … &;输出会实时显示给用户),'
       + '用 `ss -lntp | grep <端口>` 确认端口在监听后重试 browser_open。');
   }
   const id = resolveBrowserId(args, { sid: callSid }, { preferOwn: true });
@@ -129,9 +129,9 @@ export const browserToolDefs: ToolDef[] = [
       + '(pass tunnel=false to force a direct connection). After opening, use browser_snapshot / browser_click / '
       + 'browser_type to drive the page and verify the UI actually works. '
       + 'IMPORTANT: a dev server started with a foreground run_command is KILLED when that tool times out '
-      + '(default 300s), which makes the printed address dead (ERR_CONNECTION_REFUSED). Start it in the '
-      + 'background instead (e.g. `nohup npm run dev > /tmp/dev.log 2>&1 &`) and confirm the port is actually '
-      + 'listening before opening the preview; if it refuses to connect, restart the server in the background '
+      + '(default 300s), which makes the printed address dead (ERR_CONNECTION_REFUSED). Start it as a managed '
+      + 'running terminal instead: call run_command with background=true (do NOT use nohup ... &). The process keeps '
+      + 'running, its output streams live into the user\'s "running terminals" panel, and stop_project_terminal can stop it. Confirm the port is '
       + 'and retry.',
     parameters: {
       type: 'object',
@@ -158,7 +158,7 @@ export const browserToolDefs: ToolDef[] = [
       if (state.error) {
         head.push(`⚠ 页面没能加载:${state.error}`);
         head.push('若这个地址来自前台 run_command,dev server 很可能已被工具超时终止(默认 300s)。'
-          + '请改用后台方式重启(例如 `nohup npm run dev > /tmp/dev.log 2>&1 &`),确认端口在监听后再 browser_open。');
+          + '请改用 run_command(background=true)重启为「运行终端」,确认端口在监听后再 browser_open。');
       } else {
         head.push('用户已能在「浏览器预览」标签里看到该页面。');
       }

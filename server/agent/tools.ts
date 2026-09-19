@@ -11,11 +11,13 @@ import { joinRemote, normalizeRemote, sshManager as ssh } from '../core/ssh-mana
 import { localFs, resolveInLocalWorkspace, isLocalMachineRoot } from '../core/local-fs.ts';
 import type { FsEntry } from '../core/local-fs.ts';
 import { execLocal } from '../core/local-exec.ts';
+import { aiTerms, type AiTermInfo } from '../core/ai-term.ts';
 import { askUserQuestion } from './ask-user.ts';
 import { resolveImageTool, runImageJob, IMAGE_TOOL_MISSING } from './image-gen.ts';
 import { IMAGE_QUALITIES, IMAGE_SIZES } from '../store/settings-store.ts';
 import { webSearch, renderSearchResult } from './web-search.ts';
 import { browserToolDefs } from './browser-tools.ts';
+import { runSubagent, SUBAGENT_PROVIDERS } from './subagent.ts';
 import type { ToolAccess, ToolDef, ToolRegistry } from './registry.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -246,6 +248,21 @@ export function clearLocalEnvInfo() { localEnvCache = null; }
 // 避免三处各写一份导致枚举漂移。尺寸按用户口径(1K/1.5K/2K/3K/4K 方圆)映射为
 // OpenAI 兼容端点的 WxH 字符串。
 
+// background=true 的「秒退」判定:命令若在 1.5s 内就结束(参数写错 / 构建 / 测试等一次性命令),
+// 它根本不是运行终端 —— 按普通命令返回退出码与输出,既不误报「已启动」,也不在运行终端面板里留下已结束条目。
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+function earlyExitResult(term: AiTermInfo, command: string): { content: string; meta: any } {
+  const tail = aiTerms.log(term.id).replace(ANSI_ESCAPE_RE, '').trim();
+  void aiTerms.remove(term.id); // 已结束:从运行终端注册表移除(广播 removed,前端随即收起)
+  const where = term.target === 'remote' ? `远程 ${term.host}` : '本机';
+  return {
+    content: `[退出码 ${term.exitCode ?? '未知'}] 命令已结束,没有作为「运行终端」保留(background=true 只用于 dev server 等长期运行的服务)。\n`
+      + `位置:${where}${term.cwd ? ` · ${term.cwd}` : ''}\n`
+      + (tail ? `--- 输出 ---\n${capOutputBytes(tail)}` : '(无输出)'),
+    meta: { card: 'terminal', command, cwd: term.cwd || '', exitCode: term.exitCode, signal: null, timedOut: false }
+  };
+}
+
 const toolDefs: ToolDef[] = [
   {
     name: 'list_directory',
@@ -366,13 +383,28 @@ const toolDefs: ToolDef[] = [
       properties: {
         command: { type: 'string', description: '要执行的命令,可用 && 串联' },
         timeout: { type: 'integer', description: '超时秒数,默认 300,最大 600' },
+        background: { type: 'boolean', description: '是否作为「运行终端」后台启动。仅用于不会自己结束的长期服务(dev server: npm run dev / vite / next dev / python -m http.server 等);构建、测试、安装、类型检查等一次性命令一律不要传,必须用前台执行。true 时进程持续运行,输出实时显示在用户对话右上角的「运行终端」面板;若命令很快退出(参数错误等),会按普通命令返回退出码与输出,不会留在面板里' },
         description: { type: 'string', description: '用一句话说明为什么执行此命令' }
       },
       required: ['command', 'description']
     },
     timeoutMs: 660_000, // 注册表兜底超时:比工具自身最大 600s 再宽一档
-    async run({ command, timeout, description }) {
+    async run({ command, timeout, description, background }, invoke) {
       if (!command) throw new Error('命令为空');
+      // background:开发服务器等长期运行的进程 —— 交给「运行终端」托管(PTY 只读展示,可删除),
+      // 工具立即返回,不再用前台 exec 等它(前台 exec 会在超时后杀掉 dev server)。
+      if (background) {
+        const term = await aiTerms.start({ command, sid: invoke?.sid ?? null, label: description, target: 'remote' });
+        const early = await aiTerms.waitForExit(term.id, 1500);
+        if (early) return earlyExitResult(early, command);
+        return {
+          content: `已在「运行终端」中后台启动(终端 id=${term.id}):${term.label}\n`
+            + '进程会持续运行,输出实时显示在对话右上角的「运行终端」面板里;用户也可以随时删除它。\n'
+            + '需要主动停止时调用 stop_project_terminal(id)。\n'
+            + `命令:${command}`,
+          meta: { card: 'ai_term', id: term.id, label: term.label, command, target: term.target, cwd: term.cwd || '', state: term.state }
+        };
+      }
       // concurrent:true 绕过串行队列,走 ssh2 多路 exec 通道——agent 一次发起
       // 多条 run_command 时可并行执行互不阻塞(串行模式下同一时刻仅一条,行为不变)
       const res = await ssh.exec(ssh.cdCommand(command), { timeout: (timeout || 300) * 1000, concurrent: true });
@@ -807,10 +839,31 @@ const localToolDefs: ToolDef[] = [
   {
     name: 'run_local_command',
     description: '在本机执行 shell 命令(默认 cwd=本地工作区),返回 stdout/stderr 与退出码',
-    parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'integer' }, description: { type: 'string' } }, required: ['command', 'description'] },
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '要执行的命令' },
+        timeout: { type: 'integer', description: '超时秒数,默认 300,最大 600' },
+        background: { type: 'boolean', description: '是否作为本机「运行终端」后台启动。仅用于不会自己结束的长期服务(dev server / watch 等);构建、测试、安装等一次性命令一律不要传。true 时进程持续运行,输出实时显示在用户对话右上角的「运行终端」面板;若命令很快退出,会按普通命令返回退出码与输出,不会留在面板里' },
+        description: { type: 'string', description: '用一句话说明为什么执行此命令' }
+      },
+      required: ['command', 'description']
+    },
     timeoutMs: 660_000,
-    async run({ command, timeout, description }) {
+    async run({ command, timeout, description, background }, invoke) {
       if (!command) throw new Error('命令为空');
+      if (background) {
+        const term = await aiTerms.start({ command, sid: invoke?.sid ?? null, label: description, target: 'local' });
+        const early = await aiTerms.waitForExit(term.id, 1500);
+        if (early) return earlyExitResult(early, command);
+        return {
+          content: `已在本机「运行终端」中后台启动(终端 id=${term.id}):${term.label}\n`
+            + '进程会持续运行,输出实时显示在对话右上角的「运行终端」面板里;用户也可以随时删除它。\n'
+            + '需要主动停止时调用 stop_project_terminal(id)。\n'
+            + `命令:${command}`,
+          meta: { card: 'ai_term', id: term.id, label: term.label, command, target: term.target, cwd: term.cwd || '', state: term.state }
+        };
+      }
       // 全盘模式(不在工作区对话)下没有工作区可 cd,默认落在家目录,避免继承服务进程工作目录
       const cwd = localFs.workspace || (localFs.noWorkspace ? localFs.home : undefined);
       const res = await execLocal(command, { cwd, timeout: (timeout || 300) * 1000 });
@@ -853,6 +906,35 @@ const localToolDefs: ToolDef[] = [
 // 模型需要用户确认、选择或补充关键信息时调用,工具会暂停等待用户在界面上作答。
 
 const interactionToolDefs: ToolDef[] = [
+  {
+    name: 'list_project_terminals',
+    description: '列出当前被 AI 拉起的「运行终端」(后台项目进程,如 dev server),返回 id/标签/命令/状态/位置。需要停止或重启某个项目服务、或向用户说明哪个终端在运行时先调用它。',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async run() {
+      const terms = aiTerms.list();
+      if (!terms.length) return { content: '当前没有被 AI 拉起的运行终端。' };
+      const stateLabel = (s: string) => (s === 'running' ? '运行中' : s === 'failed' ? '异常结束' : '已结束');
+      const lines = terms.map((t) => `- id=${t.id} [${stateLabel(t.state)}] ${t.label}\n  命令:${t.command}\n  位置:${t.target === 'remote' ? `远程 ${t.host}` : '本机'}${t.cwd ? ` · ${t.cwd}` : ''}`);
+      return { content: `当前 AI 运行终端(${terms.length} 个):\n${lines.join('\n')}` };
+    }
+  },
+  {
+    name: 'stop_project_terminal',
+    description: '删除(停止)一个以 background=true 拉起的「运行终端」:进程被终止并从对话右上角的运行终端面板移除。仅在确认不再需要该服务时使用。',
+    mutating: true,
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '运行终端 id(list_project_terminals 返回)' } },
+      required: ['id']
+    },
+    async run({ id }) {
+      const tid = String(id || '').trim();
+      const term = aiTerms.get(tid);
+      if (!term) throw new Error(`运行终端不存在:${tid}(可用 list_project_terminals 查看当前列表)`);
+      await aiTerms.remove(tid);
+      return { content: `已删除运行终端 ${tid}:${term.label}` };
+    }
+  },
   {
     name: 'ask_user_question',
     description: '当你需要用户确认、在选项中做选择、或缺少关键信息才能继续时,向用户提出一个或多个问题并等待回答。每题可带候选选项(单选/多选),用户也可填写"其它"自定义答案;在你得到回答前会暂停等待(上限约 10 分钟,超时自动取消并返回错误,可重问或改用合理默认继续)。回答以 JSON 返回:{"answers":[{"id":"问题id","selected":["选中的选项label"],"custom":"自定义文本"}]}。只在确实需要用户决策时使用,不要在没有歧义时滥用。',
@@ -995,6 +1077,87 @@ const interactionToolDefs: ToolDef[] = [
   }
 ];
 
+
+// ---------------- 子代理工具定义 ----------------
+// 不依赖 SSH 连接(未连接时子代理只能看到本机工具),也不直接写任何状态:真正的工作在
+// agent/subagent.ts 的 runSubagent() 里——独立会话 + 只读工具白名单 + 有界嵌套循环。
+const subagentToolDefs: ToolDef[] = [
+  {
+    name: 'subagent',
+    description: 'Delegate a self-contained, READ-ONLY research task to a fresh subagent with an isolated '
+      + 'context, and get back only its final conclusion (not its intermediate steps). The subagent cannot '
+      + 'see this conversation and cannot change anything: it may only list directories, read files, search '
+      + 'code, read environment info and search the web. Use it to fan out independent exploration (several '
+      + 'subagents in one assistant message run in parallel) or to keep large, noisy investigations out of '
+      + 'your own context. Give it a complete, standalone brief: what to find, where to look, and exactly '
+      + 'what to report. To modify files or run commands, do it yourself in this conversation. '
+      + 'WRITE THE PROMPT YOURSELF before calling — never paste the user\'s raw words: state the objective, '
+      + 'the boundaries (where to look, what must NOT be done) and exactly what to report back. Either give a '
+      + 'complete self-contained prompt, or fill objective + scope (the tool rejects vague delegations and '
+      + 'tells you how to rewrite them). '
+      + 'It runs IN-PROCESS with this project\'s own agent loop and tool stack (the same model client and '
+      + 'the same SSH/local workspace bindings as you), i.e. the internal provider — the default and '
+      + 'currently the only one. Never an external CLI agent; keep provider=\'internal\' unless the user '
+      + 'explicitly asks for a different agent (those are not wired up yet).',
+    parameters: {
+      type: 'object',
+      properties: {
+        description: { type: 'string', description: 'A short (3-5 word) description of the delegated task, for display.' },
+        prompt: { type: 'string', description: 'The complete, self-contained task prompt, written by YOU (the subagent does not share this conversation). Either this (>= 60 chars), or objective + scope.' },
+        objective: {
+          type: 'string',
+          description: '任务目标,由你自己写:这次调研要回答什么、要产出什么(与 scope 一起构成最小必填集;若 prompt 已足够完整可省略)。'
+        },
+        scope: {
+          type: 'string',
+          description: '边界,由你自己写:允许看哪些目录、允许做什么,以及**明确不要做什么**(不要改文件/不要执行命令/不要看 node_modules 等;若 prompt 已足够完整可省略)。'
+        },
+        deliverable: {
+          type: 'string',
+          description: '回传要求:格式 / 长度 / 重点(可选,缺省按子代理的输出契约:结论 + 证据 + 建议 + 未解问题)。'
+        },
+        context: {
+          type: 'string',
+          description: '已知线索:父对话已知的文件/符号/入口,减少子代理盲目搜索(子代理看不到父对话,可选)。'
+        },
+        provider: {
+          type: 'string',
+          enum: SUBAGENT_PROVIDERS,
+          description: 'Agent provider. Default and currently the only supported value: "internal" = this '
+            + 'project\'s built-in agent loop and tools (in-process, same model & workspace context). Only '
+            + 'set another value if the user explicitly asked for that other agent — none are wired up yet.'
+        }
+      },
+      required: ['description']
+    },
+    // 比注册表兜底 660s 短:超时原因来自子代理自身,而不是被注册表掐断
+    timeoutMs: AGENT.SUBAGENT.TIMEOUT_MS,
+    // 会起一轮额外的模型+工具循环(消耗 token):按写类处理——confirm 下审批一次,plan 下拒绝;
+    // 并行池里独占执行,避免多个子代理同时挤一条 SSH 连接。
+    mutating: true,
+    async run(args: any, { sid, signal, llm, registry, emit }: any = {}) {
+      const description = String(args?.description || '').trim();
+      const prompt = String(args?.prompt || '').trim();
+      const r = await runSubagent({
+        llm, registry, prompt, description, sid, signal, emit,
+        objective: args?.objective, scope: args?.scope,
+        deliverable: args?.deliverable, context: args?.context,
+        provider: args?.provider,
+        maxSteps: AGENT.SUBAGENT.MAX_STEPS
+      });
+      return {
+        content: r.content,
+        meta: {
+          subagent: {
+            description, provider: r.provider, runId: r.runId, steps: r.steps, toolCalls: r.toolCalls, ms: r.ms,
+            promptTokens: r.promptTokens, completionTokens: r.completionTokens, hitStepLimit: r.hitStepLimit
+          }
+        }
+      };
+    }
+  }
+];
+
 // ---------------- 内置守卫(pre-execute,只能拒绝不能放行) ----------------
 
 // 高危命令拦截:毁灭性命令直接拒绝(工具自身的越界检查之外的最后防线)
@@ -1044,7 +1207,8 @@ export function registerTools(registry: ToolRegistry) {
     | 'skill_copy_builtin' | 'get_workspace_info' | 'web_search' | 'list_local_dir'
     | 'read_local_file' | 'write_local_file' | 'edit_local_file' | 'create_local_dir'
     | 'delete_local_path' | 'search_local_code' | 'run_local_command' | 'get_local_info'
-    | 'ask_user_question' | 'generate_image',
+    | 'ask_user_question' | 'generate_image' | 'subagent'
+    | 'list_project_terminals' | 'stop_project_terminal',
     ToolAccess
   > = {
     // 只读探测
@@ -1059,8 +1223,12 @@ export function registerTools(registry: ToolRegistry) {
     create_local_dir: 'write', delete_local_path: 'write',
     // 生图会落盘新附件(写操作):plan 模式拒绝,其余按模式审批
     generate_image: 'write',
+    // 子代理(subagent):会起一轮额外的模型+工具循环,按写类处理(plan 拒绝 / confirm 审批)
+    subagent: 'write',
     // 命令执行(auto-edit 下仍需审批)
-    run_command: 'command', run_local_command: 'command'
+    run_command: 'command', run_local_command: 'command',
+    // 运行终端(AI 拉起的后台项目进程):查看只读,停止属于命令级操作
+    list_project_terminals: 'read', stop_project_terminal: 'command'
   };
   const withAccess = (def: ToolDef): ToolDef => ({ ...def, access: TOOL_ACCESS[def.name as keyof typeof TOOL_ACCESS] });
   const prepare = (def: ToolDef): ToolDef => withAccess(withSafety(def));
@@ -1068,6 +1236,8 @@ export function registerTools(registry: ToolRegistry) {
   for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...prepare(def), remote: true } : prepare(def));
   for (const def of interactionToolDefs) registry.register(prepare(def));
   for (const def of localToolDefs) registry.register(prepare(def));
+  // 子代理工具:不依赖 SSH,也没有本机镜像
+  for (const def of subagentToolDefs) registry.register(prepare(def));
   // 浏览器预览工具(browser_*):驱动前端「浏览器预览」标签里的真实 Chromium。
   // 不依赖 SSH(地址解析需要隧道时会自动建),因此不加 remote 标记,本地模式下也可用。
   // 它们自带 access 声明(见 browser-tools.ts),不参与上面的名字表。
@@ -1290,10 +1460,22 @@ export async function loadSkillContent(name: string) {
 /**
  * 渲染模型可见的技能目录(照搬 harness tool-skill 的 catalog 消息形状):
  * <system-reminder> + <available_skills> 列表,无技能时返回空串。
+ *
+ * injected:本轮用户用 `/技能名` 直接调用过的技能名。它们的正文已随用户消息注入,
+ * 提醒里必须点名排除,否则模型会同时读到"指令就在下面"与"未加载前不要遵循"两条
+ * 互相矛盾的指令,自行判定"再调 skill 工具只是重复占一遍上下文"而跳过——表现为
+ * 用户在界面上看不到任何技能调用痕迹,要催一次才补调。
  */
-export function renderSkillCatalog(skills: SkillEntry[]) {
+export function renderSkillCatalog(skills: SkillEntry[], injected: string[] = []) {
   if (!skills || skills.length === 0) return '';
   const lines = skills.map((s) => `- \`${s.name}\`: ${s.description}`);
+  const loaded = [...new Set((injected || []).map((n) => String(n || '').trim()).filter(Boolean))];
+  const reminder = loaded.length === 0
+    ? '如果用户提到了某个技能,或任务明显匹配某技能的描述,请先调用 skill 工具加载其完整指令再行动;本目录仅含摘要,未加载前不要臆测或遵循技能的具体指令。'
+    : `本轮用户已用 \`/技能名\` 直接调用技能:${loaded.map((n) => `\`${n}\``).join('、')}。`
+      + '它们的完整指令正文已经随本轮用户消息一并注入,不要再调用 skill 工具重复加载'
+      + '(重复加载只是把同一份正文再占一遍上下文),直接按这些正文行动;'
+      + '只有还需要目录中的其它技能时,才调用 skill 工具。';
   return [
     '<system-reminder>',
     '技能(skill)是一组可复用的任务专用指令。本次会话可用以下技能:',
@@ -1302,7 +1484,7 @@ export function renderSkillCatalog(skills: SkillEntry[]) {
     ...lines,
     '</available_skills>',
     '',
-    '如果用户提到了某个技能,或任务明显匹配某技能的描述,请先调用 skill 工具加载其完整指令再行动;本目录仅含摘要,未加载前不要臆测或遵循技能的具体指令。',
+    reminder,
     '</system-reminder>'
   ].join('\n');
 }

@@ -1,0 +1,157 @@
+/* ---- AiTermPanel 独有样式:对话区右上角悬浮胶囊 + 右侧只读终端抽屉 ----
+   只使用主题 token(themes.ts / styles.scss),不引入新配色;圆角沿用 --r-md/--r-lg/--r-pill。 */
+
+/* 悬浮胶囊:固定在对话区(定位基准 .tab-body)右上角 */
+.aiterm-fab {
+  position: absolute; top: 12px; right: 14px; z-index: 30;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px 6px 10px;
+  border-radius: var(--r-pill);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  color: var(--text-2, var(--muted));
+  font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+}
+.aiterm-fab:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.aiterm-fab:active { transform: translateY(1px); }
+.aiterm-fab-ico { display: inline-flex; color: var(--accent); }
+.aiterm-fab-count {
+  min-width: 18px; padding: 0 5px; height: 18px; line-height: 18px;
+  border-radius: var(--r-pill); text-align: center;
+  font-family: var(--mono); font-size: 11px;
+  background: var(--glass-bg-inset); border: 1px solid var(--line-soft); color: var(--text);
+}
+/* 有进程在运行:仅用边框 + 计数着色表达「活跃」,不加外发光 */
+.aiterm-fab.live { border-color: var(--accent-border); }
+.aiterm-fab.live .aiterm-fab-count { color: var(--accent); border-color: var(--accent-border); background: var(--accent-fill-soft); }
+.aiterm-fab.on { color: var(--text); border-color: var(--accent-border); background: var(--glass-bg-hover); }
+
+/* 遮罩:仅桌面/平板生效(手机上抽屉占满,不再需要遮罩) */
+.aiterm-backdrop {
+  position: absolute; inset: 0; z-index: 31;
+  background: var(--mask-bg);
+  animation: aiterm-fade .16s ease-out;
+}
+@keyframes aiterm-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* 右侧抽屉:常驻挂载(xterm 不销毁),关闭时移出可视区 */
+.aiterm-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 32;
+  width: min(540px, 62vw);
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: linear-gradient(160deg, var(--bar-tint-a), var(--bar-tint-b));
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  border-left: 1px solid var(--line-soft);
+  box-shadow: var(--glass-shadow-lg);
+  transform: translateX(103%);
+  visibility: hidden; pointer-events: none;
+  transition: transform .24s ease, visibility .24s ease;
+}
+.aiterm-drawer.open { transform: none; visibility: visible; pointer-events: auto; }
+
+/* 头部 */
+.aiterm-head {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line-soft);
+}
+.aiterm-title { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; color: var(--text); }
+.aiterm-title svg { color: var(--accent); }
+.aiterm-sub { font-size: 11.5px; color: var(--muted); }
+.aiterm-head-gap { flex: 1; }
+
+/* 多终端切换:横向可滚动的 chip 条 */
+.aiterm-tabs {
+  flex: none; display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.aiterm-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  max-width: 220px; padding: 4px 10px;
+  border-radius: var(--r-pill); cursor: pointer;
+  background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--muted);
+  font-size: 12px; white-space: nowrap;
+  transition: color .14s ease, border-color .14s ease, background .14s ease;
+}
+.aiterm-tab:hover { color: var(--text); background: var(--glass-bg-hover); }
+.aiterm-tab.on { color: var(--text); border-color: var(--accent-border); background: var(--accent-fill-soft); }
+.aiterm-tab-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* 终端区:每个终端一个宿主,只有当前选中的可见 */
+.aiterm-body { position: relative; flex: 1; min-height: 0; }
+.aiterm-term {
+  position: absolute; inset: 0; display: none;
+  background: var(--xterm-bg);
+  padding: 8px 6px 8px 12px;
+}
+.aiterm-term.on { display: block; }
+.aiterm-term .xterm { height: 100%; }
+.aiterm-term .xterm-viewport { background-color: var(--xterm-bg) !important; }
+/* 只读:隐藏文本输入光标带来的「可输入」暗示 */
+.aiterm-term .xterm-helper-textarea { pointer-events: none; }
+.aiterm-empty { padding: 28px 16px; text-align: center; font-size: 12.5px; color: var(--muted); }
+
+/* 底部状态条 + 唯一的操作按钮(删除) */
+.aiterm-bar {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line-soft);
+  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
+  font-size: 12px; color: var(--muted);
+}
+.aiterm-state { flex: none; }
+.aiterm-state.st-running { color: var(--green); }
+.aiterm-state.st-failed { color: var(--red); }
+.aiterm-cmd {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-2, var(--muted));
+  background: var(--glass-bg-inset); border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm); padding: 3px 8px;
+}
+.aiterm-meta { flex: none; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.aiterm-bar-gap { flex: none; }
+.aiterm-del {
+  flex: none; padding: 4px 12px; border-radius: var(--r-pill); cursor: pointer;
+  font-size: 12px; font-weight: 600;
+  color: var(--red); background: var(--danger-soft); border: 1px solid var(--danger-soft-strong);
+  transition: background .14s ease, color .14s ease, transform .14s ease;
+}
+.aiterm-del:hover:not(:disabled) { background: var(--danger-soft-strong); color: var(--text); }
+.aiterm-del:active:not(:disabled) { transform: translateY(1px); }
+.aiterm-del:disabled { opacity: .55; cursor: not-allowed; }
+
+.aiterm-note { flex: none; padding: 6px 14px 0; font-size: 11.5px; color: var(--amber); }
+.aiterm-hint { flex: none; padding: 6px 14px 10px; font-size: 11px; color: var(--muted); opacity: .8; }
+
+/* ---- 手机(<768):抽屉占满对话区,胶囊折叠为图标 + 计数 ---- */
+@media (max-width: 767px) {
+  .aiterm-fab { top: 8px; right: 10px; padding: 6px 10px; }
+  .aiterm-fab-text { display: none; }
+  .aiterm-fab.on { display: none; }
+  .aiterm-backdrop { display: none; }
+  .aiterm-drawer {
+    width: 100%; border-left: none;
+    transform: translateY(102%);
+  }
+  .aiterm-drawer.open { transform: none; }
+  .aiterm-term { padding: 6px 2px 6px 8px; }
+  .aiterm-tab { max-width: 160px; }
+  .aiterm-cmd { font-size: 11px; }
+  .aiterm-meta { display: none; }
+}
+
+/* 触屏:横向 chip 条解锁触屏横滑 */
+@media (hover: none) and (pointer: coarse) {
+  .aiterm-tabs { touch-action: pan-x; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiterm-fab, .aiterm-tab, .aiterm-del, .aiterm-drawer { transition: none; }
+  .aiterm-backdrop { animation: none; }
+}

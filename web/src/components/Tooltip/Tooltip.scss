@@ -10,3 +10,6 @@
   animation: tip-in .14s ease-out;
 }
 @keyframes tip-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+
+/* data-tip-wide:长内容提示(如任务列表悬停展示的完整提问)放宽到 420px,减少折行 */
+.tip-host.wide { max-width: min(420px, 80vw); }

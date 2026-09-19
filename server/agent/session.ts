@@ -47,6 +47,28 @@ export interface SessionEventDataMap {
   'todo/write': { todos: Array<{ content: string; status: string }> };
   'compaction/done': { summary: string; dropCount?: number; manual?: boolean };
   /**
+   * 压缩未完成(摘要生成失败 / 被停止 / 无收益)。压缩是"上下文治理事件",失败同样要留在
+   * 记录里:projectEvents 把它投影成一行安静的「上下文压缩 · 未完成(原因)」,刷新/切回会话
+   * 后仍在。它与 notice 的区别:不是给用户的告警,不弹提示;同样只进显示面、不进模型上下文。
+   */
+  'compaction/failed': { reason?: string; manual?: boolean };
+  /**
+   * 对话流里的可见提示行(⚠)。属于"显示面"而非"消息面":projectEvents 投影给前端渲染,
+   * deriveMessages 不投影——提示是给用户看的,绝不能作为 user/assistant 消息发给模型。
+   * 落在日志里而不是只广播一次:刷新/切走再切回/继续对话后,这条提示仍在原位置可见。
+   */
+  'notice': { text: string; level?: 'info' | 'warn'; kind?: string };
+  /**
+   * 一次模型请求失败后进入重试的记录。同样只进显示面、不进模型上下文:
+   * 重试是传输层事件,模型不需要也不知道自己刚才重试过(重复的失败原文只会污染上下文)。
+   */
+  'llm/retry': {
+    retry: number; maxRetries: number; delayMs: number;
+    error?: string; discard?: boolean;
+    /** 该次重试最终的状态:started=已开始重试 / cancelled=被停止或彻底失败 */
+    state?: 'started' | 'cancelled';
+  };
+  /**
    * 生图模型(imageGen)的一轮成图记录。字节不进日志(与图片附件同规则,只存元数据 id),
    * 由前端投影为 assistant 气泡的 attachments,并可被后续轮次取回作为图生图参考图。
    * 本事件不属于"消息面"(deriveMessages 不投影它):图像端点只吃单个 prompt 字符串、
@@ -313,6 +335,10 @@ export class Session {
    *    tool/call 补了"中止"结果,落盘后就形成这类孤儿;它们投影出"无前置 assistant 的
    *    tool 消息",严格提供商会 400。此处一次性清掉,保证日志永远可安全回放。
    * 2) 仍未闭合的工具调用(进程崩溃/被杀的遗留)补一条"中止"结果。
+   * 3) 仍未闭合的轮次(进程被杀/开发模式热重启/断电:turn/start 之后没有 turn/end)
+   *    补一条可见披露并闭合它(见 _healOpenTurn)。
+   * 说明:只有"从磁盘载入"的会话会走到这里 —— 运行中的会话始终在内存里、由 _runTurn
+   * 正常收尾,所以不会把正在流式的轮次误判成异常结束。
    */
   _heal(): void {
     const alive = new Set<string>(); // 当前由 assistant tool_calls 声明的存活调用 id
@@ -340,6 +366,28 @@ export class Session {
         isError: true, content: '工具执行中止(上次会话未完成)', ms: 0
       });
     }
+    this._healOpenTurn();
+  }
+
+  /**
+   * 未闭合轮次的自愈:补一条可见披露 + turn/end。
+   * 场景:服务进程在生成中途被杀/热重启(如 npm run dev 监听 server/ 变更)/断电。
+   * 此时磁盘上只有 turn/start 与已经落盘的 user/message,没有 turn/end —— 不补的话这一轮
+   * 在对话里"不存在":用户看到的是对话毫无征兆地停住,连自己发的那句话都没了。
+   */
+  _healOpenTurn(): void {
+    let open: { turn: number } | null = null;
+    for (const ev of this.events) {
+      if (ev.type === 'turn/start') open = { turn: Number(ev.data?.turn) || 0 };
+      else if (ev.type === 'turn/end') open = null;
+    }
+    if (!open) return;
+    this.append('notice', {
+      text: '上一轮对话没有正常结束:服务进程在生成中途退出或被重启(例如开发模式的热重启),'
+        + '本轮已落盘的输入保留在上方,生成到一半的内容可能未能落盘。直接继续或重新发送即可。',
+      level: 'warn', kind: 'unclean-shutdown'
+    });
+    this.append('turn/end', { turn: open.turn, reason: { kind: 'interrupted', cause: 'unclean-shutdown' } });
   }
 }
 

@@ -32,8 +32,25 @@ function tauri(): any {
   return (window as any).__TAURI__;
 }
 
+/**
+ * 本地预览桩:开发模式下注入 window.__ABOUT_TEST__(UpdateInfo)后,
+ * getUpdateInfo 直接返回桩数据,供 web/about-preview.html 在浏览器里预览
+ * 「关于与更新」的各个状态。生产构建 import.meta.env.DEV 为 false,恒走真实分支。
+ */
+export function isAboutPreview(): boolean {
+  if (!import.meta.env.DEV) return false;
+  const v = (window as any).__ABOUT_TEST__;
+  return !!v && typeof v === 'object';
+}
+
+function aboutPreviewInfo(): UpdateInfo | null {
+  return isAboutPreview() ? ((window as any).__ABOUT_TEST__ as UpdateInfo) : null;
+}
+
 /** 检查更新:非桌面壳返回 null(前端按「无更新」处理) */
 export async function getUpdateInfo(): Promise<UpdateInfo | null> {
+  const stub = aboutPreviewInfo();
+  if (stub) return stub;
   if (!isDesktop()) return null;
   try {
     return await tauri().core.invoke('update_info');

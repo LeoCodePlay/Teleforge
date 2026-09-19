@@ -373,10 +373,37 @@ export async function summarizeWithLlm({ llm, system, dropMsgs, signal, maxToken
 // 纯函数、不动事件日志:日志保持完整(可回放/分支),只裁模型当轮可见面。
 
 export interface ToolResultPruneSpec {
-  keepRecent: number;  // 最近 N 条工具结果保持原样(模型正在分析的活跃上下文)
+  /**
+   * 保留窗口的条数上限:最近至多这么多条超限工具结果保持原样(0 = 全部折叠,压缩水位
+   * 路径用)。与 keepRecentChars 先到者为准。
+   */
+  keepRecent: number;
   minChars: number;    // 只折叠超过该长度的结果
   headChars: number;
   tailChars: number;
+  /**
+   * 保留窗口的字符预算:最近保留的原始工具输出总量达到该值即停止扩张保留区
+   * (省略 / 0 = 不设预算,只看 keepRecent)。
+   * 折叠点因此被钉在距请求末尾约「一个结果 / 该预算」的位置:提供方前缀缓存从第一个
+   * 变化的 token 起失效,单次折叠作废的尾部 ≈ 保留窗口 + 本步新增,而不是「最近 N 条
+   * 大结果 + 其后全部消息」(后者随会话增长可达成百上千 KB)。
+   */
+  keepRecentChars?: number;
+  /**
+   * 攒批门槛:本轮所有候选合计可省不足该字符数时整轮不折(省略 / 0 = 不设门槛)。
+   * 折叠会作废折叠点之后的全部前缀缓存,为省几百字符去改写中段是净亏;攒到值得一次
+   * 改写再折,把一次缓存作废摊销到多条结果上。
+   */
+  minSaveChars?: number;
+}
+
+/** 折叠结果:统计 + 折叠点(供调用方估算作废的缓存尾部) */
+export interface ToolResultPruneResult {
+  messages: any[];
+  pruned: number;
+  charsSaved: number;
+  /** 返回数组中第一条被折叠消息的下标(-1 = 本轮没有折叠);折叠点之后的整段前缀缓存会失效 */
+  firstPrunedIndex: number;
 }
 
 function pruneHint(omitted: number): string {
@@ -384,29 +411,54 @@ function pruneHint(omitted: number): string {
 }
 
 /**
- * 折叠消息历史中早期的大体积工具结果:
- * - 只处理 role='tool' 的消息;最近 keepRecent 条不动(活跃上下文);
+ * 折叠消息历史中早期的大体积工具结果(纯函数,输入不被修改):
+ * - 只处理 role='tool' 的消息;最近保留窗口(条数上限 + 字符预算,先到者为准)不动;
  * - 其余超过 minChars 的替换为 head + 提示 + tail,消息结构(role/tool_call_id)原样保留,
  *   序列合法性不受影响(只改 content 字符串);
- * - 返回新数组与统计;输入不被修改。
+ * - 合计收益低于 minSaveChars 时整轮不折(攒批);返回统计与折叠点下标。
  */
-export function pruneToolResults(msgs: any[], spec: ToolResultPruneSpec): { messages: any[]; pruned: number; charsSaved: number } {
+export function pruneToolResults(msgs: any[], spec: ToolResultPruneSpec): ToolResultPruneResult {
+  const list = msgs || [];
   const toolIdx: number[] = [];
-  (msgs || []).forEach((m, i) => {
+  list.forEach((m, i) => {
     if (m && m.role === 'tool' && typeof m.content === 'string' && m.content.length > spec.minChars) toolIdx.push(i);
   });
-  const keep = new Set(toolIdx.slice(-Math.max(0, spec.keepRecent)));
-  const out = (msgs || []).slice();
+  if (!toolIdx.length) return { messages: msgs, pruned: 0, charsSaved: 0, firstPrunedIndex: -1 };
+
+  // 保留窗口:从最新往旧扩张,直到条数到顶或字符预算用满(先到者为准)。
+  // 条数上限 0 时不保留(压缩水位路径:全部折叠);预算缺省/0 时不设预算。
+  const keepMax = Math.max(0, Math.floor(spec.keepRecent || 0));
+  const keepChars = spec.keepRecentChars && spec.keepRecentChars > 0 ? Math.floor(spec.keepRecentChars) : Infinity;
+  let keepFrom = toolIdx.length;
+  let keptChars = 0;
+  while (keepFrom > 0 && toolIdx.length - keepFrom < keepMax && keptChars < keepChars) {
+    keepFrom--;
+    keptChars += list[toolIdx[keepFrom]].content.length;
+  }
+  const candidates = toolIdx.slice(0, keepFrom);
+  if (!candidates.length) return { messages: msgs, pruned: 0, charsSaved: 0, firstPrunedIndex: -1 };
+
+  // 先算总收益:太小就整轮不折——宁可让上下文多长一点,也不为小收益作废整段前缀缓存
+  let omittable = 0;
+  for (const i of candidates) {
+    const omitted = list[i].content.length - spec.headChars - spec.tailChars;
+    if (omitted > 0) omittable += omitted;
+  }
+  const minSave = Math.max(0, Math.floor(spec.minSaveChars || 0));
+  if (minSave > 0 && omittable < minSave) return { messages: msgs, pruned: 0, charsSaved: 0, firstPrunedIndex: -1 };
+
+  const out = list.slice();
   let pruned = 0;
   let charsSaved = 0;
-  for (const i of toolIdx) {
-    if (keep.has(i)) continue;
+  let firstPrunedIndex = -1;
+  for (const i of candidates) {
     const content = out[i].content;
     const omitted = content.length - spec.headChars - spec.tailChars;
     if (omitted <= 0) continue;
     out[i] = { ...out[i], content: content.slice(0, spec.headChars) + pruneHint(omitted) + content.slice(content.length - spec.tailChars) };
     pruned++;
     charsSaved += omitted;
+    if (firstPrunedIndex < 0) firstPrunedIndex = i;
   }
-  return { messages: out, pruned, charsSaved };
+  return { messages: out, pruned, charsSaved, firstPrunedIndex };
 }

@@ -7,7 +7,9 @@ import type { RpcModule } from './router.ts';
 export function registerConfig(rpc: RpcModule) {
   rpc.register('llm', async (msg, { reply, emitStatus }) => {
     // 原 ws.js llm case(205-208)逐字复制
-    agent.configureLlm(msg.llm);
+    // llm 载荷可带 sid:只改该会话的模型(别的会话不受影响);不带 sid(草稿/新建态)= 只更新
+    // 全局默认,新会话继承它(见 server/agent/agent.ts 的 configureLlm / _llmFor)
+    agent.configureLlm(msg.sid, msg.llm);
     reply({ type: 'ok' });
     emitStatus();
   });

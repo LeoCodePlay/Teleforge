@@ -141,6 +141,14 @@ export function isSessionScoped(sid: unknown): boolean {
   return SESSION_ID_RE.test(s) || DRAFT_ID_RE.test(s);
 }
 
+/**
+ * 该 sid 是否指向"服务端已存在的会话"(真实会话 s_…)。
+ * 草稿 d_…、新建态 __new__、空值都还没有服务端会话,不能作为会话级配置(如模型)的下发目标。
+ */
+export function isRealSessionId(sid: unknown): boolean {
+  return SESSION_ID_RE.test(String(sid ?? '').trim());
+}
+
 /** 预览会话 id 所属的会话(null = 无归属:旧版共享的 main 等) */
 export function ownerOfBrowserId(browserId: unknown): string | null {
   const s = String(browserId ?? '').trim();

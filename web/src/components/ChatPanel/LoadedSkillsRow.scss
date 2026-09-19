@@ -1,0 +1,50 @@
+/* ---- 「已加载技能」行(用户 /技能名 手动调用) ----
+   行本体复用 ToolRow/SkillRow 的 .dsh-* 样式;这里只补:
+   1) 用户气泡容器是右对齐的,注入行要占满整行、按工具行左对齐(与压缩标记行同理);
+   2) 展开体的技能正文预览卡。 */
+.loaded-skills { align-self: stretch; width: 100%; }
+
+.loaded-skills-card {
+  margin: 4px 0 4px 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.loaded-skills-item + .loaded-skills-item { border-top: 1px solid var(--line-soft); }
+
+.loaded-skills-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--code-bg-soft);
+  font-size: 11px;
+  line-height: 16px;
+}
+.loaded-skills-name { flex: none; font-family: var(--mono); font-weight: 500; color: var(--text-2); }
+.loaded-skills-desc {
+  min-width: 0;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loaded-skills-body {
+  min-height: 0;
+  margin: 0;
+  padding: 10px 12px 6px;
+  max-height: 260px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-2);
+}
+.loaded-skills-body::-webkit-scrollbar-track { margin: 6px 0; }
+
+.loaded-skills-note { padding: 0 12px 10px; font-size: 11px; line-height: 16px; color: var(--text-faint); }

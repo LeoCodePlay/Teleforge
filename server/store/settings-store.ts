@@ -4,9 +4,10 @@
 //   foldPermissionMode fallback)。
 // - imageTool:「生图工具」独立配置(url/key/model + 默认质量与尺寸)。它与对话所用的
 //   LLM 提供商完全解耦 —— 对话可以是任意文本模型,生图另指一个图像端点。
-// - 落盘 data/settings.json(测试可注入 DATA_DIR 隔离目录),原子写防损坏。
+// - 落盘 data/settings.json(测试可注入 DATA_DIR 隔离目录),原子写防损坏(见 store/atomic-write.ts)。
 import fs from 'node:fs';
 import { DATA_DIR, SETTINGS_FILE } from '../config.ts';
+import { writeFileAtomic } from './atomic-write.ts';
 
 // 与 permission.ts 的 PERMISSION_MODES 保持一致(此处不复用 import,避免
 // permission.ts -> settings-store.ts 的循环依赖)
@@ -47,9 +48,7 @@ function writeSettings(patch: Record<string, any>) {
   const next = { ...cur, version: 1, ...patch };
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const body = JSON.stringify(next, null, 0);
-  const tmp = SETTINGS_FILE + '.tmp';
-  fs.writeFileSync(tmp, body, 'utf8');
-  fs.renameSync(tmp, SETTINGS_FILE);
+  writeFileAtomic(SETTINGS_FILE, body);
 }
 
 /** 全局默认访问权限模式(新会话继承;未设置/脏数据回落 'confirm') */

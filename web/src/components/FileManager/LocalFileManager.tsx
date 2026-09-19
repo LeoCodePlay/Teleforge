@@ -418,10 +418,10 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     if (errors.length) setError(errors.slice(0, 5).join('; '));
     else flash(`已删除 ${opCount} 项`);
   };
+  // 复制只写入剪贴板,不弹提示:复制了什么用户自己清楚
   const doCopy = () => {
     if (opCount === 0) return;
     setClipboard({ items: opPaths, op: 'copy' });
-    flash(`已复制 ${opCount} 项`);
   };
   // 复制选中项完整路径到系统剪贴板(多选时逐行拼接)
   const doCopyPath = async () => {
@@ -584,8 +584,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     ? `正在删除 ${deleting.index + 1}/${deleting.total}: ${deleting.name}…已删 ${deleting.done} 项`
     : transferring ? (wrState ? `传到远程 ${wrState.done}/${wrState.total}` : '正在传到远程…')
       : msg ? msg
-        : selection.size > 1 ? `已选 ${selection.size} 项`
-          : clipboard ? (clipboard.items.length > 1 ? `已复制 ${clipboard.items.length} 项` : `已复制:${baseName(clipboard.items[0])}`) : '';
+        : selection.size > 1 ? `已选 ${selection.size} 项` : '';
 
   return (
     <div className="fm" ref={rootRef}>
@@ -633,11 +632,8 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
           data-tip={!remoteCwd ? '请先连接服务器并查看远程目录' : `把选中项传到远程当前目录 ${remoteCwd||''}(同名覆盖)`}>
           ⬆ 传到远程
         </button>
-        {clipboard && (
-          <button className="ghost sm" onClick={() => pasteHere(path)}>📋 粘贴</button>
-        )}
         <span className="muted sm fm-status"
-          data-tip={deleting ? `正在删除: ${deleting.current || deleting.name}` : selection.size > 1 ? `已选 ${selection.size} 项,点空白处取消` : msg || (clipboard ? `已复制:${clipboard.items.join(', ')}` : '')}>
+          data-tip={deleting ? `正在删除: ${deleting.current || deleting.name}` : selection.size > 1 ? `已选 ${selection.size} 项,点空白处取消` : msg}>
           {statusText}
         </span>
       </div>

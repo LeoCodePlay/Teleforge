@@ -47,6 +47,7 @@ const TOOL_TITLES: Record<string, string> = {
   create_directory: '创建目录', create_local_dir: '创建本机目录',
   delete_path: '删除', delete_local_path: '删除本机',
   skill: '加载技能', available_skills: '技能目录', skill_copy_builtin: '复制内置技能',
+  subagent: '子代理',
   browser_open: '打开预览', browser_navigate: '预览跳转', browser_snapshot: '页面快照',
   browser_click: '预览点击', browser_type: '预览输入', browser_press: '预览按键',
   browser_scroll: '预览滚动', browser_wait: '等待页面', browser_screenshot: '页面截图',
@@ -91,7 +92,8 @@ const SUMMARY_KEYS: Record<ToolRowVariant, string[]> = {
   code: ['description'],
   todo: [],
   ask: ['question'],
-  others: [],
+  // others 的兜底是"参数里第一个字符串";显式给出优先级,避免 subagent 把整段 prompt 当摘要
+  others: ['description', 'path', 'file_path', 'name', 'prompt'],
 };
 
 const FILE_PATH_KEYS = ['path', 'file_path'] as const;

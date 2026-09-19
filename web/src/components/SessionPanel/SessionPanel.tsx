@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { Session } from '../../types';
 import { NO_WORKSPACE, WHOLE_LABEL } from '../../types';
 import { useLongPress } from '../../hooks/useLongPress';
+import { useGroupReorder } from '../../hooks/useGroupReorder';
 import './SessionPanel.scss';
 
 interface SessionPanelProps {
@@ -23,11 +24,44 @@ interface SessionPanelProps {
   onSwitch: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
+  /**
+   * 删除整个工作区分组(分组头右键 / 触屏长按):该分组下的对话记录一并永久删除。
+   * ids = 组内全部会话;ws = 分组绑定的工作区路径(「未指定工作区」与「不在工作区对话」哨兵为 null);
+   * local 区分该路径属于本地还是远程工作区(决定从哪份历史记录里移除)
+   */
+  onDeleteGroup?: (ids: string[], ws: string | null, local: boolean) => void;
+  /** 分组菜单「在资源管理器打开」:仅本地工作区分组可用(path = 该分组的本地工作区目录) */
+  onRevealGroup?: (path: string) => void;
 }
 
 // 三点菜单的预估尺寸(用于视口边界夹取/向上翻转;宽对齐 .ctxmenu 的 min-width 175px)
 const MENU_W = 175;
 const MENU_H = 78;
+
+// 分组菜单(右键/触屏长按分组头)的预估尺寸:比三点菜单宽(「删除分组(含 N 个对话)」文案更长)
+const GROUP_MENU_W = 220;
+const GROUP_MENU_H = 78;
+
+/** 分组元信息:渲染分组头与分组菜单共用(label 显示名 / list 组内会话 / ws 可清理的工作区路径) */
+interface GroupMeta {
+  key: string;
+  sectionId: string;
+  label: string;
+  list: Session[];
+  /** 该分组绑定的工作区路径;「未指定工作区」与「不在工作区对话」哨兵为 null(没有历史记录可清) */
+  ws: string | null;
+  /** 组内「＋」新建会话要带的工作区参数(未指定工作区时为 null) */
+  newWs: string | null;
+  /** ws 属于本地工作区历史 */
+  local: boolean;
+}
+
+/** 分组菜单:被右键/长按的工作区分组 + 屏幕坐标 */
+interface GroupMenuState extends Omit<GroupMeta, 'list' | 'newWs'> {
+  ids: string[];
+  x: number;
+  y: number;
+}
 
 // 分组内会话的「分页展开」步长:首次展开最多 5 条,超出才在组尾出现「查看更多」文本入口,
 // 点一次再放 10 条,直到全部展开(此时入口自行消失)
@@ -78,8 +112,12 @@ interface SessionRowProps {
 }
 function SessionRow({ session: s, active, running, askWaiting, onSwitch, onMenu, onMenuAt }: SessionRowProps) {
   const lp = useLongPress((x, y) => onMenuAt(x, y, s));
+  // 悬停整行时在右侧弹出首条提问:标题只是前 24 字,完整提问更有辨识度;没有提问则回落标题
+  const tip = s.prompt || s.title || '';
   return (
+    // 悬停整行 → 右侧宽气泡展示该会话的首条提问(气泡由全局 TooltipHost 统一渲染)
     <div key={s.id} className={`session-item ${active ? 'active' : ''}`}
+      {...(tip ? { 'data-tip': tip, 'data-tip-side': 'right', 'data-tip-wide': 'true' } : {})}
       {...lp.bind}
       onClick={(ev) => { if (lp.wasLongPress()) return; onSwitch(s.id); }}>
       {/* 状态点常驻占位:空闲行也留一格(仅 visibility 隐藏),
@@ -103,6 +141,15 @@ function SessionRow({ session: s, active, running, askWaiting, onSwitch, onMenu,
 
 // 一个工作区分组:分组头(折叠箭头 + 图标 + 路径名 + 尾部槽) + 折叠的会话行
 // 尾部槽:静止=「运行状态点 + 任务数」,悬停=「组内新建会话」按钮(两者叠在同一格交叉切换)
+// 拖拽排序绑定:分组头一按下就交给 useGroupReorder,拖起态也从这里回灌渲染
+interface GroupSortBinding {
+  groupKey: string;
+  sectionId: string;
+  dragging: boolean;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  wasDragging: () => boolean;
+}
 interface WorkspaceGroupProps {
   label: string;
   icon: string;
@@ -111,13 +158,14 @@ interface WorkspaceGroupProps {
   activeId: string | null;
   busyIds: string[];
   askPendingIds: string[];
+  sort: GroupSortBinding;
   onToggle: () => void;
   onNewInGroup: () => void;
   onSwitch: (id: string) => void;
   onMenu: (e: React.MouseEvent, s: Session) => void;
   onMenuAt: (x: number, y: number, s: Session) => void;
 }
-function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, askPendingIds, onToggle, onNewInGroup, onSwitch, onMenu, onMenuAt }: WorkspaceGroupProps) {
+function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, askPendingIds, sort, onToggle, onNewInGroup, onSwitch, onMenu, onMenuAt }: WorkspaceGroupProps) {
   const hasRunning = sessions.some((s) => busyIds.includes(s.id));
   // 组内可见条数:首次展开只看前 GROUP_SHOW_FIRST 条(会话按更新时间倒序下发,留下的正是最近活跃的);
   // 收起分组即复位,下次展开仍回到「首次展开」的样子,不残留上一轮的展开进度
@@ -126,8 +174,12 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
   const shown = sessions.slice(0, shownCount);
   const restCount = sessions.length - shown.length;
   return (
-    <div className="s-group">
-      <div className={`s-group-header${expanded ? ' open' : ''}`} onClick={onToggle}>
+    <div className={`s-group${sort.dragging ? ' dragging' : ''}`}
+      data-group-key={sort.groupKey} data-section-id={sort.sectionId}>
+      <div className={`s-group-header${expanded ? ' open' : ''}`}
+        onPointerDown={sort.onPointerDown}
+        onContextMenu={sort.onContextMenu}
+        onClick={() => { if (sort.wasDragging()) return; onToggle(); }}>
         <span className="s-group-lead" aria-hidden>
           <svg className="s-group-caret" width={14} height={14} viewBox="0 0 14 14" fill="none">
             <path d="M5.3 3.4L9 7l-3.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -195,13 +247,33 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
 // - 分组头可折叠(折叠状态存 localStorage);当前会话所在组自动展开。
 // - 分组内「＋」= 切到该工作区后新建会话;行尾「⋯」仍是重命名/删除。
 // - 其他服务器后台运行的会话保持跨服务器可见,点击切回原服务器。
-export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete }: SessionPanelProps) {
+// - 工作区分组的顺序固定(按路径字典序,不随会话活跃时间抖动),可拖拽自定义:
+//   桌面按住分组头拖,触屏长按分组头弹菜单、再由「拖动排序」起拖;顺序存 localStorage,
+//   只有「会话行」按最近活跃排序。
+// - 分组头右键(桌面)/长按(触屏)弹分组菜单:删除分组 = 该组全部对话记录 + 该工作区历史记录。
+export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete, onDeleteGroup, onRevealGroup }: SessionPanelProps) {
   // 三点菜单:当前展开的会话 + 屏幕坐标(portal 到 body、fixed 定位,不被侧栏 overflow 裁剪)
   const [menu, setMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   // 重命名弹窗:正在重命名的会话 + 输入框内容
   const [rename, setRename] = useState<Session | null>(null);
   const [renameText, setRenameText] = useState('');
+  // 分组菜单(右键 / 触屏长按分组头):当前分组 + 屏幕坐标
+  const [groupMenu, setGroupMenu] = useState<GroupMenuState | null>(null);
+  const groupMenuRef = useRef<HTMLDivElement>(null);
+  // 长按回调只拿得到 key 与坐标:用一张 key -> 分组元信息的表取回分组详情(渲染时登记,见下方 remoteMeta/localMeta)
+  const groupMetaRef = useRef(new Map<string, GroupMeta>());
+  const closeGroupMenu = () => setGroupMenu(null);
+  // 坐标版:夹取到视口内,底部放不下时向上翻转
+  const openGroupMenuAt = (x: number, y: number, g: GroupMeta | undefined, key: string, sectionId: string) => {
+    if (!g) return;
+    let py = y;
+    if (py + GROUP_MENU_H > window.innerHeight - 8) py = Math.max(8, y - GROUP_MENU_H - 6);
+    setGroupMenu({
+      key, sectionId, label: g.label, ids: g.list.map((s) => s.id), ws: g.ws, local: g.local,
+      x: Math.max(8, Math.min(x, window.innerWidth - GROUP_MENU_W - 8)), y: py
+    });
+  };
 
   // 工作区分组折叠状态:groupKey -> 是否折叠。缺省(未记录)= 展开;
   // 记录折叠的键写入 localStorage,跨刷新保留。分组键带作用域前缀,避免跨服务器冲突。
@@ -242,6 +314,37 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   const localSessions = mine.filter((s) => (inRemoteScope ? !hasRemoteWorkspace(s) : true));
   const remoteKey = (ws: string) => `r:${scopeKey}:${ws}`;
   const localKey = (ws: string) => `l:${ws}`;
+  // 分区 id:远程按作用域(每台服务器各排各的),本地与服务器无关——与分组键前缀同源
+  const remoteSection = `r:${scopeKey}`;
+  const localSection = 'l';
+
+  // 工作区分组顺序(拖拽结果):分区 id -> 该分区内分组 key 的完整顺序,存 localStorage。
+  // 只有被拖过的分区才有记录;没记录时按下面的默认规则排,保证工作区顺序固定、
+  // 不随会话活跃时间抖动——「按最近活跃」只用在同一工作区内部的会话行上。
+  const ORDER_KEY = 'sshai.taskGroupOrder';
+  const loadOrder = (): Record<string, string[]> => {
+    try {
+      const o = JSON.parse(localStorage.getItem(ORDER_KEY) || '{}');
+      return o && typeof o === 'object' ? o : {};
+    } catch { return {}; }
+  };
+  const [orderMap, setOrderMap] = useState<Record<string, string[]>>(loadOrder);
+  const commitOrder = (sectionId: string, keys: string[]) => {
+    setOrderMap((m) => {
+      const next = { ...m, [sectionId]: keys };
+      try { localStorage.setItem(ORDER_KEY, JSON.stringify(next)); } catch { /* 存储不可用忽略 */ }
+      return next;
+    });
+  };
+  // 拖拽排序:桌面按住拖、触屏长按拖;只在同一分区内生效,松手才提交顺序
+  const listRef = useRef<HTMLDivElement>(null);
+  // 触屏长按分组头 = 弹分组菜单(排序入口挪到菜单里的「拖动排序」)
+  const { drag, bindHeader, isBusy, wasDragging, reorder } = useGroupReorder({
+    rootRef: listRef,
+    onCommit: commitOrder,
+    onLongPress: (key, sectionId, x, y) => openGroupMenuAt(x, y, groupMetaRef.current.get(key), key, sectionId)
+  });
+
   const groupSessions = (list: Session[], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string) => {
     const groups = new Map<string, Session[]>();
     for (const s of list) {
@@ -250,16 +353,59 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
       arr.push(s);
       groups.set(keyOf(ws), arr);
     }
-    // 未指定工作区组排最后,其余按更新时间倒序(会话最近活跃的组靠前)
-    return [...groups.entries()].sort((a, b) => {
-      if (a[0] === b[0]) return 0;
-      if (a[0].endsWith(`:${UNGROUPED}`)) return 1;
-      if (b[0].endsWith(`:${UNGROUPED}`)) return -1;
-      return (Number(b[1][0]?.updatedAt) || 0) - (Number(a[1][0]?.updatedAt) || 0);
+    // 组内保持服务端下发的顺序(会话最近活跃的靠前);组间顺序交给 sortGroups
+    return [...groups.entries()];
+  };
+  // 组间顺序:拖拽过的按用户排好的顺序;没拖过的接在已记录分组之后,按工作区路径字典序
+  // (「未指定工作区」固定最后,沿用原约定)。新出现的工作区落在末尾,不会插进用户排好的序列里
+  const sortGroups = (groups: [string, Session[]][], sectionId: string, wsOf: (s: Session) => string | null | undefined) => {
+    const rank = new Map((orderMap[sectionId] || []).map((k, i) => [k, i]));
+    return [...groups].sort((a, b) => {
+      const ra = rank.get(a[0]);
+      const rb = rank.get(b[0]);
+      if (ra !== undefined || rb !== undefined) {
+        if (ra === undefined) return 1;
+        if (rb === undefined) return -1;
+        return ra - rb;
+      }
+      const ua = a[0].endsWith(`:${UNGROUPED}`);
+      const ub = b[0].endsWith(`:${UNGROUPED}`);
+      if (ua !== ub) return ua ? 1 : -1;
+      return String(wsOf(a[1][0]) || '').localeCompare(String(wsOf(b[1][0]) || ''), 'zh-Hans-CN', { numeric: true });
     });
   };
-  const remoteGroups = groupSessions(remoteSessions, (s) => s.workspace, remoteKey);
-  const localGroups = groupSessions(localSessions, (s) => s.localWorkspace, localKey);
+  // 拖拽中该分区按实时顺序渲染(被拖分组立刻让位/前移);松手后由 orderMap 接管
+  const withPreview = (groups: [string, Session[]][], sectionId: string) => {
+    if (!drag || drag.sectionId !== sectionId) return groups;
+    const out: [string, Session[]][] = [];
+    const used = new Set<string>();
+    for (const k of drag.keys) {
+      const g = groups.find((x) => x[0] === k);
+      if (g && !used.has(k)) { out.push(g); used.add(k); }
+    }
+    for (const g of groups) if (!used.has(g[0])) out.push(g); // 拖拽中才出现的新分组补在末尾
+    return out;
+  };
+  const remoteGroups = withPreview(sortGroups(groupSessions(remoteSessions, (s) => s.workspace, remoteKey), remoteSection, (s) => s.workspace), remoteSection);
+  const localGroups = withPreview(sortGroups(groupSessions(localSessions, (s) => s.localWorkspace, localKey), localSection, (s) => s.localWorkspace), localSection);
+
+  // 分组元信息:显示名与「＋ 新建」的工作区参数都从组内首条会话派生(与 groupSessions 的分组依据一致)。
+  // 「未指定工作区」与「不在工作区对话」哨兵虽是真值但都不是目录:它们不进工作区历史记录,
+  // 所以 ws(删除分组时要一并清理的历史记录)置 null,而 newWs 仍按原样透传(整台电脑/服务器是全盘模式)
+  const groupMeta = (groups: [string, Session[]][], wsOf: (s: Session) => string | null | undefined, wholeLabel: string, local: boolean, sectionId: string): GroupMeta[] =>
+    groups.map(([key, list]) => {
+      const ws = wsOf(list[0]) || '';
+      const ungrouped = key.endsWith(`:${UNGROUPED}`);
+      return {
+        key, sectionId, list, local,
+        label: ungrouped ? UNGROUPED_LABEL : (ws === NO_WORKSPACE ? `🌐 ${wholeLabel}` : lastPathSegment(ws)),
+        ws: ungrouped || !ws || ws === NO_WORKSPACE ? null : ws,
+        newWs: ungrouped ? null : (ws || null)
+      };
+    });
+  const remoteMeta = groupMeta(remoteGroups, (s) => s.workspace, WHOLE_LABEL.remote, false, remoteSection);
+  const localMeta = groupMeta(localGroups, (s) => s.localWorkspace, WHOLE_LABEL.local, true, localSection);
+  groupMetaRef.current = new Map([...remoteMeta, ...localMeta].map((m) => [m.key, m])); // 长按回调(事件期)按 key 取回分组详情
 
   // 当前激活会话所在组自动展开(harness SessionTree 行为):仅当该组从未被用户记录过折叠状态时生效,
   // 已手动折叠的组不强行展开
@@ -289,14 +435,58 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   };
   const closeMenu = () => setMenu(null);
 
+  // 分组菜单「拖动排序」:先收菜单,再把该分组交给拖拽 hook 起拖
+  // (触屏此时没有按住状态,靠之后的指针移动跟手;桌面按住分组头即可拖,故菜单项在桌面隐藏,见 SCSS)
+  const doReorderGroup = () => {
+    const g = groupMenu;
+    if (!g) return;
+    closeGroupMenu();
+    const row = listRef.current?.querySelector<HTMLElement>(`[data-group-key="${g.key}"] > .s-group-header`);
+    const r = row?.getBoundingClientRect();
+    reorder(g.key, g.sectionId, r ? r.top + r.height / 2 : window.innerHeight / 2);
+  };
+
+  // 分组菜单「在资源管理器打开」:只对绑定本机目录的分组可用(远程分组与未绑定工作区的分组
+  // 都没有本地目录 —— 菜单项已置灰,这里再兜一道,避免将来新增入口时漏判)
+  const doRevealGroup = () => {
+    const g = groupMenu;
+    if (!g?.local || !g.ws) return;
+    closeGroupMenu();
+    onRevealGroup?.(g.ws);
+  };
+
+  // 分组菜单「删除分组」:分组没了,顺手清掉它在 localStorage 里的折叠状态与拖拽顺序残留,
+  // 再把整组会话 id 交给上层执行删除(确认弹窗、RPC、工作区历史清理都在 App 里统一处理)
+  const doDeleteGroup = () => {
+    const g = groupMenu;
+    if (!g) return;
+    closeGroupMenu();
+    setCollapsedMap((m) => {
+      if (!Object.hasOwn(m, g.key)) return m;
+      const next = { ...m };
+      delete next[g.key];
+      try { localStorage.setItem(GROUPS_KEY, JSON.stringify(next)); } catch { /* 存储不可用忽略 */ }
+      return next;
+    });
+    setOrderMap((m) => {
+      const list = m[g.sectionId];
+      if (!list || !list.includes(g.key)) return m;
+      const next = { ...m, [g.sectionId]: list.filter((k) => k !== g.key) };
+      try { localStorage.setItem(ORDER_KEY, JSON.stringify(next)); } catch { /* 存储不可用忽略 */ }
+      return next;
+    });
+    onDeleteGroup?.(g.ids, g.ws, g.local);
+  };
+
   // 菜单打开期间:点击外部 / Esc / 滚动 关闭(对齐 FileManager 右键菜单的收拢方式)
   useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    if (!menu && !groupMenu) return;
+    const close = () => { setMenu(null); setGroupMenu(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     const onPointerDown = (e: PointerEvent) => {
-      if (menuRef.current && menuRef.current.contains(e.target as Node)) return;
-      setMenu(null);
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || groupMenuRef.current?.contains(t)) return;
+      close();
     };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
@@ -306,7 +496,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', close, true);
     };
-  }, [menu]);
+  }, [menu, groupMenu]);
 
   // 重命名弹窗
   const openRename = (s: Session) => { closeMenu(); setRename(s); setRenameText(s.title || ''); };
@@ -320,23 +510,40 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
 
   const totalVisible = mine.length;
   const noTasks = totalVisible === 0;
+  // 分组内有任务在跑:整组删除不可用(与服务端「运行中禁止删除会话」同一条约束)
+  const groupBusy = !!groupMenu && groupMenu.ids.some((id) => busyIds.includes(id));
+  // 「在资源管理器打开」不可用的原因(undefined = 可用):远程工作区在本机没有对应目录,
+  // 「未指定工作区」「不在工作区对话」这类分组也没有具体目录
+  const revealTip = !groupMenu ? undefined
+    : !groupMenu.local ? '远程工作区在本地没有对应目录,无法在资源管理器打开'
+      : groupMenu.ws ? undefined : '该分组未绑定具体工作区目录';
 
-  // 渲染一组会话(共用分组头/行渲染);wholeLabel = 该侧「不在工作区对话」分组的标题
-  const renderGroup = (groups: [string, Session[]][], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string, icon: string, wholeLabel: string, newInGroup: (ws: string | null) => void) =>
-    groups.map(([key, list]) => {
-      const ws = wsOf(list[0]) || '';
-      const label = key.endsWith(`:${UNGROUPED}`) ? UNGROUPED_LABEL : (ws === NO_WORKSPACE ? `🌐 ${wholeLabel}` : lastPathSegment(ws));
-      return (
-        <WorkspaceGroup key={key} label={label} icon={icon} sessions={list}
-          expanded={isExpanded(key)}
-          activeId={activeId} busyIds={busyIds} askPendingIds={askPendingIds}
-          onToggle={() => saveCollapsed(key, isExpanded(key))}
-          onNewInGroup={() => { const ws = key.endsWith(`:${UNGROUPED}`) ? null : wsOf(list[0]) || null; newInGroup(ws); }}
-          onSwitch={onSwitch}
-          onMenu={openMenu}
-          onMenuAt={openMenuAt} />
-      );
-    });
+  // 渲染一组会话(共用分组头/行渲染);分组显示名与「＋ 新建」的工作区参数由 groupMeta 派生
+  const renderGroup = (groups: GroupMeta[], icon: string, newInGroup: (ws: string | null) => void) =>
+    groups.map((g) => (
+      <WorkspaceGroup key={g.key} label={g.label} icon={icon} sessions={g.list}
+        expanded={isExpanded(g.key)}
+        activeId={activeId} busyIds={busyIds} askPendingIds={askPendingIds}
+        sort={{
+          groupKey: g.key,
+          sectionId: g.sectionId,
+          dragging: drag?.key === g.key,
+          onPointerDown: (e) => bindHeader(e, g.key, g.sectionId),
+          // 桌面右键 = 打开分组菜单。拖拽/长按途中不弹(isBusy),触屏长按已弹过同一个组也不重复弹
+          // (长按后浏览器还会补一个 contextmenu);无论哪种情况都掐掉原生菜单
+          onContextMenu: (e) => {
+            e.preventDefault();
+            if (isBusy() || groupMenu?.key === g.key) return;
+            openGroupMenuAt(e.clientX, e.clientY, g, g.key, g.sectionId);
+          },
+          wasDragging
+        }}
+        onToggle={() => saveCollapsed(g.key, isExpanded(g.key))}
+        onNewInGroup={() => newInGroup(g.newWs)}
+        onSwitch={onSwitch}
+        onMenu={openMenu}
+        onMenuAt={openMenuAt} />
+    ));
 
   return (
     <div className="panel s-panel">
@@ -345,18 +552,18 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
         <button className="sm" onClick={() => onNew()}>＋ 新建</button>
       </div>
       {scopeLabel && <div className="s-scope">📡 {scopeLabel}</div>}
-      <div className="s-list">
+      <div className={`s-list${drag ? ' reordering' : ''}`} ref={listRef}>
         {noTasks && <div className="muted" style={{ fontSize: 12 }}>暂无任务,点「＋ 新建」开始</div>}
         {remoteGroups.length > 0 && (
           <div className="s-section">
             <div className="s-section-title">远程任务列表</div>
-            {renderGroup(remoteGroups, (s) => s.workspace, remoteKey, '🖥', WHOLE_LABEL.remote, (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null); else onNew(); })}
+            {renderGroup(remoteMeta, '🖥', (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null); else onNew(); })}
           </div>
         )}
         {localGroups.length > 0 && (
           <div className="s-section">
             <div className="s-section-title">本地任务列表</div>
-            {renderGroup(localGroups, (s) => s.localWorkspace, localKey, '📂', WHOLE_LABEL.local, (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws); else onNew(); })}
+            {renderGroup(localMeta, '📂', (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws); else onNew(); })}
           </div>
         )}
         {foreign.length > 0 && (
@@ -386,6 +593,21 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
           <button className="danger" data-tip={busyIds.includes(menu.session.id) ? '任务进行中,不能删除' : undefined}
             disabled={busyIds.includes(menu.session.id)}
             onClick={() => { closeMenu(); onDelete(menu.session.id); }}>删除</button>
+        </div>,
+        document.body
+      )}
+
+      {/* 分组菜单:右键分组头 / 触屏长按分组头打开,portal 到 body,与三点菜单同款悬浮厚玻璃 */}
+      {groupMenu && createPortal(
+        <div ref={groupMenuRef} className="ctxmenu" style={{ left: groupMenu.x, top: groupMenu.y }} onContextMenu={(e) => e.preventDefault()}>
+          {/* 触屏专用入口:长按改弹菜单后,排序只能从这里起拖(桌面按住分组头即可拖,故用 CSS 隐藏本项) */}
+          <button className="s-group-menu-reorder" onClick={doReorderGroup}>拖动排序</button>
+          <button data-tip={revealTip} disabled={!!revealTip} onClick={doRevealGroup}>在资源管理器打开</button>
+          <div className="ctx-sep" />
+          <button className="danger"
+            data-tip={groupBusy ? '有任务进行中,请先停止再删除' : undefined}
+            disabled={groupBusy}
+            onClick={doDeleteGroup}>删除分组(含 {groupMenu.ids.length} 个对话)</button>
         </div>,
         document.body
       )}

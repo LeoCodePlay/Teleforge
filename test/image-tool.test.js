@@ -104,6 +104,9 @@ async function main() {
 
     const agent = new Agent({ emit: () => {} });
     agent.configureLlm({ baseUrl: 'http://x', apiKey: 'k', model: 'fake-text' });
+    // 本测试验证的是生图工具链路,与权限门控无关:显式切到完全访问,
+    // 否则默认 confirm 档下 generate_image(write)会挂起等待审批。
+    agent.setPermissionMode('full-access');
     agent.llm = makeTextLlm({ prompt: '一只戴红帽子的柴犬', size: '1536x1024', quality: 'high' });
     const sid = agent.createSession('工具生图测试');
 

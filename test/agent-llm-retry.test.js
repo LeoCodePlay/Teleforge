@@ -10,6 +10,7 @@ process.env.LLM_RETRY_BUDGET_MS = '8000';
 import http from 'node:http';
 const { Agent } = await import('../server/agent/agent.ts');
 const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
+const { LLM_RETRY } = await import('../server/agent/llm.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  OK   ${n}`); } else { fail++; console.log(`  FAIL ${n} ${e}`); } };
@@ -118,7 +119,7 @@ seen = [];
   const t = await runTurn(agent, events, '限流场景');
   check('限流后本轮跑完', t.reason?.kind === 'completed' && t.assistant[0]?.content === '限流后跑通', JSON.stringify(t.assistant.map((m) => m.content)));
   check('重试等待遵循网关 retryAfterSeconds', !!t.retries[0] && t.retries[0].delayMs >= 900, JSON.stringify(t.retries[0]));
-  check('重试次数记为上界 10 的第 1 次', !!t.retries[0] && t.retries[0].retry === 1 && t.retries[0].maxRetries === 10, JSON.stringify(t.retries[0]));
+  check('重试次数记为上界的第 1 次', !!t.retries[0] && t.retries[0].retry === 1 && t.retries[0].maxRetries === LLM_RETRY.MAX_ATTEMPTS, JSON.stringify(t.retries[0]));
 }
 
 // 4) 402 余额不足:不空等,给出可操作提示(但依然不静默中断)
@@ -152,12 +153,13 @@ seen = [];
 }
 
 // 6) 连续 503 期间不在第一步就放弃:重试到上限才报错,且错误文案说明重试过
-script = Array.from({ length: 12 }, () => ({ type: 'status', code: 503, body: 'upstream down' }));
+//    脚本条数必须多于重试上限:否则网关会在第 N 次改回成功,变成「重试成功」而不是「到上限放弃」
+script = Array.from({ length: LLM_RETRY.MAX_ATTEMPTS + 10 }, () => ({ type: 'status', code: 503, body: 'upstream down' }));
 seen = [];
 {
   const { agent, events } = makeAgent();
   const t = await runTurn(agent, events, '持续 503');
-  check('持续 503 时重试多次才放弃', seen.length > 1, String(seen.length));
+  check('持续 503 时重试到上限才放弃', seen.length === LLM_RETRY.MAX_ATTEMPTS, String(seen.length));
   check('放弃时说明已重试次数', /已自动重试/.test(t.errors[0]?.message || ''), t.errors[0]?.message);
   check('放弃后本轮以 error 收尾(不是静默卡死)', t.reason?.kind === 'error', JSON.stringify(t.reason));
 }

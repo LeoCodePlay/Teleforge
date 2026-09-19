@@ -38,6 +38,8 @@ export const PROMPT_INJECT_FILE = process.env.PROMPT_INJECT_FILE || path.join(DA
 export const CHAT_HISTORY_FILE  = path.join(DATA_DIR, 'chat-history.json');
 export const SESSIONS_FILE      = path.join(DATA_DIR, 'sessions.json');
 export const SESSIONS_DIR       = path.join(DATA_DIR, 'sessions');
+// 子代理运行记录(每次派发一个文件;面板按会话列出并回看其完整对话)
+export const SUBAGENTS_DIR      = path.join(DATA_DIR, 'subagents');
 export const SETTINGS_FILE      = path.join(DATA_DIR, 'settings.json');
 
 export const PORT = Number(process.env.PORT || 4000);
@@ -107,20 +109,41 @@ export const AGENT = {
   // (历史 + system + 工具 schema)超过该值就先做一轮"保最近"的折叠。设 0 关闭。
   // 地板路径独立阈值:水位路径按 harness 8192 保守折叠;地板路径目的是主动压体积,
   // 用更低阈值(2k)把旧的中等结果(一次 read 30k 默认即 30k 字符)也折叠掉。
+  // 折叠的缓存代价(与 agent.ts 折叠处注释同源):折叠改的是历史中段的一条消息,
+  // 提供方前缀缓存从第一个变化的 token 起失效 —— 折叠点越靠历史深处,作废的尾部越长。
+  // 保留窗口因此必须双限,才把折叠点钉在距请求末尾不远的位置:
+  //   ABS_FLOOR_KEEP_RESULTS 条数上限 + ABS_FLOOR_KEEP_CHARS 字符预算(先到者为准)。
+  // 旧配置只有最近 6 条这一个条件,而 6 条大结果加上其后的全部消息可以退到几百 KB 之前,
+  // 每折一条就把这整段按未命中重算(实测单次作废 20k-60k token,只省下 ~1k 字符)。
+  // ABS_FLOOR_MIN_SAVE_CHARS 是攒批门槛:本轮合计可省不足该值就先不折 —— 为省几百字符
+  // 去改写中段是净亏,攒到值得一次改写再折,把一次缓存作废摊销到多条结果上(设 0 关闭)。
   TOOL_RESULT_PRUNE: {
     THRESHOLD_CHARS: 8_192,
     HEAD_CHARS: 4_096,
     TAIL_CHARS: 1_024,
     ABS_FLOOR_TOKENS: 60_000,
     ABS_FLOOR_THRESHOLD_CHARS: 2_000,
-    ABS_FLOOR_KEEP_RECENT: 6
+    ABS_FLOOR_KEEP_RESULTS: 4,
+    ABS_FLOOR_KEEP_CHARS: 16_000,
+    ABS_FLOOR_MIN_SAVE_CHARS: 8_000
   },
   CONCURRENT_TOOL_CALLS: true,  // 并行执行工具调用(agent-loop 的有界滚动池,设 false 回退串行)
   MAX_PARALLEL_TOOL_CALLS: 10,  // 并行工具调用并发上限(照搬 harness DEFAULT_MAX_PARALLEL_TOOL_CALLS)
   MAX_OVERFLOW_RECOVERIES: 1,   // 上下文爆窗时自动压缩后重试本步的最大次数(对齐 harness maxOverflowRetries)
   CHAT_ONLY_TTL_MS: 10 * 60 * 1000, // 工具降级纯对话的失效时间:超时后自动重试工具调用(避免网关临时故障把会话永久打成纯对话)
   REPEAT_REMIND_THRESHOLDS: [3, 5, 8], // 连续相同工具+参数调用达到该次数时注入提醒(repeat-tool-reminder)
-  REPEAT_ARG_PREVIEW: 500       // 重复调用提醒里引用的参数预览上限(字符,对齐 harness)
+  REPEAT_ARG_PREVIEW: 500,      // 重复调用提醒里引用的参数预览上限(字符,对齐 harness)
+  // 子代理(subagent 工具,in-process 只读调研代理;见 agent/subagent.ts):
+  SUBAGENT: {
+    MAX_STEPS: 24,              // 单个子代理最多步数(1 步 = 一次模型请求 + 它发起的工具调用)
+    RESULT_MAX_CHARS: 12_000,   // 回传父级的结论上限;超出截断(完整过程只存在于子代理自己的内存会话)
+    TIMEOUT_MS: 600_000,        // 工具级超时(比注册表兜底 660s 短,让超时原因来自子代理自身)
+    // 提示词契约:父对话必须自己写清任务与边界;prompt 与 objective+scope 两条路径满足其一
+    MIN_PROMPT_CHARS: 60,       // 只给 prompt 时,完整提示词的最小长度
+    MIN_FIELD_CHARS: 6,         // 给结构化字段时,objective / scope 各自的最小长度
+    // 面板:运行记录保留条数上限(超出按开始时间删最旧;见 store/subagent-store.ts)
+    MAX_RUNS: 200
+  }
 };
 
 export const WS_MAX_PAYLOAD = 32 * 1024 * 1024;

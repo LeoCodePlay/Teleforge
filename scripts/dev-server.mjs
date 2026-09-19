@@ -5,7 +5,7 @@
 // 排除 node_modules/依赖、data/output 运行产物与 *.log。
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,17 +44,43 @@ function start() {
 
 let stillWatching = true;
 
-function scheduleRestart(changePath) {
+// 正在跑对话时不重启:agent 的一轮可能持续几十分钟,中途 kill 掉进程会让这一轮从对话里
+// 直接消失(连用户刚发的那句话都只剩"未正常结束"的痕迹)。最多等 BUSY_MAX_WAIT_MS,
+// 之后仍然重启,避免改完代码迟迟不生效。服务没起来/端口不通时照常重启。
+const PORT = Number(process.env.PORT || 4000);
+const BUSY_MAX_WAIT_MS = 120000;
+
+async function agentBusy() {
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: AbortSignal.timeout(1000) });
+    if (!r.ok) return false;
+    const j = await r.json();
+    return !!(j && j.agentBusy === true);
+  } catch { return false; }
+}
+
+function scheduleRestart(changePath, waitedMs = 0) {
   clearTimeout(timer);
-  timer = setTimeout(() => {
+  timer = setTimeout(async () => {
     if (!child || child.killed) return;
+    if (await agentBusy()) {
+      if (waitedMs < BUSY_MAX_WAIT_MS) {
+        log(`agent 正在跑对话,延后重启(已等 ${Math.round(waitedMs / 1000)}s):${changePath}`);
+        scheduleRestart(changePath, waitedMs + 1000);
+        return;
+      }
+      log(`agent 忙碌已超过 ${Math.round(BUSY_MAX_WAIT_MS / 1000)}s,仍按计划重启:${changePath}`);
+    }
     restarting = true;
     log(`检测到变更 ${changePath} → 重启`);
     child.kill();
     if (process.platform === 'win32') {
-      // 子进程可能还有 conout worker 等孙进程,直接杀树
+      // 子进程可能还有 conout worker 等孙进程,直接杀树。
+      // 注意:本文件是 ESM,没有 require —— 旧写法 `require('node:child_process')` 会抛
+      // ReferenceError 被 catch 吞掉,taskkill 实际从未执行:旧服务可能活着占着端口,
+      // 新实例启动即 EADDRINUSE 退出 → 前端那边就是"服务突然没了、对话停在半路"。
       try {
-        require('node:child_process').execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' });
+        execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' });
       } catch { /* 已退出 */ }
     }
     child.once('exit', () => {

@@ -4,6 +4,7 @@
 // - ↑↓ 移动高亮、Enter/Tab 选中、Esc 关闭
 // 选中条目在输入框显示为 @文件名/文件夹名;发送时由 ChatPanel 替换为 @source:完整路径。
 import type { RefObject } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { rankByName } from '../SlashMenu/SlashMenu';
 import './AtMenu.scss';
@@ -31,16 +32,48 @@ export interface AtMenuProps {
   anchorRef: RefObject<HTMLDivElement | null>;
 }
 
-const MAX_SHOWN = 60; // 候选行上限,避免超长目录压垮菜单
+/** 候选行上限,避免超长目录压垮菜单(父组件做 ↑↓ 导航时必须按同一上限截取) */
+export const AT_MENU_MAX = 60;
 
 export default function AtMenu({ items, query, active, loading = false, onPick, onClose, onActiveChange, anchorRef }: AtMenuProps) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
   const list = rankByName(items, query);
-  const shown = list.slice(0, MAX_SHOWN);
+  const shown = list.slice(0, AT_MENU_MAX);
+
+  // 高亮越界时夹回可见范围(过滤后候选变少、或超过渲染上限),否则高亮消失、Enter 落空
+  useLayoutEffect(() => {
+    if (shown.length === 0) {
+      if (active !== -1) onActiveChange(-1);
+    } else if (active < 0 || active > shown.length - 1) {
+      onActiveChange(Math.min(Math.max(active, 0), shown.length - 1));
+    }
+  }, [active, shown.length, onActiveChange]);
+
+  // 过滤词变化:候选重排,滚动位置回到顶部,避免停在上一次滚到的位置
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (box) box.scrollTop = 0;
+  }, [query]);
+
+  // ↑↓ 切换高亮时把选中行滚入可视区(菜单可视高度只有约 7 行,不跟随就会把高亮切到看不见的地方)。
+  // 只调整菜单自身的 scrollTop:菜单是 portal 到 body 的 fixed 层,scrollIntoView 会连带滚动页面
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const rows = box.querySelectorAll<HTMLElement>('[role="option"]');
+    const el = active >= 0 ? rows[active] : undefined;
+    if (!el) return;
+    const boxRect = box.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    if (elRect.top < boxRect.top) box.scrollTop -= boxRect.top - elRect.top;
+    else if (elRect.bottom > boxRect.bottom) box.scrollTop += elRect.bottom - boxRect.bottom;
+  }, [active, shown.length]);
+
   // portal 到 body:嵌在 composer-box(backdrop-filter)内时 Chromium 不应用 backdrop-filter,玻璃模糊失效
   const r = anchorRef.current?.getBoundingClientRect();
   const pos = r ? { left: r.left + 12, width: r.width - 24, top: r.top - 6 } : undefined;
   return createPortal(
-    <div className="at-menu" role="listbox" aria-label="文件引用菜单" style={pos}>
+    <div className="at-menu" ref={boxRef} role="listbox" aria-label="文件引用菜单" style={pos}>
       {loading ? (
         <div className="at-empty">正在列出目录文件…</div>
       ) : items.length === 0 ? (

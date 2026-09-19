@@ -118,6 +118,14 @@ export function registerAgent(rpc: RpcModule) {
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });
 
+  rpc.register('session_delete_group', async (msg, { reply, emitStatus }) => {
+    // 工作区分组「删除分组」:一次删掉该分组下的全部会话。
+    // agent.deleteSessions 先整组校验再删,组内有任务运行时整组拒绝(错误经 router 回给前端 toast)
+    agent.deleteSessions(msg.ids);
+    emitStatus(); // 分组含活跃会话时已收敛到新会话,同步其绑定工作区
+    reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
+  });
+
   rpc.register('session_rename', async (msg, { reply }) => {
     // 原 ws.js session_rename case(244-247)逐字复制
     agent.renameSession(msg.id, msg.title);
@@ -134,15 +142,24 @@ export function registerAgent(rpc: RpcModule) {
   });
 
   rpc.register('message_delete', async (msg, { reply, send }) => {
-    // 删除一条用户消息(及其所在轮回复);成功后把最新历史一并返回,前端免二次拉取
-    agent.deleteMessageAt(typeof msg.at === 'number' ? msg.at : -1);
+    // 删除一条用户消息(及其所在轮回复);成功后把最新历史一并返回,前端免二次拉取。
+    // at 是前端实时流里推算的下标(失败/中断轮会漂移),ordinal「第几条用户消息」才是权威定位,
+    // text 用于服务端校验(见 agent.locateUserEvent);三者都可缺,缺省回落旧行为
+    agent.deleteMessageAt(typeof msg.at === 'number' ? msg.at : -1, {
+      ordinal: typeof msg.ordinal === 'number' ? msg.ordinal : undefined,
+      text: typeof msg.text === 'string' ? msg.text : undefined
+    });
     reply({ type: 'ok', turns: agent.getHistory(), todos: agent.currentTodos() });
     send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });
 
   rpc.register('message_rewind', async (msg, { reply, send }) => {
-    // 回到本轮对话发起前:截断该条消息及其之后的所有内容;返回最新历史
-    agent.rewindToBefore(typeof msg.at === 'number' ? msg.at : -1);
+    // 回到本轮对话发起前:截断该条消息及其之后的所有内容;返回最新历史。
+    // 定位口径同 message_delete:ordinal(第几条用户消息)权威、at(forkTail)兜底
+    agent.rewindToBefore(typeof msg.at === 'number' ? msg.at : -1, {
+      ordinal: typeof msg.ordinal === 'number' ? msg.ordinal : undefined,
+      text: typeof msg.text === 'string' ? msg.text : undefined
+    });
     reply({ type: 'ok', turns: agent.getHistory(), todos: agent.currentTodos() });
     send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId });
   });

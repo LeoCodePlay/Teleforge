@@ -48,6 +48,11 @@ const finish = () => { console.log(`\n==== 结果: ${pass} 通过, ${fail} 失�
   check('多次压缩只从最后一个标记起算', modelFaceMessages(rendered2).length === 2
     && modelFaceMessages(rendered2)[0].content === '二次压缩摘要', `got ${JSON.stringify(modelFaceMessages(rendered2).map((m) => m.content))}`);
 
+  // 压缩失败行不是模型面起点:它没有压掉任何东西,模型仍看得到它之前的全部历史
+  const rendered3 = [...old, { role: 'user', content: '', compaction: { failed: true, reason: '摘要生成失败:已停止' } }, ...recent];
+  check('压缩失败行不改变模型面(水位不会凭空变小)', modelFaceMessages(rendered3).length === rendered3.length
+    && modelFaceMessages(rendered3)[0] === old[0], `got ${modelFaceMessages(rendered3).length}`);
+
   const bd = estimateBreakdown(rendered, '');
   check('estimateBreakdown 同样只算模型面', bd.system > 0 && bd.tools === 0 && bd.conversation > 0
     && bd.conversation < estimateMessages(rendered.slice(0, 2)), `got ${JSON.stringify(bd)}`);

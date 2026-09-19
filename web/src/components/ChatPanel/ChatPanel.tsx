@@ -12,9 +12,9 @@ import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import ModelMenu from '../ModelMenu/ModelMenu';
 import ContextMeter, { type ContextUsage } from '../ContextMeter/ContextMeter';
 import TodoPanel from '../TodoPanel/TodoPanel';
-import SlashMenu, { rankSlashItems, rankByName } from '../SlashMenu/SlashMenu';
+import SlashMenu, { rankSlashItems, rankByName, SLASH_MENU_MAX } from '../SlashMenu/SlashMenu';
 import type { SlashItem } from '../SlashMenu/SlashMenu';
-import AtMenu from '../AtMenu/AtMenu';
+import AtMenu, { AT_MENU_MAX } from '../AtMenu/AtMenu';
 import type { AtCandidate } from '../AtMenu/AtMenu';
 import { useFeedback } from '../../context/feedback';
 import AskPanel from '../AskPanel/AskPanel';
@@ -26,8 +26,10 @@ import { ReasoningRow } from '../ReasoningRow/ReasoningRow';
 import { CompactionRow } from './CompactionRow';
 import { FilesChangedCard } from './FilesChangedCard';
 import { CommandCard } from './CommandCard';
+import { LoadedSkillsRow } from './LoadedSkillsRow';
 import { matchSlashCommand } from '../../utils/slashCommand';
 import { mergeTrailingCommandCards } from '../../utils/commandCard';
+import { tailAssistantIndex } from '../../utils/compactionOrder';
 import { mergeAttachments } from '../../utils/mergeAttachments';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
@@ -329,6 +331,11 @@ function attachFileChanges(msg: ChatMessage | undefined) {
 // 一次 run 的多轮 assistant/tool 在渲染上合并为一条回复,按「思考 / 文本 / 连续工具组」实际发生顺序分段
 function turnsToMessages(turns: any[]): ChatMessage[] {
   const out: ChatMessage[] = [];
+  // 记录每个 turns 下标对应到 out 里的投影下标:服务端原位投影后,压缩标记行的
+  // compaction.retainedFrom 是 turns 下标(保留区首条消息面在 turns 里的位置)。
+  // 由于 tool 被折叠、assistant 多轮合并,out 的长度不等于 turns 的长度,
+  // 必须通过这张映射把 turns 下标换算成 out 下标,才能给 modelFaceMessages 正确切片。
+  const turnToOut = new Array(turns.length).fill(-1);
   // 先扫一遍把工具结果聚齐:历史 turns 的顺序是 assistant(含 tool_calls)在前、
   // tool(执行结果)在后,若边循环边查 map,处理 assistant 时结果还没写入,
   // 会漏配导致工具永远显示"执行中"。预扫后无论顺序如何都能配对成功。
@@ -345,15 +352,37 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
       // 工具结果并入所在回复,该消息的分支点随之推进到这条 turn
       const last = out[out.length - 1];
       if (last) last.forkTail = ti;
+      if (last) turnToOut[ti] = out.length - 1;
       continue; // tool 消息本身不渲染,只作为结果并入上游工具组
     }
     if (t.role === 'user') {
-      out.push({
-        role: 'user', content: t.content || '', forkTail: ti, time: t.time,
-        // 附件元数据随历史回放,用户气泡内渲染缩略图/文件 chip
-        ...(Array.isArray(t.attachments) && t.attachments.length ? { attachments: t.attachments } : {}),
-        ...(t.compaction ? { compaction: t.compaction } : {})
-      });
+      const pushBack = () => {
+        const idx = out.length;
+        out.push({
+          role: 'user', content: t.content || '', forkTail: ti, time: t.time,
+          // 附件元数据随历史回放,用户气泡内渲染缩略图/文件 chip
+          ...(Array.isArray(t.attachments) && t.attachments.length ? { attachments: t.attachments } : {}),
+          // 手动调用技能(`/技能名`)的记录随历史回放,用户气泡下方恢复「已加载技能」行
+          ...(Array.isArray(t.skillsInjected) && t.skillsInjected.length ? { skillsInjected: t.skillsInjected } : {}),
+          ...(t.compaction ? { compaction: t.compaction } : {})
+        });
+        turnToOut[ti] = idx;
+      };
+      if (t.compaction) {
+        // 压缩标记行:compaction.retainedFrom 是保留区首条消息面的 turns 下标,
+        // 换算成 out 下标后删除原字段,供 utils/tokens 的 modelFaceMessages 切片。
+        // 原位投影下标记行跟在保留区之后(压缩发生那一刻最后一条消息后面),刷新后位置不变。
+        const cp = t.compaction as any;
+        let fromIdx = typeof cp.retainedFrom === 'number' && cp.retainedFrom >= 0
+          ? turnToOut[cp.retainedFrom]
+          : undefined;
+        // 保留区首条在渲染数组里的下标;取不到(无保留消息 / 该 turn 未投影)时落在末尾,
+        // 此时模型面只剩摘要标记行本身。
+        if (typeof fromIdx !== 'number' || fromIdx < 0) fromIdx = out.length;
+        cp.modelFaceFrom = fromIdx;
+        delete cp.retainedFrom;
+      }
+      pushBack();
       continue;
     }
     if (t.role === 'assistant') {
@@ -379,6 +408,7 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         if (Array.isArray(t.attachments) && t.attachments.length) prev.attachments = mergeAttachments(prev.attachments, t.attachments);
         if (t.imageJob) prev.imageJob = t.imageJob;
         prev.forkTail = ti;
+        turnToOut[ti] = out.length - 1;
       } else {
         const nm: ChatMessage = { role: 'assistant', segments: [], streaming: false, forkTail: ti };
         if (t.reasoning_content) appendReasoning(nm, t.reasoning_content);
@@ -386,12 +416,39 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         appendTools(nm, tools);
         if (Array.isArray(t.attachments) && t.attachments.length) nm.attachments = t.attachments;
         if (t.imageJob) nm.imageJob = t.imageJob;
+        const idx = out.length;
         out.push(nm);
+        turnToOut[ti] = idx;
       }
+      continue;
+    }
+    if (t.role === 'notice') {
+      // 提示行(⚠ 中断原因 / 截断披露)与重试记录:服务端已把它们作为「显示面」事件持久化,
+      // 这里必须原样渲染 —— 它们不进模型上下文,但要留在对话里发生的位置上。
+      // 重试记录在日志里是「一次一条」,回放时合并成一行:重试序号递增(1→2→3…)属于同一次
+      // 失败的重试,原地更新计数(与实时流处理一致);序号回到 1 说明新一轮请求重新开始重试,
+      // 才另起一行。合并行沿用最新那条的 forkTail,分支点下标仍与服务端 turns 对齐。
+      const prevRow = out[out.length - 1];
+      if (t.retry && prevRow?.role === 'notice' && prevRow.retry
+        && Number(t.retry.retry) > Number(prevRow.retry.retry)) {
+        out[out.length - 1] = {
+          ...prevRow, content: t.content || '', retry: t.retry,
+          level: t.level, kind: t.kind, time: t.time, forkTail: ti
+        };
+        turnToOut[ti] = out.length - 1;
+        continue;
+      }
+      const idx = out.length;
+      out.push({
+        role: 'notice', content: t.content || '', retry: t.retry,
+        level: t.level, kind: t.kind, time: t.time, forkTail: ti
+      });
+      turnToOut[ti] = idx;
       continue;
     }
     // 其余角色跳过
   }
+  // 标记行保持原位投影(服务端 projectEvents 已经按事件日志顺序投影,不复排)。
   // 文件变更汇总:历史回放的工具 meta 已随 tool/result 持久化,按消息聚合挂载
   for (const m of out) if (m.role === 'assistant') attachFileChanges(m);
   return out;
@@ -470,6 +527,8 @@ interface ChatPanelProps {
   compact?: boolean;
   /** 打开远程文件(复用 App 的文件标签页);「N 个文件已更改」卡片条目点击时调用 */
   onOpenFile?: (path: string) => void;
+  /** 打开右侧子代理面板(runId 来自子代理 tool/result 的 meta) */
+  onOpenSubagent?: (runId: string) => void;
   /** 打开本机文件(内部自动加 local: 前缀,走本机读取通道) */
   onOpenLocalFile?: (path: string) => void;
 }
@@ -527,7 +586,7 @@ function markRetryStarted(msgs: ChatMessage[]): ChatMessage[] {
   return msgs;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, compact = false }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, onOpenSubagent, compact = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -862,7 +921,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setAgentState(m.status === 'running' ? 'working' : 'idle');
             if (m.status !== 'running') {
               setSessionImgJob(activeRef.current, null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
-              push((msgs) => { const c = dropStaleCompaction([...msgs]); const l = c[c.length - 1]; if (l?.streaming) l.streaming = false;
+              push((msgs) => { const c = dropStaleCompaction([...msgs]); const li = tailAssistantIndex(c); if (li >= 0 && c[li].streaming) c[li].streaming = false;
               return c; });
             }
             break;
@@ -898,6 +957,19 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               messageTokens: typeof m.messageTokens === 'number' ? m.messageTokens : undefined
             });
             break;
+          case 'skill_loaded':
+            // 用户 `/技能名` 直接调用技能:正文由服务端注入本轮消息,这里把技能记录挂到刚推入的
+            // 用户气泡上,渲染「已加载技能」行(模型主动调用 skill 工具走工具卡片,两条路径都要可见)
+            if (Array.isArray(m.skills) && m.skills.length) {
+              push((msgs) => {
+                const c = [...msgs];
+                for (let k = c.length - 1; k >= 0; k--) {
+                  if (c[k].role === 'user') { c[k] = { ...c[k], skillsInjected: m.skills }; break; }
+                }
+                return c;
+              });
+            }
+            break;
           case 'todo_update':
             // todo_write 工具写入的任务计划整表快照
             setTodos(Array.isArray(m.todos) ? m.todos : []);
@@ -913,8 +985,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               forkTurnRef.current += 1; lastIterRef.current = m.iter;
               push((msgs) => {
                 const c = [...msgs];
-                const l = c[c.length - 1];
-                if (l?.role === 'assistant') {
+                const li = tailAssistantIndex(c);
+                if (li >= 0) {
+                  const l = c[li];
                   l.forkTail = forkTurnRef.current - 1;
                   // 记录本步起点:这一步的模型请求若中途失败并重试,前端要把本步已流出的半成品整段回滚
                   l.stepSegBase = (l.segments || []).length;
@@ -926,8 +999,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'text_delta':
             push((msgs) => {
               const copy = markRetryStarted([...msgs]);
-              const last = copy[copy.length - 1];
-              if (last?.role === 'assistant') appendText(last, m.text);
+              const li = tailAssistantIndex(copy);
+              if (li >= 0) appendText(copy[li], m.text);
               return copy;
             });
             break;
@@ -936,20 +1009,20 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 后续步骤的思考自然出现在上一组工具调用之后,而不是全堆在消息开头
             push((msgs) => {
               const copy = markRetryStarted([...msgs]);
-              const last = copy[copy.length - 1];
-              if (last?.role === 'assistant') appendReasoning(last, m.text);
+              const li = tailAssistantIndex(copy);
+              if (li >= 0) appendReasoning(copy[li], m.text);
               return copy;
             });
             break;
           case 'tool_call':
             push((msgs) => {
               const copy = markRetryStarted([...msgs]);
-              const li = copy.length - 1;
-              const last = copy[li];
+              const li = tailAssistantIndex(copy);
+              const last = li >= 0 ? copy[li] : undefined;
               // 断线补偿(服务端补发)时同一 callId 可能已被实时事件渲染过,按 id 去重避免重复卡片。
               // 不可变更新(新 segments/tools 数组):配合工具列表 memo,
               // 只有本段真正变化时才重渲染,其余历史段原样跳过
-              if (last?.role === 'assistant'
+              if (last
                 && !(last.segments || []).some((s) => s.kind === 'tools' && (s.tools || []).some((t) => t.id === m.callId))) {
                 const segs = last.segments || [];
                 const newCall: ToolCallInfo = { id: m.callId, tool: m.tool, args: m.args, ok: undefined, ms: undefined, result: undefined };
@@ -966,9 +1039,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             forkTurnRef.current += 1;
             push((msgs) => {
               const copy = [...msgs];
-              const li = copy.length - 1;
-              const last = copy[li];
-              if (last?.role === 'assistant' && Array.isArray(last.segments)) {
+              const li = tailAssistantIndex(copy);
+              const last = li >= 0 ? copy[li] : undefined;
+              if (last && Array.isArray(last.segments)) {
                 // 不可变更新:替换目标工具对象与所在组数组,使工具列表 memo 正确感知变化
                 const patch = { ok: m.ok, ms: m.ms, result: m.result, meta: m.meta };
                 let segIndex = -1;
@@ -997,9 +1070,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 状态行已由事件入口按会话记账(见 api.on('agent') 开头),这里只把 pending 标记挂到气泡上
             push((msgs) => {
               const c = [...msgs];
-              const l = c[c.length - 1];
-              if (l?.role === 'assistant') {
-                c[c.length - 1] = { ...l, imageJob: { mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0, pending: true } };
+              const li = tailAssistantIndex(c);
+              if (li >= 0) {
+                c[li] = { ...c[li], imageJob: { mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0, pending: true } };
               }
               return c;
             });
@@ -1010,11 +1083,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 状态行销账已由事件入口完成(见 api.on('agent') 开头)
             push((msgs) => {
               const c = [...msgs];
-              const l = c[c.length - 1];
-              if (l?.role === 'assistant') {
-                c[c.length - 1] = {
-                  ...l,
-                  ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: mergeAttachments(l.attachments, m.attachments) } : {}),
+              const li = tailAssistantIndex(c);
+              if (li >= 0) {
+                c[li] = {
+                  ...c[li],
+                  ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: mergeAttachments(c[li].attachments, m.attachments) } : {}),
                   imageJob: { mode: m.mode === 'i2i' ? 'i2i' : 't2i', refs: Number(m.refs) || 0, ms: Number(m.ms) || 0, pending: false }
                 };
               }
@@ -1027,8 +1100,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setSessionImgJob(activeRef.current, null); // 本轮结束:状态行不再显示"正在生成图片"(成图失败时也不会卡住)
             push((msgs) => {
               const copy = [...msgs];
-              const last = copy[copy.length - 1];
-              if (last?.role === 'assistant') {
+              const li = tailAssistantIndex(copy);
+              if (li >= 0) {
+                const last = copy[li];
                 last.streaming = false;
                 // 文件变更汇总:所有 tool_result 已落定,聚合「N 个文件已更改」卡片数据
                 attachFileChanges(last);
@@ -1049,9 +1123,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setAgentState('idle'); setSessionImgJob(activeRef.current, null);
             push((msgs) => {
               const c = [...msgs];
-              const l = c[c.length - 1];
-              if (l?.streaming) l.streaming = false;
-                attachFileChanges(l);
+              const li = tailAssistantIndex(c);
+              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachFileChanges(l); }
               // 用户停下 Agent 时,尚在倒计时中的重试随之取消(对齐 harness llm/retry-started 的 cancelled 态)
               for (let i = c.length - 1; i >= 0; i--) {
                 const rt = c[i]?.retry;
@@ -1064,9 +1137,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setAgentState('error'); setErrorMsg(m.message); setSessionImgJob(activeRef.current, null);
             push((msgs) => {
               const c = [...msgs];
-              const l = c.slice(-1)[0];
-              if (l?.streaming) l.streaming = false;
-                attachFileChanges(l);
+              const li = tailAssistantIndex(c);
+              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachFileChanges(l); }
               // 重试耗尽/不可重试的直接失败:倒计时中的重试随本轮中止取消(对齐 harness cancelled 态)
               for (let i = c.length - 1; i >= 0; i--) {
                 const rt = c[i]?.retry;
@@ -1096,11 +1168,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'notice':
             // 通知不打断流式中的 assistant 气泡:插到它前面,
             // 避免后续 text/reasoning 增量找不到目标消息(它们只认末尾的 assistant)
+            // persisted=true:服务端已把它写进会话日志(占一个消息面下标),
+            // 本地分支点计数器必须同步 +1,否则下一条用户消息会回退到错误的位置
+            if (m.persisted === true) forkTurnRef.current += 1;
             push((msgs) => {
               const c = [...msgs];
-              const last = c[c.length - 1];
-              if (last?.role === 'assistant' && last.streaming) {
-                c.splice(c.length - 1, 0, { role: 'notice', content: m.text || '' });
+              const li = tailAssistantIndex(c);
+              if (li >= 0 && c[li].streaming) {
+                c.splice(li, 0, { role: 'notice', content: m.text || '' });
               } else {
                 c.push({ role: 'notice', content: m.text || '' });
               }
@@ -1111,21 +1186,21 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 自动压缩开始(超水位/爆窗恢复要走摘要):摘要是一次真实的 LLM 请求,可能十几秒
             // 到几十秒。先在对话流里落一行运行态「正在把早期对话压缩为摘要…」,等 done 原地改写,
             // 而不是让界面在这段静默里什么都不显示。同一次压缩只保留一条运行行(重复 start 幂等);
-            // 流式中的 assistant 不打断,插到它前面。
+            // 插入在流式 assistant 气泡之前:compaction/done 事件在日志里先于 assistant/message,
+            // 服务端原位投影后标记行排在回复之前;这里保持一致,刷新/切回后位置不变。
             push((msgs) => {
               if (msgs.some((x) => x.compaction?.running)) return msgs;
               const c = [...msgs];
-              const item = { role: 'user' as const, content: '', compaction: { running: true } };
-              const last = c[c.length - 1];
-              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
-              else c.push(item);
+              const li = tailAssistantIndex(c);
+              if (li >= 0) c.splice(li, 0, { role: 'user' as const, content: '', compaction: { running: true } });
+              else c.push({ role: 'user' as const, content: '', compaction: { running: true } });
               return c;
             });
             scrollToBottomNow();
             break;
           case 'compaction_done':
             // 自动压缩完成:把上面那行运行态原地改写为「上下文压缩」完成态(条数 + 可展开摘要),
-            // 不新增一行。从未收到 start(断线漏事件、切走再切回)时回退为原位插入。运行中不做
+            // 不新增一行。从未收到 start(断线漏事件、切走再切回)时回退为追加到末尾。运行中不做
             // 整表重拉,避免打断正在流式的输出;刷新/切回会话后由 compaction/done 事件投影同款行。
             // m.at = 标记行在服务端消息面里的下标:标记行插在保留区首条消息面之前,会把下标
             // >= at 的既有分支点整体挤后一位。不平移的话,本轮早先推入的用户/回复气泡会带着旧下标,
@@ -1143,15 +1218,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               const c = at < 0 ? [...msgs]
                 : msgs.map((x) => (typeof x.forkTail === 'number' && x.forkTail >= at ? { ...x, forkTail: x.forkTail + 1 } : x));
               if (idx >= 0) { c[idx] = { ...c[idx], ...done, ...(at >= 0 ? { forkTail: at } : {}) }; return c; }
-              const item = { role: 'user' as const, ...done, ...(at >= 0 ? { forkTail: at } : {}) };
-              const last = c[c.length - 1];
-              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
-              else c.push(item);
-              return c;
+              // 无运行行(断线/切会话漏事件):插入在下标 at 处,与服务端原位投影一致,
+              // 避免落到末尾(后续消息就排在它后面而非前面,与重载顺序一致)。
+              const item: ChatMessage = { role: 'user' as const, ...done, ...(at >= 0 ? { forkTail: at } : {}) };
+              const insertAt = at >= 0 ? Math.min(at, c.length) : c.length;
+              return [...c.slice(0, insertAt), item, ...c.slice(insertAt)];
             });
             scrollToBottomNow();
             break;
           case 'compaction_failed':
+            // m.persisted=true:服务端已把这条失败行落盘(占一个消息面下标),本地分支点计数器同步 +1
+            if (m.persisted === true) forkTurnRef.current += 1;
             // 压缩未完成(摘要生成失败 / 无收益 / 为空):服务端**没有**裁剪任何历史。
             // 必须把上面那行运行态原地改写为失败态:否则「正在压缩…」会一直挂着转圈,
             // 而用户也完全不知道这一轮其实没压缩成——继续发消息就会直接撞上下文窗口。
@@ -1165,19 +1242,23 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].compaction?.running) { idx = i; break; } }
               const c = [...msgs];
               if (idx >= 0) { c[idx] = { ...c[idx], ...failedItem }; return c; }
-              const item = { role: 'user' as const, ...failedItem };
-              const last = c[c.length - 1];
-              if (last?.role === 'assistant' && last.streaming) c.splice(c.length - 1, 0, item);
-              else c.push(item);
-              return c;
+              // 无运行行(断线/切会话漏事件):插入在流式 assistant 前(与 compaction_start 一致),
+              // 找不到流式 assistant 时追加到末尾。
+              const li2 = tailAssistantIndex(c);
+              const fItem = { role: 'user' as const, ...failedItem };
+              return li2 >= 0 ? [...c.slice(0, li2), fItem, ...c.slice(li2)] : [...c, fItem];
             });
             scrollToBottomNow();
             break;
           case 'retry':
             // 模型请求失败进入重试:渲染为 harness 风格的单行状态行(实时倒计时 + 可展开失败详情),
-            // 同一失败的重试原地更新不堆叠;流式 assistant 存在时插到它前面(不打断对话流)。
+            // 流式 assistant 存在时插到它前面(不打断对话流)。一次失败的重试全程只占一行:
+            // 重复事件(断线补发)与后续重试(1→2→3…)都在同一行里原地更新计数,不堆叠成多行;
+            // 只有重试序号回到 1(新一轮请求重新开始重试)才另起一行,历史重试行不会被吃掉。
             // m.discard=true 表示这次失败前已经流出过内容:重试会重发这一步,必须先把它整段回滚,
             // 否则重试成功后的正文会和这段半成品拼在一起重复。
+            // m.persisted=true:服务端已落库(占一个消息面下标),本地分支点计数器同步 +1。
+            if (m.persisted === true) forkTurnRef.current += 1;
             push((msgs) => {
               const c = [...msgs];
               const payload = {
@@ -1197,11 +1278,20 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 }
               }
               for (let i = c.length - 1; i >= 0; i--) {
-                if (c[i]?.retry) { c[i] = { role: 'notice', retry: payload }; return c; }
+                const prev = c[i]?.retry;
+                if (!prev) continue;
+                // 同一轮失败重试全程原地更新:重复推送(断线补发)或后续重试(序号递增 1→2→3…)
+                // 都不新增行,只在最近一条重试行里更新计数;序号回落到 1(新一轮请求重新开始重试)
+                // 才追加成新的一行,保证一轮一次记录、历史保留。
+                if (payload.retry >= prev.retry) {
+                  c[i] = { role: 'notice', retry: payload };
+                  return c;
+                }
+                break; // 序号回落到 1:新一轮请求的重试行,追加成新的一行
               }
-              const last = c[c.length - 1];
-              if (last?.role === 'assistant' && last.streaming) {
-                c.splice(c.length - 1, 0, { role: 'notice', retry: payload });
+              const li = tailAssistantIndex(c);
+              if (li >= 0 && c[li].streaming) {
+                c.splice(li, 0, { role: 'notice', retry: payload });
               } else {
                 c.push({ role: 'notice', retry: payload });
               }
@@ -1408,6 +1498,44 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setTodos(Array.isArray(r.todos) ? r.todos : []);
   };
 
+  // 回退/删除的定位参数:at 是本地推算的分支点下标(实时流里会漂移),ordinal 是
+  // 「这条是本地视图里的第几条用户消息」——只取决于视图内容,不受计数器漂移影响。
+  // 服务端以 ordinal 为权威定位,at/text 只作兜底与校验(见 server/agent/agent.ts 的 locateUserEvent)。
+  // 线上故障:模型请求失败后再点回退,漂移的 at 命中了失败提示行(notice),报「目标不是用户消息,
+  // 无法回退」——之前只有切换会话/刷新重拉历史才能恢复。
+  const rewindLocator = (m: ChatMessage, i: number) => {
+    const at = m.forkTail ?? i;
+    // 只对用户气泡(非压缩标记行)带序号;messages[i] 不是本条时说明视图已变,退回纯 at
+    if (m.role !== 'user' || m.compaction || messages[i] !== m) return { at };
+    let ordinal = 0;
+    for (let k = 0; k < i; k++) {
+      const x = messages[k];
+      if (x && x.role === 'user' && !x.compaction) ordinal += 1;
+    }
+    return { at, ordinal, text: m.content || '' };
+  };
+
+  // 回退/删除前把本地推算的 at 校准成服务端权威下标:
+  // get_history 的 turns 是服务端投影的权威顺序,按「第几条用户消息」取它的下标,
+  // 即使服务端还是旧版本(不认 ordinal)也能正确回退——前端热更新/刷新即时生效,不用等重启。
+  // 拉取失败时保留本地 at,由服务端定位兜底,绝不因为一次网络抖动挡住回退。
+  const rewindTarget = async (m: ChatMessage, i: number) => {
+    const loc = rewindLocator(m, i);
+    if (typeof loc.ordinal !== 'number') return loc;
+    try {
+      const h: any = await api.request('get_history', { sid: sidArg(sid) }, 8000);
+      const turns: any[] = Array.isArray(h?.turns) ? h.turns : [];
+      const users = turns.map((t, ti) => ({ t, ti })).filter((x) => x.t && x.t.role === 'user' && !x.t.compaction);
+      const text = loc.text || '';
+      const hit = users[loc.ordinal];
+      if (hit && (!text || String(hit.t.content || '') === text)) return { ...loc, at: hit.ti };
+      const same = text ? users.filter((x) => String(x.t.content || '') === text) : [];
+      if (same.length === 1) return { ...loc, at: same[0].ti };
+      if (hit) return { ...loc, at: hit.ti };
+    } catch { /* 拉取失败:沿用本地 at,由服务端按 ordinal 定位 */ }
+    return loc;
+  };
+
   // 删除消息:删掉该条用户消息及其对应的一轮回复(仅作用于所在轮,其后内容保留)
   const deleteMsg = async (m: ChatMessage, i: number) => {
     const ok = await confirm({
@@ -1418,7 +1546,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     });
     if (!ok) return;
     try {
-      applyTurns(await api.request('message_delete', { at: m.forkTail ?? i }, 8000));
+      applyTurns(await api.request('message_delete', await rewindTarget(m, i), 8000));
     } catch (e) { toast.error((e as Error).message); }
   };
 
@@ -1432,7 +1560,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     });
     if (!ok) return;
     try {
-      applyTurns(await api.request('message_rewind', { at: m.forkTail ?? i }, 8000));
+      applyTurns(await api.request('message_rewind', await rewindTarget(m, i), 8000));
       // 回退后把该条消息回填输入框,便于修改后重新发起
       updateInput(m.content || '');
       requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
@@ -1992,7 +2120,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if (m) {
       setSlashQuery(m[1] || '');
       setSlashOpen(true);
-      if (slashActive < 0) setSlashActive(0);
+      setSlashActive(0); // 过滤词变化:候选重排,高亮回到首项(否则会停在重排后的尾部)
       openSlash(); // 首次打开时拉取技能列表
     } else {
       setSlashOpen(false);
@@ -2049,7 +2177,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if (m) {
       setAtQuery(m[1] || '');
       setAtOpen(true);
-      if (atActive < 0) setAtActive(0);
+      setAtActive(0); // 过滤词变化:候选重排,高亮回到首项(否则会停在重排后的尾部)
       openAt();
     } else {
       setAtOpen(false);
@@ -2197,6 +2325,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       onRewind={() => rewindMsg(m, i)}
                     />
                   </div>
+                  {/* 手动调用技能(`/技能名`):正文已注入本轮上下文,给出可见确认与正文预览 */}
+                  {!!m.skillsInjected?.length && <LoadedSkillsRow skills={m.skillsInjected} />}
                 </>
               )}
               {m.role === 'assistant' && (
@@ -2204,7 +2334,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   <div className="bubble ai-bubble">
                     {(m.segments || []).map((seg, si) => {
                       if (seg.kind === 'tools') return (
-                        <ToolCallList key={si} tools={seg.tools || []} workspace={(connected ? workspace : localWorkspace) ?? undefined} />
+                        <ToolCallList key={si} tools={seg.tools || []} workspace={(connected ? workspace : localWorkspace) ?? undefined} onOpenSubagent={onOpenSubagent} />
                       );
                       // 思考段:穿插在文本/工具组之间,折叠展示(照搬 dsh 的 ReasoningRow;
                       // 流式时仅最后一段标记 running 获得扫光);ReasoningSegment 按 text 引用 memo
@@ -2361,7 +2491,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               onKeyDown={(e) => {
                 // / 命令菜单打开时的键盘交互(对齐 harness):↑↓ 移动、Enter 选中、Esc 关闭、Tab 补全
                 if (slashOpen) {
-                  const list = rankSlashItems(slashAll, slashQuery);
+                  const list = rankSlashItems(slashAll, slashQuery).slice(0, SLASH_MENU_MAX); // 与菜单渲染上限一致,高亮不会落到未渲染的行
                   if (e.key === 'ArrowDown') { e.preventDefault(); setSlashActive((i) => (list.length ? (i + 1) % list.length : -1)); return; }
                   if (e.key === 'ArrowUp') { e.preventDefault(); setSlashActive((i) => (list.length ? (i - 1 + list.length) % list.length : -1)); return; }
                   if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
@@ -2380,7 +2510,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 }
                 // @ 引用菜单打开时的键盘交互(与 / 菜单同款):↑↓ 移动、Enter/Tab 选中、Esc 关闭
                 if (atOpen) {
-                  const list = rankByName(atCandidates, atQuery);
+                  const list = rankByName(atCandidates, atQuery).slice(0, AT_MENU_MAX); // 与菜单渲染上限一致,高亮不会落到未渲染的行
                   if (e.key === 'ArrowDown') { e.preventDefault(); setAtActive((i) => (list.length ? (i + 1) % list.length : -1)); return; }
                   if (e.key === 'ArrowUp') { e.preventDefault(); setAtActive((i) => (list.length ? (i - 1 + list.length) % list.length : -1)); return; }
                   if (e.key === 'Escape') { e.preventDefault(); closeAt(); return; }

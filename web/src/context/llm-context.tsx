@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { PROVIDERS, DEFAULT_PROVIDER } from '../data/llm-providers';
+import { isRealSessionId } from '../utils/preview';
 import { useFeedback } from './feedback';
 import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../types';
 import './llm-context.scss';
@@ -192,6 +193,12 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     imageGen: effModelContext.imageGen === true
   });
 
+  // 会话级下发目标:只有服务端真实存在的会话(见 trackSession 维护的 curSidRef)才带 sid ——
+  // 这份配置只作用于该会话,别的会话(即使正在后台运行)的模型不受影响。
+  // 草稿/新建态('__new__'、'd_…')还没有服务端会话:不带 sid,只更新全局默认,新会话创建后继承它。
+  const targetSid = (): string | undefined =>
+    isRealSessionId(curSidRef.current) ? (curSidRef.current as string) : undefined;
+
   // 切换提供商:恢复该条目的 Key 与上次使用的模型(优先后端保存的选择级配置)
   const switchProvider = (pid: string) => {
     const p = allProviders.find((x) => x.id === pid);
@@ -207,6 +214,10 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   // 刷新丢失),切会话时 trackSession 再把"离开会话"的模型补存、并恢复目标会话的记忆。
   const sessionModelsRef = useRef<Record<string, SessionModelMem>>(loadSessionModels());
   const curSidRef = useRef<string | null>(null);
+  // 切会话计数器:切换时 +1,让下面的配置 effect 即使模型没变也重新下发一次——
+  // 保证「服务端该会话有自己的模型配置」。只靠"模型变化"触发的话,切回一个模型相同的
+  // 会话就不会下发,它在服务端一直没有自己的配置,会被别的会话对全局默认的改动带着跑。
+  const [sidEpoch, setSidEpoch] = useState(0);
   // 模型/提供方/自定义模型名变化:立即固化到当前会话
   useEffect(() => {
     const sid = curSidRef.current;
@@ -219,6 +230,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   // 会话切换(由 App 在 activeSessionId 变化时调用):保存离开会话用的模型 + 恢复目标会话记忆。
   // 新会话草稿(尚未创建服务端会话,固定 sid '__new__')不恢复历史残留——新建对话跟随当前模型
   const trackSession = (sid: string | null) => {
+    setSidEpoch((n) => n + 1); // 切会话后强制重新下发一次该会话的模型配置(见 sidEpoch 注释)
     const prev = curSidRef.current;
     curSidRef.current = sid;
     if (prev && prev !== sid) {
@@ -267,7 +279,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   // 应用 + 持久化(切换/修改即生效)
   useEffect(() => {
     // 单轮最大工具迭代次数固定用全局默认(AGENT.MAX_ITERS=500),不再由前端单独配置
-    api.send('llm', { llm: llmPayload() });
+    api.send('llm', { llm: llmPayload(), sid: targetSid() });
     LSS('llm.provider', providerId);
     LSS('llm.customModel', customModel);
     if (isMock) localStorage.removeItem('sshai.llm.model.' + providerId);
@@ -301,14 +313,14 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       } catch { /* 后端写失败不阻塞 UI,下次变更会重试 */ }
     }, 400);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen, apiKey, model, customModel, isMock]);
+  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen, apiKey, model, customModel, isMock, sidEpoch]);
 
   // 后端重启/WS 断线重连后:agent.llm 是后端内存态,重启即清空。
   // 前端不刷新时不会重新触发上面的配置 effect,这里监听 open 重连后按当前生效
   // 配置重新下发,否则重连后的第一条消息会因「尚未配置 LLM」被拒(且无提示,表现为发送没反应)。
   useEffect(() => {
     const off = api.on('open', () => {
-      api.send('llm', { llm: llmPayload() });
+      api.send('llm', { llm: llmPayload(), sid: targetSid() });
     });
     return () => { off(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,8 +1,9 @@
 // 对话历史持久化:Agent 跨轮记忆落盘到 server/data/chat-history.json
-// - 零依赖(Node 内置 fs),原子写(临时文件 + rename)防损坏
+// - 零依赖(Node 内置 fs),原子写(临时文件 + rename)防损坏,见 store/atomic-write.ts
 // - 数据量受 AGENT.HISTORY_BUDGET_CHARS 约束,量小,整文件覆盖即可
 import fs from 'node:fs';
 import { DATA_DIR, CHAT_HISTORY_FILE as FILE } from '../config.ts';
+import { writeFileAtomic } from './atomic-write.ts';
 
 // 确保数据目录存在(避免首写时因目录缺失而失败)
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -23,9 +24,7 @@ function read(): any[] {
 function write(turns: any[]) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const body = JSON.stringify({ version: 1, ts: Date.now(), turns });
-  const tmp = FILE + '.tmp';
-  fs.writeFileSync(tmp, body, 'utf8');
-  fs.renameSync(tmp, FILE);
+  writeFileAtomic(FILE, body);
 }
 
 /** 加载历史(失败静默返回空,避免磁盘异常拖垮启动) */

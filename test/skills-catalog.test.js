@@ -38,5 +38,19 @@ writeFileSync(path.join(localFs.workspace, '.agents', 'skills', 'my-local-skill.
 const catalog2 = await refreshSkillsCatalog();
 const wsSkill = catalog2.find((s) => s.name === 'my-local-skill');
 check('local-workspace 来源被扫描且优先级覆盖 local-user', wsSkill && wsSkill.source === 'local-workspace', JSON.stringify(wsSkill));
+
+// 技能目录提醒:本轮 `/技能名` 已注入正文的技能必须点名排除"再调 skill 工具"。
+// 否则模型同时读到"指令就在下面"与"未加载前不要遵循",会自行判定重复加载只是白占
+// 上下文而跳过 —— 表现为用户界面上看不到任何技能调用痕迹,要催一次才补调。
+const { renderSkillCatalog } = await import('../server/agent/tools.ts');
+const catalogNow = getSkillsCatalog();
+const withInjected = renderSkillCatalog(catalogNow, ['my-local-skill']);
+check('已注入技能时不再要求"先调用 skill 工具"', !withInjected.includes('请先调用 skill 工具加载其完整指令再行动'));
+check('已注入技能时点名正文已随消息注入',
+  withInjected.includes('不要再调用 skill 工具重复加载') && withInjected.includes('`my-local-skill`'));
+check('已注入技能时仍保留目录列表', withInjected.includes('<available_skills>') && withInjected.includes('`my-local-skill`'));
+const withoutInjected = renderSkillCatalog(catalogNow, []);
+check('无注入时保留原始提醒', withoutInjected.includes('请先调用 skill 工具加载其完整指令再行动'));
+check('目录为空时渲染空串', renderSkillCatalog([], ['my-local-skill']) === '');
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
 if (fail) process.exit(1);

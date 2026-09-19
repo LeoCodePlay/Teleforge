@@ -7,6 +7,7 @@
 //   4) 已从内存释放的空闲会话同样可压缩(旧实现直接抛「会话不存在」);
 //   5) 压缩只作用于指定 sid,不污染当前活跃会话;
 //   6) 非破坏压缩:显示视图仍完整保留早期消息。
+//   7) 中途压过多次时,每次压缩各留一条标记行;失败行(compaction/failed)同样进记录。
 // 全程用假 LLM,不打真实网络;会话写入临时 DATA_DIR,不碰用户数据。
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ import { join } from 'node:path';
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-compact-'));
 
-const { Agent, projectEvents } = await import('../server/agent/agent.ts');
+const { Agent, projectEvents, messageFaceIndexes } = await import('../server/agent/agent.ts');
 const { Session } = await import('../server/agent/session.ts');
 const store = await import('../server/store/session-store.ts');
 
@@ -200,4 +201,75 @@ function fillConversation(session, groups) {
   check('摘要正常:被压早期消息仍完整保留在日志里(非破坏)', s3.events.some((e) => e.type === 'user/message' && e.data.source === 'user'));
 }
 
+
+// ---- 9: 中途压了多次 —— 每条检查点各留一行;失败行也进记录(投影与下标同构) ----
+// 历史缺陷:显示投影只保留"最后一条生效检查点",一次对话里压过好几次时,刷新/切回会话后
+// 早期每一次压缩的痕迹全都没了(用户看到的只是"上下文忽然变短了")。
+{
+  const s = new Session();
+  fillConversation(s, 4);
+  let trace = s.deriveMessagesWithTrace({ budgetChars: Infinity });
+  s.markCompacted(trace.slice(0, 4).map((t) => t.seq), '【上下文已自动压缩】摘要#1', { dropCount: 4, manual: false });
+  s.append('turn/start', { turn: 5 });
+  s.append('user/message', { content: '继续', source: 'user' });
+  s.append('assistant/message', { turn: 5, step: 1, message: { role: 'assistant', content: '继续的回复' } });
+  trace = s.deriveMessagesWithTrace({ budgetChars: Infinity });
+  const drop2 = trace.length - 2;
+  s.markCompacted(trace.slice(0, drop2).map((t) => t.seq), '【上下文已自动压缩】摘要#2', { dropCount: drop2, manual: false });
+  // 之后又触发过一次压缩但被用户按停:不再弹 ⚠ 提示,记录里留一行「压缩未完成」
+  s.append('compaction/failed', { reason: '摘要生成失败:已停止', manual: false });
+
+  const turns = projectEvents(s.events);
+  const rows = turns.filter((t) => t.compaction);
+  check('两次压缩各留一条标记行(不再只剩最后一次)', rows.length === 3, `rows=${rows.length}`);
+  check('标记行按发生顺序排列,且各自带摘要正文',
+    /摘要#1/.test(String(rows[0]?.content || '')) && /摘要#2/.test(String(rows[1]?.content || '')),
+    JSON.stringify(rows.map((r) => String(r.content || '').slice(0, 14))));
+  check('失败行投影为「压缩未完成」并带原因',
+    rows[2]?.compaction?.failed === true && /已停止/.test(String(rows[2]?.compaction?.reason || '')),
+    JSON.stringify(rows[2]));
+  check('显示投影与消息面下标同构(删除/回退/分支仍需正确索引)',
+    turns.length === messageFaceIndexes(s.events).length,
+    `turns=${turns.length} faces=${messageFaceIndexes(s.events).length}`);
+  check('失败行不进模型上下文',
+    !s.deriveMessages({ budgetChars: Infinity }).some((m) => String(m.content || '').includes('压缩未完成')));
+  check('模型面仍只遵循最新检查点', /摘要#2/.test(s.deriveMessages({ budgetChars: Infinity })[0]?.content || ''));
+  // 删掉第一条标记行 = 取消第一次压缩(下标必须命中那条检查点事件)
+  const firstMarkerIdx = turns.findIndex((t) => t.compaction && !t.compaction.failed);
+  check('第一条标记行的下标对应第一次压缩的检查点事件',
+    s.events[messageFaceIndexes(s.events)[firstMarkerIdx]]?.type === 'compaction/done');
+}
+
+// ---- 10: 原位投影——标记行落在压缩发生那一刻的最后一条消息之后,且重投影位置不变 ----
+// 用户诉求:压缩记录只在「当前这次压缩」时出现在对话流末尾(当时最后一条消息之后),
+// 之后作为普通历史记录固定在那里;刷新/切回会话重投影时不得再次搬动。
+{
+  const s = new Session();
+  // 两组历史 + 本轮提问,再压缩早期 4 条消息面(前两组)
+  fillConversation(s, 2);
+  s.append('turn/start', { turn: 3 });
+  s.append('user/message', { content: '本轮的新问题', source: 'user' });
+  const trace = s.deriveMessagesWithTrace({ budgetChars: Infinity });
+  s.markCompacted(trace.slice(0, 4).map((t) => t.seq), '摘要#原位', { dropCount: 4, manual: true });
+
+  const once = projectEvents(s.events);
+  const markerIdx = once.findIndex((t) => t.compaction && !t.compaction.failed);
+  check('标记行落在压缩发生那一刻的最后一条消息之后(本轮提问之后)',
+    markerIdx > 0 && once[markerIdx - 1]?.role === 'user' && once[markerIdx - 1]?.content === '本轮的新问题',
+    JSON.stringify(once.map((t) => `${t.role}:${String(t.content || '').slice(0, 6)}`)));
+  // 压缩之后再继续对话:新消息排在标记行之后(记录固定在原处,不再被搬到末尾)
+  s.append('turn/start', { turn: 4 });
+  s.append('user/message', { content: '后续新问题', source: 'user' });
+  const twice = projectEvents(s.events);
+  const mIdx = twice.findIndex((t) => t.compaction && !t.compaction.failed);
+  check('后续新消息排在标记行之后(记录固定在原处,不再每次重载被搬到末尾)',
+    mIdx >= 0 && twice.slice(mIdx + 1).some((t) => t.content === '后续新问题'),
+    JSON.stringify(twice.map((t) => `${t.role}:${String(t.content || '').slice(0, 6)}`)));
+  check('重投影后标记行下标不变(刷新/切回会话位置稳定)', mIdx === markerIdx, `first=${markerIdx} again=${mIdx}`);
+  // 原位投影下标记行排在保留区之后:模型面起点(retainedFrom)必须先于标记行,才能还原 [摘要, ...保留区]
+  check('标记行携带 retainedFrom(保留区起点在标记行之前)',
+    typeof once[markerIdx]?.compaction?.retainedFrom === 'number'
+    && once[markerIdx].compaction.retainedFrom < markerIdx,
+    JSON.stringify(once[markerIdx]?.compaction));
+}
 finish();

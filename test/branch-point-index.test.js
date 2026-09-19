@@ -14,7 +14,7 @@ import { join } from 'node:path';
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-branch-index-'));
 
-const { Agent, messageFaceIndexes } = await import('../server/agent/agent.ts');
+const { Agent, projectEvents, messageFaceIndexes, visibleUserEventIndexes } = await import('../server/agent/agent.ts');
 const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
 
 let pass = 0, fail = 0;
@@ -41,6 +41,9 @@ function makeFrontCounter(onStart) {
       } else if (p.event === 'iteration') {
         if (p.iter !== state.lastIter) { state.counter += 1; state.lastIter = p.iter; }
       } else if (p.event === 'tool_result') {
+        state.counter += 1;
+      } else if (p.persisted === true && (p.event === 'notice' || p.event === 'retry' || p.event === 'compaction_failed')) {
+        // 服务端落库的提示行/重试行也占一个消息面(实时事件带 persisted 标记)
         state.counter += 1;
       } else if (p.event === 'compaction_done' && typeof p.at === 'number') {
         state.counter += 1; // 压缩标记行占一个消息面
@@ -195,6 +198,97 @@ async function main() {
     check('第一轮保留', agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第一轮问题')));
   }
 
+  // ---- 场景 4:模型请求失败并自动重试(对话里多出一行重试记录)之后,下标照样对齐 ----
+  console.log('\n[场景 4] 重试记录落库后:下一条用户消息的下标与回退都正确');
+  {
+    let calls = 0;
+    const retryLlm = {
+      isMock: false, model: 'fake-retry', contextWindow: 0, maxTokens: 100, apiKey: 'k', baseUrl: 'http://x',
+      async chat(opts) {
+        calls += 1;
+        // 模拟一次请求失败进入重试:LlmClient 在等待重试前调用 onRetry(discard=半成品已回滚)
+        if (calls === 1) opts.onRetry?.({ retry: 1, maxRetries: 10, delayMs: 800, error: 'simulated reset', discard: true });
+        return { content: `第 ${calls} 次回答`, toolCalls: [] };
+      }
+    };
+    const { agent, starts } = makeAgent(retryLlm);
+    agent.createSession('重试轮');
+    await agent.run('会先失败再重试的问题');
+    const evs = agent.session.events;
+    check('重试轮落了 llm/retry 事件',
+      evs.filter((e) => e.type === 'llm/retry').length === 1,
+      JSON.stringify(evs.map((e) => e.type)));
+    const faces = messageFaceIndexes(evs);
+    check('llm/retry 计入消息面且与投影一一对应(否则回退下标整体错位)',
+      faces.length === projectEvents(evs).length
+        && projectEvents(evs).some((x) => x.role === 'notice' && x.retry && x.retry.state === 'started'),
+      `faces=${faces.length} turns=${projectEvents(evs).length}`);
+
+    await agent.run('重试之后的下一条消息');
+    const s2 = starts[1];
+    check('重试轮之后 start:前端 base === 服务端 base', s2.counterBefore === s2.serverBase, JSON.stringify(s2));
+    let err = '';
+    try { agent.rewindToBefore(s2.serverBase); } catch (e) { err = String(e.message || e); }
+    check('重试记录不影响回退(不回退错、也不报「目标不是用户消息」)', err === '', err);
+    check('回退只移除下一条用户消息',
+      !agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('重试之后的下一条消息')));
+    check('上一轮的重试记录仍在对话里', agent.session.events.some((e) => e.type === 'llm/retry'));
+  }
+
+  // ---- 场景 5:前端 forkTail 已漂移时,用「第几条用户消息」仍能权威定位(回退/删除都不受影响) ----
+  console.log('\n[场景 5] forkTail 漂移后,ordinal 权威定位兜住回退与删除');
+  {
+    const { agent } = makeAgent(makeFakeLlm({ failOnCall: 2 }));
+    agent.createSession('序号定位');
+    await agent.run('第一轮问题');
+    await agent.run('第二轮问题'); // 402 失败轮(线上报错的那一轮)
+    await agent.run('第三轮问题');
+    const events = agent.session.events;
+    const auth = visibleUserEventIndexes(events);
+    check('可见用户消息口径正确:第 3 条就是第三轮用户消息',
+      auth.length === 3 && String(events[auth[2]]?.data?.content || '').includes('第三轮问题'),
+      `users=${auth.length}`);
+    // 复现线上漂移:前端算出的下标指向了用户消息之后那一条(assistant/notice 占位)
+    const driftedAt = faceIdxOfUserText(agent, '第三轮问题') + 1;
+    const hitType = events[messageFaceIndexes(events)[driftedAt]]?.type;
+    check('漂移下标命中的确实不是用户消息(复现线上定位错位)',
+      hitType !== 'user/message', `at=${driftedAt} 命中=${hitType}`);
+    let errOrdinal = '';
+    try { agent.rewindToBefore(driftedAt, { ordinal: 2, text: '第三轮问题' }); } catch (e) { errOrdinal = String(e.message || e); }
+    check('漂移下标 + ordinal 仍回退成功(不再报「目标不是用户消息」)', errOrdinal === '', errOrdinal);
+    check('第三轮整轮已移除',
+      !agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第三轮问题')));
+    check('前两轮保留(只截断目标轮及其之后)',
+      agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第一轮问题'))
+      && agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第二轮问题')));
+
+    // 只带文本(前端序号与服务端对不上时的兜底):同样能定位
+    await agent.run('第五轮问题');
+    const drifted2 = faceIdxOfUserText(agent, '第五轮问题') + 1;
+    let errText = '';
+    try { agent.rewindToBefore(drifted2, { text: '第五轮问题' }); } catch (e) { errText = String(e.message || e); }
+    check('漂移下标 + 文本唯一匹配 回退成功', errText === '', errText);
+    check('第五轮已移除、前两轮仍在',
+      !agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第五轮问题'))
+      && agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第一轮问题')));
+
+    // 删除路径:同样漂移的下标 + ordinal,删的是用户消息所在整轮
+    await agent.run('第四轮问题');
+    const badAt = faceIdxOfUserText(agent, '第四轮问题') - 1;
+    let errDel = '';
+    try { agent.deleteMessageAt(badAt, { ordinal: 2, text: '第四轮问题' }); } catch (e) { errDel = String(e.message || e); }
+    check('漂移下标 + ordinal 删除成功', errDel === '', errDel);
+    check('第四轮整轮已删除、前两轮保留',
+      !agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第四轮问题'))
+      && agent.session.events.some((e) => e.type === 'user/message' && String(e.data?.content || '').includes('第一轮问题')));
+
+    // 老前端(不带 ordinal/text)仍按 at 走原路径:at 正确时照常工作
+    await agent.run('第六轮问题');
+    const okAt = faceIdxOfUserText(agent, '第六轮问题');
+    let errOld = '';
+    try { agent.rewindToBefore(okAt); } catch (e) { errOld = String(e.message || e); }
+    check('不带定位参数的旧路径(at 正确)不受影响', errOld === '', errOld);
+  }
   finish();
 }
 main().catch((e) => { console.error('测试异常:', e); process.exit(1); });
