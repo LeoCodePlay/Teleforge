@@ -4,7 +4,7 @@
 // - 子代理只能调用只读工具(SUBAGENT_TOOLS 白名单),写类/命令类工具一律不派发;
 // - 过程不回传:父代理只拿到最终一条文本结论(harness 的 tool-subagent 同语义:
 //   "returns its result, not its intermediate steps");
-// - 步数/回传长度/超时都有硬上限,父轮被停止时子代理立即中止。
+// - 回传长度与超时有硬上限(步数不设上限,跑到模型自己收尾);父轮被停止时子代理立即中止。
 //
 // 与 harness 的差异(有意为之的最小实现,见 docs/superpowers/specs/2026-09-19-subagent-in-process-design.md):
 // - 只有 in-process 一种 provider(harness 有 fork/spawn/DSH-SDK/ACP/Claude Code/Codex 六种);
@@ -88,7 +88,7 @@ export interface SubagentRunOptions {
   /** 父会话 id(仅用于日志与子工具上下文透传) */
   sid?: string | null;
   signal?: AbortSignal;
-  maxSteps?: number;
+  // 步数不设上限:子代理跑到模型自己收尾(受 TIMEOUT_MS 与父轮停止约束)。
   /**
    * 变更通知(每次落盘后触发):工具层接到 agent 事件总线,右侧面板据此实时刷新。
    * 只传 runId 与状态,面板自己去拉最新记录,避免事件体携带大段对话正文。
@@ -108,8 +108,6 @@ export interface SubagentResult {
   ms: number;
   promptTokens: number;
   completionTokens: number;
-  /** 是否因步数上限收敛(未拿到模型自然收尾) */
-  hitStepLimit: boolean;
 }
 
 /** 子代理内部一次工具调用的结果(结构对齐 registry.execute 的返回值) */
@@ -193,12 +191,11 @@ export async function runSubagent(o: SubagentRunOptions): Promise<SubagentResult
   const prompt = composeSubagentPrompt(o);
 
   const description = String(o.description || '').trim();
-  const maxSteps = Math.max(1, Math.floor(Number(o.maxSteps) > 0 ? Number(o.maxSteps) : AGENT.SUBAGENT.MAX_STEPS));
   const started = Date.now();
   // 运行记录:先落盘再跑(面板可能在子代理还在跑时就打开),对话逐步追加,收尾写状态
   const runId = newRunId();
   beginRun({
-    runId, sid: o.sid ?? null, description, provider, prompt, maxSteps,
+    runId, sid: o.sid ?? null, description, provider, prompt,
     brief: { objective: o.objective, scope: o.scope, deliverable: o.deliverable, context: o.context, prompt: o.prompt }
   });
   const notify = (status: SubagentStatus) => {
@@ -221,19 +218,19 @@ export async function runSubagent(o: SubagentRunOptions): Promise<SubagentResult
   let promptTokens = 0;
   let completionTokens = 0;
   let lastText = '';
-  let hitStepLimit = false;
   // 失败/停止统一在这里收尾:记录里留下状态与原因,再原样抛给工具层
   const fail = (e: any): never => {
     const msg = e?.message || String(e);
     const aborted = /已停止/.test(msg);
     finishRun(runId, {
-      status: aborted ? 'stopped' : 'error', steps, toolCalls, promptTokens, completionTokens, hitStepLimit, note: msg
+      status: aborted ? 'stopped' : 'error', steps, toolCalls, promptTokens, completionTokens, note: msg
     });
     notify(aborted ? 'stopped' : 'error');
     throw e;
   };
 
-  for (let step = 1; step <= maxSteps; step++) {
+  // 不设步数上限:循环到模型不再发起工具调用(自然收尾)或父轮停止为止
+  for (let step = 1; ; step++) {
     if (o.signal?.aborted) fail(new Error('已停止'));
     let res: any = null;
     try {
@@ -293,12 +290,11 @@ export async function runSubagent(o: SubagentRunOptions): Promise<SubagentResult
       notify('running');
     }
 
-    if (step === maxSteps) hitStepLimit = true;
   }
 
   finishRun(runId, {
-    status: 'done', steps, toolCalls, promptTokens, completionTokens, hitStepLimit,
-    note: hitStepLimit ? `达到步数上限(${maxSteps} 步)后收敛` : null
+    status: 'done', steps, toolCalls, promptTokens, completionTokens,
+    note: null
   });
   notify('done');
 
@@ -309,18 +305,11 @@ export async function runSubagent(o: SubagentRunOptions): Promise<SubagentResult
     ? `${finalText.slice(0, cap)}\n\n…[子代理结论过长,已截断展示 ${finalText.length} 字符]…`
     : finalText;
 
-  const head = [
-    `【子代理 · 内部 agent${description ? ` · ${description}` : ''}】${hitStepLimit ? '达到步数上限后收敛' : '已完成'}:`,
-    `${steps} 步 · ${toolCalls} 次工具调用 · ${(ms / 1000).toFixed(1)}s`
-    + (promptTokens || completionTokens ? ` · token ${promptTokens}/${completionTokens}` : '')
-    + (hitStepLimit ? ` · 上限 ${maxSteps} 步` : '')
-  ].join(' ');
-
-  console.log(`[subagent] ${description || '(未命名)'} -> ${steps} 步 / ${toolCalls} 次工具调用 / ${ms}ms${hitStepLimit ? ' (步数上限)' : ''}`);
+  console.log(`[subagent] ${description || '(未命名)'} -> ${steps} 步 / ${toolCalls} 次工具调用 / ${ms}ms`);
 
   return {
-    content: `${head}\n\n${body}`,
-    provider, runId, steps, toolCalls, ms, promptTokens, completionTokens, hitStepLimit
+    content: body,
+    provider, runId, steps, toolCalls, ms, promptTokens, completionTokens
   };
 }
 

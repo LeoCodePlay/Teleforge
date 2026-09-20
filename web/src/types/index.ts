@@ -193,7 +193,6 @@ export interface ToolCallMeta {
     ms?: number;
     promptTokens?: number;
     completionTokens?: number;
-    hitStepLimit?: boolean;
   };
 }
 
@@ -212,13 +211,11 @@ export interface SubagentRunInfo {
   toolCalls: number;
   promptTokens: number;
   completionTokens: number;
-  hitStepLimit: boolean;
   /** 父对话给的原始字段(任务/边界/回传/线索) */
   brief: { objective?: string; scope?: string; deliverable?: string; context?: string; prompt?: string };
   /** 组装后真正下发的提示词 */
   prompt: string;
-  maxSteps: number;
-  /** 结束补充说明(达到步数上限 / 被停止 / 出错原因) */
+  /** 结束补充说明(被停止 / 出错原因) */
   note?: string | null;
 }
 

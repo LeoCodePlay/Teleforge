@@ -18,6 +18,32 @@ export default function PluginsPanel() {
   const [err, setErr] = useState('');
   const [pending, setPending] = useState<string | null>(null); // 正在切换的工具名
 
+  // AI 电脑操控是"运行时安全闸门",与工具启停语义不同(截图/操作都需要它开启),单独管理
+  const [cu, setCu] = useState({ active: false, userLocked: false, supported: false });
+  const [cuBusy, setCuBusy] = useState(false);
+
+  useEffect(() => {
+    const off = api.on('computer_use', (m: any) => setCu({ active: !!m.active, userLocked: !!m.userLocked, supported: !!m.supported }));
+    api.request('computer_use_status', {}, 8000)
+      .then((r) => setCu({ active: !!r.active, userLocked: !!r.userLocked, supported: !!r.supported }))
+      .catch(() => {});
+    return () => { off(); };
+  }, []);
+
+  const setCuEnabled = async (on: boolean) => {
+    if (cuBusy) return;
+    setCuBusy(true);
+    setErr('');
+    try {
+      const r = await api.request('computer_use_set', { enabled: on }, 8000);
+      setCu({ active: !!r.active, userLocked: !!r.userLocked, supported: !!r.supported });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setCuBusy(false);
+    }
+  };
+
   useEffect(() => {
     api.request('tools_list', {}, 8000)
       .then((r) => setTools(r.tools || []))
@@ -51,6 +77,26 @@ export default function PluginsPanel() {
         开关状态保存在服务端,重启后保持。下一轮对话即生效。
       </div>
       {err && <div className="error" onClick={() => setErr('')}>✕ {err}</div>}
+
+      {/* AI 电脑操控:开启后 AI 才能截屏/操作鼠标键盘,所有显示器会显示「AI 操控中」悬浮窗 */}
+      <div className="cu-block">
+        <div className="cu-head">
+          <span>AI 电脑操控</span>
+          <span className={`badge ${cu.active ? 'ok' : cu.userLocked ? 'warn' : ''}`}>
+            {cu.active ? '进行中' : cu.userLocked ? '已被你关闭' : '未开启'}
+          </span>
+          <button className={`plugin-switch ${cu.active ? 'on' : ''}`} role="switch" aria-checked={cu.active}
+            aria-label="开启或关闭 AI 电脑操控" disabled={!cu.supported || cuBusy}
+            onClick={() => setCuEnabled(!cu.active)}>
+            <span className="plugin-knob" />
+          </button>
+        </div>
+        <div className="hint">
+          开启后 AI 可以截取屏幕并操作鼠标键盘;所有显示器上会显示「AI 操控中」悬浮窗(自带「停止」按钮,点它立即中断)。
+          {cu.userLocked && ' 你手动关闭过,AI 不能自行重新开启,需要在这里打开。'}
+          {!cu.supported && ' 当前平台不支持(仅 Windows 可用)。'}
+        </div>
+      </div>
 
       <div className="plugin-list">
         {tools.map((t) => (

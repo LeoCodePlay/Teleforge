@@ -8,6 +8,7 @@ import { PORT, HOST } from './config.ts';
 import { initNetwork, networkSummary } from './core/net.ts';
 import { setupWs } from './core/ws.ts';
 import { sshManager as ssh } from './core/ssh-manager.ts';
+import { computerUse } from './core/computer-use/index.ts';
 import { browserManager } from './core/browser-manager.ts';
 import { closeTunnels } from './core/port-tunnel.ts';
 import * as sessions from './store/session-store.ts';
@@ -16,6 +17,7 @@ import registerProviders from './api/http/providers.ts';
 import registerUiState from './api/http/ui-state.ts';
 import registerTransfer from './api/http/transfer.ts';
 import registerMedia from './api/http/media.ts';
+import registerComputerUseHttp from './api/http/computer-use.ts';
 import registerAttachments from './api/http/attachments.ts';
 import registerStatic from './api/http/static.ts';
 
@@ -44,11 +46,14 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
   await app.register(registerUiState);
   await app.register(registerTransfer);
   await app.register(registerMedia);
+  await app.register(registerComputerUseHttp);
   await app.register(registerAttachments);
   await app.register(registerStatic); // 最后注册:静态通配不能影响 API 路由
 
   const { wss, termWss, browserWss } = setupWs(app.server);
 
+  // AI 电脑操控:把实际监听端口交给控制器,悬浮窗「停止」按钮要回调本机 HTTP 急停接口
+  computerUse.configure({ port });
   await app.listen({ port, host });
   if (!quiet) {
     console.log('==============================================');
@@ -72,6 +77,7 @@ if (isMain) {
       try { wss.close(); } catch {}
       try { termWss.close(); } catch {}
       try { browserWss.close(); } catch {}
+      computerUse.shutdown(); // 关掉「AI 操控中」悬浮窗与常驻控制助手进程
       closeTunnels();
       browserManager.closeAll().catch(() => {}).finally(() => {
         ssh.disconnectAll().finally(() => process.exit(0));

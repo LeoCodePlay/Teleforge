@@ -61,7 +61,8 @@ function ToolCallBranch({ call, workspace, onOpenFile, onOpenSubagent }: { call:
   } else if (name === 'subagent') {
     // 子代理:父会话只留一条结论,行尾给「查看会话」进右侧面板看过程
     view = <SubagentRow call={call} onOpenSubagent={onOpenSubagent} />;
-  } else if (name.startsWith('browser_')) {
+  } else if (name.startsWith('browser_') || name.startsWith('computer_')) {
+    // 电脑操控工具复用浏览器卡片:同样用 meta.screenshot 展示截图(computer_screenshot 会带上)
     view = <BrowserRow call={call} inspect={inspect} />;
   } else {
     view = <GenericToolCard call={call} onOpenFile={onOpenFile} inspect={inspect} />;

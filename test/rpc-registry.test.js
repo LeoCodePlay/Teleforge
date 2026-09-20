@@ -13,6 +13,7 @@ import { registerRef } from '../server/api/rpc/ref.ts';
 import { registerBrowser } from '../server/api/rpc/browser.ts';
 import { registerAiTerm } from '../server/api/rpc/ai-term.ts';
 import { registerSubagent } from '../server/api/rpc/subagent.ts';
+import { registerComputerUse } from '../server/api/rpc/computer-use.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -44,7 +45,8 @@ const GOLDEN = {
   ref:      ['ref_candidates'],
   browser:  ['browser_list', 'browser_open', 'browser_navigate', 'browser_back', 'browser_forward', 'browser_reload', 'browser_resize', 'browser_info', 'browser_selection', 'browser_close', 'browser_close_all'],
   'ai-term': ['ai_term_list', 'ai_term_log', 'ai_term_resize', 'ai_term_delete'],
-  'subagent': ['subagent_list', 'subagent_get']
+  'subagent': ['subagent_list', 'subagent_get'],
+  'computer-use': ['computer_use_status', 'computer_use_set']
 };
 
 // 各模块 golden:逐个注册到 scratch,类型清单一致
@@ -61,7 +63,8 @@ for (const [name, fn, types] of [
   ['ref', registerRef, GOLDEN.ref],
   ['browser', registerBrowser, GOLDEN.browser],
   ['ai-term', registerAiTerm, GOLDEN['ai-term']],
-  ['subagent', registerSubagent, GOLDEN.subagent]
+  ['subagent', registerSubagent, GOLDEN.subagent],
+  ['computer-use', registerComputerUse, GOLDEN['computer-use']]
 ]) {
   const rpc = scratchRpc();
   fn(rpc);

@@ -3,7 +3,7 @@
 // - 只读边界:白名单外工具不派发,回结构化错误让子代理改方案(而不是终结子代理);
 // - 上下文隔离:子代理只看得到自己的提示词,看不到父会话历史;
 // - 过程隔离:父会话只多一条 tool/call + tool/result,中间步骤不回传、可回放;
-// - 停止/上限:父轮中止立即传播;步数用尽在 MAX_STEPS 收敛并说明;
+// - 停止:父轮中止立即传播;不设步数上限,模型不再发起工具调用即自然收敛;
 // - 提供商:默认且唯一 internal(本项目内置 agent),外部 agent 明确拒绝、不冒充;
 // - 注册与权限:subagent 已注册、声明 write、mutating(并行池独占)。
 // 说明:ESM 静态 import 先于代码执行,故用顶层 await 在导入 agent 前设置 DATA_DIR
@@ -128,7 +128,7 @@ async function main() {
     const fedBack = JSON.stringify(seen[1] || []);
     check('拒绝理由已回喂给子代理(两条)', (fedBack.match(/不允许调用工具/g) || []).length === 2, fedBack.slice(0, 200));
     check('子代理仍能给出最终结论(单个工具失败不终结子代理)', r.content.includes('写操作被拒'), r.content.slice(0, 120));
-    check('回传首行含步数与内部 agent 标识', /【子代理 · 内部 agent · 改文件】已完成: 2 步 · 2 次工具调用/.test(r.content), r.content.slice(0, 120));
+    check('回传内容就是结论本身(不带步数/调用数等过程元信息)', !/步 ·|次工具调用|token/.test(r.content), r.content.slice(0, 120));
     check('结果标记 provider=internal(本项目内置 agent)', r.provider === 'internal', String(r.provider));
   }
 
@@ -151,20 +151,22 @@ async function main() {
     check('结论被回传', r.content.includes('目录里有 note.txt'));
   }
 
-  // ---- 4. 步数上限 ----
+  // ---- 4. 不设步数上限:跑到模型自己收尾 ----
   {
     let n = 0;
     const llm = {
       isMock: false,
       async chat() {
         n += 1;
-        return { content: `第 ${n} 步`, toolCalls: [{ id: `x${n}`, name: 'list_local_dir', arguments: JSON.stringify({ path: root }) }] };
+        if (n <= 30) return { content: `第 ${n} 步`, toolCalls: [{ id: `x${n}`, name: 'list_local_dir', arguments: JSON.stringify({ path: root }) }] };
+        return { content: '结论:30 步后自然收敛', toolCalls: [] };
       }
     };
-    const r = await runSubagent({ llm, registry: toolRegistry, ...BRIEF, maxSteps: 3 });
-    check('步数上限生效(恰好请求 3 次)', n === 3, `实际 ${n}`);
-    check('hitStepLimit 标记为真', r.hitStepLimit === true);
-    check('结论里说明达到步数上限', /步数上限/.test(r.content), r.content.slice(0, 160));
+    const r = await runSubagent({ llm, registry: toolRegistry, ...BRIEF });
+    check('超过旧的 24 步上限仍然继续(不设步数上限)', n === 31, `实际 ${n}`);
+    check('模型不再发起工具调用即收敛', r.content.includes('30 步后自然收敛'), r.content.slice(0, 160));
+    check('结果里不再有步数上限字段', r.hitStepLimit === undefined, String(r.hitStepLimit));
+    check('回传内容不含步数/调用数元信息', !/步 ·|次工具调用|token/.test(r.content), r.content.slice(0, 160));
   }
 
   // ---- 5. 停止传播 + 参数校验 + 提供商 ----

@@ -11,6 +11,7 @@ import { registerAskUser } from './ask-user.ts';
 import { registerRef } from './ref.ts';
 import { registerBrowser } from './browser.ts';
 import { registerAiTerm } from './ai-term.ts';
+import { registerComputerUse } from './computer-use.ts';
 import { registerSubagent } from './subagent.ts';
 
 export interface RpcCtx {
@@ -46,6 +47,7 @@ export function createRpcRouter(ctx: RpcRouterCtx) {
   registerRef(rpc);
   registerBrowser(rpc);
   registerAiTerm(rpc);
+  registerComputerUse(rpc);
   registerSubagent(rpc);
   return {
     // 多浏览器可同时在线:

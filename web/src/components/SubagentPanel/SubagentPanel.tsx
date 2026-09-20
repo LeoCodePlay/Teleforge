@@ -7,15 +7,23 @@
 // 数据来源:
 //   列表/详情 = RPC(subagent_list / subagent_get)
 //   实时变更  = agent 事件流里的 event='subagent_changed'(带 runId + status,不含正文)
-// 只读语义:没有任何写入口(不改、不删、不续聊);子代理记录是"已发生事实"的快照。
+// 只读语义:没有任何写入口(不改、不删、不续聊、不能发送);子代理记录是"已发生事实"的快照。
+//
+// 展示口径:详情区**照搬正常 AI 对话的样式** —— 父对话下发的提示词是用户气泡,
+// 子代理的思考/正文/工具调用用与主对话同一套渲染原子(assistantText + ToolCallList)。
+// 不显示步数、调用次数、token 这类过程元信息:它就是一段只读的对话。
 //
 // 布局:桌面/平板 = 左列表 + 右对话(两栏);手机 = 单栏,选中后进入对话并可返回。
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useIsPhone } from '../../hooks/useMediaQuery';
 import { StateDot } from '../StateDot/StateDot';
-import { IconArrowLeft16, IconReload16, IconSparkle16, IconThinkOutline14 } from '../icons/icons';
-import type { SubagentMessage, SubagentRun, SubagentRunInfo } from '../../types';
+import { IconArrowLeft16, IconReload16, IconSparkle16 } from '../icons/icons';
+import { AssistantSegment, ReasoningSegment } from '../ChatPanel/assistantText';
+import { ToolCallList } from '../ToolCallList/ToolCallList';
+import type {
+  ChatMessage, MsgSegment, ToolCallInfo, SubagentMessage, SubagentRun, SubagentRunInfo
+} from '../../types';
 import './SubagentPanel.scss';
 
 const POLL_MS = 1500; // 运行中记录的兜底刷新(事件为主,轮询只防丢事件)
@@ -30,120 +38,75 @@ function statusOf(s: SubagentRunInfo['status']): { text: string; dot: 'ongoing' 
   }
 }
 
-function fmtDur(ms: number | null): string {
-  if (ms == null) return '';
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
 function fmtClock(ts: number): string {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-/** 取参数里最有信息量的那一段做单行摘要 */
-function argSummary(args?: string): string {
-  if (!args) return '';
-  try {
-    const o = JSON.parse(args);
-    if (o && typeof o === 'object') {
-      for (const k of ['path', 'pattern', 'query', 'command', 'url', 'name']) {
-        if (typeof o[k] === 'string' && o[k]) return `${k}=${o[k]}`;
-      }
-      const keys = Object.keys(o);
-      if (keys.length) return keys.map((k) => `${k}=${JSON.stringify(o[k])?.slice(0, 40)}`).join(' ');
-    }
-  } catch { /* 非 JSON:原样给首行 */ }
-  return String(args).replace(/\s+/g, ' ').slice(0, 120);
-}
-
-/** 把组装后的提示词按【标签】切成小节(父对话写的任务/边界因此一眼可分) */
-function splitSections(text: string): Array<{ label: string | null; body: string }> {
-  const src = String(text || '');
-  const re = /^【([^】]+)】$/;
-  const out: Array<{ label: string | null; body: string }> = [];
-  let cur: { label: string | null; body: string[] } = { label: null, body: [] };
-  for (const line of src.split('\n')) {
-    const m = line.match(re);
-    if (m) {
-      if (cur.body.length || cur.label) out.push({ label: cur.label, body: cur.body.join('\n').trim() });
-      cur = { label: m[1], body: [] };
+/**
+ * 把子代理内部消息流组装成"正常对话"的消息数组:
+ * - 父对话下发的提示词 → 一条 user 消息;
+ * - 其后的所有 assistant/tool 属于同一次回复,按「思考 / 正文 / 连续工具组」的实际发生顺序
+ *   合并进一条 assistant 消息(与主对话 turnsToMessages 同一口径:多步迭代合并为一条回复)。
+ */
+function toConversation(messages: SubagentMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  const pushSeg = (msg: ChatMessage, seg: MsgSegment) => {
+    if (!msg.segments) msg.segments = [];
+    const last = msg.segments[msg.segments.length - 1];
+    if (last && last.kind === seg.kind) {
+      if (seg.kind === 'tools') last.tools!.push(...(seg.tools || []));
+      else last.text = (last.text || '') + (seg.text || '');
     } else {
-      cur.body.push(line);
+      msg.segments.push(seg);
     }
+  };
+  let cur: ChatMessage | null = null;
+  for (const m of messages) {
+    if (m.role === 'user') {
+      out.push({ role: 'user', content: m.text || '' });
+      cur = null;
+      continue;
+    }
+    if (!cur) { cur = { role: 'assistant', segments: [] }; out.push(cur); }
+    if (m.role === 'assistant') {
+      if (m.reasoning && String(m.reasoning).trim()) pushSeg(cur, { kind: 'reasoning', text: String(m.reasoning) });
+      if (m.text && String(m.text).trim()) pushSeg(cur, { kind: 'text', text: String(m.text) });
+      continue;
+    }
+    // tool:结果并入当前回复的工具组(与主对话一样,结果不单独成气泡)
+    const call: ToolCallInfo = {
+      id: m.callId, tool: m.name || '', args: m.args || '',
+      ok: m.isError !== true, ms: m.ms ?? null, result: m.content ?? ''
+    };
+    pushSeg(cur, { kind: 'tools', tools: [call] });
   }
-  out.push({ label: cur.label, body: cur.body.join('\n').trim() });
-  return out.filter((s) => s.label || s.body);
+  return out;
 }
 
-/** 可展开的长文本(工具输出/思考):默认折叠到 N 行,点标题栏展开 */
-function FoldableText({ text, className, lines = 8 }: { text: string; className?: string; lines?: number }) {
-  const [open, setOpen] = useState(false);
-  const arr = text.split('\n');
-  const long = arr.length > lines || text.length > 600;
-  const shown = open || !long ? text : arr.slice(0, lines).join('\n');
+/** 一次派发的完整对话(只读):与正常 AI 对话同款气泡与工具行 */
+function Conversation({ messages }: { messages: SubagentMessage[] }) {
+  const conv = useMemo(() => toConversation(messages), [messages]);
   return (
-    <div className={className}>
-      <pre className="sa-pre">{shown}{!open && long ? '\n…' : ''}</pre>
-      {long && (
-        <button type="button" className="sa-fold" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-          {open ? '收起' : `展开全部(${arr.length} 行)`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** 一条对话消息(子代理内部视角) */
-function MessageRow({ msg }: { msg: SubagentMessage }) {
-  if (msg.role === 'user') {
-    return (
-      <div className="sa-msg sa-msg-user">
-        <div className="sa-msg-head">
-          <span className="sa-msg-who">派发提示词</span>
-          <span className="sa-msg-step">由父对话生成</span>
+    <div className="sa-chat">
+      {conv.map((m, i) => (m.role === 'user' ? (
+        <div key={i} className="msg user">
+          <div className="bubble user-bubble">{m.content}</div>
         </div>
-        <div className="sa-brief">
-          {splitSections(msg.text || '').map((s, i) => (
-            <div className="sa-brief-sec" key={i}>
-              {s.label && <span className="sa-brief-label">{s.label}</span>}
-              <span className="sa-brief-body">{s.body}</span>
+      ) : (
+        <div key={i} className="msg assistant">
+          <div className="msg-col">
+            <div className="bubble ai-bubble">
+              {(m.segments || []).map((seg, si) => {
+                if (seg.kind === 'tools') return <ToolCallList key={si} tools={seg.tools || []} />;
+                if (seg.kind === 'reasoning') return <ReasoningSegment key={si} text={seg.text || ''} />;
+                return <AssistantSegment key={si} text={seg.text || ''} />;
+              })}
             </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-  if (msg.role === 'assistant') {
-    const text = String(msg.text || '').trim();
-    return (
-      <div className="sa-msg sa-msg-assistant">
-        <div className="sa-msg-head">
-          <span className="sa-msg-who">子代理 · 第 {msg.step} 步</span>
-          <span className="sa-msg-time">{fmtClock(msg.at)}</span>
-        </div>
-        {msg.reasoning ? (
-          <div className="sa-think">
-            <span className="sa-think-label"><IconThinkOutline14 size={12} />思考</span>
-            <FoldableText text={String(msg.reasoning)} className="sa-think-body" lines={4} />
           </div>
-        ) : null}
-        {text
-          ? <div className="sa-text">{text}</div>
-          : <div className="sa-text sa-text-empty">(这一步没有文字,直接发起了工具调用)</div>}
-      </div>
-    );
-  }
-  const err = msg.isError === true;
-  return (
-    <div className={`sa-msg sa-msg-tool${err ? ' is-error' : ''}`}>
-      <div className="sa-msg-head">
-        <span className="sa-tool-name">{msg.name || '工具'}</span>
-        <span className="sa-tool-args" title={msg.args}>{argSummary(msg.args)}</span>
-        {msg.ms != null && <span className="sa-msg-time">{fmtDur(msg.ms)}</span>}
-      </div>
-      {err && <div className="sa-tool-badge">被拒绝 / 失败</div>}
-      <FoldableText text={String(msg.content || '(空结果)')} className="sa-tool-out" lines={6} />
+        </div>
+      )))}
     </div>
   );
 }
@@ -313,10 +276,8 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
             </span>
             <span className="sa-item-meta">
               <span className={`sa-item-status st-${r.status}`}>{st.text}</span>
-              <span className="sa-item-stat">{r.steps} 步 · {r.toolCalls} 次调用</span>
-              {r.ms != null && <span className="sa-item-stat">{fmtDur(r.ms)}</span>}
+              <span className="sa-item-time">{fmtClock(r.startedAt)}</span>
             </span>
-            <span className="sa-item-time">{fmtClock(r.startedAt)}</span>
           </button>
         );
       })}
@@ -331,7 +292,7 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
           <IconArrowLeft16 size={14} />返回列表
         </button>
       )}
-      <div className="sa-detail-body" ref={bodyRef}>
+      <div className={`sa-detail-body${run ? ' chat' : ''}`} ref={bodyRef}>
         {detailLoading && !run && (
           <div className="sa-skel" aria-busy="true" aria-label="加载中">
             <span className="sa-skel-line" />
@@ -359,19 +320,14 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
         )}
         {run && (
           <>
-            {run.messages.map((msg, i) => <MessageRow key={`${msg.role}-${msg.step}-${i}`} msg={msg} />)}
-            {run.status === 'running' && <div className="sa-running">子代理还在跑,新步骤会自动出现</div>}
+            <Conversation messages={run.messages} />
+            {run.status === 'running' && <div className="sa-running">子代理还在跑,新内容会自动出现</div>}
           </>
         )}
       </div>
       {run && (
         <footer className="sa-foot">
           <span className={`sa-item-status st-${run.status}`}>{statusOf(run.status).text}</span>
-          <span className="sa-foot-stat">{run.steps} 步 · {run.toolCalls} 次调用</span>
-          {run.ms != null && <span className="sa-foot-stat">{fmtDur(run.ms)}</span>}
-          {(run.promptTokens || run.completionTokens) > 0 && (
-            <span className="sa-foot-stat">token {run.promptTokens}/{run.completionTokens}</span>
-          )}
           <span className="sa-foot-gap" />
           <span className="sa-foot-provider">{run.provider}</span>
         </footer>

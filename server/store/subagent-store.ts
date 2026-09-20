@@ -49,12 +49,10 @@ export interface SubagentRunInfo {
   toolCalls: number;
   promptTokens: number;
   completionTokens: number;
-  hitStepLimit: boolean;
   /** 父对话给的原始字段(回看"任务与边界是怎么写的") */
   brief: { objective?: string; scope?: string; deliverable?: string; context?: string; prompt?: string };
   /** 组装后真正下发的提示词 */
   prompt: string;
-  maxSteps: number;
   /** 结束补充说明(达到步数上限 / 被停止 / 出错原因) */
   note?: string | null;
 }
@@ -97,7 +95,7 @@ function persist(run: SubagentRun): void {
 /** 开始一次派发:建记录并立即落盘(面板可能在子代理还没跑完时就打开) */
 export function beginRun(input: {
   runId: string; sid?: string | null; description: string; provider: string;
-  brief: SubagentRunInfo['brief']; prompt: string; maxSteps: number;
+  brief: SubagentRunInfo['brief']; prompt: string;
 }): SubagentRun {
   const run: SubagentRun = {
     runId: input.runId,
@@ -112,10 +110,8 @@ export function beginRun(input: {
     toolCalls: 0,
     promptTokens: 0,
     completionTokens: 0,
-    hitStepLimit: false,
     brief: input.brief,
     prompt: clip(input.prompt) || '',
-    maxSteps: input.maxSteps,
     note: null,
     messages: []
   };
@@ -135,10 +131,10 @@ export function appendMessage(runId: string, msg: SubagentMessage): SubagentRun 
   return run;
 }
 
-/** 收尾:写状态与统计(达到步数上限/被停止/出错时带 note) */
+/** 收尾:写状态与统计(被停止/出错时带 note) */
 export function finishRun(runId: string, patch: {
   status: SubagentStatus; steps: number; toolCalls: number;
-  promptTokens: number; completionTokens: number; hitStepLimit: boolean; note?: string | null;
+  promptTokens: number; completionTokens: number; note?: string | null;
 }): SubagentRun | null {
   const run = cache.get(runId);
   if (!run) return null;
@@ -147,7 +143,6 @@ export function finishRun(runId: string, patch: {
   run.toolCalls = patch.toolCalls;
   run.promptTokens = patch.promptTokens;
   run.completionTokens = patch.completionTokens;
-  run.hitStepLimit = patch.hitStepLimit;
   run.note = patch.note ?? null;
   run.endedAt = Date.now();
   run.ms = run.endedAt - run.startedAt;

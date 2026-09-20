@@ -1,7 +1,5 @@
 import React, { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Marked } from 'marked';
-import DOMPurify from 'dompurify';
 import { api } from '../../api';
 import { useLlm } from '../../context/llm-context';
 import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, FileChangeItem } from '../../types';
@@ -22,7 +20,7 @@ import QueuePanel, { QueueItem } from '../QueuePanel/QueuePanel';
 import PermissionSelect, { isPermissionMode } from '../PermissionSelect/PermissionSelect';
 import type { PermissionMode } from '../PermissionSelect/PermissionSelect';
 import { ToolCallList } from '../ToolCallList/ToolCallList';
-import { ReasoningRow } from '../ReasoningRow/ReasoningRow';
+import { AssistantSegment, ReasoningSegment } from './assistantText';
 import { CompactionRow } from './CompactionRow';
 import { FilesChangedCard } from './FilesChangedCard';
 import { CommandCard } from './CommandCard';
@@ -72,37 +70,7 @@ function lastPathSegment(p: string): string {
   return i >= 0 ? t.slice(i + 1) : p;
 }
 
-// 完整 Markdown 解析(marked + DOMPurify):
-// gfm 支持表格/任务列表等,breaks 保留单换行即换行的聊天习惯;
-// 输出再经 DOMPurify 白名单清洗,AI 内容里即使夹带 HTML 也不会注入。
-const mdParser = new Marked({ gfm: true, breaks: true });
-
 // 推理等级定义与选择器已迁移到 ModelMenu.tsx(REASONING_LEVELS + 二级菜单)。
-
-// ---------------- markdown 渲染(完整排版,白名单清洗后输出) ----------------
-function renderMarkdown(text = '') {
-  if (!text || !text.trim()) return '';
-  // Marked 同步模式下 parse 返回 string(异步 mode 才返回 Promise)
-  const html = mdParser.parse(text) as string;
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
-}
-// 提取 ```thinking …``` 块为折叠行(ReasoningRow,与 reasoning 通道同款呈现),
-// 剩余文本交给 AssistantText 继续渲染;当正文只由 thinking 块组成(纯推理回复)时,返回 null。
-function renderAssistantContent(content = '') {
-  const blocks: React.ReactElement[] = [];
-  const rest = content.replace(/```thinking\s*([\s\S]*?)```/g, (_m, t) => {
-    blocks.push(<ReasoningRow key={blocks.length} text={t.trim()} />);
-    return '';
-  });
-  if (!blocks.length) return null; // 无 thinking 块:交给调用方直接渲染
-  const restHtml = rest.trim();
-  return (
-    <>
-      {blocks}
-      {restHtml && <AssistantText text={rest} />}
-    </>
-  );
-}
 
 // 用户消息时间戳格式化(按天粒度):
 // - 今天:仅显示 HH:MM
@@ -123,32 +91,6 @@ function formatMsgTime(ts?: number) {
     : `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
   return `${date} ${hm}`;
 }
-
-// 文本段 memo:按 text 引用判定,未变化的历史段整体跳过重渲染(含 markdown 解析)。
-// 流式增量每次赋值新字符串,正在流的段仍正常更新。
-const AssistantText = memo(function AssistantText({ text }: { text: string }) {
-  const spans: React.ReactNode[] = [];
-  const parts = text.split(/(```[\s\S]*?```)/g);
-  parts.forEach((part, i) => {
-    if (part.startsWith('```')) {
-      const code = part.slice(3, part.length - 3);
-      spans.push(<pre key={i}><code>{code}</code></pre>);
-    } else if (part.trim()) {
-      spans.push(<div key={i} className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(part) }} />);
-    }
-  });
-  return <>{spans}</>;
-});
-
-// 段级渲染 memo(正文/思考):历史段内容引用未变时整体跳过,长会话的流式更新、
-// 输入与面板重渲染不再拖着全部消息重跑 thinking 提取与 markdown 解析;
-// 正在流式更新的段(text 每次增量都是新字符串)依旧正常渲染。
-const AssistantSegment = memo(function AssistantSegment({ text }: { text: string }) {
-  return <div>{renderAssistantContent(text) || <AssistantText text={text} />}</div>;
-});
-const ReasoningSegment = memo(function ReasoningSegment({ text, running }: { text: string; running?: boolean }) {
-  return text && text.trim() ? <ReasoningRow text={text.trim()} running={running} /> : null;
-});
 
 // 消息操作栏(照搬 deepseek-harness 的 MessageIconActions):
 // - 复制:复制该条回复的全文,成功后图标短暂换成 ✓(1s)
@@ -1878,10 +1820,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 发送时的 @ 引用替换:把输入中记录的 @名称 替换为 @source:完整路径
   // (文本区只显示名称,AI 收到的是带来源标记的绝对路径)。
   // 按名称长度降序替换避免 @server.ts 被 @server 抢先吃掉;未记录的 @词原样保留。
-  function composeMentionText(text: string): string {
+  function composeMentionText(text: string): { text: string; refs: { source: 'remote' | 'local'; path: string }[] } {
     const map = atMapRef.current;
-    if (map.size === 0) return text;
+    if (map.size === 0) return { text, refs: [] };
     const names = [...map.keys()].sort((a, b) => b.length - a.length);
+    const refs: { source: 'remote' | 'local'; path: string }[] = [];
     let out = '';
     let i = 0;
     while (i < text.length) {
@@ -1894,6 +1837,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             if (after === '' || /\s/.test(after)) {
               const rec = map.get(name)!;
               out += `@${rec.source}:${rec.path}`;
+              refs.push({ source: rec.source, path: rec.path });
               consumed = 1 + name.length;
               break;
             }
@@ -1904,11 +1848,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       out += text[i];
       i += 1;
     }
-    return out;
+    return { text: out, refs };
   }
 
   // 发送文本 = 输入框原文 + @引用替换(技能 /词 原样保留,后端按独立词解析注入)
-  const composedInput = composeMentionText(input);
+  const composedInput = composeMentionText(input).text;
   // 输入中是否已含完整 /技能名 或 @引用(用于占位提示与去重判断)
   const hasSkillToken = /(?:^|\s)(\/[a-z0-9][a-z0-9-]*|@[a-zA-Z0-9_.\-/\\]+)(?=\s|$)/i.test(input);
   // 发送入口的斜杠命令拦截:与「菜单选中即执行」(pickSlash)共用同一张命令表,
@@ -1948,7 +1892,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       toast.warning(imgGateTip);
       return;
     }
-    const text = composedInput;
+    const { text, refs } = composeMentionText(input);
     let realSid: string | null = sid == null || sid === NEW_SESSION_ID ? null : sid;
     // 新会话草稿态(sid 为占位符或尚未加载):先真正创建服务端会话(此时才列入历史会话列表),
     // 创建失败则保留输入与草稿,不发送
@@ -1991,7 +1935,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setMessages((m) => [...m]);
     // 发送消息的那一刻即通知 App 锁定该会话的工作区(不等服务端 msgCount 落盘回传)
     onSessionTouched?.(realSid);
-    api.send('speak', { text, reasoning, sid: sidArg(realSid), ...(atts.length ? { attachments: atts } : {}) });
+    api.send('speak', { text, reasoning, sid: sidArg(realSid), ...(atts.length ? { attachments: atts } : {}), ...(refs.length ? { refs } : {}) });
   };
 
   // ---- 待执行队列操作 ----

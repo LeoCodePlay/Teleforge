@@ -70,8 +70,10 @@ export default function FileViewer({ path, name, onDirtyChange, onClose, onBack 
   useEffect(() => {
     setLoading(true); setError(''); setContent(''); setOrig(''); setMeta(null); setSaved(false); setMediaError('');
     if (media) { setLoading(false); return; }
-    (isLocal ? api.request('read_local_file', { path: realPath }, 20000)
-             : api.request('read_file', { path }, 20000))
+    // maxBytes:0 = 不限制,整文件读取(查看器要看全部内容,不能只给前 100KB;
+    // 服务器读上限已支持 0,WS 载荷上限 32MB,足够覆盖常规源码/文本文件)
+    (isLocal ? api.request('read_local_file', { path: realPath, maxBytes: 0 }, 30000)
+             : api.request('read_file', { path, maxBytes: 0 }, 30000))
       .then((r) => {
         setMeta({ size: r.size, truncated: r.truncated, binary: r.binary });
         if (r.binary) { setError('二进制文件,无文本预览'); setContent(''); }

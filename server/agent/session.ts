@@ -213,6 +213,22 @@ export class Session {
       traced.push({ seq: cpSeq, msg: { role: 'user', content: cp?.summary || '【上下文已自动压缩】早期对话已省略。' } });
       cpPlaced = true;
     };
+    // computer-use 等工具可以把"刚截取的画面"作为图片附件回传给模型看:
+    // tool 角色消息在 OpenAI 兼容协议里只能带文本,图片必须另起一条 user 消息。
+    // 但 tool/result 与 assistant tool_calls 必须严格配对,而 user 消息会清空 pending,
+    // 所以先缓存,等同一条 assistant 声明的全部工具结果都投影完(pending 清空)再插入。
+    let pendingVision: any[] = [];
+    let visionCaption = '';
+    let visionSeq = -1;
+    const flushVision = () => {
+      if (!pendingVision.length) return;
+      traced.push({
+        seq: visionSeq,
+        msg: { role: 'user', content: visionCaption || '以下是当前屏幕画面。', attachments: pendingVision }
+      });
+      pendingVision = [];
+      visionCaption = '';
+    };
     for (const ev of this.events) {
       const d = ev.data || {};
       switch (ev.type) {
@@ -237,6 +253,7 @@ export class Session {
           const m = d.message || {};
           const hasCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
           if (!m.content && !hasCalls) break;
+          if (pending.size === 0) flushVision(); // 视觉附件消息必须落在完整工具配对之后
           pending = new Set(hasCalls ? m.tool_calls.map((t: any) => t.id) : []);
           traced.push({
             seq: ev.seq,
@@ -256,6 +273,14 @@ export class Session {
           if (!pending.has(d.callId)) break;
           pending.delete(d.callId);
           traced.push({ seq: ev.seq, msg: { role: 'tool', tool_call_id: d.callId, content: d.content } });
+          // 带图片附件的工具结果(如 computer_screenshot):缓存视觉 user 消息,等工具配对完整后插入
+          const visionAtt = (d.meta as any)?.visionAttachments;
+          if (Array.isArray(visionAtt) && visionAtt.length) {
+            pendingVision = visionAtt;
+            visionCaption = String((d.meta as any)?.visionCaption || '');
+            visionSeq = ev.seq;
+          }
+          if (pending.size === 0) flushVision();
           break;
         case 'compaction/done':
           // 旧版破坏式压缩遗留(无 dropThroughSeq,早期消息已被物理删除):原位投影摘要
@@ -272,6 +297,7 @@ export class Session {
           break; // turn/*、step/* 等结构事件不投影
       }
     }
+    if (pending.size === 0) flushVision();
     if (!cpPlaced) placeCp(); // 兜底:压缩后保留区没有消息面事件(理论上不会发生)时摘要收尾
     // 兼容旧版损坏数据:丢弃首个 user 之前的消息
     const firstUser = traced.findIndex((t) => t.msg.role === 'user');

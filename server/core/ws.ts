@@ -25,6 +25,7 @@ import { armAskUserDisconnectGrace, disarmAskUserDisconnectGrace } from '../agen
 import { migrateLegacy } from '../store/session-store.ts';
 import { browserManager } from './browser-manager.ts';
 import { aiTerms } from './ai-term.ts';
+import { computerUse } from './computer-use/index.ts';
 
 /**
  * 兜底修复 node-pty(Windows/ConPTY)已知崩溃:见 microsoft/node-pty#827。
@@ -174,6 +175,10 @@ export function setupWs(httpServer: Server) {
   // 消息分发路由表:49 种 RPC 消息在 server/rpc/ 下按领域注册,ctx 只注入 ws 闭包专有物
   const router = createRpcRouter({ send, emitStatus, syncAgentScope });
 
+  // AI 电脑操控状态变化(开启/关闭/用户急停)-> 广播给所有界面,顶栏据此显示指示与停止入口
+  const onComputerUse = (st: any) => send({ type: 'computer_use', ...st });
+  computerUse.on('change', onComputerUse);
+
   wss.on('connection', (ws: WebSocket) => {
     // 心跳探活:连接必须响应服务端 ping,未应答的超时连接会被 terminate(见下方定时器),
     // 使电脑休眠/网络抖动导致的"假死连接"被及时发现并触发前端自动重连
@@ -182,6 +187,8 @@ export function setupWs(httpServer: Server) {
     disarmAskUserDisconnectGrace(); // 前端上线(含刷新后重连):解除断开宽限,挂起提问继续等待
     flushPending(); // 先补发断线期间缓存的 agent 事件,再下发状态,保证 UI 状态无缝衔接
     send({ type: 'log', level: 'info', message: '前端已连接' });
+    // 新连接补发当前操控状态:刷新页面后指示不会丢失
+    sendTo(ws, { type: 'computer_use', ...computerUse.status() });
     syncAgentScope();
     emitStatus();
 
@@ -445,6 +452,7 @@ export function setupWs(httpServer: Server) {
     browserManager.off('state', onBrowserState);
     browserManager.off('closed', onBrowserClosed);
     browserManager.off('renamed', onBrowserRenamed);
+    computerUse.off('change', onComputerUse);
   });
 
   return { wss, termWss, browserWss };

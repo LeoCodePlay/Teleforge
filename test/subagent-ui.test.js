@@ -110,14 +110,24 @@ try {
   await page.locator('.dock-drawer.open').first().waitFor({ timeout: 10000 });
   check('右侧抽屉已打开', true);
 
-  // 等详情加载完成(骨架消失 + 结论出现)
-  await page.locator('.dock-drawer .sa-msg-tool').first().waitFor({ timeout: 15000 });
+  // 等详情加载完成:工具行出现 + 这次派发收尾(状态栏进入终态)后再读文本,
+  // 避免读到还在流式追加的中间态。
+  // 详情区照搬正常对话:工具调用以主对话同款工具行(.dsh-tooltree)出现
+  await page.locator('.dock-drawer .sa-chat .dsh-tooltree').first().waitFor({ timeout: 15000 });
+  // 可能有多次派发:等「这次」的结论真的渲染出来再读文本,避免读到中间态/别的记录的状态
+  await page.locator('.dock-drawer .sa-chat').getByText('结论:目录可读').first().waitFor({ timeout: 25000 });
+  // 等抽屉的位移过渡(.24s)结束:.msg 带 content-visibility:auto,过渡途中还在屏外时 innerText 会跳过内容
+  await page.waitForTimeout(450);
   const drawerText = await page.locator('.dock-drawer').first().innerText();
   check('抽屉里有派发记录列表', drawerText.includes('看工作区目录'));
-  check('对话首条是父对话生成的任务与边界', drawerText.includes('任务目标') && drawerText.includes('边界(必须遵守)'));
-  check('对话里有子代理的真实工具调用', drawerText.includes('get_local_info'));
-  check('对话里有子代理的结论', drawerText.includes('结论:目录可读'));
-  check('底部状态栏给出步数与调用次数', /步/.test(drawerText) && /次调用/.test(drawerText), drawerText.slice(-80));
+  check('对话首条是父对话生成的任务与边界', drawerText.includes('任务目标') && drawerText.includes('边界(必须遵守)'), drawerText.slice(0, 200));
+  check('对话里有子代理的真实工具调用(主对话同款工具行)',
+    (await page.locator('.dock-drawer .sa-chat [data-tool="get_local_info"]').count()) > 0);
+  check('对话里有子代理的结论', drawerText.includes('结论:目录可读'), drawerText.slice(-120));
+  check('不再显示步数/调用次数等过程元信息', !/\d+\s*步/.test(drawerText) && !/次调用/.test(drawerText), drawerText.slice(-80));
+  check('详情区用正常对话样式(用户气泡 + 助手气泡)',
+    (await page.locator('.dock-drawer .sa-chat .msg.user .bubble.user-bubble').count()) > 0
+    && (await page.locator('.dock-drawer .sa-chat .msg.assistant .bubble.ai-bubble').count()) > 0);
   check('抽屉里没有任何修改入口(只读回看)', !(await page.locator('.dock-drawer button').allInnerTexts()).some((t) => /删除|停止|重跑|编辑/.test(t)));
 
   // 留一张截图作为证据

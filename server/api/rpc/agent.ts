@@ -1,5 +1,6 @@
 // 会话与对话消息:speak / stop_agent / get_history / clear_history / compact_now / session_*
 import { agent } from '../../agent/agent.ts';
+import { resolveMentionImageAttachments } from '../../agent/mention-refs.ts';
 import { sshManager as ssh } from '../../core/ssh-manager.ts';
 import { localFs } from '../../core/local-fs.ts';
 import { browserManager } from '../../core/browser-manager.ts';
@@ -27,9 +28,14 @@ export function registerAgent(rpc: RpcModule) {
     // 提交到当前活跃会话:该会话空闲时开新轮,运行中自动进入待执行队列(当前轮结束后按序执行)
     // 其他会话的运行不受影响(多会话并行)
     const sid = targetSid(msg) ?? agent.sessionId;
+    // @引用的图片文件补成附件:过去 @local:/@remote: 只是给模型的路径提示,多模态看不到画面、
+    // generate_image 也拿不到附件 id,导致「@一张图让我改」无法完成。补成附件后与粘贴图片
+    // 走完全相同的链路(请求期 image_url 注入 + reference_attachment_ids)。
+    const refAtts = Array.isArray(msg.refs) ? await resolveMentionImageAttachments(msg.refs) : [];
+    const attachments: any = [...(hasAttachments ? msg.attachments : []), ...refAtts];
     Promise.resolve(agent.submit(sid, msg.text || '', {
       reasoning: msg.reasoning || 'default',
-      attachments: hasAttachments ? msg.attachments : null
+      attachments: attachments.length ? attachments : null
     }))
       .catch((e) => send({ type: 'agent', event: 'error', message: e.message, sid }))
       .finally(() => { emitStatus(); send({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId }); });

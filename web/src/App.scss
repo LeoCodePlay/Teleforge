@@ -293,3 +293,17 @@ body.splitting * { cursor: row-resize !important; }
   0%, 100% { opacity: 1; }
   50% { opacity: .25; }
 }
+
+
+/* ---- AI 电脑操控进行中指示(顶栏):AI 能看屏/动手时这里常驻可见 ---- */
+.cu-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text); border-color: var(--warn-border); background: var(--glass-bg);
+  border: 1px solid var(--warn-border);
+  animation: cu-chip-pulse 1.6s ease-in-out infinite;
+}
+.cu-chip .cu-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+@keyframes cu-chip-pulse {
+  0%, 100% { box-shadow: inset 0 1px 0 var(--glass-hi); }
+  50% { box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 12px var(--accent-soft); }
+}

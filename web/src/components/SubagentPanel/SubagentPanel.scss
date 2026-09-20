@@ -83,8 +83,9 @@
 .sa-item.on { background: var(--accent-fill-soft); border-color: var(--accent-border); color: var(--text); }
 .sa-item-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .sa-item-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; }
+/* 列表项/底栏只展示状态与时间,不再有步数/调用次数等统计 */
 .sa-item-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
-.sa-item-stat { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
 .sa-item-status.st-running { color: var(--green); }
 .sa-item-status.st-done { color: var(--muted); }
 .sa-item-status.st-error { color: var(--red); }
@@ -122,54 +123,12 @@
 .sa-skel-line.w85 { width: 85%; }
 .sa-skel-line.w60 { width: 60%; }
 
-/* 消息块 */
-.sa-msg { display: flex; flex-direction: column; gap: 5px; }
-.sa-msg-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.sa-msg-who { font-size: 11.5px; font-weight: 700; color: var(--text-2, var(--muted)); }
-.sa-msg-step, .sa-msg-time { font-size: 10.5px; color: var(--placeholder, var(--muted)); font-family: var(--mono); }
-
-.sa-msg-user .sa-brief {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 9px 11px; border-radius: var(--r-md);
-  background: var(--glass-bg-inset); border: 1px solid var(--line-soft);
-}
-.sa-brief-sec { display: flex; flex-direction: column; gap: 2px; }
-.sa-brief-label { font-size: 11px; font-weight: 700; color: var(--accent); }
-.sa-brief-body { font-size: 12.5px; line-height: 1.55; color: var(--text); white-space: pre-wrap; word-break: break-word; }
-
-.sa-msg-assistant .sa-text {
-  font-size: 13px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word;
-}
-.sa-text-empty { color: var(--muted); font-style: italic; font-size: 12px; }
-.sa-think { display: flex; flex-direction: column; gap: 3px; }
-.sa-think-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
-.sa-think-body .sa-pre { color: var(--muted); font-size: 12px; }
-
-/* 工具行:名字 + 参数摘要 + 输出(等宽,数字对齐) */
-.sa-msg-tool {
-  padding: 7px 9px; border-radius: var(--r-md);
-  background: var(--glass-bg-inset); border: 1px solid var(--line-soft);
-}
-.sa-msg-tool.is-error { border-color: var(--danger-soft-strong); }
-.sa-tool-name { font-family: var(--mono); font-size: 12px; color: var(--text); }
-.sa-tool-args {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--mono); font-size: 11px; color: var(--muted);
-}
-.sa-tool-badge { font-size: 11px; color: var(--red); }
-.sa-tool-out .sa-pre { font-size: 11.5px; }
-
-.sa-pre {
-  margin: 0; padding: 0; max-height: 420px; overflow: auto;
-  font-family: var(--mono); font-size: 12px; line-height: 1.5;
-  color: var(--text-2, var(--muted)); white-space: pre-wrap; word-break: break-word;
-}
-.sa-fold {
-  margin-top: 4px; padding: 1px 8px; border-radius: var(--r-pill); cursor: pointer;
-  font-size: 11px; color: var(--text-2, var(--muted));
-  background: var(--glass-bg); border: 1px solid var(--glass-border);
-}
-.sa-fold:hover { color: var(--text); background: var(--glass-bg-hover); }
+/* 详情区就是一段只读的对话:直接复用主对话的 .msg / .bubble / .md / 工具行样式,
+   这里只做面板内的宽度与间距微调(列比主对话窄,气泡放宽一点;间距交给 .msg 自己的 margin)。 */
+.sa-detail-body.chat { gap: 0; }
+.sa-chat { display: flex; flex-direction: column; }
+.sa-chat .bubble { max-width: 92%; }
+.sa-chat .msg:last-child { margin-bottom: 0; }
 
 .sa-running { font-size: 12px; color: var(--muted); }
 
@@ -180,7 +139,7 @@
   background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
   font-size: 11.5px; color: var(--muted);
 }
-.sa-foot-stat { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
 .sa-foot-gap { flex: 1; }
 .sa-foot-provider { font-family: var(--mono); font-size: 11px; }
 .sa-note { flex: none; padding: 6px 14px 8px; font-size: 11.5px; color: var(--amber); }

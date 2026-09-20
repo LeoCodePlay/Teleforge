@@ -138,7 +138,8 @@ export const AGENT = {
   REPEAT_ARG_PREVIEW: 500,      // 重复调用提醒里引用的参数预览上限(字符,对齐 harness)
   // 子代理(subagent 工具,in-process 只读调研代理;见 agent/subagent.ts):
   SUBAGENT: {
-    MAX_STEPS: 24,              // 单个子代理最多步数(1 步 = 一次模型请求 + 它发起的工具调用)
+    // 不设步数上限:子代理跑到模型自己收尾为止(只受下面的 TIMEOUT_MS 与父轮停止约束),
+    // 长调研不会被硬截断成"达到上限后收敛"的半成品结论。
     RESULT_MAX_CHARS: 12_000,   // 回传父级的结论上限;超出截断(完整过程只存在于子代理自己的内存会话)
     TIMEOUT_MS: 600_000,        // 工具级超时(比注册表兜底 660s 短,让超时原因来自子代理自身)
     // 提示词契约:父对话必须自己写清任务与边界;prompt 与 objective+scope 两条路径满足其一

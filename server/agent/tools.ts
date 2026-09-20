@@ -17,6 +17,7 @@ import { resolveImageTool, runImageJob, IMAGE_TOOL_MISSING } from './image-gen.t
 import { IMAGE_QUALITIES, IMAGE_SIZES } from '../store/settings-store.ts';
 import { webSearch, renderSearchResult } from './web-search.ts';
 import { browserToolDefs } from './browser-tools.ts';
+import { computerUseToolDefs } from './computer-use-tools.ts';
 import { runSubagent, SUBAGENT_PROVIDERS } from './subagent.ts';
 import type { ToolAccess, ToolDef, ToolRegistry } from './registry.ts';
 
@@ -1082,7 +1083,7 @@ const interactionToolDefs: ToolDef[] = [
 
 // ---------------- 子代理工具定义 ----------------
 // 不依赖 SSH 连接(未连接时子代理只能看到本机工具),也不直接写任何状态:真正的工作在
-// agent/subagent.ts 的 runSubagent() 里——独立会话 + 只读工具白名单 + 有界嵌套循环。
+// agent/subagent.ts 的 runSubagent() 里——独立会话 + 只读工具白名单 + 无步数上限的嵌套循环。
 const subagentToolDefs: ToolDef[] = [
   {
     name: 'subagent',
@@ -1144,15 +1145,14 @@ const subagentToolDefs: ToolDef[] = [
         llm, registry, prompt, description, sid, signal, emit,
         objective: args?.objective, scope: args?.scope,
         deliverable: args?.deliverable, context: args?.context,
-        provider: args?.provider,
-        maxSteps: AGENT.SUBAGENT.MAX_STEPS
+        provider: args?.provider
       });
       return {
         content: r.content,
         meta: {
           subagent: {
             description, provider: r.provider, runId: r.runId, steps: r.steps, toolCalls: r.toolCalls, ms: r.ms,
-            promptTokens: r.promptTokens, completionTokens: r.completionTokens, hitStepLimit: r.hitStepLimit
+            promptTokens: r.promptTokens, completionTokens: r.completionTokens
           }
         }
       };
@@ -1244,6 +1244,10 @@ export function registerTools(registry: ToolRegistry) {
   // 不依赖 SSH(地址解析需要隧道时会自动建),因此不加 remote 标记,本地模式下也可用。
   // 它们自带 access 声明(见 browser-tools.ts),不参与上面的名字表。
   for (const def of browserToolDefs) registry.register(withSafety(def));
+  // AI 电脑操控工具(computer_*):截图本机屏幕 + 注入鼠标键盘。不依赖 SSH,本地模式下也可用。
+  // 同样自带 access 声明(见 computer-use-tools.ts),不参与上面的名字表;截图/操作都必须
+  // 先 computer_control(action="start") 开启控制(开启即显示「AI 操控中」悬浮窗)。
+  for (const def of computerUseToolDefs) registry.register(withSafety(def));
   // 守卫 1:SSH 连接状态 —— 仅真正依赖 SSH 的远程工具需要连接;本地工具(local_*)、
   // 交互工具与技能/任务清单等非远程工具不受影响,连接断开时绝不误伤本机工具链
   registry.guard((name: string) => (SSH_ONLY_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));

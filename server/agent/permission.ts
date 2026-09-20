@@ -70,14 +70,17 @@ const WRITE_TOOLS = new Set([
   'write_local_file', 'edit_local_file', 'create_local_dir', 'delete_local_path',
   // 浏览器工具:会改变页面/浏览器状态,plan 模式下不应执行
   'browser_open', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll',
-  'browser_eval', 'browser_close'
+  'browser_eval', 'browser_close',
+  // 电脑操控:会改变外部状态的动作类工具(plan 模式不应执行)
+  'computer_action', 'computer_launch', 'computer_ui_action', 'computer_control'
 ]);
 const COMMAND_TOOLS = new Set(['run_command', 'run_local_command']);
 /** 已知只读工具:仅在调用方未提供工具定义(纯名字判定)时用于保持放行语义 */
 const READ_TOOLS = new Set([
   'list_directory', 'read_file', 'search_code', 'get_workspace_info', 'web_search',
   'list_local_dir', 'read_local_file', 'search_local_code', 'get_local_info',
-  'browser_snapshot'
+  'browser_snapshot',
+  'computer_screenshot', 'computer_windows', 'computer_ui', 'computer_ocr'
 ]);
 
 /**
@@ -115,6 +118,22 @@ function argSummary(name: string, args: any): string {
       return `复制内置技能到本机技能目录(${s(args?.name)})`;
     case 'subagent':
       return `派发子代理「${s(args?.description) || '未命名'}」做只读调研`;
+    case 'computer_action':
+      return `操作本机电脑(${s(args?.action)}${args?.x != null ? ` @(${s(args?.x)},${s(args?.y)})` : ''})`;
+    case 'computer_screenshot':
+      return '截取本机屏幕画面';
+    case 'computer_control':
+      return `AI 电脑操控开关(${s(args?.action)})`;
+    case 'computer_windows':
+      return '列出当前可见窗口';
+    case 'computer_launch':
+      return `打开或激活应用「${s(args?.app)}」`;
+    case 'computer_ui':
+      return `读取界面元素${args?.query ? `(查找「${s(args?.query)}」)` : ''}`;
+    case 'computer_ui_action':
+      return `对界面元素执行 ${s(args?.action)}(${s(args?.ref)})`;
+    case 'computer_ocr':
+      return '识别屏幕文字'
     default:
       return '';
   }

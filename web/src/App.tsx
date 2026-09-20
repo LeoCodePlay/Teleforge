@@ -119,6 +119,11 @@ export default function App() {
   // 本地后端/WS 断连标记:api 会自动重连,但此前没有任何 UI 反馈 —— 界面上那个「未连接」说的是
   // SSH 远端连接,本地服务死了它照样显示正常,用户看到的只是「对话突然不动了,也没有报错」。
   const [backendDown, setBackendDown] = useState(false);
+  // AI 电脑操控状态(computer_* 工具):active=AI 正在看屏/操作本机,顶栏显示进行中指示与急停入口;
+  // userLocked=用户手动关过,需用户在设置里重新开启(AI 不能自行恢复)。
+  const [computerUse, setComputerUse] = useState<{ active: boolean; userLocked: boolean; supported: boolean }>({
+    active: false, userLocked: false, supported: false
+  });
   const [tabs, setTabs] = useState<TabItem[]>(() => [...PINNED_TABS, ...loadSavedFileTabs(), ...loadSavedBrowserTabs()]);
   const [activeTabId, setActiveTabId] = useState(loadSavedActiveTab);
   const tabsRef = useRef(tabs);
@@ -372,6 +377,9 @@ export default function App() {
     const offClose = api.on('close', () => setBackendDown(true));
     const offOpen = api.on('open', () => {
       setBackendDown(false); // 重连成功:撤掉断连提示
+      api.request('computer_use_status', {}, 8000)
+        .then((r) => setComputerUse({ active: !!r.active, userLocked: !!r.userLocked, supported: !!r.supported }))
+        .catch(() => {});
       const my = opRef.current;
       api.request('session_list', {}, 8000)
         .then((r) => {
@@ -528,7 +536,10 @@ export default function App() {
   useEffect(() => {
     api.connect();
     const offStatus = api.on('status', setStatus);
-    return () => { offStatus(); api.close(); };
+    const offComputerUse = api.on('computer_use', (m: any) => setComputerUse({
+      active: !!m.active, userLocked: !!m.userLocked, supported: !!m.supported
+    }));
+    return () => { offStatus(); offComputerUse(); api.close(); };
   }, []);
 
   // 活动连接变化(切换/断开)后,远程文件标签页已不属于当前服务器:
@@ -1156,6 +1167,13 @@ export default function App() {
             <button className="ghost edge-toggle update-chip" data-tip={`发现新版本 v${updateChip},点击查看`}
               onClick={() => { setSettingsTab('about'); setSettingsOpen(true); }}>
               ⬆ v{updateChip}
+            </button>
+          )}
+          {/* AI 电脑操控进行中:AI 能看屏/动鼠标键盘时顶栏常驻可见,点一下立即停止 */}
+          {computerUse.active && (
+            <button className="ghost edge-toggle cu-chip" data-tip="AI 正在操控本机电脑,点击立即停止"
+              onClick={() => { api.request('computer_use_set', { enabled: false }, 8000).catch(() => {}); }}>
+              <span className="cu-dot" /> AI 操控中 ✕
             </button>
           )}
           <button className="ghost edge-toggle settings-btn" onClick={() => setSettingsOpen(true)}>⚙</button>
