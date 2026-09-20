@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { aiProviders, type AiProvider } from '../../store/ai-providers-store.ts';
 import { uiState } from '../../store/ui-state-store.ts';
 import { setImageToolConfig, imageToolSummary, IMAGE_QUALITIES, IMAGE_SIZE_OPTIONS } from '../../store/settings-store.ts';
+import { describeFetchError } from '../../core/net.ts';
 
 // modelConfig 白名单净化:每模型只保留 contextWindow/maxTokens(正数)与 multimodal/imageGen(布尔)
 function sanitizeModelConfig(mc: unknown): Record<string, any> | null {
@@ -45,7 +46,7 @@ export default async function registerProviders(app: FastifyInstance) {
       const models = [...new Set(raw.map((m: any) => String(m || '').trim()).filter(Boolean))].sort();
       return { models };
     } catch (e: any) {
-      return reply.code(502).send({ error: '获取模型列表失败:' + e.message });
+      return reply.code(502).send({ error: '获取模型列表失败:' + describeFetchError(e) });
     }
   });
 
@@ -134,7 +135,7 @@ export default async function registerProviders(app: FastifyInstance) {
       const raw = Array.isArray(j?.data) ? j.data.map((m: any) => m?.id) : [];
       return { ok: true, models: [...new Set(raw.map((m: any) => String(m || '').trim()).filter(Boolean))].sort() };
     } catch (e: any) {
-      return reply.code(502).send({ error: '连接失败:' + e.message });
+      return reply.code(502).send({ error: '连接失败:' + describeFetchError(e) });
     }
   });
 }

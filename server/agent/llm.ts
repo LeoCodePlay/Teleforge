@@ -3,6 +3,7 @@
 // 生图模型(imageGen)另走 /images/generations 与 /images/edits 两个非流式端点
 // model 设为 'mock' 时进入本地联调模式(无需 API Key,可跑通完整 Agent 循环)
 import type { LlmMessage } from './session.ts';
+import { describeFetchError } from '../core/net.ts';
 
 export interface ToolCallSpec {
   id: string;
@@ -616,7 +617,9 @@ function parseRetryAfterMs(res: Response, rawBody: string): number | undefined {
   return undefined;
 }
 
-const errText = (e: any): string => (e instanceof Error ? e.message : String(e ?? ""));
+// undici 把 DNS 失败/连接超时/证书错误全部折叠成一句 "fetch failed",真正原因在 e.cause。
+// 直接取 e.message 会让所有网络故障长得一模一样(换台机器就完全查不动),这里统一展开。
+const errText = (e: any): string => (e instanceof Error ? describeFetchError(e) : String(e ?? ""));
 
 /** 用户主动停止:统一抛「已停止」(上层按 aborted 收尾,不当错误上报) */
 function abortError(): Error {

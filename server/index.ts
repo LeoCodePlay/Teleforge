@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import { PORT, HOST } from './config.ts';
+import { initNetwork, networkSummary } from './core/net.ts';
 import { setupWs } from './core/ws.ts';
 import { sshManager as ssh } from './core/ssh-manager.ts';
 import { browserManager } from './core/browser-manager.ts';
@@ -29,6 +30,8 @@ browserManager.setSessionTitleLookup((sid: string) => {
 });
 
 export async function startApp({ port = PORT, host = HOST, quiet = false } = {}) {
+  // 出站网络:固定 DNS 顺序(默认 IPv4 优先)+ 按需挂系统代理,详见 core/net.ts
+  initNetwork();
   // serverFactory 包住自建 http.Server,供 setupWs 在 app.server 上挂 /ws、/ws/term、/ws/browser 的 upgrade 路由
   const app = Fastify({
     serverFactory: (handler) => http.createServer(handler),
@@ -51,6 +54,7 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
     console.log('==============================================');
     console.log('  SSH 远程 AI 编程工具已启动');
     console.log(`  http://${host}:${port}`);
+    console.log(`  出站网络:${networkSummary()}`);
     if (!fs.existsSync(distDir)) {
       console.log('  (未找到 web/dist,请先执行 npm run build 构建前端)');
     }

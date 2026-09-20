@@ -11,6 +11,7 @@ import path from 'node:path';
 import { sshManager as ssh } from '../core/ssh-manager.ts';
 import { execLocal } from '../core/local-exec.ts';
 import { AGENT } from '../config.ts';
+import { describeFetchError } from '../core/net.ts';
 
 /** 一条搜索结果来源 */
 export interface WebSearchSource {
@@ -287,7 +288,7 @@ async function searchLocalFetch(query: string, maxResults: number, signal?: Abor
       });
     } catch (e: any) {
       if (signal?.aborted) throw new Error('已停止');
-      throw new Error(`网络请求失败(本机无法访问 DuckDuckGo?): ${e?.message || e}`);
+      throw new Error(`网络请求失败(本机无法访问 DuckDuckGo?): ${describeFetchError(e)}`);
     }
     if (res.status === 202) { if (attempt === 0) continue; throw new Error('DuckDuckGo 限流(HTTP 202),请稍后重试'); }
     if (!res.ok) throw new Error(`DuckDuckGo 请求失败(HTTP ${res.status})`);
