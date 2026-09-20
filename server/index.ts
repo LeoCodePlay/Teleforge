@@ -30,8 +30,8 @@ browserManager.setSessionTitleLookup((sid: string) => {
 });
 
 export async function startApp({ port = PORT, host = HOST, quiet = false } = {}) {
-  // 出站网络:固定 DNS 顺序(默认 IPv4 优先)+ 按需挂系统代理,详见 core/net.ts
-  initNetwork();
+  // 出站网络:固定 DNS 顺序(默认 IPv4 优先)+ 探测系统代理,详见 core/net.ts
+  await initNetwork();
   // serverFactory 包住自建 http.Server,供 setupWs 在 app.server 上挂 /ws、/ws/term、/ws/browser 的 upgrade 路由
   const app = Fastify({
     serverFactory: (handler) => http.createServer(handler),

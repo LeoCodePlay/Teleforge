@@ -3,7 +3,7 @@
 // 生图模型(imageGen)另走 /images/generations 与 /images/edits 两个非流式端点
 // model 设为 'mock' 时进入本地联调模式(无需 API Key,可跑通完整 Agent 循环)
 import type { LlmMessage } from './session.ts';
-import { describeFetchError } from '../core/net.ts';
+import { describeFetchError, outboundFetch } from '../core/net.ts';
 
 export interface ToolCallSpec {
   id: string;
@@ -250,7 +250,7 @@ export class LlmClient {
       deadline = setTimeout(() => { deadlineFired = true; attemptAc.abort(); }, budgetLeftMs);
       let res: Response;
       try {
-        res = await fetch(url, {
+        res = await outboundFetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -409,7 +409,7 @@ export class LlmClient {
     try {
       let res: Response;
       try {
-        res = await fetch(url, { ...init, headers, signal: ac.signal });
+        res = await outboundFetch(url, { ...init, headers, signal: ac.signal });
       } catch (e: any) {
         if (signal?.aborted) throw new Error('已停止');
         throw toFriendlyLlmError(e);
@@ -445,7 +445,7 @@ export class LlmClient {
 
   /** 拉取远端成图字节(受同一超时/中止信号约束) */
   private async _fetchBytes(url: string, signal: AbortSignal): Promise<Buffer> {
-    const r = await fetch(url, { signal });
+    const r = await outboundFetch(url, { signal });
     if (!r.ok) throw new Error(`下载生成的图片失败:HTTP ${r.status}`);
     return Buffer.from(await r.arrayBuffer());
   }

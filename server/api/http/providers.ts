@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { aiProviders, type AiProvider } from '../../store/ai-providers-store.ts';
 import { uiState } from '../../store/ui-state-store.ts';
 import { setImageToolConfig, imageToolSummary, IMAGE_QUALITIES, IMAGE_SIZE_OPTIONS } from '../../store/settings-store.ts';
-import { describeFetchError } from '../../core/net.ts';
+import { describeFetchError, outboundFetch } from '../../core/net.ts';
 
 // modelConfig 白名单净化:每模型只保留 contextWindow/maxTokens(正数)与 multimodal/imageGen(布尔)
 function sanitizeModelConfig(mc: unknown): Record<string, any> | null {
@@ -34,7 +34,7 @@ export default async function registerProviders(app: FastifyInstance) {
     const apiKey = String((request.body as any)?.apiKey || '').trim();
     if (!/^https?:\/\//i.test(baseUrl)) return reply.code(400).send({ error: 'Base URL 需以 http:// 或 https:// 开头' });
     try {
-      const r = await fetch(baseUrl + '/models', {
+      const r = await outboundFetch(baseUrl + '/models', {
         headers: apiKey ? { Authorization: 'Bearer ' + apiKey } : {},
         signal: AbortSignal.timeout(15000)
       });
@@ -126,7 +126,7 @@ export default async function registerProviders(app: FastifyInstance) {
     const apiKey = String(b.apiKey || '').trim();
     if (!/^https?:\/\//i.test(baseUrl)) return reply.code(400).send({ error: 'Base URL 需以 http:// 或 https:// 开头' });
     try {
-      const r = await fetch(baseUrl + '/models', {
+      const r = await outboundFetch(baseUrl + '/models', {
         headers: apiKey ? { Authorization: 'Bearer ' + apiKey } : {},
         signal: AbortSignal.timeout(15000)
       });

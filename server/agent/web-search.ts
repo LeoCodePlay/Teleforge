@@ -11,7 +11,7 @@ import path from 'node:path';
 import { sshManager as ssh } from '../core/ssh-manager.ts';
 import { execLocal } from '../core/local-exec.ts';
 import { AGENT } from '../config.ts';
-import { describeFetchError } from '../core/net.ts';
+import { describeFetchError, outboundFetch } from '../core/net.ts';
 
 /** 一条搜索结果来源 */
 export interface WebSearchSource {
@@ -277,7 +277,7 @@ async function searchLocalFetch(query: string, maxResults: number, signal?: Abor
     if (attempt > 0) await new Promise((r) => setTimeout(r, 3000));
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await outboundFetch(url, {
         headers: {
           'User-Agent': BROWSER_UA,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

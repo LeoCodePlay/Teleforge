@@ -1,6 +1,6 @@
 {
   "name": "teleforge",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
   "description": "SSH 远程 AI 编程工具:保持 SSH 连接、选择远程工作区、AI Agent 在远程服务器上读写文件与执行命令",
@@ -66,7 +66,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "ssh2": "^1.16.0",
-    "undici": "^8.10.2",
+    "undici": "^7.29.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
