@@ -139,6 +139,12 @@ async function dirSize(dir) {
 async function main() {
   const t0 = Date.now();
   console.log('== 桌面资源打包 ==');
+  // 版本号三处(package.json / Cargo.toml / tauri.conf.json)必须一致,
+  // 否则打出的包会自动更新自噬:装到最新版仍提示有新版本。
+  console.log('⓪ 校验版本号一致性…');
+  const { checkVersions } = await import('./check-versions.mjs');
+  const ver = checkVersions({ quiet: true });
+  console.log(`   ${ver.pkg} ✓`);
   await fsp.rm(OUT, { recursive: true, force: true });
   await fsp.mkdir(path.join(OUT, 'node'), { recursive: true });
 

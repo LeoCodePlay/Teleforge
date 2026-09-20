@@ -42,7 +42,10 @@ pub async fn download(app: tauri::AppHandle, args: DownloadArgs) -> Result<Strin
         .map(|s| s.port)
         .ok_or_else(|| "后端未运行(下载命令仅桌面生产模式可用)".to_string())?;
     let url = format!("http://127.0.0.1:{port}{}", args.api_path);
+    // 目标恒为本机回环地址:必须显式绕开系统代理。reqwest 恢复读系统代理后,
+    // 若用户的代理没把 127.0.0.1 列入例外,这个请求会被送去代理而直接失败。
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| e.to_string())?;
@@ -209,8 +212,12 @@ pub async fn download_update(
     let part_path = dir.join(format!("{file_name}.part"));
     let _ = std::fs::remove_file(&part_path);
 
+    // 安装包走 GitHub(302 到 release-assets.githubusercontent.com)。这里刻意不设总超时:
+    // reqwest 的 timeout 覆盖整段响应体读取,慢速链路下会把下载中途掐断;
+    // 改用「连接超时 + 读空闲超时」,只有真正卡死才失败,持续慢速仍能跑完。
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(&url).send().await.map_err(|e| format!("下载失败: {e}"))?;
@@ -222,16 +229,30 @@ pub async fn download_update(
     let mut stream = resp.bytes_stream();
     let mut received: u64 = 0;
     use futures_util::StreamExt;
+    // 进度节流:HTTP 分片常只有几 KB,逐块 emit 会在 41MB 的包上产生上万次跨 IPC 广播,
+    // 反而拖慢下载并卡住界面;这里按时间合并上报(前端另有 140ms 节流)。
+    const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+    let mut last_emit = std::time::Instant::now()
+        .checked_sub(PROGRESS_EMIT_INTERVAL)
+        .unwrap_or_else(std::time::Instant::now);
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("下载中断: {e}"))?;
         file.write_all(&chunk).map_err(|e| e.to_string())?;
         received += chunk.len() as u64;
-        let percent = if total > 0 { received as f64 / total as f64 } else { 0.0 };
-        let _ = app.emit(
-            "update-progress",
-            DownloadProgress { received, total, percent },
-        );
+        if last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
+            last_emit = std::time::Instant::now();
+            let percent = if total > 0 { received as f64 / total as f64 } else { 0.0 };
+            let _ = app.emit(
+                "update-progress",
+                DownloadProgress { received, total, percent },
+            );
+        }
     }
+    // 收尾补发一次:节流可能吞掉最后一块,不补发界面会停在 99.x%
+    let _ = app.emit(
+        "update-progress",
+        DownloadProgress { received, total, percent: 1.0 },
+    );
     // 落盘成功后重命名为正式文件名
     std::fs::rename(&part_path, &final_path).map_err(|e| e.to_string())?;
     Ok(final_path.to_string_lossy().into_owned())

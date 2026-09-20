@@ -22,6 +22,7 @@ import WindowControls from './components/WindowControls/WindowControls';
 import { isTauri } from './utils/desktop';
 import { getUpdateInfo, openExternal } from './utils/updater';
 import { useIsPhone, useIsTablet, useIsDesktop } from './hooks/useMediaQuery';
+import { scrollMovesPanel } from './utils/scrollClose';
 import { useVisualViewportInset } from './hooks/useVisualViewport';
 import { useLlm } from './context/llm-context';
 import { useFeedback } from './context/feedback';
@@ -133,6 +134,7 @@ export default function App() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const dragTabIdRef = useRef<string | null>(null);
   const stripRef = useRef<HTMLDivElement>(null);
+  const tabstripRef = useRef<HTMLDivElement>(null); // 标签条整体:右键菜单「滚动收拢」的判定范围
 
   // 文件标签持久化:标签列表/激活标签变化即写入 localStorage(固定页不存);
   // 恢复时若保存的激活标签已不存在(如远程标签被连接切换清理),回退到最后一个标签
@@ -870,7 +872,8 @@ export default function App() {
   };
   useEffect(() => {
     if (!tabMenu) return;
-    const closeMenu = () => setTabMenu(null);
+    // 滚动只在标签条自身/其外层容器滚动时收起(会带动标签位置);聊天流式吸底等无关滚动不打断
+    const onScroll = (e: Event) => { if (scrollMovesPanel(tabstripRef.current, e)) setTabMenu(null); };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (tabMenuRef.current && tabMenuRef.current.contains(t)) return;
@@ -879,11 +882,11 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setTabMenu(null); };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', closeMenu, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', closeMenu, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [tabMenu]);
 
@@ -1240,6 +1243,7 @@ export default function App() {
         <main className="main">
           <div
             className="tabstrip"
+            ref={tabstripRef}
             onDragOver={(e) => { if (dragTabIdRef.current) e.preventDefault(); }}
             onDrop={(e) => e.preventDefault()}
           >

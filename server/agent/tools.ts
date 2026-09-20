@@ -1069,6 +1069,8 @@ const interactionToolDefs: ToolDef[] = [
       lines.push(`成图附件 id:${job.saved.map((a) => a.id).join(', ')}`
         + '(用户若要继续修改这张图,下次调用带 use_last_image=true;要显式指定这张图作参考,把该 id 放进 reference_attachment_ids)。');
       lines.push('图片已自动展示给用户,不要把图片嵌入你的回复正文。');
+      if (job.workspaceSaved.length) lines.push(`成图已同时保存到工作区:${job.workspaceSaved.join('、')}`);
+      else if (job.workspaceError) lines.push(`注意:成图写入工作区失败(${job.workspaceError}),已保留在会话附件中。`);
       if (job.skipped.length) lines.push(`警告:${job.skipped.length} 个参考图 id 无效或不是图片,已跳过:${job.skipped.join(', ')}`);
       if (job.upstreamModel && job.upstreamModel !== rt.cfg.model) lines.push(`注意:上游回显的实际模型为 ${job.upstreamModel}(网关做了别名路由)。`);
       if (size && size !== 'auto' && job.size && job.size !== size) lines.push(`注意:请求尺寸 ${size} 未被采纳,上游返回 ${job.size}(该网关可能忽略 size 参数)。`);

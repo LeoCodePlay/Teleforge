@@ -9,6 +9,11 @@ import { LlmClient, type ImageInput } from './llm.ts';
 import { getImageToolConfig, type ImageDialect, type ImageToolConfig } from '../store/settings-store.ts';
 import { getAttachment, readImageBytes, saveAttachment, type AttachmentMeta } from '../store/attachments-store.ts';
 import type { SessionEvent } from './session.ts';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { sshManager as ssh, joinRemote, type SshConnection } from '../core/ssh-manager.ts';
+import { localFs } from '../core/local-fs.ts';
+import { GENERATED_IMAGES_DIRNAME } from '../config.ts';
 
 /** 一次生图执行的完整结果 */
 export interface ImageJobResult {
@@ -22,6 +27,10 @@ export interface ImageJobResult {
   skipped: string[];
   /** 成图落盘后的服务端元数据(下一轮据此回灌作参考图) */
   saved: AttachmentMeta[];
+  /** 成图额外写入的工作区路径(远程/本地工作区下的 generated-images 目录);空 = 只留在会话附件里 */
+  workspaceSaved: string[];
+  /** 写入工作区失败的原因(不影响成图本身,已保留在会话附件中) */
+  workspaceError?: string;
   /** 上游回显的实际尺寸(部分网关忽略请求的 size) */
   size?: string;
   /** 上游回显的实际模型名(网关可能别名路由) */
@@ -94,6 +103,38 @@ function isRequestShapeError(e: any): boolean {
 }
 
 /**
+ * 成图在工作区里的落盘目标:
+ *  - 远程工作区已选择 → 远程(经 SFTP 上传到该连接的工作区);
+ *  - 否则本地工作区已选择 → 本地;
+ *  - 都没有(含「不在工作区对话」)→ null,成图只留在会话附件里。
+ * 远程必须先有真正绑定的连接:本地会话下 ssh.workspace 可能回落到连接级残留值。
+ */
+type GeneratedImagesTarget =
+  | { kind: 'remote'; conn: SshConnection; dir: string }
+  | { kind: 'local'; dir: string };
+
+function generatedImagesTarget(): GeneratedImagesTarget | null {
+  const conn = ssh.active;
+  const remoteWs = conn ? ssh.workspace : null;
+  if (conn && remoteWs) return { kind: 'remote', conn, dir: joinRemote(remoteWs, GENERATED_IMAGES_DIRNAME) };
+  const localWs = localFs.workspace;
+  if (localWs) return { kind: 'local', dir: path.join(localWs, GENERATED_IMAGES_DIRNAME) };
+  return null;
+}
+
+/** 把成图字节写入工作区专用目录;返回写入后的完整路径。失败抛错,由调用方降级为警告 */
+async function writeToWorkspace(target: GeneratedImagesTarget, name: string, buf: Buffer): Promise<string> {
+  const dest = target.kind === 'remote' ? joinRemote(target.dir, name) : path.join(target.dir, name);
+  if (target.kind === 'remote') {
+    await target.conn.writeRemoteFile(dest, buf, { maxBytes: 0 });
+  } else {
+    await fs.mkdir(target.dir, { recursive: true });
+    await fs.writeFile(dest, buf);
+  }
+  return dest;
+}
+
+/**
  * 执行一次生图:解析参考图 → 调端点 → 成图落盘为附件。
  * 关键约定:
  *  - 参考图只认服务端附件索引里的图片(调用方给的 id 一律重新校验,防伪造与越权读盘);
@@ -155,11 +196,23 @@ export async function runImageJob({
   }
 
   const saved: AttachmentMeta[] = [];
+  const workspaceSaved: string[] = [];
+  let workspaceError: string | undefined;
+  const target = generatedImagesTarget();
   for (let i = 0; i < imgs.length; i++) {
-    saved.push(await saveAttachment(imgs[i].buf, generatedImageName(i + 1, imgs[i].mime), imgs[i].mime));
+    const name = generatedImageName(i + 1, imgs[i].mime);
+    saved.push(await saveAttachment(imgs[i].buf, name, imgs[i].mime));
+    if (target) {
+      try { workspaceSaved.push(await writeToWorkspace(target, name, imgs[i].buf)); }
+      catch (e: any) {
+        workspaceError = e?.message || String(e);
+        console.error('[image-gen] 成图写入工作区失败:', workspaceError);
+      }
+    }
   }
   return {
-    mode, prompt, refs: refs.length, skipped, saved,
+    mode, prompt, refs: refs.length, skipped, saved, workspaceSaved,
+    ...(workspaceError ? { workspaceError } : {}),
     size: imgs[0]?.size, upstreamModel: imgs[0]?.model, revisedPrompt: imgs[0]?.revisedPrompt,
     ms: Date.now() - t0
   };

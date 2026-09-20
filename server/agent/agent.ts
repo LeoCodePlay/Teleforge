@@ -2131,7 +2131,9 @@ export class Agent {
       // 成图落盘为附件由 runImageJob 统一完成:字节进附件库、日志只存元数据(与用户上传
       // 同规则)。这是"多轮迭代"能成立的前提——下一轮要靠这个 id 把成图读回来当参考图。
       const ms = job.ms;
-      const caption = imageCaption({ mode: job.mode, refs: job.refs, size: job.size, count: job.saved.length });
+      const caption = imageCaption({ mode: job.mode, refs: job.refs, size: job.size, count: job.saved.length })
+        + (job.workspaceSaved.length ? `\n已保存到工作区:${job.workspaceSaved.join('、')}`
+          : job.workspaceError ? `\n(写入工作区失败:${job.workspaceError},已保留在会话附件中)` : '');
       // assistant/message 让切回文本模型时 AI 仍知道这里出过图;image/generated 承载成图元数据
       session.append('assistant/message', { turn, step: 1, message: { role: 'assistant', content: caption } });
       session.append('image/generated', {

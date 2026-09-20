@@ -6,6 +6,7 @@ import { useLongPress } from '../../hooks/useLongPress';
 import { sessionDot, sessionDotClass, SESSION_DOT_TIP } from '../../utils/sessionDot';
 import { useGroupReorder } from '../../hooks/useGroupReorder';
 import { orderGroups } from '../../utils/sessionGroupOrder';
+import { scrollMovesPanel } from '../../utils/scrollClose';
 import './SessionPanel.scss';
 
 interface SessionPanelProps {
@@ -222,9 +223,12 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
         <div className="s-group-body-clip">
           <div className="s-group-body">
             {shown.map((s) => {
-              const running = busyIds.includes(s.id);
+              // running 的判定移到下方 askWaiting 之后:等待作答时要从"运行中"剔除
               // 有挂起提问(等待用户操作)时运行点变黄;仅非当前会话才显示
               const askWaiting = askPendingIds.includes(s.id) && s.id !== activeId;
+              // agent 阻塞在提问上时服务端仍把它算作 busy(rt.busy 未释放),照搬 busy
+              // 判"运行中"会显示绿点、把"待用户操作"的黄点盖掉,故等待作答期间从 running 剔除
+              const running = busyIds.includes(s.id) && !askWaiting;
               return (
                 <SessionRow key={s.id} session={s}
                   active={s.id === activeId}
@@ -286,7 +290,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     });
   };
 
-  // 工作区分组折叠状态:groupKey -> 是否折叠。缺省(未记录)= 展开;
+  // 工作区分组折叠状态:groupKey -> 是否折叠。缺省(未记录)= 折叠;
   // 记录折叠的键写入 localStorage,跨刷新保留。分组键带作用域前缀,避免跨服务器冲突。
   const GROUPS_KEY = 'sshai.taskGroups';
   const loadGroupState = (): Record<string, boolean> => {
@@ -303,7 +307,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
       return next;
     });
   };
-  const isExpanded = (key: string) => !collapsedMap[key];
+  const isExpanded = (key: string) => collapsedMap[key] === false;
 
   // 其他服务器后台运行的会话:connKey 是其他服务器(排除本地模式会话——连接时本地会话
   // 也始终可见,归入本地任务列表),且仅在运行中(服务端只下发运行中的)
@@ -477,7 +481,9 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     onDeleteGroup?.(g.ids, g.ws, g.local);
   };
 
-  // 菜单打开期间:点击外部 / Esc / 滚动 关闭(对齐 FileManager 右键菜单的收拢方式)
+  // 菜单打开期间:点击外部 / Esc / 滚动 关闭(对齐 FileManager 右键菜单的收拢方式)。
+  // 滚动只在「会带动菜单锚点」时才关闭:任务列表自滚(列表在 .s-list 内)或外层容器滚动会
+  // 让菜单与分组头/会话行错位;聊天流式吸底等无关滚动不动锚点,不能把菜单打断隐藏。
   useEffect(() => {
     if (!menu && !groupMenu) return;
     const close = () => { setMenu(null); setGroupMenu(null); };
@@ -489,11 +495,12 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
+    const onScroll = (e: Event) => { if (scrollMovesPanel(listRef.current, e)) close(); };
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [menu, groupMenu]);
 

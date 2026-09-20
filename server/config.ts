@@ -33,6 +33,9 @@ export const UI_STATE_FILE      = process.env.UI_STATE_FILE      || path.join(DA
 export const SSH_PROFILES_FILE  = process.env.SSH_PROFILES_FILE  || path.join(DATA_DIR, 'ssh-profiles.json');
 export const AI_PROVIDERS_FILE  = process.env.AI_PROVIDERS_FILE  || path.join(DATA_DIR, 'ai-providers.json');
 export const ATTACHMENTS_DIR    = process.env.ATTACHMENTS_DIR    || path.join(DATA_DIR, 'attachments');
+// 「生图」成图在工作区根目录下的专用存放目录名(见 agent/image-gen.ts):
+// 远程工作区优先,其次本地工作区;两者都没选时成图只留在会话附件里。
+export const GENERATED_IMAGES_DIRNAME = 'generated-images';
 export const AGENT_TOOLS_FILE   = process.env.AGENT_TOOLS_FILE   || path.join(DATA_DIR, 'agent-tools.json');
 export const PROMPT_INJECT_FILE = process.env.PROMPT_INJECT_FILE || path.join(DATA_DIR, 'prompt-inject.md');
 export const CHAT_HISTORY_FILE  = path.join(DATA_DIR, 'chat-history.json');

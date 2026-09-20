@@ -7,7 +7,7 @@
 // 所有会话的提问都会入队(带 sid,
 // 不按当前会话过滤),切走会话时面板随会话隐藏、切回仍可见;背景会话提出的
 // 问题切回去也会重新展示,不会因事件被过滤而永久丢失。
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { AskAnswerItem, AskQuestion, AskRequest } from '../../types';
 import './AskPanel.scss';
@@ -42,8 +42,18 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
     if (checking) return sid != null && (!x.sid || x.sid === sid);
     return !sid || !x.sid || x.sid === sid;
   }) || null;
-  const q: AskQuestion | null = active ? active.questions[qIndex] || null : null;
-  const pending = !!active;
+  // 当前挂起批次一变(切会话、或换成另一批提问)就把作答指针归零。
+  // 旧逻辑只在"当前会话来了新 ask_user 事件"时归零,背景会话的提问不归零:
+  // 若上一批停在第二/第三题,切走再切回(或切回一个题数更少的背景提问),
+  // 就会沿用越界下标 —— active 存在却取不到题,面板渲染 null,
+  // 而父组件仍按 pending 锁死输入区,表现为"卡在提问、没有面板、也没有输入框"。
+  const activeAskId = active ? active.askId : null;
+  useLayoutEffect(() => { setQIndex(0); }, [activeAskId]);
+  // 夹取下标兜底:批次切换与上面 effect 之间可能隔一帧,保证有挂起提问就一定取得到题
+  const idx = active ? Math.min(Math.max(qIndex, 0), active.questions.length - 1) : 0;
+  const q: AskQuestion | null = active ? active.questions[idx] || null : null;
+  // 只有面板真能渲染出来才锁定输入区:否则会陷入"输入被锁死、面板却是空的"死局
+  const pending = !!active && !!q;
 
   // 挂起状态上抛:父组件据此禁用输入框/发送/停止按钮
   useEffect(() => { onPendingChange?.(pending); }, [pending, onPendingChange]);
@@ -133,13 +143,13 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
   };
 
   const goNext = () => {
-    if (qIndex < active.questions.length - 1) setQIndex(qIndex + 1);
+    if (idx < active.questions.length - 1) setQIndex(idx + 1);
     else submit();
   };
 
   const total = active.questions.length;
-  const isFirst = qIndex === 0;
-  const isLast = qIndex === total - 1;
+  const isFirst = idx === 0;
+  const isLast = idx === total - 1;
 
   return (
     <div className="ask-panel" role="dialog" aria-modal="false" aria-label="AI 需要你确认">
@@ -161,9 +171,9 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
                   key={qn.id}
                   role="button"
                   tabIndex={0}
-                  className={`ask-step ${i === qIndex ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`}
+                  className={`ask-step ${i === idx ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`}
                   aria-label={`第 ${i + 1} 题,${answered(qn) ? '已作答' : '未作答'}`}
-                  aria-current={i === qIndex ? 'step' : undefined}
+                  aria-current={i === idx ? 'step' : undefined}
                   title={`第 ${i + 1} 题 · ${answered(qn) ? '已作答' : '未作答'}`}
                   onClick={() => setQIndex(i)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setQIndex(i); } }}
@@ -243,7 +253,7 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
         <button className="ghost sm ask-cancel" onClick={cancel}>取消提问</button>
         <div className="ask-nav">
           {total > 1 && (
-            <button className="ghost sm" disabled={isFirst} onClick={() => setQIndex(qIndex - 1)}>‹ 上一道</button>
+            <button className="ghost sm" disabled={isFirst} onClick={() => setQIndex(idx - 1)}>‹ 上一道</button>
           )}
           <button className={isLast ? 'primary sm' : 'ghost sm'} onClick={goNext}>
             {isLast ? '提交 ✓' : '下一道 ›'}

@@ -1,6 +1,6 @@
 [package]
 name = "teleforge"
-version = "0.2.3"
+version = "0.2.5"
 description = "SSH 远程 AI 编程工具桌面端"
 authors = ["liaozhenqiang"]
 license = "GPL-3.0"
@@ -18,5 +18,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls"] }
+# system-proxy:reqwest 的默认特性里带它,而 default-features = false 会一并关掉,
+# 于是 Windows 下不读「Internet 选项」里的代理(注册表 ProxyEnable/ProxyServer),
+# 自动更新下载只能直连 GitHub(国内常年几十 KB/s 甚至 0),必须显式打开。
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls", "system-proxy"] }
 futures-util = "0.3"

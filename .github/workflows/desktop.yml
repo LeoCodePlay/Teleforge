@@ -50,6 +50,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 版本号三处不一致会让应用自动更新自噬(装到最新版仍提示更新),且 tag 必须与版本号一致
+      - name: Check version consistency
+        run: node scripts/check-versions.mjs
+
       # beforeBuildCommand 会自动执行 npm run build + node scripts/build.mjs(下载 Node 运行时、拷贝 server/web/dist、staging 安装生产依赖)
       - name: Build desktop bundle
         run: npx tauri build --bundles ${{ matrix.bundles }}

@@ -4,6 +4,7 @@ import { api } from '../../api';
 import { useFeedback } from '../../context/feedback';
 import { useHorizontalScroller } from '../../hooks/useHorizontalScroller';
 import { useLongPress } from '../../hooks/useLongPress';
+import { scrollMovesPanel } from '../../utils/scrollClose';
 import { downloadViaTauri } from '../../utils/desktop';
 import type { DirEntry } from '../../types';
 import './fm.scss';
@@ -142,14 +143,6 @@ function FmRow({ entry, selected, navLoading, renaming, renameBusy, renameDraft,
 // 文件管理器:导航式浏览远程目录(进入目录即显示其内容)
 // 选中:单击单选 · Ctrl/Cmd+单击 多选切换 · Shift+单击 连选 · Ctrl+A 全选 · Delete 删除
 // 操作:双击打开/进入 · 右键对选区执行 打开/下载/复制/删除/粘贴
-// 固定定位的右键菜单只在"面板内容会移动"的滚动时才需要关闭:滚动元素在面板内(列表/面包屑自滚)
-// 或包含面板(外层容器滚动)会让菜单与行错位;聊天流式吸底、编辑器等无关区域的滚动不打断菜单
-function scrollMovesPanel(root: HTMLElement | null, e: Event): boolean {
-  if (!root) return true;
-  const el = e.target instanceof Document ? e.target.documentElement : e.target as Node | null;
-  if (!el) return true;
-  return root.contains(el) || el.contains(root);
-}
 
 export default function FileManager({ workspace, home, connId, localCwd, onCwdChange, onOpenFile }: FileManagerProps) {
   const { confirm } = useFeedback();
@@ -828,11 +821,12 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
             <>
               <div className="ctx-sep" />
               <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}><span className="ctx-ico">🗑</span>删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
-              <div className="ctx-sep" />
-              <button onClick={() => startCreate('file')}><span className="ctx-ico">📄</span>新建文件</button>
-              <button onClick={() => startCreate('dir')}><span className="ctx-ico">📁</span>新建文件夹</button>
             </>
           )}
+          {/* 新建项不依赖是否命中条目:在空白处(含空目录)右键同样能新建到当前目录 */}
+          <div className="ctx-sep" />
+          <button onClick={() => startCreate('file')}><span className="ctx-ico">📄</span>新建文件</button>
+          <button onClick={() => startCreate('dir')}><span className="ctx-ico">📁</span>新建文件夹</button>
         </div>,
         document.body
       )}

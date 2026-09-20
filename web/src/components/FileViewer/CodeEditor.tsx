@@ -22,6 +22,7 @@ import { foldGutter, indentOnInput, bracketMatching, syntaxHighlighting } from '
 import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { searchKeymap } from '@codemirror/search';
 import { langOf, syntaxStyle } from './codeMirrorTheme';
+import { scrollMovesPanel } from '../../utils/scrollClose';
 
 interface CodeEditorProps {
   /** 文件名,用于推断语言高亮 */
@@ -132,10 +133,12 @@ export default function CodeEditor({ fileName, path, initial, onEdit, onSave }: 
     });
   };
 
-  // 关闭菜单:点击外部(pointerdown)/ Esc / 任意滚动 —— 与 FileManager 右键菜单同一套范式
+  // 关闭菜单:点击外部(pointerdown)/ Esc / 滚动 —— 与 FileManager 右键菜单同一套范式。
+  // 滚动只在编辑器自身(CodeMirror 滚动区在 .codeedit 内)或外层容器滚动时收起;
+  // 聊天流式吸底等无关滚动不动编辑器锚点,不能把菜单打断隐藏。
   useEffect(() => {
     if (!menu) return;
-    const close = () => setMenu(null);
+    const onScroll = (e: Event) => { if (scrollMovesPanel(hostRef.current, e)) setMenu(null); };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (menuRef.current && menuRef.current.contains(t)) return;
@@ -144,11 +147,11 @@ export default function CodeEditor({ fileName, path, initial, onEdit, onSave }: 
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [menu]);
 
