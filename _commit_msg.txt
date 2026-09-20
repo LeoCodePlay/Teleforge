@@ -1,0 +1,12 @@
+v0.2.3 链接点击不再整页替换
+
+- 链接点击修复:聊天/工具输出/日志里的任意 HTTP(s) 链接点击后统一进入
+  内置「浏览器预览」标签(本地项目地址与公网页面如 GitHub Release 页一样),
+  桌面端壳绝不再把整个应用页面替换成目标网页(回退键均失效);按住 Ctrl/Cmd
+  点击则交给系统默认浏览器。浏览器预览工具栏/右键菜单的「在系统浏览器打
+  开」按钮在桌面壳改走 Tauri open_external 命令(window.open 在 webview 不
+  生效),浏览器模式回落 window.open。openExternal 用 isTauri() 判定,使
+  桌面 dev 模式也能正常。
+- 隧道/预览诊断:远程端口未监听时错误提示补加 nohup/后台启动建议;
+  browser-preview.test.js 失败恢复。
+- (同步)浏览器预览按会话归属隔离 + llms.ts 其它改动。
