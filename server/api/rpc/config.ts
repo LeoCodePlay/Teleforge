@@ -2,6 +2,7 @@
 import { agent, toolRegistry } from '../../agent/agent.ts';
 import { toolSettings } from '../../agent/tool-settings.ts';
 import { getPromptInject, setPromptInject } from '../../agent/prompt-inject.ts';
+import { getBuildInfo } from '../../build-info.ts';
 import type { RpcModule } from './router.ts';
 
 export function registerConfig(rpc: RpcModule) {
@@ -18,6 +19,12 @@ export function registerConfig(rpc: RpcModule) {
     // 原 ws.js get_status case(308-311)逐字复制
     reply({ type: 'ok' });
     emitStatus();
+  });
+
+  rpc.register('build_info', async (msg, { reply }) => {
+    // 「关于与更新」面板展示后端构建信息:打包快照 / 源码运行、git sha、构建时间、是否带本地改动。
+    // 用途:桌面端跑的是构建时的代码快照,更新后要能一眼确认"生效的是哪份代码"。
+    reply({ type: 'ok', build: getBuildInfo() });
   });
 
   rpc.register('tools_list', async (msg, { reply }) => {

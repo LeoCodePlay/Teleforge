@@ -175,6 +175,14 @@ async function main() {
   const pty = spawnSync(nodeBin, ['-e', "require('node-pty')"], { cwd: OUT, encoding: 'utf8' });
   if (pty.status !== 0) throw new Error('node-pty 原生绑定缺失或无法加载,请确认 npm 已允许其 install scripts(allowScripts)');
   console.log(`   node-pty 绑定可加载 ✓`);
+
+  // ⑥ 构建戳:让安装后的「关于与更新」与 /api/health 能报出"这份包是哪个提交、什么时候打的、
+  // 有没有带未提交改动"。桌面端跑的是代码快照,没有它就无法判断某个修复是否真的进了这个包。
+  console.log('⑥ 写构建戳 BUILD.json…');
+  const { writeBuildStamp } = await import('./write-build-stamp.mjs');
+  const stamp = writeBuildStamp(path.join(OUT, 'BUILD.json'));
+  console.log(`   v${stamp.version} ${stamp.gitSha || '(无 sha)'}${stamp.dirty ? '+dirty(含未提交改动)' : ''} ${stamp.builtAt} ✓`);
+
   const sizeMB = (await dirSize(OUT)) / 1024 / 1024;
   console.log(`完成:${OUT} 共 ${sizeMB.toFixed(1)} MB,耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   await fsp.rm(STAGING, { recursive: true, force: true });

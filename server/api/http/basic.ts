@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { sshManager as ssh } from '../../core/ssh-manager.ts';
 import { agent } from '../../agent/agent.ts';
+import { getBuildInfo } from '../../build-info.ts';
 
 export default async function registerBasic(app: FastifyInstance) {
   // 读取本机私钥文件内容(仅供本地前端使用;服务默认只监听 127.0.0.1)
@@ -18,5 +19,7 @@ export default async function registerBasic(app: FastifyInstance) {
 
   // agentBusy:是否有会话正在跑一轮对话。开发模式的热重启脚本据此在"对话进行中"延后重启 ——
   // 中途杀掉服务进程会让这一轮直接从对话里消失(用户看到的就是毫无征兆地停住)。
-  app.get('/api/health', () => ({ ok: true, ts: Date.now(), connected: ssh.connected, workspace: ssh.workspace, agentBusy: agent.busyNow }));
+  // build:后端构建信息(打包快照 / 源码运行 + git sha + 构建时间)。
+  // 桌面端跑的是打包快照,排查"这个修复到底生效没有"时先看这里,别再靠猜。
+  app.get('/api/health', () => ({ ok: true, ts: Date.now(), connected: ssh.connected, workspace: ssh.workspace, agentBusy: agent.busyNow, build: getBuildInfo() }));
 }

@@ -17,6 +17,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { api } from '../../api';
 import { useFeedback } from '../../context/feedback';
 import { isDesktop } from '../../utils/desktop';
 import {
@@ -32,6 +33,26 @@ const APP_LICENSE = 'GPL-3.0';
 const APP_TAGLINE = '远程 AI 编程工具:保持 SSH 连接,让 AI 在远程服务器上读写文件、执行命令。';
 
 type Phase = 'idle' | 'checking' | 'ready' | 'downloading' | 'downloaded' | 'installing' | 'error';
+
+/** 后端构建信息(server/build-info.ts 经 build_info RPC 下发) */
+interface BackendBuild {
+  version: string;
+  gitSha: string;
+  builtAt: string | null;
+  dirty: boolean;
+  source: 'packaged' | 'dev';
+  node: string;
+  entry: string;
+}
+
+/** ISO 构建时间 → 「2026-09-20 17:40」;解析失败原样返回 */
+function fmtBuiltAt(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 /** 进度回调节流间隔:避免每个数据块都触发一次重渲染(下载大包时尤其明显) */
 const PROGRESS_THROTTLE_MS = 140;
@@ -85,6 +106,16 @@ export default function AboutPanel() {
   const [prog, setProg] = useState({ received: 0, total: 0, percent: 0 });
   const [savedPath, setSavedPath] = useState('');
   const [dirCopied, setDirCopied] = useState(false);
+  // 后端构建信息:桌面端跑的是打包快照,更新后必须能确认"生效的是哪份代码"(见 server/build-info.ts)
+  const [build, setBuild] = useState<BackendBuild | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.request('build_info', {}, 8000)
+      .then((r) => { if (alive && r?.build) setBuild(r.build as BackendBuild); })
+      .catch(() => { /* 旧后端没有该 RPC:保持 '—' 即可 */ });
+    return () => { alive = false; };
+  }, []);
 
   // 已发起的检查去重:面板每次打开都会挂载,避免重复打 GitHub
   const checkedRef = useRef(false);
@@ -225,6 +256,22 @@ export default function AboutPanel() {
           <div className="fact">
             <dt>当前版本</dt>
             <dd className="mono">v{APP_VERSION}</dd>
+          </div>
+          <div className="fact">
+            <dt>后端构建</dt>
+            <dd
+              className="mono"
+              data-tip={build ? `${build.entry || '(未知入口)'} · Node ${build.node}` : undefined}
+              data-tip-ellipsis
+            >
+              {build ? (
+                <>
+                  {build.source === 'dev' ? '源码运行(开发模式)' : (build.builtAt ? fmtBuiltAt(build.builtAt) : '已打包')}
+                  {build.gitSha ? ` · ${build.gitSha}` : ''}
+                  {build.dirty ? <span className="fact-warn"> · 含本地改动</span> : null}
+                </>
+              ) : '—'}
+            </dd>
           </div>
           <div className="fact">
             <dt>许可</dt>

@@ -5,10 +5,12 @@ import { get, list } from '../../store/subagent-store.ts';
 import type { RpcModule } from './router.ts';
 
 export function registerSubagent(rpc: RpcModule) {
-  // sid 可选:不传 = 全部会话的派发记录(面板默认只查当前会话)
+  // sid 可选:不传 = 该会话的派发记录(不带 sid 时返回空,不暴露其它会话)
   rpc.register('subagent_list', async (msg, { reply }) => {
     const sid = msg.sid ? String(msg.sid) : null;
-    reply({ type: 'subagent_list', sid, runs: list(sid) });
+    // 必须带 sid:没有 sid 一律回空,绝不回"全部会话"(面板只显示当前对话的记录,
+    // 旧前端/别的调用方也不能借这个入口看到其它会话的派发)
+    reply({ type: 'subagent_list', sid, runs: sid ? list(sid) : [] });
   });
 
   rpc.register('subagent_get', async (msg, { reply }) => {

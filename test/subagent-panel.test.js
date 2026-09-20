@@ -119,6 +119,14 @@ const files = () => { try { return readdirSync(SUBAGENTS_DIR).filter((f) => f.en
   check('subagent_list 回 type=subagent_list + runs', listReply?.type === 'subagent_list' && Array.isArray(listReply.runs)
     && listReply.runs.length === 1, JSON.stringify(listReply)?.slice(0, 160));
 
+  // 不带 sid:一律回空 —— 面板只显示当前对话的派发,别的会话的记录不能从这个入口漏出去
+  const noSidReply = await call('subagent_list', {});
+  check('subagent_list 不带 sid 回空(不暴露其它会话的记录)',
+    noSidReply?.type === 'subagent_list' && Array.isArray(noSidReply.runs) && noSidReply.runs.length === 0,
+    JSON.stringify(noSidReply)?.slice(0, 160));
+  const otherSidReply = await call('subagent_list', { sid: 's_other' });
+  check('subagent_list 只回该会话自己的记录(换会话为空)', otherSidReply?.runs?.length === 0);
+
   const one = store.list('s_RPC')[0];
   const getReply = await call('subagent_get', { runId: one.runId });
   check('subagent_get 回 type=subagent_run + 完整对话', getReply?.type === 'subagent_run'

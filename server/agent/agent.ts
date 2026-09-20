@@ -195,6 +195,9 @@ function newRuntime(session) {
   return {
     session,       // Session:该会话的事件日志(唯一事实源)
     busy: false,   // 该会话的 driver 是否在运行(idle/running 状态机的运行态)
+    // 手动压缩(/compact)是否在生成摘要:与 busy 分开记账——压缩不驱动轮次、前端也不该显示
+    // "生成中",但它同样不能被切走释放(见 switchSession)、不能并发开轮(见 submit)。
+    compacting: false,
     signal: null,  // 该会话当前轮的 AbortController
     inbox: [],     // next-turn 输入队列(followup,空闲时逐条开新轮)
     steer: [],     // next-step 注入队列(运行中补充指令,下一步生效)
@@ -761,7 +764,8 @@ export class Agent {
    * turnIndex 为消息数组(turns 投影)中的索引,>=0 时克隆到该条消息为止的事件日志
    * (截断其后的消息,从分支点另起炉灶);缺省 -1 克隆整个会话。
    * 原会话原封不动,用户可沿另一方向继续。
-   * 克隆时 Session 构造的 _heal 会给进行中的工具调用补"中止"结果,快照永远可回放。
+   * 克隆时 Session 构造的 _heal 会给进行中的工具调用补"中止"结果,快照永远可回放;
+   * 截断点若落在某轮中间,该轮只由 _heal 静默收尾(forkCut,不写崩溃披露,见 Session._healOpenTurn)。
    */
   forkSession(turnIndex = -1) {
     const srcId = this.sessionId;
@@ -776,6 +780,11 @@ export class Agent {
       if (at < 0) throw new Error('分支点无效:目标消息不在当前会话中');
       cut = at;
     }
+    // 截断点之后若只剩本轮的结构收尾(step/end、turn/end),一并纳入切片:分支日志与源会话
+    // 在该轮边界上完全一致,不需要靠自愈补收尾,收尾原因也保持真实(completed/error/…)。
+    let tail = cut;
+    while (tail < events.length && events[tail].type === 'step/end') tail++;
+    if (tail < events.length && events[tail].type === 'turn/end') cut = tail + 1;
     const log = events.slice(0, cut);
     const srcMeta = sessions.list().find((s) => s.id === srcId);
     // 分支标题:剥离旧的分支后缀后重新编号,避免 "(分支)" 层层叠加
@@ -789,7 +798,9 @@ export class Agent {
       workspace: srcMeta?.workspace ?? null,
       localWorkspace: srcMeta?.localWorkspace ?? null
     });
-    const cloned = new Session(log.map((e) => ({ type: e.type, data: e.data, time: e.time })));
+    // forkCut:切点常落在某轮中间(点在用户消息上、点在某步中途),这份切片尾部本就未闭合;
+    // 标记为分支切片后自愈只静默补 turn/end,不再把它当成"进程生成中途被杀"。
+    const cloned = new Session(log.map((e) => ({ type: e.type, data: e.data, time: e.time })), { forkCut: true });
     sessions.saveEvents(s.id, cloned.events);
     this._runtimes.set(s.id, newRuntime(cloned));
     this.sessionId = s.id;
@@ -862,7 +873,7 @@ export class Agent {
     sessions.setActive(id);
     if (prevId && prevId !== id) {
       const prev = this._runtimes.get(prevId);
-      if (prev && !prev.busy) this._runtimes.delete(prevId); // 空闲会话磁盘即最新
+      if (prev && !prev.busy && !prev.compacting) this._runtimes.delete(prevId); // 空闲会话磁盘即最新
     }
     this._applySessionBinding(id); // 切回的会话把绑定工作区应用到活动连接(UI 自动跟随)
     this.emit('agent', { event: 'session_switched', id });
@@ -939,6 +950,7 @@ export class Agent {
   deleteSession(id) {
     const rt = this._runtimes.get(id);
     if (rt?.busy) throw new Error('会话任务进行中,请先停止再删除');
+    if (rt?.compacting) throw new Error('会话正在压缩,请等待完成再删除');
     this._runtimes.delete(id);
     this._llmBySid.delete(id);       // 会话没了,它的模型快照一并回收
     this._chatOnlyUntil.delete(id);  // 降级标记同理
@@ -954,8 +966,8 @@ export class Agent {
   // 也不会留下「删了几个、还剩几个」的残留分组。返回实际删除的会话 id。
   deleteSessions(ids: string[]) {
     const list = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean);
-    const busy = list.filter((id) => this._runtimes.get(id)?.busy);
-    if (busy.length) throw new Error(`${busy.length} 个会话任务进行中,请先停止再删除`);
+    const busy = list.filter((id) => this._runtimes.get(id)?.busy || this._runtimes.get(id)?.compacting);
+    if (busy.length) throw new Error(`${busy.length} 个会话任务进行中或正在压缩,请先停止再删除`);
     for (const id of list) this.deleteSession(id);
     return list;
   }
@@ -970,6 +982,7 @@ export class Agent {
   clearHistory(id = this.sessionId) {
     const rt = id != null ? this._runtimes.get(id) : null;
     if (rt?.busy) throw new Error('会话正在运行,请先停止或等待完成');
+    if (rt?.compacting) throw new Error('会话正在压缩,请等待完成');
     if (id != null) {
       this._runtimes.set(id, newRuntime(new Session()));
       sessions.saveEvents(id, []);
@@ -990,6 +1003,7 @@ export class Agent {
     const rt = this._runtimes.get(this.sessionId);
     if (!rt) throw new Error('当前没有可操作的会话');
     if (rt.busy) throw new Error('会话正在运行,请先停止或等待完成');
+    if (rt.compacting) throw new Error('会话正在压缩,请等待完成');
     const session = rt.session;
     const events = session.events;
     const idx = locateUserEvent(events, at, loc);
@@ -1025,6 +1039,7 @@ export class Agent {
     const rt = this._runtimes.get(this.sessionId);
     if (!rt) throw new Error('当前没有可操作的会话');
     if (rt.busy) throw new Error('会话正在运行,请先停止或等待完成');
+    if (rt.compacting) throw new Error('会话正在压缩,请等待完成');
     const session = rt.session;
     const events = session.events;
     const idx = locateUserEvent(events, at, loc);
@@ -1064,6 +1079,29 @@ export class Agent {
     if (id == null) throw new Error('当前没有可压缩的会话');
     const rt = id != null ? this._runtimes.get(id) : null;
     if (rt?.busy) throw new Error('会话正在运行,请先停止或等待完成');
+    if (rt?.compacting) throw new Error('会话正在压缩,请等待完成');
+    // 摘要生成期间置 compacting:switchSession 不回收该 runtime(否则用户切走再切回时
+    // 会从磁盘重建一份不含检查点的日志,压缩完成写回的是没人持有的孤儿 session ——
+    // 线上「压缩完切会话再切回,压缩记录不见了、模型上下文也没被压缩」);
+    // submit 同时把新消息排队,避免压缩读日志时另有轮次往日志尾部追加事件。
+    // 结束/失败都在 finally 复位,并把压缩期间排队的消息派发出去。
+    if (rt) rt.compacting = true;
+    try {
+      return await this._compactNowInner(id, rt);
+    } finally {
+      if (rt) {
+        rt.compacting = false;
+        if (!rt.busy && rt.pending.length > 0) {
+          while (rt.pending.length > 0) rt.inbox.push(rt.pending.shift());
+          this._emitQueue(rt, id);
+          this._drive(rt, id);
+        }
+      }
+    }
+  }
+
+  /** compactNow 的实现:调用方已置 rt.compacting,并在 finally 复位(见 compactNow) */
+  async _compactNowInner(id: string, rt: any) {
     // 目标会话可能已从内存释放(切走时空闲 runtime 被回收):按该会话自己的磁盘日志重建。
     // 绝不回落 this.session——那会把用户正在看的另一个会话压缩后写进本 id 的文件。
     const session = rt ? rt.session : this._loadHealed(id);
@@ -1123,7 +1161,12 @@ export class Agent {
     // 非破坏压缩:日志完整保留早期消息(前端显示/刷新后回看始终完整),
     // 只追加压缩检查点,模型历史投影自检查点起跳过被压消息、以摘要顶替。
     session.markCompacted(dropSeqs, summaryMsg, { dropCount: dropMsgs.length, manual: true });
-    if (!rt) this._runtimes.set(id, newRuntime(session)); // 压缩结果同步进内存,避免下次载入前被旧快照覆盖
+    // 把压缩后的日志对齐到「当前注册的那份 runtime」:正常情况就是上面这份 session;
+    // 若期间该会话被切走又切回(旧版本/极端时序会重建 runtime),则用压缩后的日志覆盖它,
+    // 否则内存 runtime 看不到检查点(标记行消失),之后任何一轮落盘还会用旧日志覆盖磁盘。
+    const live = this._runtimes.get(id);
+    if (live && live.session !== session) live.session.events = session.events;
+    else if (!live) this._runtimes.set(id, newRuntime(session)); // 不在内存:同步进内存,避免下次载入前被旧快照覆盖
     if (id != null) sessions.saveEvents(id, session.events); // 落盘,重启/切回会话后仍在
     this.emit('agent', { event: 'history_compacted', sid: id, dropCount: dropMsgs.length });
     // 压缩后立即把仪表盘口径换成「压缩后的模型上下文」:手动压缩不产生新模型请求,
@@ -1265,9 +1308,11 @@ export class Agent {
     if (!rt) throw new Error(`会话不存在: ${sessionId}`);
     const text = String(userText);
     const atts = resolveAttachments(attachments);
-    if (rt.busy) {
+    if (rt.busy || rt.compacting) {
       // 运行中提交:默认进入待执行队列(不打断当前回复);
       // 需要打断当前回复立即执行时,由前端"立即执行"操作走 steerQueueItem(inbox 抢先 + 中止当前轮)
+      // 手动压缩中(rt.compacting)也走这里:压缩要读整份日志算 drop 区间,此刻开新轮会把
+      // 检查点追加进正在流式的轮次;压缩结束由 compactNow 的 finally 统一派发。
       rt.pending.push({ id: ++rt.queueSeq, text, reasoning, attachments: atts });
       this._emitQueue(rt, sessionId);
       return rt.driving;
@@ -1303,7 +1348,7 @@ export class Agent {
     const idx = rt.pending.findIndex((p) => p.id === id);
     if (idx < 0) throw new Error('该消息不在待执行队列中');
     const [item] = rt.pending.splice(idx, 1);
-    if (rt.busy) {
+    if (rt.busy || rt.compacting) {
       // 立即执行 = 现在就要答案:把消息插到 inbox 队首并中止正在生成的回复。
       // 当前轮捕获中止后抢救半成品并收尾,drain 随即消费队首直接开新一轮回复该消息,
       // 不等当前回复跑完。旧实现走 steer 的"下一步注入":回复未结束时消息要拖到整轮
@@ -1545,7 +1590,7 @@ export class Agent {
     let finalText = '';
     let reasoningChars = 0; // 本轮累计收到的思考字符(供 turn 结束的"零思考"提示判断)
     let stepsUsed = 0;
-    let endReason: { kind: string; error?: any } = { kind: 'completed' };
+    let endReason: { kind: string; error?: any; cause?: string } = { kind: 'completed' };
     let stepPartial = '';         // 当前步已流式收到的正文(中止时抢救落盘,保住"正在回答的部分")
     let stepPartialReasoning = '';
 
@@ -1592,6 +1637,9 @@ export class Agent {
         // 轮次一开始就把用户输入落盘(整轮只在收尾时落盘的话,进程中途被杀/热重启会把用户
         // 刚发的那句话一起丢掉,重启后对话里"连问题都没有",只剩下一片空白)。
         if (runSessionId) sessions.saveEvents(runSessionId, session.events);
+        // 用户消息一落盘就通知前端刷新任务列表:活跃排序键(lastUserAt)此刻已更新,
+        // 让「刚发消息的对话」立刻浮到最前,不必等整轮 AI 回复结束才重排
+        this.emit('agent', { event: 'sessions_changed' });
 
         // 收件箱:领取运行中注入(steer),作为本步的追加 user 消息;
         // 真实用户输入到达时重置 repeat-tool-reminder 计数(对齐 harness guard 的 reset 语义)
@@ -1885,13 +1933,24 @@ export class Agent {
         stepPartialReasoning = '';
         rt.live = null; // 已落盘:get_history 从事件日志投影,不再需要 live 半成品(防重复投影)
 
+        // 该步"到底怎么结束的"落盘(诊断用):finish_reason 是区分「模型自己收尾」与
+        // 「网关把流掐了」的唯一硬证据 —— 线上"突然断开又没报错"的排查全靠它。
+        // step/* 不投影消息面(projectEvents/deriveMessages 都忽略),加字段无副作用。
+        const stepMeta = {
+          turn, step,
+          finishReason: res.finishReason || null,
+          truncated: res.truncated === true,
+          chars: String(res.content || '').length,
+          toolCalls: (res.toolCalls || []).length
+        };
+
         // 上游流没有正常结束标记就断了(自动重试后仍如此):正文可能只写了一半。
         // 旧行为把它当正常完成 —— 用户看到的就是「回答写到一半毫无征兆停住、也没有任何报错」。
         // 现在:已生成的内容保留(不白扔),但显式收尾并在对话里留下可见记录,
         // 不再拿可能残缺的工具参数继续执行。
         if (res.truncated === true) {
           finalText = res.content || '';
-          session.append('step/end', { turn, step });
+          session.append('step/end', stepMeta);
           endReason = { kind: 'truncated' };
           this._notice(session, runSessionId,
             '模型响应流被中途中断,本次回复可能不完整(已自动重试,仍未收到正常结束标记)。发送「继续」可让我接着往下写。',
@@ -1904,7 +1963,7 @@ export class Agent {
         // 截断的步骤不得被当作正常完成),是否继续由用户决定,而不是宿主替模型续跑。
         if (!res.toolCalls || res.toolCalls.length === 0) {
           finalText = res.content || '';
-          session.append('step/end', { turn, step });
+          session.append('step/end', stepMeta);
           if (String(res.finishReason || '').toLowerCase() === 'length') {
             endReason = { kind: 'max-tokens' };
             this._notice(session, runSessionId, '上一条回复因达到输出上限被截断,本轮已结束;发送"继续"可让模型接着输出。', { level: 'warn', kind: 'max-tokens' });
@@ -1916,7 +1975,7 @@ export class Agent {
         // 并发发起、结果按模型请求顺序提交)。
         const { turnConcluded } = await this._runToolCalls(rt, session, runSessionId, signal, turn, step, res.toolCalls, invokeCtx);
 
-        session.append('step/end', { turn, step });
+        session.append('step/end', stepMeta);
         if (turnConcluded) break; // 工具显式收尾:本轮到此为止,不再请求模型
       }
 
@@ -2021,7 +2080,7 @@ export class Agent {
     const prev = lastGeneratedImage(session.events);
     const isFirst = !session.hasUserMessages();
     const turn = session.nextTurn();
-    let endReason: { kind: string; error?: any } = { kind: 'completed' };
+    let endReason: { kind: string; error?: any; cause?: string } = { kind: 'completed' };
     let turnOpened = false;
 
     // start 事件与文本轮共用:前端据此渲染用户气泡 + 一条流式中的 assistant 气泡,

@@ -777,7 +777,18 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, t
         if (!line.startsWith('data:')) continue;
         sawData = true;
         const data = line.slice(5).trim();
-        if (data === '[DONE]') return finish();
+        if (data === '[DONE]') {
+          // [DONE] 到了但整条流从没给过 finish_reason:这不是正常结束,而是网关把上游掐断后
+          // "干净地"关流(实测 LiteLLM 一类中转型网关在上游超时/不可用时就这样收尾)。
+          // 旧代码在这里直接 return,于是"模型说到一半停住"被记成 completed:用户看到的正是
+          // 「突然断开、没有任何报错、也不会重试」。与"流被截断"同一策略:先重试一次,
+          // 再容忍但标记 truncated(上层落一条可见披露,绝不静默当正常完成)。
+          if (!finishReason) {
+            if (!tolerateMissingEnd) throw new Error('LLM API 响应流被中断([DONE] 之前未收到 finish_reason)');
+            truncated = true;
+          }
+          return finish();
+        }
         try {
           const j = JSON.parse(data);
           const choice = j.choices && j.choices[0];

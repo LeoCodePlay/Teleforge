@@ -58,6 +58,7 @@ const server = http.createServer((req, res) => {
     if (step.text) res.write(sse({ content: step.text }));
     if (step.type === 'cut') { setTimeout(() => res.destroy(), 5); return; }   // 已流出内容后掐断
     if (step.type === 'eof') { res.end(); return; }                            // 无 finish_reason / [DONE] 就关闭
+    if (step.type === 'doneOnly') { res.write('data: [DONE]\n\n'); res.end(); return; } // 有 [DONE] 但整条流没有 finish_reason
     if (step.type === 'hold') return;                                          // 保持打开:等客户端中止(模拟掉线)
     res.write(sse({}, 'stop'));
     res.write('data: [DONE]\n\n');
@@ -312,6 +313,24 @@ console.log('== 7) 绑定连接失败(本轮未执行):原因与未送达的输�
   check('投影为对话里的一行 notice', agent.getHistory().some((x) => x.kind === 'turn-not-started'), j(agent.getHistory().map((x) => x.kind || x.role)));
   check('记录不进模型上下文', agent.session.deriveMessages().every((m) => !/本轮未执行/.test(String(m.content || ''))));
   ssh.connByUserKey = realLookup;
+}
+
+console.log('== 8) [DONE] 但没有 finish_reason(网关掐断后"干净收尾"):必须重试且不得记成正常完成 ==');
+{
+  script = [{ type: 'doneOnly', text: '说到一半' }, { type: 'doneOnly', text: '重试后仍无结束标记' }];
+  seen = [];
+  const { agent, events } = makeAgent();
+  const t = await runTurn(agent, '会被掐断的问题');
+  check('本轮以 truncated 收尾(不是 completed)', t.reason?.kind === 'truncated', j(t.reason));
+  check('自动重试了一次(网关共收到 2 次请求)', seen.length === 2, String(seen.length));
+  check('对话里有可见披露(不隐藏)', t.turns.some((x) => x.role === 'notice' && x.kind === 'truncated'), j(t.turns.map((x) => x.kind || x.role)));
+  check('披露已落盘(重载后仍在)', t.evs.some((e) => e.type === 'notice' && e.data?.kind === 'truncated'), j(t.evs.map((e) => e.type)));
+  const stepEnds = t.evs.filter((e) => e.type === 'step/end');
+  check('step/end 落盘了 finish_reason 诊断(下次可直接判定根因)',
+    stepEnds.some((e) => e.data && Object.prototype.hasOwnProperty.call(e.data, 'finishReason') && e.data.finishReason === null),
+    j(stepEnds.map((e) => e.data)));
+  check('step/end 标记了 truncated=true', stepEnds.some((e) => e.data?.truncated === true), j(stepEnds.map((e) => e.data)));
+  check('披露不进模型上下文', t.derived.every((m) => !/本次回复可能不完整/.test(String(m.content || ''))), j(t.derived.map((m) => m.content)));
 }
 
 console.warn = realWarn;

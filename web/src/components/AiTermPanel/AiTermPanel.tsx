@@ -60,8 +60,10 @@ function shortCommand(cmd: string, max = 46): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
-export default function AiTermPanel({ active, embedded = false, onCounts }: {
+export default function AiTermPanel({ active, embedded = false, onCounts, sid }: {
   active: boolean;
+  /** 只显示这个会话拉起的运行终端(面板跟着对话走,不跨会话显示);null = 草稿会话,什么都没有 */
+  sid?: string | null;
   /** 由外层 ActivityDock 托管:不渲染自己的悬浮胶囊/抽屉,只渲染面板内容 */
   embedded?: boolean;
   /** 向上汇报数量与运行中数量(宿主据此决定整块面板是否显示、标签上的角标) */
@@ -164,14 +166,18 @@ export default function AiTermPanel({ active, embedded = false, onCounts }: {
 
   // ---------------- 数据:列表 + 历史日志 + 实时事件 ----------------
 
+  // 只留本会话的终端:服务端列表是全量的,面板按 sid 过滤(草稿会话 sid 为空 → 一条都不显示)
+  const mine = useCallback((list: AiTermInfo[]) => (sid ? list.filter((t) => t.sid === sid) : []), [sid]);
+
   const applyTerms = useCallback((list: AiTermInfo[]) => {
+    list = mine(list);
     setTerms(list);
     setActiveId((cur) => (cur && list.some((t) => t.id === cur) ? cur : list[0]?.id ?? null));
     // 清掉服务端已不存在的终端(可能被 evict)
     const alive = new Set(list.map((t) => t.id));
     for (const id of [...xterms.current.keys()]) if (!alive.has(id)) disposeXterm(id);
     for (const id of [...logs.current.keys()]) if (!alive.has(id)) logs.current.delete(id);
-  }, [disposeXterm]);
+  }, [disposeXterm, mine]);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -202,6 +208,7 @@ export default function AiTermPanel({ active, embedded = false, onCounts }: {
       if (m.event === 'start') {
         const term: AiTermInfo | undefined = m.term;
         if (!term) return;
+        if (!sid || term.sid !== sid) return; // 别的会话拉起的终端不进这个面板
         if (!logs.current.has(id)) logs.current.set(id, '');
         setTerms((prev) => (prev.some((t) => t.id === id) ? prev : [term, ...prev]));
         setActiveId((cur) => cur ?? id);
@@ -243,7 +250,20 @@ export default function AiTermPanel({ active, embedded = false, onCounts }: {
       void fetchAll();
     });
     return () => { mountedRef.current = false; offTerm(); offOpen(); };
-  }, [appendLog, disposeXterm, fetchAll, hydrate]);
+  }, [appendLog, disposeXterm, fetchAll, hydrate, sid]);
+
+  // 切换会话:先丢掉上一个会话的终端与日志(含 xterm 实例),再按新会话重拉
+  const firstSid = useRef(sid);
+  useEffect(() => {
+    if (firstSid.current === sid) return;
+    firstSid.current = sid;
+    for (const id of [...xterms.current.keys()]) disposeXterm(id);
+    logs.current.clear();
+    setTerms([]);
+    setActiveId(null);
+    setOpen(false);
+    void fetchAll();
+  }, [sid, disposeXterm, fetchAll]);
 
   // 列表变化后把 activeId 收敛到有效值;没有终端时自动收起
   useEffect(() => {

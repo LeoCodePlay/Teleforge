@@ -72,6 +72,12 @@ export interface Session {
   title?: string;
   msgCount?: number;
   updatedAt?: string | number;
+  /**
+   * 会话最后一次「用户发消息」的时间(服务端 session-store 维护)。
+   * 任务列表的活跃排序以它为准:AI 回复只推进 updatedAt,不改 lastUserAt,
+   * 否则每轮回复都会把会话/工作区分组顶到最前。旧数据缺失时回退 updatedAt。
+   */
+  lastUserAt?: number;
   /** 所属作用域:服务器键(username@host:port)或 'local';与当前作用域不同 = 其他服务器后台运行的会话 */
   connKey?: string | null;
   /**

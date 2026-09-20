@@ -61,6 +61,8 @@ export default function ActivityDock({ active, sid, subagentRunId, onOpenSubagen
 
   // 切走标签页 / 全部内容消失:收起
   useEffect(() => { if (!active) setOpen(false); }, [active]);
+  // 切换会话:收起抽屉(面板内容属于某个对话,不跨对话残留;数据侧由两个分区按 sid 自行过滤)
+  useEffect(() => { setOpen(false); }, [sid]);
   useEffect(() => { if (total === 0) setOpen(false); }, [total]);
 
   // Esc 收起(两个分区的键盘出口统一在这里,子面板不再各挂一个)
@@ -144,7 +146,7 @@ export default function ActivityDock({ active, sid, subagentRunId, onOpenSubagen
         <div className="dock-body">
           {/* 两个分区常驻挂载:终端 xterm 切走不销毁,切回即恢复 */}
           <section className={`dock-pane${tab === 'term' ? ' on' : ''}`}>
-            <AiTermPanel active={active} embedded onCounts={onTermCounts} />
+            <AiTermPanel active={active} embedded sid={sid} onCounts={onTermCounts} />
           </section>
           <section className={`dock-pane${tab === 'subagent' ? ' on' : ''}`}>
             <SubagentPanel

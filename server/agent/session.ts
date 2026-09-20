@@ -113,12 +113,15 @@ export interface TracedMessage {
 
 export class Session {
   events: SessionEvent[];
+  /** 这份日志是"用户主动截断"的分支切片(见 Agent.forkSession):尾部未闭合的轮次静默收尾,不写崩溃披露 */
+  private _forkCut = false;
 
-  constructor(events: SessionEvent[] = []) {
+  constructor(events: SessionEvent[] = [], opts: { forkCut?: boolean } = {}) {
     // 载入/迁移的事件统一按位置重排 seq;time 缺失时补当前时间
     this.events = (events || [])
       .filter((ev: any) => ev && ev.type && ev.data && typeof ev.data === 'object')
       .map((ev: any, i: number) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
+    this._forkCut = !!opts.forkCut;
     this._heal(); // 给崩溃遗留的未闭合工具调用补结果,保证日志重放出的消息序列永远合法
   }
 
@@ -374,6 +377,9 @@ export class Session {
    * 场景:服务进程在生成中途被杀/热重启(如 npm run dev 监听 server/ 变更)/断电。
    * 此时磁盘上只有 turn/start 与已经落盘的 user/message,没有 turn/end —— 不补的话这一轮
    * 在对话里"不存在":用户看到的是对话毫无征兆地停住,连自己发的那句话都没了。
+   * 例外:分支切片(forkCut)是用户主动选的切点——forkSession 按消息面下标截断,切点常落在
+   * 某轮中间,尾部本就没有 turn/end。它不是异常退出,只静默补 turn/end,不写崩溃披露;
+   * 否则点任意一条消息的「在新对话中分支」,分支会话里都会凭空多出一条「上一轮对话没有正常结束」。
    */
   _healOpenTurn(): void {
     let open: { turn: number } | null = null;
@@ -382,12 +388,19 @@ export class Session {
       else if (ev.type === 'turn/end') open = null;
     }
     if (!open) return;
-    this.append('notice', {
-      text: '上一轮对话没有正常结束:服务进程在生成中途退出或被重启(例如开发模式的热重启),'
-        + '本轮已落盘的输入保留在上方,生成到一半的内容可能未能落盘。直接继续或重新发送即可。',
-      level: 'warn', kind: 'unclean-shutdown'
+    if (!this._forkCut) {
+      this.append('notice', {
+        text: '上一轮对话没有正常结束:服务进程在生成中途退出或被重启(例如开发模式的热重启),'
+          + '本轮已落盘的输入保留在上方,生成到一半的内容可能未能落盘。直接继续或重新发送即可。',
+        level: 'warn', kind: 'unclean-shutdown'
+      });
+    }
+    this.append('turn/end', {
+      turn: open.turn,
+      reason: this._forkCut
+        ? { kind: 'aborted', cause: 'fork' }
+        : { kind: 'interrupted', cause: 'unclean-shutdown' }
     });
-    this.append('turn/end', { turn: open.turn, reason: { kind: 'interrupted', cause: 'unclean-shutdown' } });
   }
 }
 

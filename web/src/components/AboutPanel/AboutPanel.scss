@@ -52,6 +52,9 @@
 }
 
 /* 版本事实行:当前版本 / 许可 / 更新源,竖线分隔,与区块留白对齐 */
+/* 「后端构建」里的告警标记:这份包带着未提交改动(不是干净提交打的,排查时要注意) */
+.fact-warn { color: var(--amber); }
+
 .about-facts {
   display: flex;
   flex-wrap: wrap;

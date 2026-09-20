@@ -175,12 +175,17 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const runningCount = useMemo(() => runs.filter((r) => r.status === 'running').length, [runs]);
-  useEffect(() => { onCounts?.({ count: runs.length, running: runningCount }); }, [runs.length, runningCount, onCounts]);
+  // 草稿会话(还没有 sid)名下不可能有派发记录:一条都不报,宿主也就不会显示子代理分区
+  useEffect(() => {
+    onCounts?.({ count: sid ? runs.length : 0, running: sid ? runningCount : 0 });
+  }, [sid, runs.length, runningCount, onCounts]);
   const selectedInfo = useMemo(() => runs.find((r) => r.runId === selected) || null, [runs, selected]);
 
   const fetchList = useCallback(async () => {
+    // 草稿会话没有 sid:不请求,列表直接清空(绝不把别的会话的记录当成自己的)
+    if (!sid) { setRuns([]); setListErr(null); return; }
     try {
-      const r = await api.request('subagent_list', sid ? { sid } : {}, 10000, 'subagent_list');
+      const r = await api.request('subagent_list', { sid }, 10000, 'subagent_list');
       if (!mountedRef.current) return;
       setRuns(Array.isArray(r?.runs) ? r.runs : []);
       setListErr(null);
@@ -377,7 +382,7 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
 
   // 由 ActivityDock 托管:只出内容(没有派发记录时什么都不渲染,宿主自然不显示这一栏)
   if (embedded) {
-    if (runs.length === 0) return null;
+    if (!sid || runs.length === 0) return null;
     return (
       <div className={`sa-cols${showDetailOnPhone ? ' detail' : ''}`}>
         {renderList()}
@@ -386,8 +391,8 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
     );
   }
 
-  // 独立使用:没有派发记录就不显示悬浮胶囊(整块不存在)
-  if (runs.length === 0) return null;
+  // 独立使用:没有派发记录(或草稿会话)就不显示悬浮胶囊(整块不存在)
+  if (!sid || runs.length === 0) return null;
 
   return (
     <>

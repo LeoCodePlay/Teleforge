@@ -2029,10 +2029,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
 
   // ---- 命令卡片本地状态(role='command',仅前端可见,不持久化) ----
   // 系统命令(如 /compact)执行时插入消息流尾部显示「运行中」,异步完成后按 cmdId 原地更新。
-  // 压缩成功时服务端广播 history_compacted 会重拉并整表替换历史;命令卡不持久化,故重拉时
-  // 按 cmdId 把它接回列表尾部(见 utils/commandCard),让「已压缩 N 条早期消息…」留在底部;
-  // 压缩本身的持久披露由「压缩标记行」(CompactionRow)承担,两者并存(呈现对齐 harness 的
-  // CompactionCommandCard:运行行 + checkpoint 披露)。
+  // 压缩成功时服务端广播 history_compacted 会重拉并整表替换历史;命令卡不持久化,重拉时
+  // 只在"新历史里还没有持久压缩标记行"时才按 cmdId 接回尾部(见 utils/commandCard)。
+  // 压缩本身的持久披露由「压缩标记行」(CompactionRow)承担:成功时它是这次 /compact 的
+  // 唯一记录(命令卡让位,避免底部并排两条「已压缩 N 条早期消息」)。
   const cmdSeqRef = useRef(0);
   const pushCmd = (cmd: { state: 'running' | 'ok' | 'error'; text?: string }, id?: number) => {
     const cid = id ?? ++cmdSeqRef.current;
@@ -2065,9 +2065,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         const id = pushCmd({ state: 'running', text: '正在压缩当前会话上下文…' });
         try {
           const r = await api.request('compact_now', { sid: sidArg(sid) }, 120000);
-          // 压缩成功时服务端先广播 history_compacted → 前端重拉历史,
-          // 命令卡随之被「压缩标记行」(CompactionRow)取代;这里先落完成态兜底,
-          // 保证事件重拉失败时用户仍能看到结果(harness:命令卡片折叠进 CompactionItem)
+          // 压缩成功时服务端先广播 history_compacted → 前端重拉历史,持久「压缩标记行」
+          // (CompactionRow)随之出现在对话末尾,成为这次压缩的唯一记录;命令卡被它取代。
+          // 这里保留完成态只是兜底:万一事件重拉失败(标记行没进来),用户仍能看到结果。
           if (r.compacted) patchCmd(id, { state: 'ok', text: `已压缩 ${r.dropCount} 条早期消息,上下文空间已释放` });
           else patchCmd(id, { state: 'ok', text: '当前历史较短,无需压缩' });
         } catch (e) {

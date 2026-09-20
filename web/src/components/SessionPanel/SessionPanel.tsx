@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import type { Session } from '../../types';
 import { NO_WORKSPACE, WHOLE_LABEL } from '../../types';
 import { useLongPress } from '../../hooks/useLongPress';
+import { sessionDot, sessionDotClass, SESSION_DOT_TIP } from '../../utils/sessionDot';
 import { useGroupReorder } from '../../hooks/useGroupReorder';
+import { orderGroups } from '../../utils/sessionGroupOrder';
 import './SessionPanel.scss';
 
 interface SessionPanelProps {
@@ -12,6 +14,8 @@ interface SessionPanelProps {
   busyIds?: string[];
   /** 模型提问挂起(等待用户操作)的会话 id 集合:运行点由绿变黄 */
   askPendingIds?: string[];
+  /** 有后台终端(AI 运行终端)在跑的会话 id 集合:会话空闲时状态点显示蓝色 */
+  termRunningIds?: string[];
   /** 当前作用域标签(连接的服务器或「本地工作区」) */
   scopeLabel?: string;
   /** 当前作用域键(username@host:port 或 'local');用于识别其他服务器后台运行的会话 */
@@ -106,14 +110,19 @@ interface SessionRowProps {
   running: boolean;
   /** 有挂起提问(等待用户操作)时运行点变黄;仅非当前会话才显示 */
   askWaiting: boolean;
+  /** 该会话名下有还在跑的后台终端:会话空闲时状态点显示蓝色 */
+  termRunning: boolean;
   onSwitch: (id: string) => void;
   onMenu: (e: React.MouseEvent, s: Session) => void;
   onMenuAt: (x: number, y: number, s: Session) => void;
 }
-function SessionRow({ session: s, active, running, askWaiting, onSwitch, onMenu, onMenuAt }: SessionRowProps) {
+function SessionRow({ session: s, active, running, askWaiting, termRunning, onSwitch, onMenu, onMenuAt }: SessionRowProps) {
   const lp = useLongPress((x, y) => onMenuAt(x, y, s));
   // 悬停整行时在右侧弹出首条提问:标题只是前 24 字,完整提问更有辨识度;没有提问则回落标题
   const tip = s.prompt || s.title || '';
+  // 绿(任务进行中)> 黄(等待用户操作)> 蓝(会话空闲但有后台终端在跑)> 不显示
+  const dot = sessionDot({ running, askWaiting, termRunning });
+  const dotTip = SESSION_DOT_TIP[dot];
   return (
     // 悬停整行 → 右侧宽气泡展示该会话的首条提问(气泡由全局 TooltipHost 统一渲染)
     <div key={s.id} className={`session-item ${active ? 'active' : ''}`}
@@ -122,10 +131,7 @@ function SessionRow({ session: s, active, running, askWaiting, onSwitch, onMenu,
       onClick={(ev) => { if (lp.wasLongPress()) return; onSwitch(s.id); }}>
       {/* 状态点常驻占位:空闲行也留一格(仅 visibility 隐藏),
           否则有/无小点的两行会话标题左边缘会参差不齐 */}
-      <span
-        className={`s-run${askWaiting ? ' warn' : running ? '' : ' idle'}`}
-        {...(askWaiting ? { 'data-tip': '等待用户操作' } : running ? { 'data-tip': '任务进行中' } : {})}
-      />
+      <span className={sessionDotClass(dot)} {...(dotTip ? { 'data-tip': dotTip } : {})} />
       {/* 点击始终触发切换请求(含当前会话):重载失败/加载中的会话可再次点击重试,
           而非被 activeId 守卫挡成 no-op */}
       <span className="s-title">
@@ -158,6 +164,7 @@ interface WorkspaceGroupProps {
   activeId: string | null;
   busyIds: string[];
   askPendingIds: string[];
+  termRunningIds: string[];
   sort: GroupSortBinding;
   onToggle: () => void;
   onNewInGroup: () => void;
@@ -165,9 +172,10 @@ interface WorkspaceGroupProps {
   onMenu: (e: React.MouseEvent, s: Session) => void;
   onMenuAt: (x: number, y: number, s: Session) => void;
 }
-function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, askPendingIds, sort, onToggle, onNewInGroup, onSwitch, onMenu, onMenuAt }: WorkspaceGroupProps) {
+function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, askPendingIds, termRunningIds, sort, onToggle, onNewInGroup, onSwitch, onMenu, onMenuAt }: WorkspaceGroupProps) {
   const hasRunning = sessions.some((s) => busyIds.includes(s.id));
-  // 组内可见条数:首次展开只看前 GROUP_SHOW_FIRST 条(会话按更新时间倒序下发,留下的正是最近活跃的);
+  const hasTermRunning = sessions.some((s) => termRunningIds.includes(s.id));
+  // 组内可见条数:首次展开只看前 GROUP_SHOW_FIRST 条(会话按用户最近发消息时间倒序下发,留下的正是最近活跃的);
   // 收起分组即复位,下次展开仍回到「首次展开」的样子,不残留上一轮的展开进度
   const [shownCount, setShownCount] = useState(GROUP_SHOW_FIRST);
   useEffect(() => { if (!expanded) setShownCount(GROUP_SHOW_FIRST); }, [expanded]);
@@ -191,7 +199,9 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
             悬停分组头时按钮旋入、计数淡出;移开则还原——按钮不再隐形常驻占位,右侧不会空出一片 */}
         <span className="s-group-tail" onClick={(e) => e.stopPropagation()}>
           <span className="s-group-meta">
-            {hasRunning && <span className="s-run" data-tip="有任务进行中" />}
+            {hasRunning
+              ? <span className="s-run" data-tip="有任务进行中" />
+              : hasTermRunning && <span className="s-run term" data-tip="有后台终端在运行" />}
             <span className="s-group-count">{sessions.length}</span>
           </span>
           <button type="button" className="s-group-add" aria-label="在此工作区新建会话"
@@ -219,6 +229,7 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
                 <SessionRow key={s.id} session={s}
                   active={s.id === activeId}
                   running={running}
+            termRunning={termRunningIds.includes(s.id)}
                   askWaiting={askWaiting}
                   onSwitch={onSwitch}
                   onMenu={onMenu}
@@ -251,7 +262,7 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
 //   桌面按住分组头拖,触屏长按分组头弹菜单、再由「拖动排序」起拖;顺序存 localStorage,
 //   只有「会话行」按最近活跃排序。
 // - 分组头右键(桌面)/长按(触屏)弹分组菜单:删除分组 = 该组全部对话记录 + 该工作区历史记录。
-export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete, onDeleteGroup, onRevealGroup }: SessionPanelProps) {
+export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], termRunningIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete, onDeleteGroup, onRevealGroup }: SessionPanelProps) {
   // 三点菜单:当前展开的会话 + 屏幕坐标(portal 到 body、fixed 定位,不被侧栏 overflow 裁剪)
   const [menu, setMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -356,24 +367,12 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     // 组内保持服务端下发的顺序(会话最近活跃的靠前);组间顺序交给 sortGroups
     return [...groups.entries()];
   };
-  // 组间顺序:拖拽过的按用户排好的顺序;没拖过的接在已记录分组之后,按工作区路径字典序
-  // (「未指定工作区」固定最后,沿用原约定)。新出现的工作区落在末尾,不会插进用户排好的序列里
-  const sortGroups = (groups: [string, Session[]][], sectionId: string, wsOf: (s: Session) => string | null | undefined) => {
-    const rank = new Map((orderMap[sectionId] || []).map((k, i) => [k, i]));
-    return [...groups].sort((a, b) => {
-      const ra = rank.get(a[0]);
-      const rb = rank.get(b[0]);
-      if (ra !== undefined || rb !== undefined) {
-        if (ra === undefined) return 1;
-        if (rb === undefined) return -1;
-        return ra - rb;
-      }
-      const ua = a[0].endsWith(`:${UNGROUPED}`);
-      const ub = b[0].endsWith(`:${UNGROUPED}`);
-      if (ua !== ub) return ua ? 1 : -1;
-      return String(wsOf(a[1][0]) || '').localeCompare(String(wsOf(b[1][0]) || ''), 'zh-Hans-CN', { numeric: true });
-    });
-  };
+  // 组间顺序:拖拽过的分区按用户排好的手动顺序(新出现的工作区接在末尾,不插进用户排好的序列);
+  // 没拖过的分区按组内「用户最近发消息时间」倒序——刚聊过的工作区浮到最前,
+  // 活跃度相同(如都没发过消息)时按工作区路径字典序保持稳定(「未指定工作区」固定最后)。
+  // 排序键用 lastUserAt(用户发消息时间)而非 updatedAt,AI 回复不会让工作区分组重排。
+  const sortGroups = (groups: [string, Session[]][], sectionId: string, wsOf: (s: Session) => string | null | undefined) =>
+    orderGroups(groups, { sectionId, orderMap, wsOf, ungrouped: UNGROUPED });
   // 拖拽中该分区按实时顺序渲染(被拖分组立刻让位/前移);松手后由 orderMap 接管
   const withPreview = (groups: [string, Session[]][], sectionId: string) => {
     if (!drag || drag.sectionId !== sectionId) return groups;
@@ -523,7 +522,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     groups.map((g) => (
       <WorkspaceGroup key={g.key} label={g.label} icon={icon} sessions={g.list}
         expanded={isExpanded(g.key)}
-        activeId={activeId} busyIds={busyIds} askPendingIds={askPendingIds}
+        activeId={activeId} busyIds={busyIds} askPendingIds={askPendingIds} termRunningIds={termRunningIds}
         sort={{
           groupKey: g.key,
           sectionId: g.sectionId,

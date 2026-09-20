@@ -164,6 +164,17 @@ try {
   await fab.click();
   await page.locator('.dock-drawer.open').first().waitFor({ timeout: 8000 });
   check('胶囊能重新打开抽屉', true);
+
+  // ---- 面板不跨对话:换一个对话后,胶囊与抽屉都不该再出现 ----
+  const firstSessionTitle = await page.locator('.session-item .s-title').first().innerText();
+  await page.locator('.sidebar-left').getByText('＋ 新建', { exact: true }).first().click();
+  await page.waitForTimeout(800);
+  check('新建对话后:悬浮胶囊不显示(该对话没有终端/子代理)',
+    (await page.locator('.dock-fab').count()) === 0 || !(await page.locator('.dock-fab').first().isVisible()));
+  check('新建对话后:抽屉不显示', !(await page.locator('.dock-drawer').first().isVisible()));
+  await page.locator('.session-item').filter({ hasText: firstSessionTitle }).first().click();
+  await page.waitForTimeout(800);
+  check('切回原对话:胶囊又出现(记录属于那个对话)', await page.locator('.dock-fab').first().isVisible());
 } catch (e) {
   fail++;
   console.log(`  ✗ 用例异常:${e?.message || e}`);

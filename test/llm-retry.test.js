@@ -46,6 +46,7 @@ const server = http.createServer((req, res) => {
     if (step.type === 'destroy') { setTimeout(() => res.destroy(), 5); return; } // 连接被掐断(无输出)
     if (step.type === 'partial') { setTimeout(() => res.destroy(), 5); return; } // 已输出一部分后被掐断
     if (step.type === 'eof') { res.end(); return; } // 没有 finish_reason / [DONE] 就关闭
+    if (step.type === 'doneOnly') { res.write('data: [DONE]\n\n'); res.end(); return; } // 有 [DONE] 但整条流没有 finish_reason(网关掐断后的"干净收尾")
     res.write(sseChunk({}, 'stop'));
     res.write('data: [DONE]\n\n');
     res.end();
@@ -150,6 +151,18 @@ seen = [];
 {
   const { res } = await run(mkClient());
   check('空响应后重试成功', res.content === '补上的回答', JSON.stringify(res.content));
+}
+
+// 4e) [DONE] 但没有 finish_reason:网关把上游掐断后"干净地"关流(实测 LiteLLM 一类中转网关
+//     在上游超时/不可用时如此收尾)。旧代码在这里直接 return,于是"说到一半停住"被记成正常完成 ——
+//     用户看到的就是「突然断开、没有任何报错、也不会重试」。
+script = [{ type: 'doneOnly', text: '说到一半' }, { type: 'doneOnly', text: '重试后仍无结束标记' }];
+seen = [];
+{
+  const { res, retries } = await run(mkClient());
+  check('[DONE] 无 finish_reason 会先自动重试一次', seen.length === 2, String(seen.length));
+  check('[DONE] 无 finish_reason 的结果标 truncated(不再静默当完成)', res.truncated === true, JSON.stringify(res));
+  check('[DONE] 无 finish_reason 的重试带 discard(半成品回滚)', retries.length === 1 && retries[0].discard === true, JSON.stringify(retries));
 }
 
 // 5) 429 限流:尊重网关给的 retryAfterSeconds / Retry-After

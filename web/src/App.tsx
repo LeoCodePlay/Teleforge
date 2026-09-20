@@ -11,6 +11,7 @@ import ConsolePanel from './components/ConsolePanel/ConsolePanel';
 import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
 import BrowserPanel from './components/BrowserPanel/BrowserPanel';
 import ActivityDock from './components/ActivityDock/ActivityDock';
+import { useRunningTermSessions } from './hooks/useRunningTermSessions';
 import { PREVIEW_EVENT, isHttpLink, normalizePreviewInput, previewLabel,
   BROWSER_TAB_PREFIX, allocBrowserId, browserSessionId, browserTabId,
   newDraftSessionId, ownerOfBrowserId, DRAFT_SESSION_PREFIX } from './utils/preview';
@@ -114,6 +115,9 @@ export default function App() {
     platform: null, home: null, workspace: null, localWorkspace: null, localHome: null, agentBusy: false, busySessions: [], llmModel: null,
     noWorkspace: false, localNoWorkspace: false
   });
+  // 本地后端/WS 断连标记:api 会自动重连,但此前没有任何 UI 反馈 —— 界面上那个「未连接」说的是
+  // SSH 远端连接,本地服务死了它照样显示正常,用户看到的只是「对话突然不动了,也没有报错」。
+  const [backendDown, setBackendDown] = useState(false);
   const [tabs, setTabs] = useState<TabItem[]>(() => [...PINNED_TABS, ...loadSavedFileTabs(), ...loadSavedBrowserTabs()]);
   const [activeTabId, setActiveTabId] = useState(loadSavedActiveTab);
   const tabsRef = useRef(tabs);
@@ -283,6 +287,13 @@ export default function App() {
   // 发送首条消息时由 ChatPanel 真正 session_create 并通过 onSessionCreated 回调刷新。
   const pendingNewRef = useRef(false);
 
+  // 活动面板(运行终端 + 子代理)只属于它所在的对话:切换会话时收起并清掉卡片定位,
+  // 免得 A 会话的面板内容留在 B 会话里(面板自己也会按 sid 过滤数据)。
+  useEffect(() => {
+    setSubagentPanelOpen(false);
+    setSubagentRunId(null);
+  }, [activeSessionId]);
+
   // 会话操作版本:每次「主动会话操作」(新建/切换/分支/草稿态建会话成功/删除)自增。
   // 异步 session_list 响应在其发起后若版本已变化,说明期间用户已做了更新的会话操作,
   // 该响应就是过期快照,丢弃以免把前端视图覆盖回旧会话,导致前端 sid 与后端活跃
@@ -356,7 +367,9 @@ export default function App() {
     });
     // 后端重启/WS 断线重连后:后端会话状态(列表/活跃会话)已按磁盘恢复,与前端内存可能脱节。
     // 重连成功后重新拉取对齐;期间用户已新建/切换过会话(草稿态)则保持不动,避免打断当前操作。
+    const offClose = api.on('close', () => setBackendDown(true));
     const offOpen = api.on('open', () => {
+      setBackendDown(false); // 重连成功:撤掉断连提示
       const my = opRef.current;
       api.request('session_list', {}, 8000)
         .then((r) => {
@@ -371,7 +384,7 @@ export default function App() {
     const offErr = api.on('server_error', (m: any) => {
       toast.error(m?.error || '服务器错误');
     });
-    return () => { off(); offChanged(); offAsk(); offOpen(); offErr(); };
+    return () => { off(); offChanged(); offAsk(); offClose(); offOpen(); offErr(); };
   }, []);
 
   const refreshSessions = (r: any, opts?: { forceActive?: boolean }) => {
@@ -611,6 +624,8 @@ export default function App() {
   }, [profiles, status.activeConn, status.conns, status.host, status.port, status.username]);
   // 多会话并行:busySessions 是运行中的会话集合;聊天区只关心"当前活跃会话"是否在运行
   const busySessions = status.busySessions || [];
+  // 有后台终端在跑的会话集合:会话列表据此在空闲行显示蓝色状态点(见 utils/sessionDot)
+  const termRunningIds = useRunningTermSessions();
   const activeBusy = activeSessionId != null && busySessions.includes(activeSessionId);
 
   // 工作区锁定:会话发送首条消息后锁定,不能改——
@@ -1079,6 +1094,13 @@ export default function App() {
 
   return (
     <div className="app" style={isPhone && vkInset > 0 ? { paddingBottom: vkInset } : undefined}>
+      {backendDown && (
+        // 与本地服务的连接断了:必须显式说出来(自动重连仍在进行,恢复后自动消失)
+        <div className="backend-down" role="status">
+          <span className="backend-down-dot" />
+          与本地服务的连接已断开,正在自动重连…(对话历史已保存;若长时间不恢复,请重启本应用)
+        </div>
+      )}
       <header className="topbar">
         <div className="topbar-left">
           {/* 手机:≡ 是唯一的会话抽屉入口;旁边仅展示品牌(不可点、无箭头) */}
@@ -1153,6 +1175,7 @@ export default function App() {
                 activeId={activeSessionId}
                 busyIds={busySessions}
                 askPendingIds={pendingAskIds}
+                termRunningIds={termRunningIds}
                 scopeLabel={scopeLabel}
                 scopeKey={scopeKey}
                 onNew={newSession}
@@ -1198,6 +1221,7 @@ export default function App() {
                 activeId={activeSessionId}
                 busyIds={busySessions}
                 askPendingIds={pendingAskIds}
+                termRunningIds={termRunningIds}
                 scopeLabel={scopeLabel}
                 scopeKey={scopeKey}
                 onNew={() => { newSession(); setSessionDrawerOpen(false); setActiveTabId('agent'); }}

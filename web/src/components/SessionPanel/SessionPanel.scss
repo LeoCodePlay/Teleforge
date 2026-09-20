@@ -59,6 +59,7 @@
 }
 .s-group-header .s-run { color: var(--green); width: 6px; height: 6px; }
 .s-group-header .s-group-count {
+.s-group-header .s-run.term { color: var(--running); }
   flex: none; font-size: 10px; color: var(--muted); background: var(--glass-bg-hover);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 0 5px; line-height: 15px;
 }
@@ -150,6 +151,7 @@
 /* 待用户操作(模型提问挂起):运行点变黄,提示切回该会话作答/取消 */
 .session-item .s-run.warn { color: var(--amber); box-shadow: 0 0 8px var(--warn-border); }
 /* 空闲行:小点隐去但格子照留(7px + 6px 行间距),所有会话标题左边缘严格同列 */
+.session-item .s-run.term { color: var(--running); box-shadow: 0 0 8px var(--run-border); }
 .session-item .s-run.idle { visibility: hidden; animation: none; }
 @keyframes s-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .session-item .s-actions { display: flex; gap: 2px; }

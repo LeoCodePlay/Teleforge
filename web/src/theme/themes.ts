@@ -239,6 +239,7 @@ function deriveThemeVars(t: ThemeTokens): Record<string, string> {
     '--code-ink': dark ? '#e4eaf3' : '#1e293b',        /* 代码表面上的文字(随主题翻转) */
     '--placeholder': dark ? 'rgba(138,147,166,.7)' : 'rgba(100,116,139,.7)',
     '--running': '#5686fe',                            /* 运行中蓝(StateDot/todo 前导) */
+    '--run-border': dark ? 'rgba(86,134,254,.45)' : 'rgba(86,134,254,.36)',
 
     /* 页面级玻璃条(顶栏/侧栏/底部工具栏/输入卡) */
     '--bar-tint-a': dark ? ov(0.08) : 'rgba(255,255,255,.52)',

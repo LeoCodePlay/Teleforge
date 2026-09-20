@@ -35,7 +35,7 @@ const GOLDEN = {
   ssh:      ['connect', 'disconnect', 'conn_disconnect', 'conn_switch', 'ssh_profiles_list', 'ssh_profile_save', 'ssh_profile_delete'],
   agent:    ['speak', 'stop_agent', 'get_history', 'permission_get', 'permission_default_get', 'permission_set', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_delete_group', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
   skills:   ['skills_list', 'skill_get', 'skill_save', 'skill_delete', 'skill_copy_builtin'],
-  config:   ['llm', 'get_status', 'tools_list', 'tool_toggle', 'prompt_inject_get', 'prompt_inject_set'],
+  config:   ['llm', 'get_status', 'build_info', 'tools_list', 'tool_toggle', 'prompt_inject_get', 'prompt_inject_set'],
   local:    ['list_local_dir', 'read_local_file', 'write_local_file', 'create_local_dir', 'local_delete', 'local_copy', 'local_rename', 'set_local_workspace', 'local_reveal'],
   remote:   ['list_dir', 'read_file', 'write_file', 'create_dir', 'delete', 'copy', 'rename', 'set_workspace'],
   transfer: ['local_to_remote', 'remote_to_local'],

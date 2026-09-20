@@ -268,3 +268,28 @@ body.splitting * { cursor: row-resize !important; }
 @media (hover: none) and (pointer: coarse) {
   .btab-close { opacity: .85; }
 }
+
+/* 与本地服务的连接断开(后端进程退出/WS 断线):顶部常驻提示,重连成功后自动消失。
+   刻意做得显眼:此前这种情况界面上什么都不会显示,用户只看到「对话突然不动了」。 */
+.backend-down {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--amber);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
+  flex: 0 0 auto;
+}
+.backend-down-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: backend-down-pulse 1.2s ease-in-out infinite;
+}
+@keyframes backend-down-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .25; }
+}
