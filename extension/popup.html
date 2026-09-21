@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      width: 300px; margin: 0; padding: 12px;
+      font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #1b1d21; color: #e6e7e9;
+    }
+    .brand { font-weight: 600; font-size: 13px; letter-spacing: .2px; margin-bottom: 8px; }
+    header { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; flex: 0 0 auto; }
+    .dot.on { background: #22c55e; }
+    .dot.warn { background: #f59e0b; }
+    #ver { margin-left: auto; color: #7c828c; font-size: 11px; }
+    label { display: block; color: #9aa1ab; font-size: 12px; margin: 8px 0 4px; }
+    input[type="text"] {
+      width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px;
+      border: 1px solid #33363c; background: #23262b; color: #e6e7e9;
+    }
+    .row { display: flex; gap: 8px; margin-top: 8px; }
+    button {
+      flex: 1; padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      border: 1px solid #33363c; background: #262a30; color: #e6e7e9; font-size: 12px;
+    }
+    button:hover { background: #2d3238; }
+    button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
+    button.primary:hover { background: #3b7bf5; }
+    .check { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: #e6e7e9; font-size: 12px; }
+    .err { color: #f87171; font-size: 12px; min-height: 16px; margin: 8px 0 0; word-break: break-all; }
+    .hint { color: #7c828c; font-size: 11px; margin: 10px 0 0; }
+    code { background: #262a30; padding: 1px 4px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div class="brand">Teleforge Auto</div>
+  <header>
+    <span class="dot" id="dot"></span>
+    <strong id="state">读取中…</strong>
+    <span id="ver"></span>
+  </header>
+
+  <label for="server">Teleforge 服务地址</label>
+  <input id="server" type="text" placeholder="http://127.0.0.1:4000" />
+
+  <div class="row">
+    <button id="pair" class="primary">获取配对并连接</button>
+    <button id="disconnect">断开</button>
+  </div>
+
+  <label class="check">
+    <input type="checkbox" id="paused" />
+    暂停 AI 控制
+  </label>
+
+  <div class="row">
+    <button id="detachAll">停止调试(去掉黄条)</button>
+  </div>
+
+  <p class="err" id="err"></p>
+  <p class="hint">
+    连接后 AI 就能操作这个浏览器。默认只允许操作它自己新开的标签,以及你在 Teleforge 面板里
+    「交给 AI」的标签。被操作的标签顶部会出现「正在调试此浏览器」提示,这是 Chrome 强制的。
+  </p>
+
+  <script src="popup.js"></script>
+</body>
+</html>

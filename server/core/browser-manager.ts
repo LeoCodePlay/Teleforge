@@ -243,7 +243,7 @@ function launchArgs(): string[] {
  * 页面快照脚本:给可见的可交互元素打上 data-tp-ref="eN" 引用,返回结构化描述。
  * 必须是自包含函数(page.evaluate 会把它序列化后在页面里执行,不能引用外部变量)。
  */
-const SNAPSHOT_SCRIPT = () => {
+export const SNAPSHOT_SCRIPT = () => {
   const win = globalThis as any;
   const doc = win.document;
   const ATTR = 'data-tp-ref';
@@ -317,7 +317,7 @@ const SNAPSHOT_SCRIPT = () => {
   };
 };
 
-function formatSnapshot(d: any): string {
+export function formatSnapshot(d: any): string {
   const lines: string[] = [];
   lines.push(`页面标题:${d?.title || '(无标题)'}`);
   lines.push(`地址:${d?.url || ''}`);

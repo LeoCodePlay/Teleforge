@@ -10,6 +10,8 @@
 // 设计取舍:AI 拿到的不是截图而是「结构化文本快照」(+ 可选的截图附件)。
 // 纯文本模型无法内联看图,而带 ref 的快照能精确点击/输入,比像素坐标稳得多。
 import { browserManager, defaultBrowserIdFor, normalizePreviewUrl, ownerFromBrowserId } from '../core/browser-manager.ts';
+import { nativeAvailable, nativeInventory, nativeOpsFor, previewOps } from './browser-backends.ts';
+import type { BrowserOps } from './browser-backends.ts';
 import { resolvePreviewUrl } from '../core/port-tunnel.ts';
 import { saveAttachment, attachmentUrl } from '../store/attachments-store.ts';
 import type { ToolDef } from './registry.ts';
@@ -85,6 +87,41 @@ function resolveBrowserId(args: any, invokeCtx: any, opts: { preferOwn?: boolean
   return LEGACY_BROWSER_ID;
 }
 
+/** 真机浏览器相关的工具参数说明(所有 browser_* 工具共用) */
+const TARGET_DESC = '作用在哪个浏览器上:auto(默认)= 有扩展连接就用本机真机浏览器,否则用内置预览;'
+  + 'native = 强制真机浏览器(未连接会直接报错);preview = 强制内置预览浏览器';
+const TAB_ID_DESC = '真机浏览器的标签 id(来自 browser_open 的返回或 ext_status 的标签清单);省略 = 当前活动标签。'
+  + '仅 target=native 时有意义';
+
+/**
+ * 选择这次调用作用在哪个浏览器上(两种后端见 agent/browser-backends.ts)。
+ * - 显式 target 优先;browser_id 以 native: 开头也视为真机;
+ * - 默认 auto:扩展在线 → 真机,否则 → 内置预览 —— 用户没装扩展时行为与改动前完全一致。
+ */
+function resolveOps(args: any, ctx: any, opts: { preferOwn?: boolean } = {}): BrowserOps {
+  const want = String(args?.target || '').trim().toLowerCase();
+  const rawBrowserId = String(args?.browser_id || '').trim();
+  const forceNative = want === 'native' || rawBrowserId.startsWith('native:');
+  const forcePreview = want === 'preview';
+  if (forceNative || (!forcePreview && nativeAvailable())) {
+    const rawTab = args?.tab_id ?? args?.tabId;
+    let tabId: number | null = null;
+    if (rawTab !== undefined && rawTab !== null && rawTab !== '') {
+      tabId = Number(rawTab);
+      if (!Number.isFinite(tabId)) throw new Error(`tab_id 必须是数字(收到 ${rawTab})`);
+    } else if (rawBrowserId.startsWith('native:tab:')) {
+      tabId = Number(rawBrowserId.slice('native:tab:'.length));
+    }
+    return nativeOpsFor(tabId);
+  }
+  return previewOps(resolveBrowserId(args, ctx, opts), callerSid(ctx));
+}
+
+/** 工具结果里回带的"我现在能操作哪些浏览器目标":真机列标签,预览列预览 */
+function inventoryMeta(sid: string | null, kind: string): Record<string, unknown> {
+  return kind === 'native' ? nativeInventory() : previewInventoryMeta(sid);
+}
+
 /** 工具返回的统一结构:正文 + 浏览器卡 UI 数据 */
 function browserMeta(extra: Record<string, unknown> = {}) {
   return { card: 'browser', ...extra };
@@ -93,6 +130,13 @@ function browserMeta(extra: Record<string, unknown> = {}) {
 async function openTarget(args: any, { emit, sid: callSid }: any) {
   const raw = String(args?.url || '').trim();
   if (!raw) throw new Error('url 不能为空,请给出形如 http://localhost:5173 的项目地址');
+  // 真机浏览器:直接开新标签,不走 resolvePreviewUrl —— 端口探测与 SSH 隧道是内置预览的能力,
+  // 用户自己的浏览器访问的就是他这台机器的 localhost。
+  const ops = resolveOps(args, { sid: callSid }, { preferOwn: true });
+  if (ops.kind === 'native') {
+    const st = await ops.openUrl(raw);
+    return { target: { url: raw, direct: raw, tunneled: false, note: null }, id: ops.id, state: st, ops };
+  }
   const tunnel = args?.tunnel === true ? true : args?.tunnel === false ? false : undefined;
   let target;
   try {
@@ -105,7 +149,7 @@ async function openTarget(args: any, { emit, sid: callSid }: any) {
       + '请先用 run_command 的 background=true 在远程工作区把项目启动为「运行终端」(不要用 nohup … &;输出会实时显示给用户),'
       + '用 `ss -lntp | grep <端口>` 确认端口在监听后重试 browser_open。');
   }
-  const id = resolveBrowserId(args, { sid: callSid }, { preferOwn: true });
+  const id = ops.id;
   const owner = ownerFromBrowserId(id) || callSid;
   const state = await browserManager.open({
     id, url: target.url, width: args?.width, height: args?.height, ownerSid: owner
@@ -116,7 +160,7 @@ async function openTarget(args: any, { emit, sid: callSid }: any) {
     url: target.url, direct: target.direct, tunneled: target.tunneled, note: target.note || null,
     ownerSid: state.ownerSid
   });
-  return { target, id, state };
+  return { target, id, state, ops };
 }
 
 export const browserToolDefs: ToolDef[] = [
@@ -140,6 +184,8 @@ export const browserToolDefs: ToolDef[] = [
         browser_id: { type: 'string', description: '预览标签 id;省略 = 本会话自己的预览(同一会话里已开多个预览时按打开顺序取第一个)。'
           + '同一会话可多开预览:传一个新的 id(如 "<会话id>:2")即可新开一个' },
         tunnel: { type: 'boolean', description: '是否强制走 SSH 隧道映射远程端口;省略=回环地址且已连 SSH 时自动隧道' },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
         width: { type: 'integer', description: '视口宽度,默认 1280' },
         height: { type: 'integer', description: '视口高度,默认 800' }
       },
@@ -150,9 +196,11 @@ export const browserToolDefs: ToolDef[] = [
     mutating: true,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const { target, id, state } = await openTarget(args, ctx);
-      const snap = await browserManager.snapshot(id, sid).catch((e) => `(快照失败:${e.message})`);
-      const head = [`已在浏览器预览中打开:${state.url}`];
+      const { target, id, state, ops } = await openTarget(args, ctx);
+      const snap = await ops.snapshot().catch((e) => `(快照失败:${e.message})`);
+      const head = [ops.kind === 'native'
+        ? `已在真机浏览器打开:${state.url}`
+        : `已在浏览器预览中打开:${state.url}`];
       if (target.tunneled) head.push(target.note || '已建立 SSH 隧道');
       else if (target.direct !== state.url) head.push(`原始地址 ${target.direct}`);
       if (state.error) {
@@ -160,14 +208,14 @@ export const browserToolDefs: ToolDef[] = [
         head.push('若这个地址来自前台 run_command,dev server 很可能已被工具超时终止(默认 300s)。'
           + '请改用 run_command(background=true)重启为「运行终端」,确认端口在监听后再 browser_open。');
       } else {
-        head.push('用户已能在「浏览器预览」标签里看到该页面。');
+        head.push(ops.kind === 'native' ? '已在本机浏览器里打开该标签,用户能直接看到。' : '用户已能在「浏览器预览」标签里看到该页面。');
       }
       return {
         content: head.join('\n') + '\n\n' + snap,
         meta: browserMeta({
-          browserId: id, url: state.url, direct: target.direct,
+          backend: ops.kind, browserId: id, url: state.url, direct: target.direct,
           tunneled: target.tunneled, note: target.note || null, title: state.title,
-          ...previewInventoryMeta(sid)
+          ...inventoryMeta(sid, ops.kind)
         })
       };
     }
@@ -180,18 +228,21 @@ export const browserToolDefs: ToolDef[] = [
       + 'the page; refs are refreshed on every snapshot and may become stale after the page re-renders.',
     parameters: {
       type: 'object',
-      properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC } }
+      properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC }, }
     },
     access: 'read',
     timeoutMs: 30_000,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
-      const snap = await browserManager.snapshot(id, sid);
-      const st = browserManager.state(id);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
+      const snap = await ops.snapshot();
+      const st = ops.state();
       return {
         content: snap,
-        meta: browserMeta({ browserId: id, url: st?.url || '', title: st?.title || '', ...previewInventoryMeta(sid) })
+        meta: browserMeta({ backend: ops.kind, browserId: id, url: st?.url || '', title: st?.title || '', ...inventoryMeta(sid, ops.kind) })
       };
     }
   },
@@ -204,6 +255,8 @@ export const browserToolDefs: ToolDef[] = [
       properties: {
         url: { type: 'string', description: '目标地址' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
         tunnel: { type: 'boolean', description: '是否强制走 SSH 隧道;省略=自动' }
       },
       required: ['url']
@@ -213,15 +266,30 @@ export const browserToolDefs: ToolDef[] = [
     mutating: true,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const { target, id, state } = await openTarget(args, ctx);
-      const snap = await browserManager.snapshot(id, sid).catch(() => '');
+      // 真机浏览器:导航「当前正在操作的那个标签」,而不是像 browser_open 那样新开一个 ——
+      // 否则模型连续 navigate 会把用户浏览器开满标签。
+      const opsNav = resolveOps(args, ctx, { preferOwn: true });
+      if (opsNav.kind === 'native') {
+        const st = await opsNav.navigate(String(args?.url || '').trim());
+        const snapNav = await opsNav.snapshot().catch(() => '');
+        const warnNav = st.error ? `\n⚠ 页面没能加载:${st.error}` : '';
+        return {
+          content: `已导航到:${st.url}${warnNav}\n\n${snapNav}`,
+          meta: browserMeta({
+            backend: 'native', browserId: opsNav.id, url: st.url, title: st.title,
+            ...inventoryMeta(sid, opsNav.kind)
+          })
+        };
+      }
+      const { target, id, state, ops } = await openTarget(args, ctx);
+      const snap = await ops.snapshot().catch(() => '');
       const warn = state.error ? `\n⚠ 页面没能加载:${state.error}` : '';
       return {
         content: `已导航到:${state.url}${warn}\n\n${snap}`,
         meta: browserMeta({
-          browserId: id, url: state.url, direct: target.direct,
+          backend: ops.kind, browserId: id, url: state.url, direct: target.direct,
           tunneled: target.tunneled, note: target.note || null, title: state.title,
-          ...previewInventoryMeta(sid)
+          ...inventoryMeta(sid, ops.kind)
         })
       };
     }
@@ -237,7 +305,9 @@ export const browserToolDefs: ToolDef[] = [
         ref: { type: 'string', description: 'browser_snapshot 返回的元素引用,如 e3' },
         selector: { type: 'string', description: 'CSS 选择器(与 ref/text 三选一)' },
         text: { type: 'string', description: '可见文本,匹配第一个包含它的元素' },
-        browser_id: { type: 'string', description: BROWSER_ID_DESC }
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
     access: 'write',
@@ -245,13 +315,14 @@ export const browserToolDefs: ToolDef[] = [
     mutating: true,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
-      const msg = await browserManager.click(id, { ref: args?.ref, selector: args?.selector, text: args?.text }, sid);
-      const snap = await browserManager.snapshot(id, sid).catch(() => '');
-      const st = browserManager.state(id);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
+      const msg = await ops.click({ ref: args?.ref, selector: args?.selector, text: args?.text });
+      const snap = await ops.snapshot().catch(() => '');
+      const st = ops.state();
       return {
         content: `${msg}\n\n${snap}`,
-        meta: browserMeta({ browserId: id, url: st?.url || '', title: st?.title || '', ...previewInventoryMeta(sid) })
+        meta: browserMeta({ backend: ops.kind, browserId: id, url: st?.url || '', title: st?.title || '', ...inventoryMeta(sid, ops.kind) })
       };
     }
   },
@@ -269,7 +340,9 @@ export const browserToolDefs: ToolDef[] = [
         text: { type: 'string', description: '要输入的文本' },
         clear: { type: 'boolean', description: '是否先清空原有内容,默认 true' },
         submit: { type: 'boolean', description: '输入后是否回车提交,默认 false' },
-        browser_id: { type: 'string', description: BROWSER_ID_DESC }
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
       required: ['text']
     },
@@ -278,16 +351,17 @@ export const browserToolDefs: ToolDef[] = [
     mutating: true,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
-      const msg = await browserManager.fill(id, {
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
+      const msg = await ops.fill({
         ref: args?.ref, selector: args?.selector,
         text: String(args?.text ?? ''), clear: args?.clear, submit: args?.submit === true
-      }, sid);
-      const snap = await browserManager.snapshot(id, sid).catch(() => '');
-      const st = browserManager.state(id);
+      });
+      const snap = await ops.snapshot().catch(() => '');
+      const st = ops.state();
       return {
         content: `${msg}\n\n${snap}`,
-        meta: browserMeta({ browserId: id, url: st?.url || '', title: st?.title || '', ...previewInventoryMeta(sid) })
+        meta: browserMeta({ backend: ops.kind, browserId: id, url: st?.url || '', title: st?.title || '', ...inventoryMeta(sid, ops.kind) })
       };
     }
   },
@@ -300,7 +374,9 @@ export const browserToolDefs: ToolDef[] = [
       type: 'object',
       properties: {
         key: { type: 'string', description: '按键名,如 Enter / Tab / Escape / ArrowDown / Control+A' },
-        browser_id: { type: 'string', description: BROWSER_ID_DESC }
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
       required: ['key']
     },
@@ -309,10 +385,11 @@ export const browserToolDefs: ToolDef[] = [
     mutating: true,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
       return {
-        content: await browserManager.press(id, String(args?.key || 'Enter'), sid),
-        meta: browserMeta({ browserId: id, ...previewInventoryMeta(sid) })
+        content: await ops.press(String(args?.key || 'Enter')),
+        meta: browserMeta({ backend: ops.kind, browserId: id, ...inventoryMeta(sid, ops.kind) })
       };
     }
   },
@@ -325,7 +402,9 @@ export const browserToolDefs: ToolDef[] = [
       properties: {
         direction: { type: 'string', enum: ['down', 'up'], description: '滚动方向,默认 down' },
         amount: { type: 'integer', description: '滚动像素,默认 600' },
-        browser_id: { type: 'string', description: BROWSER_ID_DESC }
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
     access: 'write',
@@ -333,10 +412,11 @@ export const browserToolDefs: ToolDef[] = [
     mutating: true,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
       return {
-        content: await browserManager.scroll(id, { direction: args?.direction, amount: args?.amount }, sid),
-        meta: browserMeta({ browserId: id, ...previewInventoryMeta(sid) })
+        content: await ops.scroll({ direction: args?.direction, amount: args?.amount }),
+        meta: browserMeta({ backend: ops.kind, browserId: id, ...inventoryMeta(sid, ops.kind) })
       };
     }
   },
@@ -352,19 +432,22 @@ export const browserToolDefs: ToolDef[] = [
         selector: { type: 'string', description: '等待该 CSS 选择器可见' },
         url: { type: 'string', description: '等待 URL 匹配(支持通配,如 **/dashboard)' },
         timeout_ms: { type: 'integer', description: '超时毫秒,默认 8000,最大 60000' },
-        browser_id: { type: 'string', description: BROWSER_ID_DESC }
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
     access: 'read',
     timeoutMs: 70_000,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
       return {
-        content: await browserManager.waitFor(id, {
+        content: await ops.waitFor({
           text: args?.text, selector: args?.selector, url: args?.url, timeoutMs: args?.timeout_ms
-        }, sid),
-        meta: browserMeta({ browserId: id, ...previewInventoryMeta(sid) })
+        }),
+        meta: browserMeta({ backend: ops.kind, browserId: id, ...inventoryMeta(sid, ops.kind) })
       };
     }
   },
@@ -377,16 +460,19 @@ export const browserToolDefs: ToolDef[] = [
       type: 'object',
       properties: {
         full_page: { type: 'boolean', description: '是否整页截图(含滚动区域),默认 false 只截视口' },
-        browser_id: { type: 'string', description: BROWSER_ID_DESC }
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
     access: 'read',
     timeoutMs: 60_000,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
-      const buf = await browserManager.screenshot(id, { fullPage: args?.full_page === true }, sid);
-      const st = browserManager.state(id);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
+      const buf = await ops.screenshot({ fullPage: args?.full_page === true });
+      const st = ops.state();
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const att = await saveAttachment(buf, `浏览器截图-${ts}.png`, 'image/png');
       return {
@@ -394,7 +480,7 @@ export const browserToolDefs: ToolDef[] = [
         meta: browserMeta({
           browserId: id, url: st?.url || '', title: st?.title || '',
           screenshot: { id: att.id, url: attachmentUrl(att.id), name: att.name },
-          ...previewInventoryMeta(sid)
+          ...inventoryMeta(sid, ops.kind)
         })
       };
     }
@@ -409,7 +495,9 @@ export const browserToolDefs: ToolDef[] = [
       type: 'object',
       properties: {
         expression: { type: 'string', description: '要执行的 JS 表达式,如 document.querySelectorAll("li").length' },
-        browser_id: { type: 'string', description: BROWSER_ID_DESC }
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
       required: ['expression']
     },
@@ -417,10 +505,11 @@ export const browserToolDefs: ToolDef[] = [
     timeoutMs: 30_000,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
       return {
-        content: await browserManager.evaluate(id, String(args?.expression || ''), sid),
-        meta: browserMeta({ browserId: id, ...previewInventoryMeta(sid) })
+        content: await ops.evaluate(String(args?.expression || '')),
+        meta: browserMeta({ backend: ops.kind, browserId: id, ...inventoryMeta(sid, ops.kind) })
       };
     }
   },
@@ -431,17 +520,20 @@ export const browserToolDefs: ToolDef[] = [
       + 'the preview, or before opening a completely unrelated project.',
     parameters: {
       type: 'object',
-      properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC } }
+      properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC }, }
     },
     access: 'write',
     timeoutMs: 30_000,
     async run(args, ctx) {
       const sid = callerSid(ctx);
-      const id = resolveBrowserId(args, ctx);
-      await browserManager.close(id, sid);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
+      await ops.close();
       return {
         content: `已关闭浏览器预览:${id}`,
-        meta: browserMeta({ browserId: id, closed: true, ...previewInventoryMeta(sid) })
+        meta: browserMeta({ browserId: id, closed: true, ...inventoryMeta(sid, ops.kind) })
       };
     }
   }

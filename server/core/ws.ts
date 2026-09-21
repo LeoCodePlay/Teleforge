@@ -24,6 +24,7 @@ import { clearSearchEngine } from '../agent/tools.ts';
 import { armAskUserDisconnectGrace, disarmAskUserDisconnectGrace } from '../agent/ask-user.ts';
 import { migrateLegacy } from '../store/session-store.ts';
 import { browserManager } from './browser-manager.ts';
+import { browserBridge } from './browser-bridge.ts';
 import { aiTerms } from './ai-term.ts';
 import { computerUse } from './computer-use/index.ts';
 
@@ -48,6 +49,9 @@ export function setupWs(httpServer: Server) {
   // 浏览器预览通道:二进制帧 = 页面画面(JPEG),JSON 帧 = 状态与输入。
   // 连接时用 ?id=<浏览器标签 id> 订阅某个预览会话(每个预览标签一条连接)。
   const browserWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
+  // 浏览器扩展桥接通道:用户本机真实浏览器里的扩展反向连到这里(见 core/browser-bridge.ts)。
+  // 与 /ws/browser 的区别:那个推的是内置预览的画面帧,这个只走控制指令(真机浏览器用户自己看得见)。
+  const extWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
 
   // 同一 http server 上有两个 WSS,必须手动路由 upgrade:
   // 若各自自动监听,非匹配路径的 WSS 会对已升级的 socket abortHandshake(400),
@@ -58,6 +62,11 @@ export function setupWs(httpServer: Server) {
       termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws));
     } else if (pathname === '/ws/browser') {
       browserWss.handleUpgrade(req, socket, head, (ws) => browserWss.emit('connection', ws, req));
+    } else if (pathname === '/ws/ext') {
+      // 浏览器扩展桥接:配对鉴权不过就销毁 socket(任意本机网页都能连 127.0.0.1 的 WS,
+      // 而这条通道能接管用户浏览器,必须在 upgrade 阶段就挡掉)
+      if (!browserBridge.authorizeUpgrade(req)) { socket.destroy(); return; }
+      extWss.handleUpgrade(req, socket, head, (ws) => extWss.emit('connection', ws, req));
     } else if (pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws));
     } else {
@@ -397,6 +406,21 @@ export function setupWs(httpServer: Server) {
     ws.on('error', () => { try { (ws as any).browserId = null; } catch { /* 忽略 */ } void browserManager.setViewer(id, false); });
   });
 
+  // ---------- 真机浏览器桥接通道(/ws/ext) ----------
+  // 扩展在连接建立时已通过 token 鉴权(见上面的 upgrade 路由),这里只负责把连接交给桥接层,
+  // 并把连接/断开/标签变化广播给前端(前端「真机浏览器」状态条据此亮灭)。
+  extWss.on('connection', (ws: WebSocket) => {
+    (ws as any).isAlive = true;
+    browserBridge.attach(ws);
+  });
+  const onExtChange = (st: any) => {
+    const payload = JSON.stringify({ type: 'ext_status', ...st });
+    for (const client of wss.clients) {
+      if (client.readyState === 1) { try { client.send(payload); } catch { /* 忽略 */ } }
+    }
+  };
+  browserBridge.on('change', onExtChange);
+
   // 浏览器画面/状态 -> 只推给订阅了该标签的连接(多标签、多浏览器互不干扰)
   const onBrowserFrame = (f: { id: string; data: Buffer }) => {
     for (const ws of browserWss.clients) {
@@ -445,7 +469,7 @@ export function setupWs(httpServer: Server) {
       try { ws.ping(); } catch {}
     }
   };
-  const heartbeatTimer = setInterval(() => { heartbeat(wss); heartbeat(termWss); heartbeat(browserWss); }, HEARTBEAT_MS);
+  const heartbeatTimer = setInterval(() => { heartbeat(wss); heartbeat(termWss); heartbeat(browserWss); heartbeat(extWss); }, HEARTBEAT_MS);
   httpServer.on('close', () => {
     clearInterval(heartbeatTimer);
     browserManager.off('frame', onBrowserFrame);
@@ -453,7 +477,8 @@ export function setupWs(httpServer: Server) {
     browserManager.off('closed', onBrowserClosed);
     browserManager.off('renamed', onBrowserRenamed);
     computerUse.off('change', onComputerUse);
+    browserBridge.off('change', onExtChange);
   });
 
-  return { wss, termWss, browserWss };
+  return { wss, termWss, browserWss, extWss };
 }

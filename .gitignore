@@ -34,3 +34,6 @@ server/data/
 
 # 生图工具的默认输出目录(运行时产物,不入库)
 generated-images/
+
+# 扩展打包产物(scripts/build-extension.mjs 生成,发布时作为 GitHub Release 附件,不入库)
+output/teleforge-auto-*.zip

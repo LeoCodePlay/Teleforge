@@ -1,0 +1,50 @@
+# Teleforge Auto 扩展发布:打 extension-v* tag 或手动触发,打包 extension/ 并发布到 GitHub Release。
+# 用户从 Release 下载 teleforge-auto-v<版本>.zip,解压后在 chrome://extensions 以「加载已解压的扩展程序」安装。
+#
+# 版本号唯一来源是 extension/manifest.json 的 version;tag 必须写成 extension-v<version>,
+# 否则 scripts/build-extension.mjs 会直接报错退出(防止发出一个版本号对不上的包)。
+name: extension-release
+
+on:
+  push:
+    tags: ["extension-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # 打包脚本只用 Node 内置模块(zlib/crypto),不需要 npm ci
+      - name: Build extension zip
+        run: node scripts/build-extension.mjs
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teleforge-auto-extension
+          path: output/teleforge-auto-v*.zip
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Teleforge Auto ${{ github.ref_name }}
+          generate_release_notes: true
+          # 关键:扩展 release 绝不能成为 GitHub 的 "latest"。
+          # 桌面端自动更新读的是 /releases/latest(src-tauri/src/commands.rs),
+          # 一旦这里被扩展发布顶掉,客户端会拿扩展的 tag 当版本号比较,更新检查直接坏掉。
+          make_latest: false
+          fail_on_unmatched_files: false
+          files: output/teleforge-auto-v*.zip

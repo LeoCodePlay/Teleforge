@@ -19,6 +19,7 @@ import registerTransfer from './api/http/transfer.ts';
 import registerMedia from './api/http/media.ts';
 import registerComputerUseHttp from './api/http/computer-use.ts';
 import registerAttachments from './api/http/attachments.ts';
+import registerBrowserBridgeHttp from './api/http/browser-bridge.ts';
 import registerStatic from './api/http/static.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,9 +49,10 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
   await app.register(registerMedia);
   await app.register(registerComputerUseHttp);
   await app.register(registerAttachments);
+  await app.register(registerBrowserBridgeHttp);
   await app.register(registerStatic); // 最后注册:静态通配不能影响 API 路由
 
-  const { wss, termWss, browserWss } = setupWs(app.server);
+  const { wss, termWss, browserWss, extWss } = setupWs(app.server);
 
   // AI 电脑操控:把实际监听端口交给控制器,悬浮窗「停止」按钮要回调本机 HTTP 急停接口
   computerUse.configure({ port });
@@ -65,18 +67,19 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
     }
     console.log('==============================================');
   }
-  return { app, server: app.server, wss, termWss, browserWss, port };
+  return { app, server: app.server, wss, termWss, browserWss, extWss, port };
 }
 
 // 直接运行时启动
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  startApp().then(({ wss, termWss, browserWss }) => {
+  startApp().then(({ wss, termWss, browserWss, extWss }) => {
     const shutdown = () => {
       console.log('\n正在退出…');
       try { wss.close(); } catch {}
       try { termWss.close(); } catch {}
       try { browserWss.close(); } catch {}
+      try { extWss.close(); } catch {}
       computerUse.shutdown(); // 关掉「AI 操控中」悬浮窗与常驻控制助手进程
       closeTunnels();
       browserManager.closeAll().catch(() => {}).finally(() => {

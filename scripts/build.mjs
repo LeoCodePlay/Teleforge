@@ -4,6 +4,7 @@
 //   server/**                       —— 后端源码副本(Node 22.18+ 类型剥离直接运行 .ts)
 //   web/dist/**                     —— 前端构建产物(static.ts 按 __dirname 相对计算到 web/dist)
 //   node_modules/**                 —— 生产依赖(staging 里 npm ci --omit=dev,获得平台正确的 node-pty 预编译)
+//   extension/**                    —— Teleforge Auto 扩展(与 GitHub Release 的 zip 同一份,装完即可在浏览器加载)
 // 用法:
 //   node scripts/build.mjs                  # 按当前平台下载 Node 运行时(需网络)
 //   TF_USE_LOCAL_NODE=1 node scripts/build.mjs  # 用本机 node 代替下载(本地开发)
@@ -86,6 +87,18 @@ async function copyServer() {
   await walk(path.join(root, 'server'), path.join(OUT, 'server'));
 }
 
+/** ③ Teleforge Auto 扩展:与 scripts/build-extension.mjs 打出的 zip 同源,装完就能在浏览器里加载 */
+async function copyExtension() {
+  const src = path.join(root, 'extension');
+  if (!fs.existsSync(path.join(src, 'manifest.json'))) {
+    throw new Error('extension/manifest.json 缺失,无法把扩展打进安装包');
+  }
+  const dst = path.join(OUT, 'extension');
+  await fsp.cp(src, dst, { recursive: true });
+  const n = (await fsp.readdir(dst)).length;
+  console.log(`   ${n} 个文件 ✓`);
+}
+
 /** ④ 生产依赖:staging 里 npm ci --omit=dev,再整体搬入 resources */
 async function prepareNodeModules() {
   await fsp.rm(STAGING, { recursive: true, force: true });
@@ -154,6 +167,9 @@ async function main() {
 
   console.log('② 拷贝 server 源码…');
   await copyServer();
+
+  console.log('②b 拷贝 Teleforge Auto 扩展…');
+  await copyExtension();
 
   console.log('③ 拷贝前端产物 web/dist…');
   const dist = path.join(root, 'web', 'dist');

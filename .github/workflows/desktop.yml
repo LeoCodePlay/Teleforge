@@ -80,6 +80,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # 安装包里已带同一份扩展,这里再单独附一个 zip:只想装浏览器扩展的用户不必下整个安装包
+      - name: Build Teleforge Auto extension zip
+        run: node scripts/build-extension.mjs
+
       - name: Download all bundles
         uses: actions/download-artifact@v4
         with:
@@ -93,4 +104,6 @@ jobs:
           name: Teleforge ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: false
-          files: bundles/**
+          files: |
+            bundles/**
+            output/teleforge-auto-v*.zip

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Teleforge Auto",
+  "version": "1.0.0",
+  "description": "Teleforge Auto:把本机真实浏览器接入 Teleforge,让 AI 打开/关闭标签、点击、输入、截图。仅连接 127.0.0.1。",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "tabs",
+    "debugger",
+    "storage",
+    "alarms",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Browser Bridge"
+  }
+}
