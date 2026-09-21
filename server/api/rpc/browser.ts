@@ -6,6 +6,7 @@
 // 内核按 id 里编入的归属 + 请求 sid 双重校验,非归属会话的请求一律拒绝(见 core/browser-manager.ts)。
 import { browserManager } from '../../core/browser-manager.ts';
 import { resolvePreviewUrl } from '../../core/port-tunnel.ts';
+import { nativeAvailable, nativeOpsFor } from '../../agent/browser-backends.ts';
 import type { RpcModule } from './router.ts';
 
 export function registerBrowser(rpc: RpcModule) {
@@ -35,6 +36,34 @@ export function registerBrowser(rpc: RpcModule) {
       type: 'browser_opened', ...state,
       direct: target.direct, tunneled: target.tunneled, note: target.note || null
     });
+  });
+
+  // 前端点链接 / 工具卡「在真实浏览器打开」:扩展在线时丢给真机浏览器,而不是内置预览。
+  //
+  // 为什么不能只走 browser_open:内置预览是 Playwright headless,带登录态的站点
+  // (x.com 这类有前置风控的)会直接 403 —— 用户点消息里的 x.com 链接永远打不开。
+  // 只有真机浏览器能带上用户自己的 cookie。扩展不在线时回 ok:false,由前端回落预览标签。
+  rpc.register('browser_open_native', async (msg, { reply }) => {
+    const raw = String(msg.url || '');
+    if (!nativeAvailable()) {
+      reply({ type: 'browser_opened_native', ok: false, reason: 'offline', url: raw });
+      return;
+    }
+    // 先过隧道解析:远程项目里的 localhost 地址要映射成本机可达的隧道地址,
+    // 真机浏览器才连得上;公网地址原样返回,不受影响。
+    let target = raw;
+    try {
+      target = (await resolvePreviewUrl(raw, {})).url;
+    } catch (e: any) {
+      reply({ type: 'browser_opened_native', ok: false, reason: e?.message || String(e), url: raw });
+      return;
+    }
+    try {
+      const state = await nativeOpsFor(null).openUrl(target);
+      reply({ type: 'browser_opened_native', ok: true, url: state.url, title: state.title });
+    } catch (e: any) {
+      reply({ type: 'browser_opened_native', ok: false, reason: e?.message || String(e), url: target });
+    }
   });
 
   rpc.register('browser_navigate', async (msg, { reply }) => {

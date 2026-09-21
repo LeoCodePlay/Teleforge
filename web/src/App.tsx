@@ -566,7 +566,33 @@ export default function App() {
   const connCount = (status.conns || []).filter((c) => c.status === 'connected').length;
   const multiConn = connCount > 1;
 
-  // 全局:聊天/工具卡里的链接点击统一接管 —— 一律用内置预览标签打开(本地项目地址与公网
+  // 真机浏览器(Teleforge Auto 扩展)是否在线:决定点链接走真机还是内置预览。
+  // 用 ref 而不是 state —— 只有点击那一瞬间要读它,不需要触发重渲染。
+  const extOnlineRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    api.request('ext_status', {}, 8000)
+      .then((r: any) => { if (alive) extOnlineRef.current = !!r?.online; })
+      .catch(() => {});
+    const off = api.on('ext_status', (m: any) => { extOnlineRef.current = !!m?.online; });
+    return () => { alive = false; off(); };
+  }, []);
+
+  // 链接去处:扩展在线 → 真机浏览器(带用户自己的登录态,x.com 这类不会被前置风控 403);
+  // 扩展不在线、或真机打开失败 → 回落内置预览标签。绝不让点击"没反应"。
+  const openLinkTarget = useCallback(async (url: string) => {
+    if (!extOnlineRef.current) { ensureBrowserTabRef.current?.(url); return; }
+    try {
+      const r: any = await api.request('browser_open_native', { url }, 60000);
+      if (r?.ok) { toast.success(`已在真实浏览器打开:${previewLabel(r.url || url)}`); return; }
+      toast.warning(`真机浏览器打开失败(${r?.reason || '未知原因'}),已改用内置预览`);
+    } catch (e) {
+      toast.warning(`真机浏览器打开失败(${(e as Error).message}),已改用内置预览`);
+    }
+    ensureBrowserTabRef.current?.(url);
+  }, [toast]);
+
+  // 全局:聊天/工具卡里的链接点击统一接管 —— 扩展在线走真机浏览器,否则内置预览标签(本地项目地址与公网
   // 外链都不例外),桌面壳里绝不放行 webview 自己导航(那会把整个应用页面换成目标网页);
   // Ctrl/Cmd 点击则交给系统默认浏览器;以及工具卡「打开预览」按钮派发的自定义事件
   useEffect(() => {
@@ -585,7 +611,7 @@ export default function App() {
       e.stopPropagation();
       // 先拦住原生导航,再决定去处:内置预览标签(默认)或系统浏览器(Ctrl/Cmd 点击)
       if (e.metaKey || e.ctrlKey) { void openExternal(href); return; }
-      ensureBrowserTabRef.current?.(href);
+      void openLinkTarget(href);
     };
     window.addEventListener(PREVIEW_EVENT, onPreviewEvent);
     document.addEventListener('click', onClickCapture, true);
