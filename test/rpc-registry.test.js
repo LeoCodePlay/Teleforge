@@ -44,7 +44,7 @@ const GOLDEN = {
   exec:     ['run_command', 'stop_command'],
   'ask-user': ['ask_user_answer', 'ask_user_cancel', 'ask_user_list'],
   ref:      ['ref_candidates'],
-  browser:  ['browser_list', 'browser_open', 'browser_navigate', 'browser_back', 'browser_forward', 'browser_reload', 'browser_resize', 'browser_info', 'browser_selection', 'browser_close', 'browser_close_all'],
+  browser:  ['browser_list', 'browser_open', 'browser_open_native', 'browser_navigate', 'browser_back', 'browser_forward', 'browser_reload', 'browser_resize', 'browser_info', 'browser_selection', 'browser_close', 'browser_close_all'],
   'ai-term': ['ai_term_list', 'ai_term_log', 'ai_term_resize', 'ai_term_delete'],
   'subagent': ['subagent_list', 'subagent_get'],
   'computer-use': ['computer_use_status', 'computer_use_set'],
