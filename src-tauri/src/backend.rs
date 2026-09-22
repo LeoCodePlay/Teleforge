@@ -21,14 +21,28 @@ pub struct BackendState {
 #[cfg(not(debug_assertions))]
 const HEALTH_TIMEOUT_SECS: u64 = 30;
 
+/// 桌面端后端监听的端口区间。浏览器扩展(Teleforge Auto)靠扫描这段区间发现服务端,
+/// 所以必须是有限且可枚举的 —— 用随机端口时用户装好扩展也不知道该填什么。
+/// 改这里要同步改 extension/background.js 的 PORT_RANGE_*。
+#[cfg(not(debug_assertions))]
+const PORT_RANGE_START: u16 = 4000;
+#[cfg(not(debug_assertions))]
+const PORT_RANGE_END: u16 = 4019;
+
 /// 生产模式入口:在后台线程运行,完成后把主窗口导航到后端地址
 #[cfg(not(debug_assertions))]
 pub fn spawn_and_wait(handle: AppHandle) {
-    // 1. 找空闲端口(先绑 127.0.0.1:0 拿端口再释放;单实例场景竞态可接受)
-    let port = match TcpListener::bind("127.0.0.1:0") {
-        Ok(l) => l.local_addr().map(|a| a.port()).unwrap_or(4000),
-        Err(_) => 4000,
-    };
+    // 1. 找空闲端口。优先在固定区间里挑(扩展要能扫到);区间全被占用才退回系统随机端口,
+    //    那种情况下只能靠用户在 popup 里手填地址。(先绑再释放,单实例场景竞态可接受。)
+    let port = (PORT_RANGE_START..=PORT_RANGE_END)
+        .find(|p| TcpListener::bind(("127.0.0.1", *p)).is_ok())
+        .or_else(|| {
+            TcpListener::bind("127.0.0.1:0")
+                .ok()
+                .and_then(|l| l.local_addr().ok())
+                .map(|a| a.port())
+        })
+        .unwrap_or(4000);
 
     // 2. 定位打包资源($RESOURCE 布局见 scripts/build.mjs)
     let res = match handle.path().resource_dir() {

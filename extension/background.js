@@ -7,6 +7,10 @@ import { attachedTabs, detach } from './cdp.js';
 import * as ops from './page-ops.js';
 
 const DEFAULT_SERVER = 'http://127.0.0.1:4000';
+// 桌面端(安装版)会在这段固定区间里挑端口,见 src-tauri/src/backend.rs 的 PORT_RANGE_*。
+// 两边必须一致:端口随机的话扩展根本扫不到服务端,用户装好扩展也配不上对。
+const PORT_RANGE_START = 4000;
+const PORT_RANGE_END = 4019;
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30000;
 
@@ -63,9 +67,50 @@ function send(obj) {
 
 // ---------------- 配对与连接 ----------------
 
+/** 探一个地址是不是 Teleforge 服务端(接口要求 X-Bridge-Pair 头,普通网页拿不到这个响应) */
+async function probeServer(base) {
+  try {
+    const res = await fetch(base + '/api/browser-bridge/pair', {
+      headers: { 'X-Bridge-Pair': '1' },
+      signal: AbortSignal.timeout(1500)
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 自动找服务端:先试用户填的/记住的地址,再并行扫固定端口区间。
+ * 安装版桌面端每次启动端口都可能不同,不能让用户去猜 —— 扫一遍就能找到。
+ * @returns 第一个应答的地址;都连不上返回 null
+ */
+async function discoverServerBase(preferred) {
+  const cfg = await loadConfig();
+  const cands = [];
+  if (preferred) cands.push(preferred);
+  if (cfg.serverBase) cands.push(cfg.serverBase);
+  cands.push(DEFAULT_SERVER);
+  for (let p = PORT_RANGE_START; p <= PORT_RANGE_END; p++) cands.push(`http://127.0.0.1:${p}`);
+  const uniq = [...new Set(cands.map((s) => String(s).replace(/\/+$/, '')))];
+  const hits = await Promise.all(uniq.map(async (b) => ((await probeServer(b)) ? b : null)));
+  return hits.find(Boolean) || null;
+}
+
 /** 从本机 Teleforge 取回配对 token 与 WS 地址(接口要求 X-Bridge-Pair 头,网页拿不到) */
 async function pair(serverBase) {
-  const base = String(serverBase || DEFAULT_SERVER).replace(/\/+$/, '');
+  let base = String(serverBase || '').trim().replace(/\/+$/, '');
+  // 没填地址、或填的地址连不上 → 自动扫端口区间找服务端
+  if (!base || !(await probeServer(base))) {
+    const found = await discoverServerBase(base);
+    if (!found) {
+      throw new Error(
+        `没找到 Teleforge 服务端(已扫描 127.0.0.1:${PORT_RANGE_START}-${PORT_RANGE_END})。` +
+        '请确认 Teleforge 正在运行,或在上面填服务地址后重试'
+      );
+    }
+    base = found;
+  }
   let res;
   try {
     res = await fetch(base + '/api/browser-bridge/pair', { headers: { 'X-Bridge-Pair': '1' } });

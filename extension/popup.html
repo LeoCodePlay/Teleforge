@@ -42,11 +42,11 @@
     <span id="ver"></span>
   </header>
 
-  <label for="server">Teleforge 服务地址</label>
-  <input id="server" type="text" placeholder="http://127.0.0.1:4000" />
+  <label for="server">Teleforge 服务地址(留空 = 自动查找)</label>
+  <input id="server" type="text" placeholder="留空自动查找,或填 http://127.0.0.1:4000" />
 
   <div class="row">
-    <button id="pair" class="primary">获取配对并连接</button>
+    <button id="pair" class="primary">查找并连接</button>
     <button id="disconnect">断开</button>
   </div>
 
@@ -61,6 +61,8 @@
 
   <p class="err" id="err"></p>
   <p class="hint">
+    桌面端每次启动端口可能不同,地址留空点「查找并连接」会自动扫描
+    <code>127.0.0.1:4000-4019</code> 找到它。<br />
     连接后 AI 就能操作这个浏览器。默认只允许操作它自己新开的标签,以及你在 Teleforge 面板里
     「交给 AI」的标签。被操作的标签顶部会出现「正在调试此浏览器」提示,这是 Chrome 强制的。
   </p>

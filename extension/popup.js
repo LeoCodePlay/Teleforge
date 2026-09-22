@@ -44,7 +44,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refresh();
 
   $('pair').addEventListener('click', () => withBusy($('pair'), async () => {
-    const r = await ask('pair', { serverBase: $('server').value.trim() || 'http://127.0.0.1:4000' });
+    // 留空 → background 会自动扫端口区间找服务端(桌面端端口不固定,不能要求用户知道)
+    const r = await ask('pair', { serverBase: $('server').value.trim() });
     if (r && r.ok) render(r.status);
     else $('err').textContent = (r && r.error) || '配对失败';
   }));
