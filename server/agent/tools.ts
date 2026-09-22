@@ -1278,6 +1278,11 @@ const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SKILL_HEAD_BYTES = 4096;     // 目录扫描只读头部,解析 frontmatter 足够
 const SKILL_BODY_MAX_BYTES = 100_000;
 const SKILLS_TTL_MS = 60_000;      // 目录缓存 TTL:每轮至多全量扫描一次
+// 目录扫描硬上限:扫描发生在轮次开始处(turn/start 落盘与模型请求之前),远程两级要走 SFTP。
+// 网络慢或连接半死时逐条读取能耗掉几分钟——那时界面已显示「运行中」、用户消息也已上屏,
+// 却没有任何输出,看起来就是"卡死"。超时一律沿用上一次目录:宁可技能列表略旧,
+// 也绝不把一整轮对话卡在扫描上。
+const SKILLS_SCAN_TIMEOUT_MS = 5000;
 const SKILL_DESC_MAX = 500;        // 目录中 description 截断长度(对齐 harness)
 
 // 解析 Markdown 头部 frontmatter(--- 包围的 key: value 行)与正文
@@ -1364,46 +1369,51 @@ async function scanBuiltin(): Promise<SkillEntry[]> {
 async function scanLocalSkillRoot(root: string, source: string): Promise<SkillEntry[]> {
   let names: string[] = [];
   try { names = fs.readdirSync(root); } catch { return []; }
-  const out: SkillEntry[] = [];
+  const jobs: Array<Promise<SkillEntry | null>> = [];
   for (const n of names) {
     if (n.startsWith('.')) continue;
     const full = path.join(root, n);
     let st;
     try { st = fs.statSync(full); } catch { continue; }
     const fallback = n.toLowerCase().replace(/\.md$/, '');
-    let s;
     if (st.isDirectory()) {
-      s = await readSkillHead(`${LOCAL_SKILL_PREFIX}${full}/SKILL.md`, `${LOCAL_SKILL_PREFIX}${full}`, fallback, source);
+      jobs.push(readSkillHead(`${LOCAL_SKILL_PREFIX}${full}/SKILL.md`, `${LOCAL_SKILL_PREFIX}${full}`, fallback, source));
     } else if (st.isFile() && n.endsWith('.md')) {
-      s = await readSkillHead(`${LOCAL_SKILL_PREFIX}${full}`, `${LOCAL_SKILL_PREFIX}${path.dirname(full)}`, fallback, source);
+      jobs.push(readSkillHead(`${LOCAL_SKILL_PREFIX}${full}`, `${LOCAL_SKILL_PREFIX}${path.dirname(full)}`, fallback, source));
     }
-    if (s) out.push(s);
   }
-  return out;
+  return (await Promise.all(jobs)).filter((s): s is SkillEntry => !!s);
 }
 
 // 扫描一个技能根目录:目录包(<name>/SKILL.md)与平铺文件(<name>.md)
 async function scanSkillRoot(root: string, source: string): Promise<SkillEntry[]> {
   let entries: FsEntry[] = [];
   try { entries = await ssh.listDir(root); } catch { return []; }
-  const out: SkillEntry[] = [];
+  // 并行读取:每个技能头要走 stat+open+read+close 多次 SFTP 往返,逐条 await 会把
+  // 往返次数直接乘进轮次开始的等待时间(实测上百个技能能拖到分钟级)。
+  const jobs: Array<Promise<SkillEntry | null>> = [];
   for (const e of entries) {
     if (e.name.startsWith('.') && e.name !== '.agents') continue;
     if (e.type === 'dir') {
-      const s = await readSkillHead(`${root}/${e.name}/SKILL.md`, `${root}/${e.name}`, e.name, source);
-      if (s) out.push(s);
+      jobs.push(readSkillHead(`${root}/${e.name}/SKILL.md`, `${root}/${e.name}`, e.name, source));
     } else if (e.type === 'file' && e.name.endsWith('.md')) {
-      const s = await readSkillHead(`${root}/${e.name}`, root, e.name.slice(0, -3), source);
-      if (s) out.push(s);
+      jobs.push(readSkillHead(`${root}/${e.name}`, root, e.name.slice(0, -3), source));
     }
   }
-  return out;
+  return (await Promise.all(jobs)).filter((s): s is SkillEntry => !!s);
 }
 
-// 技能目录缓存 key:本地根(不变)+ 远程工作区 + 远程家目录 + 本地工作区;
+// 本轮是否真的能扫远程技能目录:必须看 ssh.active(当前作用域内**实际绑定**的连接),
+// 不能用 ssh.connected —— 后者在"未绑定连接的会话轮次"里会回落到连接级 _status,把活动服务器
+// 当成可用连接:本地会话于是跑到远端工作区/家目录上逐个技能读 SFTP,一轮对话开场就卡住。
+function remoteSkillsAvailable() {
+  return !!(ssh.active && ssh.workspace && ssh.home);
+}
+
+// 技能目录缓存 key:本地根(不变)+ 远程工作区 + 远程家目录 + 本地工作区 + 是否含远程两级;
 // 任一变化即失效,TTL 内复用,避免每步重复扫描目录
 function skillContextKey() {
-  return [ssh.workspace || '', ssh.home || '', localFs.workspace || ''].join('::');
+  return [ssh.workspace || '', ssh.home || '', localFs.workspace || '', remoteSkillsAvailable() ? 'R' : 'L'].join('::');
 }
 
 let skillsCache: { key: string | null; at: number; skills: SkillEntry[] } = { key: null, at: 0, skills: [] };
@@ -1416,26 +1426,42 @@ let skillsCache: { key: string | null; at: number; skills: SkillEntry[] } = { ke
  */
 export async function refreshSkillsCatalog() {
   const ws = ssh.workspace;
-  const [builtin, localUser, localProject, localWorkspace] = await Promise.all([
-    scanBuiltin(),
-    scanLocalSkillRoot(LOCAL_USER_SKILLS, 'local-user'),
-    scanLocalSkillRoot(LOCAL_PROJECT_SKILLS, 'local-project'),
-    localFs.workspace ? scanLocalSkillRoot(path.join(localFs.workspace, '.agents', 'skills'), 'local-workspace') : Promise.resolve([])
+  const scan = (async () => {
+    const [builtin, localUser, localProject, localWorkspace] = await Promise.all([
+      scanBuiltin(),
+      scanLocalSkillRoot(LOCAL_USER_SKILLS, 'local-user'),
+      scanLocalSkillRoot(LOCAL_PROJECT_SKILLS, 'local-project'),
+      localFs.workspace ? scanLocalSkillRoot(path.join(localFs.workspace, '.agents', 'skills'), 'local-workspace') : Promise.resolve([])
+    ]);
+    // 远程两级只在"本轮确实绑定了某台连接"时才有:其余情况只返回内置 + 本机技能
+    let user: SkillEntry[] = [], project: SkillEntry[] = [];
+    if (remoteSkillsAvailable()) {
+      try {
+        [project, user] = await Promise.all([
+          scanSkillRoot(`${String(ws).replace(/\/+$/, '')}/.agents/skills`, 'project'),
+          scanSkillRoot(`${String(ssh.home).replace(/\/+$/, '')}/.agents/skills`, 'user')
+        ]);
+      } catch { /* 远程扫描失败:退回内置 + 本机技能 */ }
+    }
+    // 优先级:builtin < local-user < user < local-project < local-workspace < project;同名时后写入者覆盖先写入者
+    const byName = new Map();
+    for (const s of [...builtin, ...localUser, ...user, ...localProject, ...localWorkspace, ...project]) byName.set(s.name, s);
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  })();
+  // 硬超时:慢目录/半死连接只能让技能列表退回上一次结果,绝不允许拖住整轮对话(见常量注释)
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const skills = await Promise.race([
+    scan,
+    new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), SKILLS_SCAN_TIMEOUT_MS); })
   ]);
-  // 远程两级只有连接后才有:其余情况只返回内置 + 本机技能
-  let user: SkillEntry[] = [], project: SkillEntry[] = [];
-  if (ws && ssh.connected && ssh.home) {
-    try {
-      [project, user] = await Promise.all([
-        scanSkillRoot(`${ws.replace(/\/+$/, '')}/.agents/skills`, 'project'),
-        scanSkillRoot(`${ssh.home.replace(/\/+$/, '')}/.agents/skills`, 'user')
-      ]);
-    } catch { /* 远程扫描失败:退回内置 + 本机技能 */ }
+  if (timer) clearTimeout(timer);
+  if (skills === null) {
+    console.warn(`[skills] 技能目录扫描超过 ${SKILLS_SCAN_TIMEOUT_MS}ms 未完成,本轮沿用上次目录(${skillsCache.skills.length} 个技能)`);
+    // 记一次"已尝试":key/时间对齐当前上下文,避免 TTL 内每一步都重扫同一个慢目录
+    skillsCache = { key: skillContextKey(), at: Date.now(), skills: skillsCache.skills };
+    return skillsCache.skills;
   }
-  // 优先级:builtin < local-user < user < local-project < local-workspace < project;同名时后写入者覆盖先写入者
-  const byName = new Map();
-  for (const s of [...builtin, ...localUser, ...user, ...localProject, ...localWorkspace, ...project]) byName.set(s.name, s);
-  skillsCache = { key: skillContextKey(), at: Date.now(), skills: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)) };
+  skillsCache = { key: skillContextKey(), at: Date.now(), skills };
   return skillsCache.skills;
 }
 

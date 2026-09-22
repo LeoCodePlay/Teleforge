@@ -204,6 +204,9 @@ function newRuntime(session) {
     pending: [],   // 待执行队列(工作中提交的消息,FIFO,当前轮结束后逐条自动执行)
     queueSeq: 0,   // 待执行队列项的自增 id(供前端按 id 做立即执行/删除等操作)
     driving: null, // 进行中的 driver promise(同会话并发提交复用同一驱动)
+    // 上一次驱动是否已收尾:rt.driving 的清空回调是微任务,可能滞后于驱动真正结束;
+    // 不区分"已结束但 promise 还挂着"就会把新派发的输入吞掉(永不执行,界面停在运行中)。
+    driveDone: true,
     boundConn: null, // 当前轮绑定的 SSH 连接(切走活动连接后工具仍操作它)
     // 该会话归属的服务器键(username@host:port,取自会话元数据):新一轮开始时按它解析
     // 连接对象。缺失(旧会话/local 作用域)才回落当前活动连接。
@@ -1091,7 +1094,10 @@ export class Agent {
     } finally {
       if (rt) {
         rt.compacting = false;
-        if (!rt.busy && rt.pending.length > 0) {
+        // 压缩期间排队的消息必须在此刻派发:除了 rt.pending,还要看 rt.inbox —— 用户点
+        // 「立即执行」时消息会先被移进 inbox,只认 pending 就会把它漏掉。漏掉的后果是前端
+        // 队列面板已清空(看起来"发出去了")、驱动却从未启动:agent 一直"运行中"、毫无输出。
+        if (!rt.busy && (rt.pending.length > 0 || rt.inbox.length > 0)) {
           while (rt.pending.length > 0) rt.inbox.push(rt.pending.shift());
           this._emitQueue(rt, id);
           this._drive(rt, id);
@@ -1379,9 +1385,11 @@ export class Agent {
 
   // 唤醒某会话的 driver:同一会话同一时刻只有一个驱动在跑,并发提交复用同一个 promise
   _drive(rt, id) {
-    if (rt.driving) return rt.driving;
+    // 只有"上一次驱动确实还在跑"才复用它的 promise;已收尾(即使 promise 还没被清掉)必须开新驱动
+    if (rt.driving && !rt.driveDone) return rt.driving;
+    rt.driveDone = false;
     rt.driving = this._drain(rt, id);
-    return rt.driving.finally(() => { rt.driving = null; });
+    return rt.driving;
   }
 
   // driver 主循环:逐条消费该会话的 inbox,每条输入跑完整一轮(Turn)
@@ -1416,6 +1424,7 @@ export class Agent {
       rt.busy = false;
       rt.signal = null;
       rt.boundConn = null;
+      rt.driveDone = true; // 同步置位(见 newRuntime.driveDone):不能只靠 promise 回调去清 rt.driving
       this.emit('agent', { event: 'status', status: 'idle', sid: id });
     }
   }
@@ -1607,10 +1616,6 @@ export class Agent {
       this.emit('agent', { event: 'skill_loaded', skills: injectedSkills, sid: runSessionId });
     }
     try {
-      // 技能目录:每轮开始按需刷新一次(工作区变化或 TTL 过期),供 system prompt 注入
-      if (useTools && skillsCatalogStale()) {
-        try { await refreshSkillsCatalog(); } catch { /* 扫描失败不阻塞本轮 */ }
-      }
       // 工具调用上下文:todo_write 等需要写会话事件日志的工具从这里拿到所属会话
       // invokeCtx 里带上当前模型客户端与工具注册表:subagent 工具需要它们起独立循环
       // (用注入而不是 import,避免 tools.ts 反向依赖 agent.ts)
@@ -1649,6 +1654,14 @@ export class Agent {
             ...(Array.isArray(s.attachments) && s.attachments.length ? { attachments: s.attachments } : {})
           });
           if (!s.internal) { rt.lastCallKey = null; rt.lastCallCount = 0; }
+        }
+
+        // 技能目录:每轮按需刷新一次(工作区变化或 TTL 过期),供 system prompt 与运行时
+        // 上下文快照注入。位置在 turn/start + user/message 落盘之后、快照生成之前:目录扫描要
+        // 读磁盘/走 SFTP,慢的时候不能把「这一轮已经开始」的事实一起卡住(否则界面显示运行中、
+        // 日志里却什么都没有);但必须早于快照——快照文本里含技能目录,晚于它会多追加一条快照。
+        if (useTools && skillsCatalogStale()) {
+          try { await refreshSkillsCatalog(); } catch { /* 扫描失败不阻塞本轮 */ }
         }
 
         // 运行时上下文快照(对齐 harness runtime-context 投影):工作区/技能目录/环境探测
