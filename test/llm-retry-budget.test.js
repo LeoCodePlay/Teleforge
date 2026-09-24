@@ -1,15 +1,18 @@
-// 「重试预算」账目测试(用户反馈:模型连接中断时「只重试 1 次就放弃」)。
+// 「重试次数」账目测试(用户反馈:连接超时/未响应 600s 就直接停止,明明还有重试额度)。
+// 现行语义:不再有总时长预算(BUDGET_MS 已移除),唯一的放弃条件是重试次数用尽(MAX_ATTEMPTS)。
 // 用可控的假网关验证三件事:
-//   1) 网关假死(接了连接一个字节都不发)时,单次尝试的等待不超过剩余预算,
-//      所以同一轮里还能继续重试,而不是一次假死就把整轮预算吃光;
-//   2) 流一直有数据却永不结束时,由预算 deadline 兜底掐断(静默看门狗永远等不到);
-//   3) 放弃时文案写清「为什么停」(重试总预算用尽),且总耗时不超过预算。
+//   1) 网关假死(接了连接一个字节都不发)时,单次尝试被静默看门狗掐断并继续重试,
+//      一直重试到次数用尽才停 —— 而不是一次假死就让整轮失败;
+//   2) 流一直有数据却永不结束时,由「单次尝试总时长上限」(ATTEMPT_MS)兜底掐断并继续重试
+//      (这种情形静默看门狗每收到数据就被重置,永远等不到);
+//   3) 空响应(正文/思考/工具调用全空)同样要重试多次,且失败原因保留在文案里。
 process.env.LLM_RETRY_BASE_DELAY_MS = '20';
 process.env.LLM_RETRY_MAX_DELAY_MS = '60';
-process.env.LLM_RETRY_BUDGET_MS = '1200';
-process.env.LLM_RETRY_MAX_ATTEMPTS = '20';
-// 静默看门狗压到 300ms(生产默认 60s):毫秒级跑完与生产同一套时序
-process.env.LLM_STREAM_IDLE_MS = '300';
+process.env.LLM_RETRY_MAX_ATTEMPTS = '5';
+// 静默看门狗压到 200ms、单次尝试总时长上限压到 1000ms(生产默认都是 300s):
+// 毫秒级跑完与生产同一套时序
+process.env.LLM_STREAM_IDLE_MS = '200';
+process.env.LLM_ATTEMPT_MS = '1000';
 
 import http from 'node:http';
 const { LlmClient, LLM_RETRY } = await import('../server/agent/llm.ts');
@@ -34,7 +37,7 @@ const server = http.createServer((req, res) => {
       const timer = setInterval(() => {
         if (res.writableEnded || res.destroyed) return stop();
         try { res.write(sseChunk({ content: '.' })); } catch { stop(); }
-      }, 80);
+      }, 40);
       res.on('close', stop);
       res.on('error', stop);
       return;
@@ -60,36 +63,34 @@ const run = async () => {
   return { ms: Date.now() - t0, message: String(err?.message || '') };
 };
 
-console.log('== 重试预算账目 ==');
-const BUDGET = LLM_RETRY.BUDGET_MS;
+console.log('== 重试次数账目 ==');
+const MAX = LLM_RETRY.MAX_ATTEMPTS;
 
-// 1) 网关假死:单次尝试不允许吃掉整轮预算(否则用户看到的就是「只重试 1 次就放弃」)
+// 1) 网关假死:必须一直重试到次数用尽(旧行为:总预算一到就停)
 script = Array.from({ length: 30 }, () => ({ type: 'silent' }));
 seen = [];
 {
-  const { message, ms } = await run();
-  check('假死时同一轮确实重试了多次(不是 1 次就放弃)', seen.length > 1, `请求 ${seen.length} 次`);
-  check('总耗时被重试总预算钉住(不会因为静默超时更长而无限等)', ms <= BUDGET * 2, `${ms}ms`);
-  check('放弃时说明是重试总预算用尽', /预算已用尽/.test(message) && /已自动重试/.test(message), message);
+  const { message } = await run();
+  check('假死时重试到次数用尽(共发起 MAX_ATTEMPTS 次请求)', seen.length === MAX, `请求 ${seen.length} 次 / 上限 ${MAX}`);
+  check('放弃时说明是重试次数用尽', /重试次数已用尽/.test(message) && /已自动重试/.test(message), message);
 }
 
-// 2) 流一直有数据但永不结束:静默看门狗等不到,必须由 deadline 兜底
-script = [{ type: 'trickle' }, { type: 'ok' }];
+// 2) 流一直有数据但永不结束:静默看门狗等不到,必须由单次尝试总时长上限兜底
+script = Array.from({ length: 30 }, () => ({ type: 'trickle' }));
 seen = [];
 {
-  const { message, ms } = await run();
-  check('慢响应不再「永远生成中」:预算到点即掐断', seen.length === 1 && ms <= BUDGET * 2, `请求 ${seen.length} 次 / ${ms}ms`);
-  check('掐断原因是重试预算用尽', /预算/.test(message) && /已用尽/.test(message), message);
+  const { message } = await run();
+  check('慢响应不会「永远生成中」:单次尝试超时后继续重试', seen.length > 1, `请求 ${seen.length} 次`);
+  check('掐断原因是单次尝试超时', /单次尝试超过/.test(message), message);
 }
 
 // 3) 空响应(正文/思考/工具调用全空):正是用户遇到的那种失败,同样要继续重试
 script = Array.from({ length: 30 }, () => ({ type: 'empty' }));
 seen = [];
 {
-  const { message, ms } = await run();
+  const { message } = await run();
   check('空响应会重试多次', seen.length > 1, `请求 ${seen.length} 次`);
   check('空响应的失败原因保留在文案里', /空响应/.test(message), message);
-  check('总耗时被预算钉住', ms <= BUDGET * 2, `${ms}ms`);
 }
 
 console.warn = realWarn;

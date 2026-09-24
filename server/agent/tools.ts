@@ -162,6 +162,27 @@ function capOutputBytes(s: string, max: number = AGENT.BASH_MAX_OUTPUT_BYTES): s
   return `…[输出超过 ${max} 字节,前段已省略,仅保留尾部 ${slice.length} 字节]…\n` + slice.toString('utf8');
 }
 
+// ---- 编辑工具的换行符兼容 ----
+// 模型给出的 old_string/new_string 跨行时几乎总是用 LF(\n),而 Windows 本地文件多为 CRLF(\r\n):
+// 朴素的精确匹配会让"删除两行及以上"必然找不到原文(单行不含换行,所以不受影响)。
+// 先按原文精确匹配,失败再按文件主换行符归一化后重试;归一化只在需要时发生,不改变精确匹配行为。
+function resolveEditMatch(text: string, old_string: string, new_string: string): { oldStr: string; newStr: string; count: number } {
+  let oldStr = old_string;
+  let newStr = new_string;
+  let count = text.split(oldStr).length - 1;
+  if (count === 0) {
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const norm = (s: string) => s.replace(/\r\n|\r|\n/g, eol);
+    const o = norm(old_string);
+    if (o !== oldStr) {
+      oldStr = o;
+      newStr = norm(new_string);
+      count = text.split(oldStr).length - 1;
+    }
+  }
+  return { oldStr, newStr, count };
+}
+
 function safeJson(v: any): string { return JSON.stringify(v, null, 2).slice(0, 60000); }
 
 function shQuotePosix(s: string): string { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
@@ -359,19 +380,19 @@ const toolDefs: ToolDef[] = [
       const { buffer, size } = await ssh.readFileChunk(abs, { maxBytes: 2 * 1024 * 1024 });
       if (size > buffer.length) throw new Error('文件超过 2MB,不适宜逐文本编辑,建议用 write_file 整体重写');
       const text = buffer.toString('utf8');
-      const count = text.split(old_string).length - 1;
+      const { oldStr, newStr, count } = resolveEditMatch(text, old_string, new_string);
       if (count === 0) {
         const ctx = text.slice(0, 300);
         throw new Error(`未找到要替换的原文(在 ${abs} 中)。文件开头 300 字符:\n${ctx}\n…请用 read_file 先确认准确内容,注意缩进与换行完全一致`);
       }
-      if (count > 1 && !replace_all) throw new Error(`"${old_string.slice(0, 60)}" 在文件中出现 ${count} 次,请设置 replace_all=true 或让 old_string 更具体`);
-      const next = replace_all ? text.split(old_string).join(new_string) : text.replace(old_string, new_string);
+      if (count > 1 && !replace_all) throw new Error(`"${oldStr.slice(0, 60)}" 在文件中出现 ${count} 次,请设置 replace_all=true 或让 old_string 更具体`);
+      const next = replace_all ? text.split(oldStr).join(newStr) : text.replace(oldStr, newStr);
       const bytes = await ssh.writeRemoteFile(abs, next);
       const times = replace_all ? count : 1;
       return {
         content: `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`,
         // meta:文件改动卡(编辑 + 增删行数,按替换次数累乘),供前端「N 个文件已更改」汇总卡呈现
-        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(new_string) * times, delLines: countLines(old_string) * times }
+        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(newStr) * times, delLines: countLines(oldStr) * times }
       };
     }
   },
@@ -760,16 +781,16 @@ const localToolDefs: ToolDef[] = [
       const { buffer, size } = await localFs.readFileChunk(abs, { maxBytes: 2 * 1024 * 1024 });
       if (size > buffer.length) throw new Error('文件超过 2MB,建议用 write_local_file 整体重写');
       const text = buffer.toString('utf8');
-      const count = text.split(old_string).length - 1;
+      const { oldStr, newStr, count } = resolveEditMatch(text, old_string, new_string);
       if (count === 0) throw new Error(`未找到要替换的原文(在 ${abs} 中)。请用 read_local_file 先确认准确内容`);
-      if (count > 1 && !replace_all) throw new Error(`"${old_string.slice(0, 60)}" 在文件中出现 ${count} 次,请设置 replace_all=true`);
-      const next = replace_all ? text.split(old_string).join(new_string) : text.replace(old_string, new_string);
+      if (count > 1 && !replace_all) throw new Error(`"${oldStr.slice(0, 60)}" 在文件中出现 ${count} 次,请设置 replace_all=true`);
+      const next = replace_all ? text.split(oldStr).join(newStr) : text.replace(oldStr, newStr);
       const bytes = await localFs.writeFile(abs, next);
       const times = replace_all ? count : 1;
       return {
         content: `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`,
         // meta:文件改动卡(编辑 + 增删行数,按替换次数累乘),供前端「N 个文件已更改」汇总卡呈现
-        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(new_string) * times, delLines: countLines(old_string) * times }
+        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(newStr) * times, delLines: countLines(oldStr) * times }
       };
     }
   },

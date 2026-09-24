@@ -849,7 +849,20 @@ public class TFOverlayNative {
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
 using System.Windows.Forms;
 public class NoActivateForm : Form {
+  public NoActivateForm() {
+    SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+  }
   protected override bool ShowWithoutActivation { get { return true; } }
+}
+// 自绘控件(呼吸指示灯 / 停止按钮)必须双缓冲,否则悬停与呼吸重绘会闪。
+// 另外 Control 默认不支持透明背景色,直接设 Transparent 会抛 ArgumentException;
+// 打开 SupportsTransparentBackColor 后才能安全使用透明背景。
+public class BufferedControl : Control {
+  public BufferedControl() {
+    SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint
+      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw
+      | ControlStyles.SupportsTransparentBackColor, true);
+  }
 }
 '@
 
@@ -876,6 +889,57 @@ function Stop-Control {
   [System.Windows.Forms.Application]::ExitThread()
 }
 
+# ---------------------------------------------------------------- 视觉规范
+# 一套固定的调色与尺寸,避免各处硬编码色值互相打架(改色只改这里)。
+$script:Ink        = [System.Drawing.Color]::FromArgb(11, 14, 20)     # 卡片底:近黑蓝
+$script:InkEdge    = [System.Drawing.Color]::FromArgb(48, 56, 72)     # 卡片描边
+$script:TextMain   = [System.Drawing.Color]::FromArgb(240, 244, 252)  # 主文字
+$script:TextDim    = [System.Drawing.Color]::FromArgb(138, 150, 172)  # 副文字
+$script:Accent     = [System.Drawing.Color]::FromArgb(56, 132, 255)   # 强调蓝(页面唯一点缀色)
+$script:Danger     = [System.Drawing.Color]::FromArgb(232, 72, 84)    # 停止按钮
+$script:DangerHot  = [System.Drawing.Color]::FromArgb(246, 96, 106)
+$script:DangerDown = [System.Drawing.Color]::FromArgb(198, 52, 64)
+$script:FontUI     = 'Microsoft YaHei UI'
+$script:FontNum    = 'Consolas'
+# 圆角只允许这两档:卡片 16,卡片内控件 10(同心收窄,不混用第三档)
+$script:Radius     = 16
+$script:BtnRadius  = 10
+
+# --r 圆角矩形路径(GDI+ 没有原生圆角,用四段圆弧拼)
+function Get-RoundedPath([single]$x, [single]$y, [single]$w, [single]$h, [single]$r) {
+  $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+  $d = $r * 2
+  if ($w -le $d -or $h -le $d) {
+    $p.AddRectangle((New-Object System.Drawing.RectangleF($x, $y, $w, $h)))
+    return $p
+  }
+  $p.AddArc($x, $y, $d, $d, 180, 90)
+  $p.AddArc(($x + $w - $d), $y, $d, $d, 270, 90)
+  $p.AddArc(($x + $w - $d), ($y + $h - $d), $d, $d, 0, 90)
+  $p.AddArc($x, ($y + $h - $d), $d, $d, 90, 90)
+  $p.CloseFigure()
+  return $p
+}
+
+# --r 把控件裁成圆角(窗口本身仍是直角矩形,圆角靠 Region 实现)
+function Set-RoundedRegion([System.Windows.Forms.Control]$c, [int]$r) {
+  $old = $c.Region
+  $c.Region = New-Object System.Drawing.Region((Get-RoundedPath 0 0 $c.Width $c.Height $r))
+  if ($old) { $old.Dispose() }
+}
+
+# --r 抗锯齿 + 高质量插值,避免指示灯和描边出现锯齿毛边
+function Set-SmoothGraphics([System.Drawing.Graphics]$g) {
+  $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+  $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+}
+
+# 以显示器为单位标出"这块屏幕正在被接管":只在四角画 L 形角标。
+# 为什么不用半透明描边:窗体靠 TransparencyKey(纯品红)抠背景,任何带 alpha 的画笔
+# 都会与品红混色,边缘出现一圈紫色毛边(实测非常明显)。所以这里一律用不透明色,
+# 并且关掉抗锯齿 + 用 FillRectangle 而非 Pen,保证像素是干净的纯色、边缘不发虚。
 function New-Frame([object]$bounds) {
   $f = New-Object NoActivateForm
   $f.FormBorderStyle = 'None'
@@ -888,58 +952,179 @@ function New-Frame([object]$bounds) {
   $f.TransparencyKey = [System.Drawing.Color]::Magenta
   $f.Add_Paint({
     param($sender, $e)
-    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 0, 132, 255), 6)
-    $r = New-Object System.Drawing.Rectangle(3, 3, ([int]$sender.Width - 8), ([int]$sender.Height - 8))
-    $e.Graphics.DrawRectangle($pen, $r)
-    $pen.Dispose()
+    $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None
+    $e.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::None
+    $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+
+    $brush = New-Object System.Drawing.SolidBrush($script:Accent)
+    $m = 0
+    $t = 4
+    $len = [int][Math]::Min(168, [Math]::Max(72, $sender.Width * 0.06))
+    $w = [int]$sender.Width
+    $h = [int]$sender.Height
+
+    # 左上
+    $e.Graphics.FillRectangle($brush, $m, $m, $len, $t)
+    $e.Graphics.FillRectangle($brush, $m, $m, $t, $len)
+    # 右上
+    $e.Graphics.FillRectangle($brush, ($w - $m - $len), $m, $len, $t)
+    $e.Graphics.FillRectangle($brush, ($w - $m - $t), $m, $t, $len)
+    # 左下
+    $e.Graphics.FillRectangle($brush, $m, ($h - $m - $t), $len, $t)
+    $e.Graphics.FillRectangle($brush, $m, ($h - $m - $len), $t, $len)
+    # 右下
+    $e.Graphics.FillRectangle($brush, ($w - $m - $len), ($h - $m - $t), $len, $t)
+    $e.Graphics.FillRectangle($brush, ($w - $m - $t), ($h - $m - $len), $t, $len)
+
+    $brush.Dispose()
   })
   return $f
 }
 
+# 顶部悬浮条:圆角深色卡片 = 指示灯 + 标题/副标题 + (可选)计时器 + 停止按钮
+# 尺寸按标题文字实测宽度自适应,中英文都不会被截断。
 function New-Banner([object]$bounds) {
-  $w = 372
-  $h = 68
-  $x = [int]($bounds.X + (($bounds.Width - $w) / 2))
-  $y = [int]($bounds.Y + 18)
+  $padL = 16
+  $dotSize = 16
+  $gapDot = 8
+  $gapSec = 16
+  $padR = 12
+  $textLeft = $padL + $dotSize + $gapDot
 
   $f = New-Object NoActivateForm
   $f.FormBorderStyle = 'None'
   $f.StartPosition = 'Manual'
+  $f.ShowInTaskbar = $false
+  $f.TopMost = $true
+  $f.BackColor = $script:Ink
+
+  # -- 尺寸测量(用 Graphics.MeasureString 拿真实文字宽度)
+  $g = $f.CreateGraphics()
+  Set-SmoothGraphics $g
+  $fTitle = New-Object System.Drawing.Font($script:FontUI, 12, [System.Drawing.FontStyle]::Bold)
+  $fSub = New-Object System.Drawing.Font($script:FontUI, 8.25, [System.Drawing.FontStyle]::Regular)
+  $fNum = New-Object System.Drawing.Font($script:FontNum, 9, [System.Drawing.FontStyle]::Regular)
+
+  $subText = '请勿操作鼠标键盘'
+  $tSize = $g.MeasureString($Text, $fTitle)
+  $sSize = $g.MeasureString($subText, $fSub)
+  $nSize = $g.MeasureString('00:00', $fNum)
+  $g.Dispose()
+
+  $w = [int][Math]::Ceiling($textLeft + [Math]::Max($tSize.Width, $sSize.Width) + $gapSec + $nSize.Width + $gapSec + 72 + $padR)
+  $h = 62
+
+  $x = [int]($bounds.X + (($bounds.Width - $w) / 2))
+  $y = [int]($bounds.Y + 16)
   $f.Location = New-Object System.Drawing.Point($x, $y)
   $f.Size = New-Object System.Drawing.Size($w, $h)
-  $f.TopMost = $true
-  $f.ShowInTaskbar = $false
-  $f.BackColor = [System.Drawing.Color]::FromArgb(17, 20, 28)
-  $f.Opacity = 0.95
 
-  $dot = New-Object System.Windows.Forms.Label
-  $dot.Text = [char]0x25CF
-  $dot.ForeColor = [System.Drawing.Color]::FromArgb(0, 208, 132)
-  $dot.Font = New-Object System.Drawing.Font('Segoe UI', 13, [System.Drawing.FontStyle]::Bold)
-  $dot.Location = New-Object System.Drawing.Point(15, 18)
-  $dot.AutoSize = $true
-  $f.Controls.Add($dot)
+  # -- 指示灯:直接画在窗体自己的 Paint 上(子控件自绘在这条链路上不可靠)。
+  # 这里是静态圆点而不是呼吸动画:窗口设了 TopMost + Region,再叠加高频重绘会撕裂,
+  # "它还活着"由每秒跳动的计时器表达,不需要再动这一个点。
+  $dotCx = $padL + ($dotSize / 2)
+  $dotCy = $h / 2
+  $f.Add_Paint({
+    param($sender, $e)
+    Set-SmoothGraphics $e.Graphics
 
+    # 卡片顶部内侧高光:1px 亮线,模拟光掠过玻璃边缘,让卡片有一点厚度
+    $hl = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(26, 255, 255, 255), 1)
+    $hp = Get-RoundedPath 0.5 0.5 ($sender.Width - 1) ($sender.Height - 1) $script:Radius
+    $e.Graphics.DrawPath($hl, $hp)
+    $hl.Dispose()
+    $hp.Dispose()
+
+    # 指示灯:外圈柔光 + 实心点
+    $halo = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(64, $script:Accent.R, $script:Accent.G, $script:Accent.B))
+    $e.Graphics.FillEllipse($halo, ($dotCx - 5.5), ($dotCy - 5.5), 11, 11)
+    $halo.Dispose()
+    $core = New-Object System.Drawing.SolidBrush($script:Accent)
+    $e.Graphics.FillEllipse($core, ($dotCx - 3), ($dotCy - 3), 6, 6)
+    $core.Dispose()
+  })
+
+  # -- 主标题 + 副标题,两行左对齐;不再是一个孤立的大字
   $lbl = New-Object System.Windows.Forms.Label
   $lbl.Text = $Text
-  $lbl.ForeColor = [System.Drawing.Color]::White
-  $lbl.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 11, [System.Drawing.FontStyle]::Bold)
-  $lbl.Location = New-Object System.Drawing.Point(40, 20)
+  $lbl.ForeColor = $script:TextMain
+  $lbl.Font = $fTitle
   $lbl.AutoSize = $true
+  $lbl.BackColor = [System.Drawing.Color]::Transparent
+  $lbl.Location = New-Object System.Drawing.Point($textLeft, 11)
   $f.Controls.Add($lbl)
 
-  $btn = New-Object System.Windows.Forms.Button
-  $btn.Text = '停止'
-  $btn.FlatStyle = 'Flat'
-  $btn.FlatAppearance.BorderSize = 0
-  $btn.BackColor = [System.Drawing.Color]::FromArgb(226, 62, 74)
-  $btn.ForeColor = [System.Drawing.Color]::White
-  $btn.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9.5, [System.Drawing.FontStyle]::Bold)
-  $btn.Size = New-Object System.Drawing.Size(66, 34)
-  $btn.Location = New-Object System.Drawing.Point(($w - 66 - 13), 17)
+  $sub = New-Object System.Windows.Forms.Label
+  $sub.Text = $subText
+  $sub.ForeColor = $script:TextDim
+  $sub.Font = $fSub
+  $sub.AutoSize = $true
+  $sub.BackColor = [System.Drawing.Color]::Transparent
+  $sub.Location = New-Object System.Drawing.Point(($textLeft + 1), 37)
+  $f.Controls.Add($sub)
+
+  # -- 计时器:等宽数字,只显示已授权的本次时长(非虚构数据)
+  $elapsed = New-Object System.Windows.Forms.Label
+  $elapsed.Text = '00:00'
+  $elapsed.ForeColor = $script:TextDim
+  $elapsed.Font = $fNum
+  $elapsed.AutoSize = $true
+  $elapsed.BackColor = [System.Drawing.Color]::Transparent
+  $elapsed.Location = New-Object System.Drawing.Point(($w - $padR - 72 - $gapSec - [int]$nSize.Width), 22)
+  $f.Controls.Add($elapsed)
+
+  # -- 停止按钮:自绘圆角,三态(常态/悬停/按下)都有物理反馈
+  $btnW = 72
+  $btnH = 32
+  $btn = New-Object BufferedControl
+  $btn.Size = New-Object System.Drawing.Size($btnW, $btnH)
+  $btn.Location = New-Object System.Drawing.Point(($w - $padR - $btnW), ([int](($h - $btnH) / 2)))
   $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
+  $btn.BackColor = $script:Ink
+  # 状态挂在按钮自己的 Tag 上,多显示器时各按钮互不影响
+  $btn.Tag = 'idle'
+  $btn.Add_Paint({
+    param($sender, $e)
+    Set-SmoothGraphics $e.Graphics
+    $state = [string]$sender.Tag
+    $fill = $script:Danger
+    $edge = [System.Drawing.Color]::FromArgb(70, 255, 255, 255)
+    if ($state -eq 'hot') { $fill = $script:DangerHot }
+    if ($state -eq 'down') { $fill = $script:DangerDown }
+
+    $path = Get-RoundedPath 0.5 0.5 ($sender.Width - 1) ($sender.Height - 1) $script:BtnRadius
+    $br = New-Object System.Drawing.SolidBrush($fill)
+    $e.Graphics.FillPath($br, $path)
+    $br.Dispose()
+    $ep = New-Object System.Drawing.Pen($edge, 1)
+    $e.Graphics.DrawPath($ep, $path)
+    $ep.Dispose()
+    $path.Dispose()
+
+    # 按下时整体下沉 1px,模拟物理按压
+    $dy = 0
+    if ($state -eq 'down') { $dy = 1 }
+    $tf = New-Object System.Drawing.Font($script:FontUI, 9.5, [System.Drawing.FontStyle]::Bold)
+    $sf = New-Object System.Drawing.StringFormat
+    $sf.Alignment = [System.Drawing.StringAlignment]::Center
+    $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
+    $rect = New-Object System.Drawing.RectangleF(0, $dy, $sender.Width, $sender.Height)
+    $txtBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 255, 255))
+    $e.Graphics.DrawString('停止', $tf, $txtBrush, $rect, $sf)
+    $txtBrush.Dispose()
+    $tf.Dispose()
+    $sf.Dispose()
+  })
+  $btn.Add_MouseEnter({ $this.Tag = 'hot'; $this.Invalidate() })
+  $btn.Add_MouseLeave({ $this.Tag = 'idle'; $this.Invalidate() })
+  $btn.Add_MouseDown({ $this.Tag = 'down'; $this.Invalidate() })
+  $btn.Add_MouseUp({ $this.Tag = 'idle'; $this.Invalidate() })
+  # 用 Click 而不是 MouseUp 触发:避免"在别处按下、在按钮上松手"被误判为点击
   $btn.Add_Click({ Stop-Control })
   $f.Controls.Add($btn)
+
+  # 计时器挂到窗体 Tag 上,方便全局 tick 统一更新
+  $f.Tag = @{ elapsed = $elapsed; button = $btn }
 
   return $f
 }
@@ -957,22 +1142,26 @@ foreach ($s in [System.Windows.Forms.Screen]::AllScreens) {
   $script:forms += $banner
   $banner.Show()
   Set-OverlayStyle $banner
+  Set-RoundedRegion $banner $script:Radius
 }
 
-# 心跳灯:绿/蓝交替,提示这是"进行中"的状态而不是静态贴图
-$pulse = New-Object System.Windows.Forms.Timer
-$pulse.Interval = 700
-$script:on = $true
-$pulse.Add_Tick({
-  $script:on = -not $script:on
-  $c = if ($script:on) { [System.Drawing.Color]::FromArgb(0, 208, 132) } else { [System.Drawing.Color]::FromArgb(0, 132, 255) }
+# 计时器每秒走一格。它同时承担"这次授权已持续多久"和"它还活着"两个信息,
+# 所以不需要再额外做呼吸动画(高频重绘会和 TopMost + Region 打架,画面会撕裂)。
+$script:startedAt = Get-Date
+$tick = New-Object System.Windows.Forms.Timer
+$tick.Interval = 1000
+$tick.Add_Tick({
+  $secs = [int]((Get-Date) - $script:startedAt).TotalSeconds
+  $mm = [string][Math]::Floor($secs / 60)
+  $ss = [string]($secs % 60)
+  if ($mm.Length -lt 2) { $mm = '0' + $mm }
+  if ($ss.Length -lt 2) { $ss = '0' + $ss }
+  $label = $mm + ':' + $ss
   foreach ($f in $script:forms) {
-    foreach ($c2 in $f.Controls) {
-      if ($c2 -is [System.Windows.Forms.Label] -and $c2.Text -eq [string][char]0x25CF) { $c2.ForeColor = $c }
-    }
+    if ($f.Tag -and $f.Tag.elapsed) { $f.Tag.elapsed.Text = $label }
   }
 })
-$pulse.Start()
+$tick.Start()
 
 # 后端消失则自动退出,避免留下孤儿悬浮窗
 $health = New-Object System.Windows.Forms.Timer

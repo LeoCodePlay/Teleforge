@@ -682,7 +682,9 @@ export default function App() {
   const activeTouched = activeSessionId != null && activeSessionId !== NEW_SESSION_ID && touchedSessions.has(activeSessionId);
   const activeHasMsg = ((activeMeta?.msgCount ?? 0) > 0) || activeTouched;
   const remoteLocked = !!activeMeta && activeHasMsg;
-  const localLocked = !!activeMeta && activeHasMsg && !activeMeta.workspace;
+  // 两侧锁定各自独立判断:本地侧只看 localWorkspace,绝不引用远程字段。
+  // 否则远程选「整台服务器」(workspace 为空)会把本地侧误判为未锁定,两侧边界失守。
+  const localLocked = !!activeMeta && activeHasMsg && !activeMeta.localWorkspace;
 
   // ---- 浏览器式标签页:打开文件 = 在固定页右侧追加标签(已存在则仅激活) ----
   // 文件标签面板常驻挂载,切走仅 CSS 隐藏,未保存修改不丢失

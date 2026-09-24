@@ -26,6 +26,7 @@ import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.
 import * as sessions from '../store/session-store.ts';
 import { getDefaultPermissionMode as storeDefaultMode, setDefaultPermissionMode as storeSetDefaultMode } from '../store/settings-store.ts';
 import { getAttachment, readImageDataURL, readImageBytes, saveAttachment, isTextLike, attachmentPath, type AttachmentMeta } from '../store/attachments-store.ts';
+import { aiProviders } from '../store/ai-providers-store.ts';
 import { browserManager, extractPreviewUrls } from '../core/browser-manager.ts';
 
 // 全局唯一工具注册表:启动时注册全部内置工具与守卫
@@ -649,10 +650,12 @@ export class Agent {
       rt.connKey = meta.connKey ?? null;
     }
     if (id === this.sessionId) {
-      // 远程绑定回写到连接的条件:全盘哨兵随时可写(它就是把当前连接设为全盘边界);
+      // 远程绑定回写到连接的条件:只有该会话确实归属当前这台服务器时才写。
+      // 全盘哨兵不再享有「随时可写」的例外——它同样是远程侧绑定,写下去会把当前连接切进
+      // 全盘边界,连带改变与这台服务器无关的会话(含本地侧)的执行边界,边界失守。
       // 具体目录只有在该会话确实归属当前这台服务器时才写,否则会把别的服务器的工作区
       // 盖到活动连接上,串改其他会话的执行目录。
-      if (meta.workspace != null && (meta.workspace === NO_WORKSPACE || meta.connKey === this._connKey)) {
+      if (meta.workspace != null && meta.connKey === this._connKey) {
         this._applyRemoteBinding(meta.workspace);
       }
       if (meta.localWorkspace != null) this._applyLocalBinding(meta.localWorkspace);
@@ -1206,7 +1209,22 @@ export class Agent {
     const isCfgObject = !!sidOrCfg && typeof sidOrCfg === 'object';
     const sid = isCfgObject ? null : (sidOrCfg != null && sidOrCfg !== '' ? String(sidOrCfg) : null);
     const cfg = isCfgObject ? sidOrCfg : maybeCfg;
-    const client = new LlmClient(cfg || {});
+    // 提供商 id(前端随 llm 配置下发):余额不足时用它把「无余额」标记写回提供商配置,
+    // 并广播事件让界面刷新出「无余额」徽标与「重置」按钮。
+    const providerId = String((cfg as any)?.providerId || '');
+    const client = new LlmClient({
+      ...(cfg || {}),
+      onKeyExhausted: providerId
+        ? (key: string, reason: string) => {
+            try {
+              aiProviders.markKeyExhausted(providerId, key, reason);
+              this.emit('agent', { event: 'key_exhausted', providerId, key, reason });
+            } catch (e: any) {
+              console.warn('标记 API Key 余额不足失败:', e?.message);
+            }
+          }
+        : undefined
+    });
     if (sid) {
       // 会话级配置:只作用于该会话,全局默认不动——否则在 A 会话切模型会把还没打开过的
       // B 会话也一起换掉(线上故障的根因)。首次下发(全局还没有默认)时兜底设为默认。

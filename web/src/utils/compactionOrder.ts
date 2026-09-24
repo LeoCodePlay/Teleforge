@@ -11,21 +11,33 @@
 // 约束:标记行可能排在流式 assistant 之后(断线补发等路径)—— 流式增量 / 工具结果 /
 // 收尾必须跳过它,仍落到本轮那条 assistant 上,否则整段增量会被静默丢弃(见 tailAssistantIndex)。
 //
+// 同一约束也适用于「模型请求失败进入重试」的提示行:它必须排在当前回复气泡**之后**
+// (用户要求:重试消息跟在已输出的最新内容下面,而不是顶到回复最上面),于是它也成了
+// assistant 之后的尾部行。若不在这里一并跳过,重试后接上来的增量就全部找不到落点。
+//
 // 无 DOM/React 依赖,可单测。
 
-/** 只要求带可选 compaction 字段与 role,避免 util 依赖前端 ChatMessage 具体形状 */
+/** 只要求带可选 compaction/retry 字段与 role,避免 util 依赖前端 ChatMessage 具体形状 */
 export interface CompactionRowCarrier {
   compaction?: unknown;
   role?: string;
+  retry?: unknown;
+}
+
+/** 流式落点需要跳过的尾部行:压缩标记行、重试提示行 */
+function isTrailingRow(m: CompactionRowCarrier | undefined): boolean {
+  if (!m) return false;
+  if (m.compaction) return true;
+  return m.role === 'notice' && !!m.retry;
 }
 
 /**
- * 本轮回复气泡(最后一条 assistant)的下标:跳过尾部的压缩标记行。
+ * 本轮回复气泡(最后一条 assistant)的下标:跳过尾部的压缩标记行与重试提示行。
  * 语义与原实现一致 —— 只跳过尾部标记行,其余情况仍要求最后一条非标记行是 assistant,
  * 否则返回 -1(不做任何落点)。
  */
 export function tailAssistantIndex(msgs: CompactionRowCarrier[]): number {
   let i = msgs.length - 1;
-  while (i >= 0 && msgs[i]?.compaction) i -= 1;
+  while (i >= 0 && isTrailingRow(msgs[i])) i -= 1;
   return i >= 0 && msgs[i]?.role === 'assistant' ? i : -1;
 }

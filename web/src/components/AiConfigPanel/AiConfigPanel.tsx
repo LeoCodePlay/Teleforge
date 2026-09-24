@@ -7,13 +7,14 @@ import { createPortal } from 'react-dom';
 import { useLlm } from '../../context/llm-context';
 import { PROVIDERS, getDefaultModelContext } from '../../data/llm-providers';
 import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../../types';
+import { IconTrashOutline14, IconEye16, IconEyeOff16 } from '../icons/icons';
 import GlassSelect from '../GlassSelect/GlassSelect';
 import './AiConfigPanel.scss';
 
 export default function AiConfigPanel() {
   const llm = useLlm();
   const { userProviders, providerId, switchProvider, addProvider, updateProvider,
-    duplicateProvider, removeProvider } = llm;
+    duplicateProvider, removeProvider, resetProviderKey } = llm;
   // 弹窗状态:null=关闭;{provider}=编辑该条目;{}=添加
   const [modal, setModal] = useState<{ provider?: LlmProvider } | null>(null);
 
@@ -48,7 +49,8 @@ export default function AiConfigPanel() {
             onUse={() => switchProvider(p.id)}
             onEdit={() => setModal({ provider: p })}
             onCopy={() => duplicateProvider(p.id)}
-            onDelete={() => removeProvider(p.id)} />
+            onDelete={() => removeProvider(p.id)}
+            onResetKey={(k) => resetProviderKey(p.id, k)} />
         ))}
         <button className="provider-add" onClick={() => setModal({})}>
           <span className="pa-icon">＋</span> 添加提供方
@@ -71,6 +73,16 @@ export default function AiConfigPanel() {
   );
 }
 
+/** 该提供商配置的全部 Key(去重、去空);首位为主 Key(apiKey) */
+function keyList(p: LlmProvider): string[] {
+  return [...new Set([p.apiKey, ...(p.apiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))] as string[];
+}
+
+/** 展示用脱敏:只露头尾,避免整串 Key 出现在界面上 */
+function maskKey(k: string): string {
+  return k.length <= 12 ? k : `${k.slice(0, 6)}…${k.slice(-4)}`;
+}
+
 // ---- 提供商卡片:名称/地址/模型数 + 编辑/复制/删除 ----
 interface ProviderCardProps {
   p: LlmProvider;
@@ -79,9 +91,11 @@ interface ProviderCardProps {
   onEdit: () => void;
   onCopy: () => void;
   onDelete: () => void;
+  /** 清除某个「无余额」Key 的标记(充值后点「重置」,下次重试会再次尝试它) */
+  onResetKey: (key: string) => void;
 }
 
-function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete }: ProviderCardProps) {
+function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete, onResetKey }: ProviderCardProps) {
   return (
     <div className={'provider-card' + (active ? ' active' : '')} onClick={onUse}>
       <div className="pc-head">
@@ -91,8 +105,30 @@ function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete }: ProviderCa
       <div className="pc-url">{p.baseUrl}</div>
       <div className="pc-meta">
         <span>{p.models.length > 0 ? `${p.models.length} 个模型` : '无模型(手动输入)'}</span>
-        <span>{p.apiKey ? 'Key 已配置' : '未配置 Key'}</span>
+        <span>{keyList(p).length > 1 ? `${keyList(p).length} 个 Key` : (p.apiKey ? 'Key 已配置' : '未配置 Key')}</span>
       </div>
+      {/* 多 Key 状态:余额不足的 Key 显示「无余额」并提供「重置」——
+          充值后点重置,下次重试轮询会再次尝试它(否则会被一直跳过) */}
+      {keyList(p).length > 0 && (
+        <div className="pc-keys" onClick={(e) => e.stopPropagation()}>
+          {keyList(p).map((k) => {
+            const st = p.keyStates?.[k];
+            return (
+              <div key={k} className={'pc-key' + (st?.exhausted ? ' exhausted' : '')}>
+                <span className="pc-key-mask">{maskKey(k)}</span>
+                {st?.exhausted
+                  ? (
+                    <>
+                      <span className="badge warn" title={st.reason || '该 Key 余额不足'}>无余额</span>
+                      <button className="sm" onClick={() => onResetKey(k)}>重置</button>
+                    </>
+                  )
+                  : <span className="badge ok">可用</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="pc-actions" onClick={(e) => e.stopPropagation()}>
         {!active && <button className="sm" onClick={onUse}>使用</button>}
         <button className="sm" onClick={onEdit}>编辑</button>
@@ -115,7 +151,13 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   const isEdit = !!editProvider;
   const [name, setName] = useState(isEdit ? editProvider.name : '');
   const [baseUrl, setBaseUrl] = useState(isEdit ? editProvider.baseUrl : '');
-  const [apiKey, setApiKey] = useState(isEdit ? (editProvider.apiKey || '') : '');
+  // 多个 API Key(轮询用):某个 Key 余额不足时自动切换到下一个;首位为主 Key
+  const [apiKeys, setApiKeys] = useState<string[]>(() => {
+    if (!isEdit) return [''];
+    const list = [...new Set([editProvider.apiKey, ...(editProvider.apiKeys || [])]
+      .map((k) => String(k || '').trim()).filter(Boolean))];
+    return list.length ? list : [''];
+  });
   const [models, setModels] = useState<string[]>(isEdit ? [...(editProvider.models || [])] : []);
   // 每个模型的上下文能力(输入窗口/输出上限),随条目随保存落盘
   const [modelConfig, setModelConfig] = useState<Record<string, ModelContextConfig>>(
@@ -123,6 +165,10 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   );
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  // 明文显示的行(按行下标记录,与 apiKeys 数组同序)。默认全部遮罩:
+  // Key 是密码级信息,滚动/截屏时不应默认外露;要看时点行尾眼睛显式露出。
+  // 增删 Key 后下标会错位,但最坏只是某行延续了相邻行的显隐状态,不影响输入与保存。
+  const [revealed, setRevealed] = useState<Set<number>>(() => new Set());
 
   // 直接更新某模型的能力配置(上下文窗口/输出上限/多模态/生图);全部为空或关闭时清除该条配置。
   // 布尔开关用 '1'/'' 两个字符串值复用同一签名(与数字字段一致的调用形态)
@@ -169,7 +215,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
       const r = await fetch('/api/providers/fetch-models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: b, apiKey: apiKey.trim() })
+        body: JSON.stringify({ baseUrl: b, apiKey: (apiKeys[0] || '').trim() })
       });
       let j: any;
       try { j = await r.json(); }
@@ -219,7 +265,9 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
     if (!/^https?:\/\//i.test(b)) return setError('Base URL 需以 http:// 或 https:// 开头');
     setSaving(true);
     setError('');
-    const ok = await onSave({ name: n, baseUrl: b, models, apiKey: apiKey.trim(), modelConfig });
+    // 去空去重后提交:apiKey 镜像首个(主 Key),apiKeys 是完整轮询列表
+    const keys = [...new Set(apiKeys.map((k) => k.trim()).filter(Boolean))];
+    const ok = await onSave({ name: n, baseUrl: b, models, apiKey: keys[0] || '', apiKeys: keys, modelConfig });
     if (ok) onClose();
     else setSaving(false);
   };
@@ -255,8 +303,42 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
             <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://your-gateway/v1" />
           </div>
           <div className="field">
-            <label>API Key(可选,仅存本机,随本条目保存)</label>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
+            <label>API Key(可填多个:某个 Key 余额不足时自动切换到下一个;仅存本机)</label>
+            <div className="key-list">
+              {apiKeys.map((k, i) => {
+                const st = isEdit ? editProvider.keyStates?.[k.trim()] : undefined;
+                const shown = revealed.has(i);
+                return (
+                  <div key={i} className={'key-row' + (st?.exhausted ? ' exhausted' : '')}>
+                    <input type={shown ? 'text' : 'password'} value={k}
+                      placeholder={i === 0 ? 'sk-…(主 Key)' : 'sk-…(备用 Key)'}
+                      onChange={(e) => setApiKeys((cur) => cur.map((v, j) => (j === i ? e.target.value : v)))} />
+                    {st?.exhausted && <span className="badge warn" title={st.reason || '该 Key 余额不足'}>无余额</span>}
+                    {/* 显隐切换:点眼睛在明文/遮罩之间切换(仅影响显示,不改动值) */}
+                    <button type="button" className="key-reveal action-icon"
+                      title={shown ? '隐藏' : '显示明文'}
+                      aria-label={shown ? '隐藏 Key' : '显示 Key 明文'}
+                      aria-pressed={shown}
+                      onClick={() => setRevealed((cur) => {
+                        const next = new Set(cur);
+                        if (next.has(i)) next.delete(i); else next.add(i);
+                        return next;
+                      })}>
+                      {shown ? <IconEyeOff16 size={16} /> : <IconEye16 size={16} />}
+                    </button>
+                    {/* 单 Key 行不给删除:删空后无从恢复「主 Key」输入位,由上方「＋ 添加 Key」重新加行 */}
+                    {apiKeys.length > 1 && (
+                      <button type="button" className="key-del action-icon danger"
+                        title="删除该 Key" aria-label="删除该 Key"
+                        onClick={() => setApiKeys((cur) => cur.filter((_, j) => j !== i))}>
+                        <IconTrashOutline14 size={14} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <button type="button" className="sm" onClick={() => setApiKeys((cur) => [...cur, ''])}>＋ 添加 Key</button>
+            </div>
           </div>
 
           {/* 模型区:手动输入 + 获取模型列表勾选 */}

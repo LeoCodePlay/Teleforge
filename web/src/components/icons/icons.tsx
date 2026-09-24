@@ -245,6 +245,29 @@ export function IconLock16(props: IconProps) {
   );
 }
 
+// 显隐切换的「眼睛」一对:明文时用 IconEye16,遮罩时用 IconEyeOff16(带斜杠)。
+// 两者外轮廓共用同一条路径,切换只增减瞳孔与斜杠 —— 视觉重量一致,不会在点按时跳动。
+const EYE_PATH = 'M1.6 8S3.9 3.6 8 3.6 14.4 8 14.4 8 12.1 12.4 8 12.4 1.6 8 1.6 8Z';
+
+export function IconEye16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d={EYE_PATH} />
+      <circle cx="8" cy="8" r="2.1" />
+    </svg>
+  );
+}
+
+export function IconEyeOff16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M1.6 8S3.9 3.6 8 3.6 14.4 8 14.4 8 12.1 12.4 8 12.4 1.6 8 1.6 8Z" />
+      <path d="M6.7 6.7a2.1 2.1 0 0 0 2.9 2.9" />
+      <path d="M2.9 2.9 13.1 13.1" />
+    </svg>
+  );
+}
+
 export function IconKeyboard16(props: IconProps) {
   return (
     <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">

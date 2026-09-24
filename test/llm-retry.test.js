@@ -1,10 +1,11 @@
 // 重试链路测试:验证「瞬态报错一律重试、不因一次报错就中断对话」的语义。
 // 用本机假网关(可控地返回 5xx/429/402、掐断连接、无结束标记关闭、流中途输出后掐断),
-// 断言:LlmClient 会重试、尊重网关给的等待时长、带 discard 回滚半成品、永久错误不空等。
-// 退避/预算等常量在这里压到毫秒级(走环境变量),测试总耗时 < 5s。
+// 断言:LlmClient 会重试、尊重网关给的等待时长、带 discard 回滚半成品、
+// 余额不足(402)时切换同一个提供方里的下一个 Key,全部 Key 都无余额才停下。
+// 退避/单次尝试上限等常量在这里压到毫秒级(走环境变量),测试总耗时 < 5s。
 process.env.LLM_RETRY_BASE_DELAY_MS = '20';
 process.env.LLM_RETRY_MAX_DELAY_MS = '60';
-process.env.LLM_RETRY_BUDGET_MS = '6000';
+process.env.LLM_ATTEMPT_MS = '6000'; // 单次尝试总时长上限(替代已移除的重试总预算)
 process.env.LLM_RETRY_MAX_ATTEMPTS = '10';
 // 静默看门狗压到 250ms:验证「网关接了连接却一个字节都不发」不再永远卡住
 process.env.LLM_STREAM_IDLE_MS = '250';
@@ -19,12 +20,14 @@ const check = (n, c, e = '') => { if (c) { pass++; console.log(`  ✓ ${n}`); } 
 const sseChunk = (delta, finish = null) => `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
 
 let script = [];
+let auths = []; // 每次请求的 Authorization 头:用于验证「余额不足后切换到下一个 Key」
 let seen = [];
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     seen.push(JSON.parse(body || '{}'));
+    auths.push(String(req.headers.authorization || ''));
     const step = script.shift() || { type: 'ok', text: '默认回复' };
     if (step.type === 'hang') return; // 不响应:用于验证「等待期间用户停止」
     if (step.type === 'silent') { // 已建立连接(头部已发)却一个字节都不发:网关假死
@@ -59,14 +62,15 @@ const mkClient = () => new LlmClient({ baseUrl, apiKey: 'test', model: 'deepseek
 const run = (client, opts = {}) => {
   const retries = [];
   const texts = [];
+  // 失败分支也要能读到重试记录与最终结果(挂到 promise 上,不随 catch 的返回值丢失)
+  const box = { retries, texts, res: undefined, err: undefined };
   const p = client.chat({
     messages: [{ role: 'user', content: 'hi' }],
     onDelta: (d) => { if (d.kind === 'text') texts.push(d.text); },
     onRetry: (r) => retries.push(r),
     ...opts
-  }).then((res) => ({ res, retries, texts }));
-  // 失败分支也要能读到重试记录(挂到 promise 上,不随 catch 的返回值丢失)
-  return Object.assign(p, { retries, texts });
+  }).then((res) => { box.res = res; return box; }, (e) => { box.err = e; return box; });
+  return Object.assign(p, box);
 };
 
 // 静音重试日志(测试输出只保留断言结果),同时记录日志条数用于断言
@@ -142,7 +146,8 @@ script = Array.from({ length: 12 }, () => ({ type: 'ok' })); // 只有 finish_re
 seen = [];
 {
   let err = null;
-  await run(mkClient()).catch((e) => { err = e; });
+  const box = await run(mkClient());
+  err = box.err;
   check('持续空响应最终报错(不静默完成)', /空响应/.test(String(err?.message)), String(err?.message));
   check('空响应确实重试过多次', seen.length > 1, String(seen.length));
 }
@@ -188,31 +193,95 @@ seen = [];
 {
   let err = null;
   const p = run(mkClient());
-  await p.catch((e) => { err = e; });
+  const box = await p;
+  err = box.err;
   check('402 只发 1 次请求(不白等)', seen.length === 1, String(seen.length));
-  check('402 不派发重试事件', p.retries.length === 0, JSON.stringify(p.retries));
+  check('402 不派发重试事件', box.retries.length === 0, JSON.stringify(p.retries));
   check('402 错误标记为不可重试', err instanceof LlmRequestError && err.retryable === false && isRetryableLlmError(err) === false);
   check('402 给出充值提示', /余额不足/.test(String(err?.message)) && /充值/.test(String(err?.message)), String(err?.message));
 }
 
-// 7) 401/400 同样不空等,但会带上可操作指引
-script = [{ type: 'status', code: 401, body: '{"error":"invalid api key"}' }];
+// 7) 401 API Key 无效:仍按「除余额不足外一律重试」重试到次数用尽,最终给可操作指引
+//    (401 是确定性错误,重试不会变好;但需求口径是只把「余额不足」排除在重试之外,
+//     所以这里断言它确实重试到上限,而不是一次就放弃。)
+script = Array.from({ length: 12 }, () => ({ type: 'status', code: 401, body: '{"error":"invalid api key"}' }));
 seen = [];
+auths = [];
 {
-  let err = null;
-  await run(mkClient()).catch((e) => { err = e; });
-  check('401 只发 1 次请求且提示检查 API Key', seen.length === 1 && /API Key/.test(String(err?.message)), String(err?.message));
+  const box = await run(mkClient());
+  check('401 重试到次数用尽(除余额不足外一律重试)', seen.length === LLM_RETRY.MAX_ATTEMPTS, String(seen.length));
+  check('401 始终用同一个 Key 重试(不触发 Key 轮询)', auths.length === LLM_RETRY.MAX_ATTEMPTS && auths.every((a) => a === 'Bearer test'), JSON.stringify(auths));
+  check('401 重试次数 = 上限-1', box.retries.length === LLM_RETRY.MAX_ATTEMPTS - 1, String(box.retries.length));
+  check('401 错误标记为不可重试(次数用尽后交给用户)', isRetryableLlmError(box.err) === false);
+  check('401 最终文案仍提示检查 API Key', /API Key/.test(String(box.err?.message)), String(box.err?.message));
 }
 
+// 7.1) 多 Key 轮询:第 1 个 Key 余额不足 -> 自动切到第 2 个 Key 继续,不打断对话
+script = [{ type: 'status', code: 402, body: '{"error":"insufficient balance"}' }, { type: 'ok', text: '第二个 Key 的回答' }];
+seen = [];
+auths = [];
+{
+  const exhausted = [];
+  let err = null;
+  const p = run(new LlmClient({
+    baseUrl, apiKey: 'key-one', apiKeys: ['key-one', 'key-two'], model: 'deepseek-chat', maxTokens: 64,
+    onKeyExhausted: (k) => exhausted.push(k)
+  }));
+  const box = await p;
+  err = box.err;
+  check('余额不足后自动换 Key 并成功', !err && box.res?.content === '第二个 Key 的回答', String(err?.message || box.res?.content));
+  check('一共发了 2 次请求(每 Key 一次)', seen.length === 2, String(seen.length));
+  check('第 2 次请求用的是第 2 个 Key', auths[1] === 'Bearer key-two', JSON.stringify(auths));
+  check('onKeyExhausted 收到无余额的那个 Key', exhausted.length === 1 && exhausted[0] === 'key-one', JSON.stringify(exhausted));
+  check('换 Key 会通知前端(不消耗重试次数)', box.retries.length === 1 && /余额不足/.test(box.retries[0].error), JSON.stringify(p.retries));
+}
+
+// 7.2) 所有 Key 都余额不足:停止重试,并指引「充值 + 重置」
+script = [{ type: 'status', code: 402, body: '{"error":"insufficient balance"}' }, { type: 'status', code: 402, body: '{"error":"insufficient balance"}' }];
+seen = [];
+auths = [];
+{
+  const exhausted = [];
+  let err = null;
+  const p = run(new LlmClient({
+    baseUrl, apiKey: 'key-one', apiKeys: ['key-one', 'key-two'], model: 'deepseek-chat', maxTokens: 64,
+    onKeyExhausted: (k) => exhausted.push(k)
+  }));
+  const box = await p;
+  err = box.err;
+  check('全部 Key 无余额时只遍历一遍(2 次请求)', seen.length === 2, String(seen.length));
+  check('两个 Key 都被上报为无余额', exhausted.join(',') === 'key-one,key-two', JSON.stringify(exhausted));
+  check('每个 Key 各发 1 次(不在死 Key 上反复重试)', auths[0] === 'Bearer key-one' && auths[1] === 'Bearer key-two', JSON.stringify(auths));
+  check('错误标记为不可重试', isRetryableLlmError(err) === false);
+  check('文案指引充值 + 重置', /充值/.test(String(err?.message)) && /重置/.test(String(err?.message)), String(err?.message));
+}
+
+// 7.3) 单 Key 提供方遇到 402:不轮询、不重试,仍是「不可重试 + 充值提示」
+script = [{ type: 'status', code: 402, body: '{"error":"insufficient balance"}' }];
+seen = [];
+{
+  const exhausted = [];
+  let err = null;
+  const p = run(new LlmClient({
+    baseUrl, apiKey: 'only-key', model: 'deepseek-chat', maxTokens: 64,
+    onKeyExhausted: (k) => exhausted.push(k)
+  }));
+  const box = await p;
+  err = box.err;
+  check('单 Key 402 只发 1 次请求', seen.length === 1, String(seen.length));
+  check('单 Key 402 上报无余额', exhausted.join(',') === 'only-key', JSON.stringify(exhausted));
+  check('单 Key 402 文案提示充值', /充值/.test(String(err?.message)), String(err?.message));
+}
 // 8) 预算/次数耗尽:重试到 MAX_ATTEMPTS 次才放弃,且文案说明「已重试 N 次」
 script = Array.from({ length: 12 }, () => ({ type: 'status', code: 503, body: 'upstream unavailable' }));
 seen = [];
 {
   let err = null;
   const p = run(mkClient());
-  await p.catch((e) => { err = e; });
+  const box = await p;
+  err = box.err;
   check('持续 503 时重试到上限次数', seen.length === LLM_RETRY.MAX_ATTEMPTS, String(seen.length));
-  check('重试次数 = 上限-1', p.retries.length === LLM_RETRY.MAX_ATTEMPTS - 1, String(p.retries.length));
+  check('重试次数 = 上限-1', box.retries.length === LLM_RETRY.MAX_ATTEMPTS - 1, String(box.retries.length));
   check('最终文案说明已重试的次数', /已自动重试 9 次/.test(String(err?.message)), String(err?.message));
   check('最终错误标记为不可重试(避免上层再叠一层)', isRetryableLlmError(err) === false);
 }
@@ -223,7 +292,6 @@ seen = [];
 {
   const ac = new AbortController();
   const p = run(mkClient(), { signal: ac.signal, onRetry: () => { setTimeout(() => ac.abort(), 1); } })
-    .catch((e) => ({ err: e, retries: [], res: null, texts: [] }));
   const { err, res } = await p;
   check('停止后立即抛错(不继续等)', !!err && /已停止/.test(String(err.message)), String(err?.message));
   check('停止后没再发请求', seen.length === 1, String(seen.length));

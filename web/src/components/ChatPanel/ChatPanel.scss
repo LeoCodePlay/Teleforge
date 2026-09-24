@@ -66,6 +66,15 @@
   border: 1px solid var(--glass-border-hover);
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 18px var(--shadow-1);
 }
+/* @ 文件/文件夹引用:气泡里折叠成 @文件名,用与输入框同款 accent 淡底标记引用关系
+   (完整路径挂在 title 上,悬停可见) */
+.bubble-mention {
+  padding: 0 3px; border-radius: 4px;
+  background: var(--accent-fill);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+  color: var(--text);
+}
+
 /* AI 消息:无气泡外壳、占满整行宽度( 聊天布局——
    助手回复直接铺满页面宽度,只保留内容排版,不套背景/边框/磨砂玻璃) */
 .ai-bubble {

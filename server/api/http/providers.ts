@@ -62,6 +62,8 @@ export default async function registerProviders(app: FastifyInstance) {
       baseUrl,
       models: Array.isArray(b.models) ? b.models.map((m: any) => String(m)).filter(Boolean) : [],
       apiKey: String(b.apiKey || ''),
+      // 多个 API Key(轮询用):apiKey 由 store 对齐为 apiKeys[0]
+      ...(Array.isArray(b.apiKeys) ? { apiKeys: b.apiKeys.map((k: any) => String(k ?? '')).filter(Boolean) } : {}),
       note: '由用户添加'
     };
     const mc = sanitizeModelConfig(b.modelConfig);
@@ -82,9 +84,21 @@ export default async function registerProviders(app: FastifyInstance) {
     }
     if (Array.isArray(b.models)) patch.models = b.models.map((m: any) => String(m)).filter(Boolean);
     if (typeof b.apiKey === 'string') patch.apiKey = b.apiKey;
+    // 多 Key 列表(权威):给了它就以它为准,apiKey 由 store 对齐为首项
+    if (Array.isArray(b.apiKeys)) patch.apiKeys = b.apiKeys.map((k: any) => String(k ?? '').trim()).filter(Boolean);
     if (b.modelConfig !== undefined) patch.modelConfig = sanitizeModelConfig(b.modelConfig) || {};
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: '没有可更新的字段' });
     if (!aiProviders.update(String((request.params as any)?.id), patch)) return reply.code(404).send({ error: '提供商不存在' });
+    return { userProviders: aiProviders.list() };
+  });
+
+  // 清除某 Key(或全部 Key)的「无余额」标记:充值后点「重置」,
+  // 下次重试轮询该 Key 时会再次尝试它(否则余额不足的 Key 会被一直跳过)
+  app.post('/api/providers/:id/reset-key', (request: FastifyRequest, reply: FastifyReply) => {
+    const id = String((request.params as any)?.id || '');
+    const key = String((request.body as any)?.key || '').trim();
+    if (key) aiProviders.resetKey(id, key);
+    else aiProviders.resetAllKeys(id); // 未指定 Key = 全部重置
     return { userProviders: aiProviders.list() };
   });
 

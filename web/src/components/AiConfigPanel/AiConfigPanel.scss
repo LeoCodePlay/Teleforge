@@ -91,3 +91,29 @@
 .model-row:hover { background: var(--glass-bg-hover); }
 .model-row input { width: auto; flex: none; }
 .model-empty { padding: 12px; text-align: center; color: var(--muted); font-size: 12px; }
+
+/* ---- 多 API Key 轮询:弹窗里的 Key 列表编辑器 ---- */
+.key-list { display: flex; flex-direction: column; gap: 6px; }
+.key-row { display: flex; align-items: center; gap: 6px; }
+.key-row input { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 12px; }
+.key-row.exhausted input { border-color: var(--warn-border); }
+/* 行尾图标按钮(显隐 / 删除)。颜色/hover/按下反馈由 .action-icon(.danger) 统一提供,
+   这里只定几何 —— 与输入框等高(30px)的方形热区,保证同一行的隐式高度不被按钮撑高 */
+.key-row .key-reveal,
+.key-row .key-del {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: var(--r-sm);
+}
+/* 明文显示时眼睛常亮:让「当前能看见 Key」这件事在扫视时也有状态可读,
+   否则只能靠图标里那条斜杠去分辨 */
+.key-row .key-reveal[aria-pressed='true'] { color: var(--accent-2); }
+.key-list > button.sm { align-self: flex-start; }
+
+/* ---- 多 API Key 轮询:卡片上的 Key 状态行(无余额徽标 + 重置) ---- */
+.pc-keys { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.pc-key { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.pc-key-mask {
+  flex: 1 1 auto; min-width: 0; font-family: var(--mono); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pc-key.exhausted .pc-key-mask { color: var(--amber); }
+.pc-key button.sm { padding: 1px 7px; font-size: 11px; }

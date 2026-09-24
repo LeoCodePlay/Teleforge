@@ -26,6 +26,7 @@ import { FilesChangedCard } from './FilesChangedCard';
 import { CommandCard } from './CommandCard';
 import { LoadedSkillsRow } from './LoadedSkillsRow';
 import { matchSlashCommand } from '../../utils/slashCommand';
+import { atTokenAt, displayMentionText, restoreMentionInput, serializeMention, splitMentions } from '../../utils/mentionRefs';
 import { mergeTrailingCommandCards } from '../../utils/commandCard';
 import { tailAssistantIndex } from '../../utils/compactionOrder';
 import { mergeAttachments } from '../../utils/mergeAttachments';
@@ -68,6 +69,11 @@ function lastPathSegment(p: string): string {
   const t = p.replace(/[\\/]+$/, '');
   const i = Math.max(t.lastIndexOf('/'), t.lastIndexOf('\\'));
   return i >= 0 ? t.slice(i + 1) : p;
+}
+
+// 正则元字符转义:按名称拼 RegExp(技能名/@文件名 去重判断)时使用
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, (c) => `\\${c}`);
 }
 
 // 推理等级定义与选择器已迁移到 ModelMenu.tsx(REASONING_LEVELS + 二级菜单)。
@@ -372,7 +378,7 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
       // 才另起一行。合并行沿用最新那条的 forkTail,分支点下标仍与服务端 turns 对齐。
       const prevRow = out[out.length - 1];
       if (t.retry && prevRow?.role === 'notice' && prevRow.retry
-        && Number(t.retry.retry) > Number(prevRow.retry.retry)) {
+        && Number(t.retry.retry) >= Number(prevRow.retry.retry)) {
         out[out.length - 1] = {
           ...prevRow, content: t.content || '', retry: t.retry,
           level: t.level, kind: t.kind, time: t.time, forkTail: ti
@@ -419,6 +425,19 @@ function tokenizeInput(text: string): OverlaySeg[] {
   }
   if (last < text.length) out.push({ t: 'text', v: text.slice(last) });
   return out;
+}
+
+// 用户消息正文渲染:上行正文里 @ 引用是 @source:完整路径(给模型按路径读文件用),
+// 气泡里折叠成 @文件名,避免一长串绝对路径把消息撑得又长又难看;悬停 title 给出完整路径。
+// 折叠发生在渲染期,历史消息(落盘的就是带路径的正文)无需迁移。
+function MentionText({ text }: { text: string }) {
+  return (
+    <>
+      {splitMentions(text).map((s, i) => s.t === 'mention'
+        ? <span className="bubble-mention" key={i} title={s.path}>{s.v}</span>
+        : <React.Fragment key={i}>{s.v}</React.Fragment>)}
+    </>
+  );
 }
 
 interface ChatPanelProps {
@@ -577,6 +596,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 名称 -> 引用解析:选中 @文件名 时记录其完整路径与来源,发送时据此替换为 @source:path。
   // 文本区始终只显示 @名称(普通可编辑文本),路径不进入输入框。
   const atMapRef = useRef<Map<string, { path: string; source: 'remote' | 'local' }>>(new Map());
+  // 光标处正在编辑的 @词 区间(菜单打开时记录):选中候选按该区间替换,
+  // 这样在已有文字中间补全引用也不会动到光标后面的内容。
+  const atTokenRef = useRef<{ start: number; end: number } | null>(null);
+  // 把带路径的正文(回退的历史消息 / 撤回编辑的队列消息)还原到输入框:
+  // 只显示 @文件名,并把 名称->{路径,来源} 重新登记,再次发送时才能序列化回完整路径。
+  const restoreInputMentions = (raw: string) => {
+    const r = restoreMentionInput(raw || '');
+    for (const ref of r.refs) atMapRef.current.set(ref.name, { path: ref.path, source: ref.source });
+    updateInput(r.text);
+  };
   // 候选只拉取一次(避免每次输入 @ 都请求;工作区切换后重新拉取)
   const atLoadedRef = useRef(false);
   // 候选拉取令牌:工作区切换时递增,使在途的旧工作区候选失效(避免晚到的响应覆盖新工作区)
@@ -662,6 +691,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   activeRef.current = sid;
   const busyRef = useRef(busy); // 切换到运行中的会话时,历史载入后把末条 assistant 标记为流式中
   busyRef.current = busy;
+  // 本轮是否已经收尾(done/error/stopped)。重试事件属于「还没结束」,必须据此把回复气泡
+  // 保持在流式态,收尾产物(已修改文件卡 / 复制 / 分支)才不会在重试途中冒出来;
+  // 反过来,ws 断线补发(见 server/core/ws.ts 的 pendingEvents/flushPending)可能在重连后
+  // 重放一条陈旧的重试事件,那时本轮其实已经结束,不能靠它把气泡重新点亮成流式。
+  const turnClosedRef = useRef(false);
 
   const changeReasoning = (lv: string) => {
     setReasoning(lv);
@@ -863,8 +897,20 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setAgentState(m.status === 'running' ? 'working' : 'idle');
             if (m.status !== 'running') {
               setSessionImgJob(activeRef.current, null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
-              push((msgs) => { const c = dropStaleCompaction([...msgs]); const li = tailAssistantIndex(c); if (li >= 0 && c[li].streaming) c[li].streaming = false;
-              return c; });
+              push((msgs) => {
+                const c = dropStaleCompaction([...msgs]);
+                // 尾部还挂着「等待重试」的行:这一步失败后正在退避等待重发,本轮并没有结束。
+                // 此时不能解除流式,否则渲染层会立刻把「已修改文件」卡与复制/分支按钮当成
+                // 收尾产物显示出来(用户明确要求:重试途中不出现这些)。真正结束由
+                // done/error/stopped 收尾,它们会自行把 streaming 置回 false。
+                const tail = c[c.length - 1];
+                const retryPending = tail?.role === 'notice' && !!tail.retry && tail.retry.state === 'scheduled';
+                if (!retryPending) {
+                  const li = tailAssistantIndex(c);
+                  if (li >= 0 && c[li].streaming) c[li].streaming = false;
+                }
+                return c;
+              });
             }
             break;
           case 'queue_update':
@@ -873,6 +919,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'start':
             hasLive.current = true;
+            turnClosedRef.current = false; // 新一轮开始:重新进入「未收尾」状态
             // 本轮首条 user/message 计入分支点计数
             forkTurnRef.current += 1; lastIterRef.current = 0;
             setAgentState('working'); setErrorMsg('');
@@ -1039,6 +1086,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'done':
             setAgentState('done');
+            turnClosedRef.current = true; // 本轮真正结束:此后重试事件不再把气泡点亮成流式
             setSessionImgJob(activeRef.current, null); // 本轮结束:状态行不再显示"正在生成图片"(成图失败时也不会卡住)
             push((msgs) => {
               const copy = [...msgs];
@@ -1062,7 +1110,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'stopped':
-            setAgentState('idle'); setSessionImgJob(activeRef.current, null);
+            setAgentState('idle'); turnClosedRef.current = true; setSessionImgJob(activeRef.current, null);
             push((msgs) => {
               const c = [...msgs];
               const li = tailAssistantIndex(c);
@@ -1076,7 +1124,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'error':
-            setAgentState('error'); setErrorMsg(m.message); setSessionImgJob(activeRef.current, null);
+            setAgentState('error'); turnClosedRef.current = true; setErrorMsg(m.message); setSessionImgJob(activeRef.current, null);
             push((msgs) => {
               const c = [...msgs];
               const li = tailAssistantIndex(c);
@@ -1193,10 +1241,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             scrollToBottomNow();
             break;
           case 'retry':
-            // 模型请求失败进入重试:渲染为 harness 风格的单行状态行(实时倒计时 + 可展开失败详情),
-            // 流式 assistant 存在时插到它前面(不打断对话流)。一次失败的重试全程只占一行:
-            // 重复事件(断线补发)与后续重试(1→2→3…)都在同一行里原地更新计数,不堆叠成多行;
-            // 只有重试序号回到 1(新一轮请求重新开始重试)才另起一行,历史重试行不会被吃掉。
+            // 模型请求失败进入重试:渲染为 harness 风格的单行状态行(实时倒计时 + 可展开失败详情)。
+            // 位置:排在当前回复气泡**之后**——重试是「这一步没跑完,接着再来」,提示行必须跟在
+            // 已输出的最新内容下面;下次重试成功后接上来的增量继续写回上面那个气泡(重试后直接接上,
+            // 不另起一段)。因此这里只 push/插到气泡后面,绝不 splice 到气泡前面。
+            // 一次失败的重试全程只占一行:重复事件(断线补发)与后续重试(1→2→3…)都在同一行里
+            // 原地更新计数(1/10 → 2/10),不堆叠成多行;只有重试序号回到 1(新一轮请求重新开始重试)
+            // 才另起一行,历史重试行不会被吃掉。
             // m.discard=true 表示这次失败前已经流出过内容:重试会重发这一步,必须先把它整段回滚,
             // 否则重试成功后的正文会和这段半成品拼在一起重复。
             // m.persisted=true:服务端已落库(占一个消息面下标),本地分支点计数器同步 +1。
@@ -1219,23 +1270,38 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   break;
                 }
               }
-              for (let i = c.length - 1; i >= 0; i--) {
+              // 本轮回复仍在进行中:重试只是这一步重发,不是对话结束。必须保持 streaming=true,
+              // 否则渲染层会把「已修改文件」汇总卡、复制按钮、分支按钮一并当成收尾产物显示出来
+              // (三者的显示条件都只看 !streaming)。重试成功后增量继续写回这个气泡。
+              // turnClosedRef 挡住断线补发的陈旧重试事件:本轮已收尾就不该再被点亮成流式。
+              if (!turnClosedRef.current) {
+                for (let i = c.length - 1; i >= 0; i--) {
+                  if (c[i]?.role === 'assistant') { c[i] = { ...c[i], streaming: true }; break; }
+                }
+              }
+              // 本轮的落点气泡:仅在本轮回复仍在流式时参与合并。
+              // 重试行只可能属于「正在跑的这一步」,因此只认本轮气泡之后的那条重试行 ——
+              // 一旦本轮气泡还没出现(老重试行都在上一轮气泡后面),就绝不能回头改历史行。
+              const li = tailAssistantIndex(c);
+              const streaming = li >= 0 && c[li].streaming;
+              // 从本轮气泡往后找第一条重试行:找到就原地更新计数,不新增行
+              for (let i = c.length - 1; i > li; i--) {
                 const prev = c[i]?.retry;
                 if (!prev) continue;
-                // 同一轮失败重试全程原地更新:重复推送(断线补发)或后续重试(序号递增 1→2→3…)
-                // 都不新增行,只在最近一条重试行里更新计数;序号回落到 1(新一轮请求重新开始重试)
-                // 才追加成新的一行,保证一轮一次记录、历史保留。
+                // 序号递增或持平(1→2、断线补发)都算同一次失败的重试:原地更新成最新计数。
+                // 序号回落到 1 说明这是新一轮请求的重试,另起一行,历史记录保留。
                 if (payload.retry >= prev.retry) {
-                  c[i] = { role: 'notice', retry: payload };
+                  c[i] = { role: 'notice', content: '', retry: payload };
                   return c;
                 }
-                break; // 序号回落到 1:新一轮请求的重试行,追加成新的一行
+                break;
               }
-              const li = tailAssistantIndex(c);
-              if (li >= 0 && c[li].streaming) {
-                c.splice(li, 0, { role: 'notice', retry: payload });
+              // 首次重试:插到本轮气泡正后方(流式中即紧随气泡;气泡已收尾时落到末尾),
+              // 保证提示行显示在最新内容下面而不是最上面。
+              if (streaming) {
+                c.splice(li + 1, 0, { role: 'notice', content: '', retry: payload });
               } else {
-                c.push({ role: 'notice', retry: payload });
+                c.push({ role: 'notice', content: '', retry: payload });
               }
               return c;
             });
@@ -1503,8 +1569,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     if (!ok) return;
     try {
       applyTurns(await api.request('message_rewind', await rewindTarget(m, i), 8000));
-      // 回退后把该条消息回填输入框,便于修改后重新发起
-      updateInput(m.content || '');
+      // 回退后把该条消息回填输入框,便于修改后重新发起(@引用按 @文件名 回填)
+      restoreInputMentions(m.content || '');
       requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
     } catch (e) { toast.error((e as Error).message); }
   };
@@ -1836,7 +1902,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             const after = text[i + 1 + name.length] ?? '';
             if (after === '' || /\s/.test(after)) {
               const rec = map.get(name)!;
-              out += `@${rec.source}:${rec.path}`;
+              out += serializeMention(rec.source, rec.path);
               refs.push({ source: rec.source, path: rec.path });
               consumed = 1 + name.length;
               break;
@@ -1952,7 +2018,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     try {
       const r = await api.request('queue_remove', { id: item.id, sid: sidArg(sid) }, 8000);
       setQueue(Array.isArray(r.queue) ? r.queue : []);
-      updateInput(item.text);
+      restoreInputMentions(item.text);
       requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
     } catch (e) { toast.error((e as Error).message); }
   };
@@ -2083,8 +2149,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       // 高亮叠加层负责把它显示为高亮 token)
       const m = /(^|\s)\/[a-z0-9-]*$/i.exec(input);
       const head = m ? input.slice(0, m.index + m[1].length) : input;
-      // 同一技能已完整存在于文本中则不重复追加
-      const already = new RegExp(`(?:^|\\s)/${name}(?=\\s|$)`, 'i').test(input);
+      // 去重必须只看 head(光标处这个 /词 之前的文本):拿整条 input 判断时,
+      // 「刚刚输入/粘贴进来的 /技能名 本身」会被当成"已存在",补全退化成删除——
+      // 粘贴含 /front-design 的文案后回车,技能名当场从输入框消失,只能重新输入。
+      const already = new RegExp(`(?:^|\\s)/${escapeRe(name)}(?=\\s|$)`, 'i').test(head);
       const next = already ? head : `${head}/${name} `;
       updateInput(next);
       syncSlash(next);
@@ -2115,37 +2183,63 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       .finally(() => { if (token === atFetchTokenRef.current) setAtLoading(false); });
   };
 
-  // 输入 @ 唤醒菜单:行首 或 空白后 的 @ 且其后是词尾时开启(与 syncSlash 同构)
-  const syncAt = (text: string) => {
-    const m = /(?:^|\s)@([a-zA-Z0-9_.\-/\\]*)$/.exec(text);
-    if (m) {
-      setAtQuery(m[1] || '');
+  // 输入 @ 唤醒菜单:按「光标位置」判断 —— 光标前是行首/空白后的 @词 就开启。
+  // 过去要求整条输入以 @词 结尾,于是「在已有文字中间插入引用」(@ 后面还跟着别的内容)
+  // 永远弹不出菜单;现在只看光标前的文本,光标之后有什么都不影响。
+  const syncAt = (text: string, caret?: number) => {
+    const tok = atTokenAt(text, caret ?? text.length);
+    if (tok) {
+      atTokenRef.current = { start: tok.start, end: tok.end };
+      setAtQuery(tok.query);
       setAtOpen(true);
       setAtActive(0); // 过滤词变化:候选重排,高亮回到首项(否则会停在重排后的尾部)
       openAt();
     } else {
+      atTokenRef.current = null;
       setAtOpen(false);
     }
   };
-  const closeAt = () => { setAtOpen(false); setAtActive(-1); };
+  const closeAt = () => { setAtOpen(false); setAtActive(-1); atTokenRef.current = null; };
 
-  // 选中候选:把末尾刚输入的 @词 替换为 @名称 + 空格(路径不进输入框),
+  // 选中候选:把光标处的 @词 替换为 @名称 + 空格(路径不进输入框),
   // 记录 名称 -> {路径,来源} 供发送时替换;同一名称已完整存在则不重复插入。
-  // 注意 already 需对 head(剥除当前 @词 尾部后的保留文本)判断:若对 input 判断,
+  // 替换区间优先用菜单打开时记录的 atTokenRef(支持在文本中间补全,光标之后的内容原样保留),
+  // 区间失效(文本被外部改写)时回落到末尾词匹配。
+  // 注意 already 需对 head(当前 @词 之前的保留文本)判断:若对 input 判断,
   // 刚输入的查询尾巴 @web 会被误判为"已存在",导致 @web 被清掉(引用"消失")。
   const pickAt = (item: AtCandidate, _query: string) => {
     const name = item.name;
-    const m = /(^|\s)@[a-zA-Z0-9_.\-/\\]*$/i.exec(input);
-    const head = m ? input.slice(0, m.index + m[1].length) : input;
-    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const already = new RegExp(`(?:^|\\s)@${esc}(?=\\s|$)`, 'i').test(head);
-    const next = already ? head : `${head}@${name} `;
+    let start = input.length;
+    let end = input.length;
+    const tok = atTokenRef.current;
+    if (tok && tok.start >= 0 && tok.end <= input.length && tok.start < tok.end
+      && input[tok.start] === '@' && /^@[a-zA-Z0-9_.\-/\\]*$/.test(input.slice(tok.start, tok.end))) {
+      start = tok.start;
+      end = tok.end;
+    } else {
+      const m = /(^|\s)@[a-zA-Z0-9_.\-/\\]*$/i.exec(input);
+      if (m) start = m.index + m[1].length;
+    }
+    const head = input.slice(0, start);
+    const already = new RegExp(`(?:^|\\s)@${escapeRe(name)}(?=\\s|$)`, 'i').test(head);
+    const insert = already ? '' : `@${name} `;
+    // 吃掉一个相邻空白,避免在文本中间留下双空格:插入词自带尾随空格;
+    // 去重删除时则是两侧各有一个空白相邻
+    let tail = input.slice(end);
+    const eatsSpace = insert ? /^[ \t]/.test(tail) : (/[ \t]$/.test(head) && /^[ \t]/.test(tail));
+    if (eatsSpace) tail = tail.slice(1);
+    const next = head + insert + tail;
+    const caretAfter = head.length + insert.length;
     atMapRef.current.set(name, { path: item.path, source: item.source });
     updateInput(next);
-    syncAt(next);
+    syncAt(next, caretAfter);
     setAtOpen(false);
+    atTokenRef.current = null;
     setAtActive(-1);
-    requestAnimationFrame(() => { const el = taRef.current; if (el) el.focus(); });
+    requestAnimationFrame(() => {
+      const el = taRef.current;
+      if (el) { el.focus(); el.setSelectionRange(caretAfter, caretAfter); }
+    });
   };
 
   const stop = () => api.send('stop_agent', { sid: sidArg(sid) });
@@ -2187,7 +2281,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setLocalWsBrowserOpen(false); setLocalWsMenuOpen(false);
   };
 
-  // 工作区 chip 文案的三种状态:绑定了目录 / 「不在工作区对话」(全盘模式)/ 尚未选择
+  // 工作区 chip 文案的三种状态:绑定了目录 / 不使用工作区(边界=整台服务器·整台电脑)/ 尚未选择
   const remoteChip = noWorkspace ? `🌐 ${WHOLE_LABEL.remote}` : workspace ? `📂 ${lastPathSegment(workspace)}` : '选择远程工作区';
   const localChip = localNoWorkspace ? `🌐 ${WHOLE_LABEL.local}` : localWorkspace ? `🖥 ${lastPathSegment(localWorkspace)}` : '选择本地工作区';
 
@@ -2219,8 +2313,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 切会话瞬态(复位 effect 尚未跑)也不会把上一个会话的「正在生成图片」画到新会话上
   const rowImgJob = imgJob && (imgJob.owner == null || imgJob.owner === sid) ? imgJob : null;
   // 工作中也允许输入发送(自动进入待执行队列,当前轮结束后按序执行);
-  // 发送条件:远程或本地任一侧「有工作区」或「已选择不在工作区对话(全盘模式)」——
-  // 连接服务器但未选远程工作区时,只要选了本地工作区即可发起对话(仅限本地工作,会话归本地任务列表);
+  // 发送条件:远程或本地任一侧「有工作区」或「已选择不使用工作区(整台服务器/整台电脑)」——
+  // 两侧完全独立,只要有一侧确定了边界即可发起对话;两侧都没选则不允许发送。
   // 模型提问挂起时锁定输入与暂停(须先作答或取消提问);会话切换加载中也锁定,避免发到错误会话
   const canSend = (!!workspace || !!localWorkspace || noWorkspace || localNoWorkspace) && !askPending && !switching;
 
@@ -2259,12 +2353,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     {!!m.attachments?.length && (
                       <MessageAttachments items={m.attachments} onOpen={setLightbox} />
                     )}
-                    {m.content}
+                    <MentionText text={m.content || ''} />
                   </div>
                   <div className="user-msg-foot">
                     {!!m.time && <span className="user-msg-time">{formatMsgTime(m.time)}</span>}
                     <UserMessageActions
-                      text={m.content || ''}
+                      text={displayMentionText(m.content || '')}
                       onDelete={() => deleteMsg(m, i)}
                       onRewind={() => rewindMsg(m, i)}
                     />
@@ -2413,7 +2507,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               {input.endsWith('\n') && <span> </span>}
             </div>
             <textarea ref={taRef} rows={1} value={input}
-              onChange={(e) => { const v = e.target.value; updateInput(v); syncSlash(v); syncAt(v); }}
+              onChange={(e) => { const v = e.target.value; updateInput(v); syncSlash(v); syncAt(v, e.target.selectionStart ?? v.length); }}
               onScroll={syncOverlayScroll}
               onPaste={(e) => {
                 // 粘贴图片/文件:拦截默认行为改为附件收纳(粘贴文本不受影响)
@@ -2421,10 +2515,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 if (files.length > 0) { e.preventDefault(); intakeFiles(files); }
               }}
               placeholder={!connected && !localWorkspace && !localNoWorkspace ? '未连接服务器 · 选择本地工作区后即可对话'
-                : !workspace && !localWorkspace && !noWorkspace && !localNoWorkspace ? '请先选择远程工作区或本地工作区(也可选「不在工作区对话」)'
-                : noWorkspace && localNoWorkspace ? '不在工作区对话 · 整台服务器 + 整台电脑(请让 AI 使用绝对路径)'
-                : localNoWorkspace ? '不在工作区对话 · 本机全盘(请让 AI 使用绝对路径)'
-                : noWorkspace ? '不在工作区对话 · 整台远程服务器(请让 AI 使用绝对路径)'
+                : !workspace && !localWorkspace && !noWorkspace && !localNoWorkspace ? '请先选择远程工作区或本地工作区(至少选一个:也可让该侧「不使用工作区」)'
+                : noWorkspace && localNoWorkspace ? '不使用工作区 · 整台服务器 + 整台电脑(请让 AI 使用绝对路径)'
+                : localNoWorkspace ? '不使用本地工作区 · 本机全盘(请让 AI 使用绝对路径)'
+                : noWorkspace ? '不使用远程工作区 · 整台远程服务器(请让 AI 使用绝对路径)'
                 : connected && !workspace ? '未选远程工作区 · 当前仅限本地工作区对话'
                 : askPending ? '请先在提问面板中作答或取消…'
                 : working ? 'Agent 工作中,发送后将进入队列等待执行…'
@@ -2439,10 +2533,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   if (e.key === 'ArrowDown') { e.preventDefault(); setSlashActive((i) => (list.length ? (i + 1) % list.length : -1)); return; }
                   if (e.key === 'ArrowUp') { e.preventDefault(); setSlashActive((i) => (list.length ? (i - 1 + list.length) % list.length : -1)); return; }
                   if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
-                  if (e.key === 'Enter' && !e.shiftKey && list.length) {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    // 菜单开着就绝不落进发送分支:那会把刚粘贴进来的 /技能名 当普通消息发走并清空输入框,
+                    // 用户只能重新输入(技能列表还在异步加载、候选为空时最容易踩到)。
+                    // 有候选则补全/执行,没有候选只收起菜单,输入原样保留,再按一次回车才是发送。
                     e.preventDefault();
-                    const it = list[slashActive >= 0 ? slashActive : 0];
-                    if (it) pickSlash(it, slashQuery);
+                    const it = list.length ? list[slashActive >= 0 ? slashActive : 0] : null;
+                    if (it) pickSlash(it, slashQuery); else closeSlash();
                     return;
                   }
                   if (e.key === 'Tab' && list.length) {
@@ -2492,7 +2589,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       const next = el.value.slice(0, start) + el.value.slice(end);
                       updateInput(next);
                       syncSlash(next);
-                      syncAt(next);
+                      syncAt(next, start);
                       requestAnimationFrame(() => {
                         const t = taRef.current;
                         if (t) { t.setSelectionRange(start, start); t.focus(); }
@@ -2581,7 +2678,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 className={`ws-chip ${workspace || noWorkspace ? '' : 'none'}${remoteLocked ? ' locked' : ''}`}
                 disabled={remoteLocked}
                 data-tip={remoteLocked ? '该会话已开始对话,远程工作区已锁定;如需更换请新建会话'
-                  : noWorkspace ? `「不在工作区对话」:AI 可读写整台远程服务器(必须传绝对路径),点击切换回某个目录工作区` : undefined}
+                  : noWorkspace ? `「不使用工作区」:AI 可读写整台远程服务器(必须传绝对路径),点击切换回某个目录工作区` : undefined}
                 onClick={() => { if (!remoteLocked) { setWsMenuOpen((v) => !v); setLocalWsMenuOpen(false); } }}
               >
                 <span className="ws-chip-path">{remoteLocked ? `🔒 ${remoteChip}` : remoteChip}</span>
@@ -2616,11 +2713,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       🏠 家目录
                     </button>
                   )}
-                  {/* 「不在工作区对话」:不绑定任何目录,边界放宽到整台远程服务器 */}
+                  {/* 不使用工作区:不绑定任何目录,边界放宽到整台远程服务器。与本地侧完全独立 */}
                   <button className={`ws-pick-item ws-pick-action${noWorkspace ? ' on' : ''}`}
-                    data-tip="不绑定工作目录:AI 可在整台远程服务器上读写文件与执行命令(必须使用绝对路径)"
+                    data-tip="不绑定远程工作目录:AI 可在整台远程服务器上读写文件与执行命令(必须使用绝对路径)。仅影响远程侧,与本地工作区互不影响"
                     onClick={() => setWorkspace(NO_WORKSPACE)}>
-                    🌐 不在工作区对话({WHOLE_LABEL.remote}){noWorkspace ? ' ✓' : ''}
+                    🌐 不使用工作区(整台服务器){noWorkspace ? ' ✓' : ''}
                   </button>
                 </div>
               )}
@@ -2631,7 +2728,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               className={`ws-chip local ${localWorkspace || localNoWorkspace ? '' : 'none'}${localLocked ? ' locked' : ''}`}
               disabled={localLocked}
               data-tip={localLocked ? '该本地会话已开始对话,本地工作区已锁定;如需更换请新建会话'
-                : localNoWorkspace ? `「不在工作区对话」:AI 可读写这台电脑的整个「此电脑」(所有盘符,必须传绝对路径),点击切换回某个目录工作区` : undefined}
+                : localNoWorkspace ? `「不使用工作区」:AI 可读写这台电脑的整个「此电脑」(所有盘符,必须传绝对路径),点击切换回某个目录工作区` : undefined}
               onClick={() => { if (!localLocked) { setLocalWsMenuOpen((v) => !v); setWsMenuOpen(false); } }}
             >
               <span className="ws-chip-path">{localLocked ? `🔒 ${localChip}` : localChip}</span>
@@ -2661,11 +2758,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 <button className="ws-pick-item ws-pick-action" onClick={() => { setLocalWsMenuOpen(false); setLocalWsBrowserOpen(true); }}>
                   📁 浏览选择其他本地目录…
                 </button>
-                {/* 「不在工作区对话」:不绑定任何目录,边界放宽到整台电脑(此电脑/所有盘符) */}
+                {/* 不使用工作区:不绑定任何目录,边界放宽到整台电脑(此电脑/所有盘符)。与远程侧完全独立 */}
                 <button className={`ws-pick-item ws-pick-action${localNoWorkspace ? ' on' : ''}`}
-                  data-tip="不绑定工作目录:AI 可读写这台电脑的任何位置(C 盘、D 盘…统称「此电脑」),必须使用绝对路径"
+                  data-tip="不绑定本地工作目录:AI 可读写这台电脑的任何位置(C 盘、D 盘…统称「此电脑」),必须使用绝对路径。仅影响本地侧,与远程工作区互不影响"
                   onClick={() => setLocalWorkspace(NO_WORKSPACE)}>
-                  🌐 不在工作区对话({WHOLE_LABEL.local}){localNoWorkspace ? ' ✓' : ''}
+                  🌐 不使用工作区(整台电脑){localNoWorkspace ? ' ✓' : ''}
                 </button>
               </div>
             )}
@@ -2702,7 +2799,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     {userMsgIndices.length > 1 && (
       <nav className="chat-dots" aria-label="用户消息跳转">
         {userMsgIndices.map((idx, d) => {
-          const t = (messages[idx]?.content || '').trim();
+          const t = displayMentionText(messages[idx]?.content || '').trim();
           return (
             <button
               key={idx}

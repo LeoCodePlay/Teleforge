@@ -1,13 +1,13 @@
 // 共享类型定义:前后端 WebSocket 消息为动态结构,这里只描述前端使用到的关键形状
 
 /**
- * 「不在工作区对话」哨兵值(与 server/config.ts 的 NO_WORKSPACE 保持一致):
+ * 「不使用工作区」哨兵值(与 server/config.ts 的 NO_WORKSPACE 保持一致):
  * 作为 set_workspace / set_local_workspace 的 path 传入,表示该侧不绑定任何目录,
  * AI 的文件边界放宽到整台机器(本机 = 所有盘符,远程 = 整个远程文件系统)。
  */
 export const NO_WORKSPACE = 'no-workspace';
 
-/** 全盘模式下的展示文案:本地侧 = 整台电脑,远程侧 = 整台服务器 */
+/** 不使用工作区时的展示文案:本地侧 = 整台电脑,远程侧 = 整台服务器 */
 export const WHOLE_LABEL = { local: '整台电脑', remote: '整台服务器' } as const;
 
 /** 一条 SSH 连接(服务端多连接池中的一个) */
@@ -82,7 +82,7 @@ export interface Session {
   connKey?: string | null;
   /**
    * 会话绑定的远程工作区(连接服务器时的执行目录)。
-   * 路径 / NO_WORKSPACE(「不在工作区对话」,边界=整台服务器)/ null·缺失(未绑定)
+   * 路径 / NO_WORKSPACE(不使用工作区,边界=整台服务器)/ null·缺失(未绑定)
    */
   workspace?: string | null;
   /** 会话绑定的本地工作区;同样可为 NO_WORKSPACE(边界=整台电脑)或 null·缺失(未绑定) */
@@ -108,6 +108,16 @@ export interface ModelContextConfig {
   imageGen?: boolean;
 }
 
+/** 单个 API Key 的运行状态(按 Key 字符串索引) */
+export interface KeyState {
+  /** true = 已判定「余额不足」,自动轮询会跳过它;点「重置」后清除 */
+  exhausted?: boolean;
+  /** 判定原因(网关原文摘要),便于排查 */
+  reason?: string;
+  /** 判定时间(毫秒时间戳) */
+  at?: number;
+}
+
 /** LLM 提供商(预置 + 用户自定义,userProviders 来自服务端配置文件) */
 export interface LlmProvider {
   id: string;
@@ -115,6 +125,10 @@ export interface LlmProvider {
   baseUrl: string;
   models: string[];
   apiKey?: string;
+  /** 多个 API Key(轮询用):某个 Key 余额不足时自动切换到下一个 */
+  apiKeys?: string[];
+  /** 每个 Key 的状态(余额不足标记等),key = API Key 本身 */
+  keyStates?: Record<string, KeyState>;
   note?: string;
   mock?: boolean;
   /** 每个模型的上下文能力映射(可选),key = 模型名 */
@@ -127,6 +141,8 @@ export interface ProviderDraft {
   baseUrl: string;
   models: string[];
   apiKey: string;
+  /** 多个 API Key(轮询用);apiKey 由服务端对齐为 apiKeys[0] */
+  apiKeys: string[];
   /** 每个模型的上下文能力映射(可选) */
   modelConfig?: Record<string, ModelContextConfig>;
 }

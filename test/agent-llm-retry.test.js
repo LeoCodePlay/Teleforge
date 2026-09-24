@@ -1,16 +1,17 @@
 // 端到端回归:模型响应在对话中途被网关掐断 / 限流时,本轮不再「突然中断」。
 // 真实链路:LlmClient(真 fetch + 真 SSE 解析 + 真重试)→ Agent 主循环 → 会话事件日志。
 // 断言的是用户可见结果:本轮仍然跑完(completed)、本轮日志里只有一条完整回复(没有半句残留)、
-// 重试事件带着回滚标记;而配置类错误(余额不足)不空等,给出可操作提示。
+// 重试事件带着回滚标记;余额不足时不再空等,而是在同一提供商的多个 Key 之间自动轮询。
 process.env.DATA_DIR = (await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(), 'sshai-retry-'));
 process.env.LLM_RETRY_BASE_DELAY_MS = '20';
 process.env.LLM_RETRY_MAX_DELAY_MS = '60';
-process.env.LLM_RETRY_BUDGET_MS = '8000';
+process.env.LLM_ATTEMPT_MS = '8000'; // 单次尝试总时长上限(替代已移除的重试总预算)
 
 import http from 'node:http';
 const { Agent } = await import('../server/agent/agent.ts');
 const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
 const { LLM_RETRY } = await import('../server/agent/llm.ts');
+const { aiProviders, usableKeys } = await import('../server/store/ai-providers-store.ts');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log(`  OK   ${n}`); } else { fail++; console.log(`  FAIL ${n} ${e}`); } };
@@ -27,11 +28,13 @@ ssh.stat = async () => ({ isDirectory: () => true });
 const sse = (delta, finish = null) => `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
 let script = [];
 let seen = [];
+let auths = []; // 每次请求的 Authorization 头:验证「余额不足后切换到下一个 Key」
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     seen.push(JSON.parse(body || '{}'));
+    auths.push(String(req.headers.authorization || ''));
     const step = script.shift() || { type: 'ok', text: '默认回复' };
     if (step.type === 'status') {
       res.writeHead(step.code, { 'Content-Type': 'application/json' });
@@ -55,10 +58,10 @@ const warns = [];
 const realWarn = console.warn;
 console.warn = (...a) => { warns.push(a.join(' ')); };
 
-function makeAgent() {
+function makeAgent(llmCfg = {}) {
   const events = [];
   const agent = new Agent({ emit: (e, p) => events.push([e, p]) });
-  agent.configureLlm({ baseUrl, apiKey: 'test', model: 'deepseek-chat' });
+  agent.configureLlm({ baseUrl, apiKey: 'test', model: 'deepseek-chat', ...llmCfg });
   return { agent, events };
 }
 // 只取事件载荷(payload),并按本轮切片:同一进程里会话历史会跨 Agent 累积
@@ -162,6 +165,53 @@ seen = [];
   check('持续 503 时重试到上限才放弃', seen.length === LLM_RETRY.MAX_ATTEMPTS, String(seen.length));
   check('放弃时说明已重试次数', /已自动重试/.test(t.errors[0]?.message || ''), t.errors[0]?.message);
   check('放弃后本轮以 error 收尾(不是静默卡死)', t.reason?.kind === 'error', JSON.stringify(t.reason));
+}
+
+// 7) 多 Key 轮询(端到端):第 1 个 Key 余额不足 -> 自动切到第 2 个 Key,本轮照常跑完。
+//    同时验证服务端确实把「无余额」写回提供商配置,并广播 key_exhausted 让界面出徽标。
+const pid = 'u_e2e_multikey';
+aiProviders.add({ id: pid, name: 'E2E', baseUrl, apiKey: 'key-one', apiKeys: ['key-one', 'key-two'], models: ['deepseek-chat'], note: '' });
+script = [
+  { type: 'status', code: 402, body: JSON.stringify({ code: 'INSUFFICIENT_BALANCE', message: '余额不足' }) },
+  { type: 'ok', text: '第二个 Key 的回答' }
+];
+seen = [];
+auths = [];
+{
+  const { agent, events } = makeAgent({ apiKey: 'key-one', apiKeys: ['key-one', 'key-two'], providerId: pid });
+  const t = await runTurn(agent, events, '多 Key 场景');
+  const exhausted = agentEvents(events, 'key_exhausted');
+  const stored = aiProviders.find(pid);
+  check('第 1 个 Key 余额不足后本轮仍跑完(不中断对话)', t.reason?.kind === 'completed', JSON.stringify(t.reason));
+  check('最终回复来自第 2 个 Key', t.assistant.length === 1 && t.assistant[0].content === '第二个 Key 的回答', JSON.stringify(t.assistant.map((m) => m.content)));
+  check('网关收到 2 次请求、第 2 次换了 Key', seen.length === 2 && auths[0] === 'Bearer key-one' && auths[1] === 'Bearer key-two', JSON.stringify(auths));
+  check('本轮没有报错事件', t.errors.length === 0, JSON.stringify(t.errors));
+  check('换 Key 对用户可见(重试事件说明原因)', t.retries.length === 1 && /余额不足/.test(t.retries[0].error || ''), JSON.stringify(t.retries));
+  check('广播 key_exhausted 供界面刷新徽标', exhausted.length === 1 && exhausted[0].key === 'key-one' && exhausted[0].providerId === pid, JSON.stringify(exhausted));
+  check('「无余额」写回提供商配置', stored?.keyStates?.['key-one']?.exhausted === true, JSON.stringify(stored?.keyStates));
+  check('该提供商的可用 Key 只剩第 2 个(重置前不再尝试第 1 个)', JSON.stringify(usableKeys(stored)) === '["key-two"]', JSON.stringify(usableKeys(stored)));
+  check('重置后第 1 个 Key 重新可用', aiProviders.resetKey(pid, 'key-one') === true && JSON.stringify(usableKeys(aiProviders.find(pid))) === '["key-one","key-two"]', JSON.stringify(usableKeys(aiProviders.find(pid))));
+}
+
+// 8) 所有 Key 都余额不足:停止重试,本轮以 error 收尾并指引「充值 + 重置」
+const pid2 = 'u_e2e_allgone';
+aiProviders.add({ id: pid2, name: 'E2E2', baseUrl, apiKey: 'k1', apiKeys: ['k1', 'k2'], models: ['deepseek-chat'], note: '' });
+script = [
+  { type: 'status', code: 402, body: JSON.stringify({ code: 'INSUFFICIENT_BALANCE', message: '余额不足' }) },
+  { type: 'status', code: 402, body: JSON.stringify({ code: 'INSUFFICIENT_BALANCE', message: '余额不足' }) }
+];
+seen = [];
+auths = [];
+{
+  const { agent, events } = makeAgent({ apiKey: 'k1', apiKeys: ['k1', 'k2'], providerId: pid2 });
+  const t = await runTurn(agent, events, '全部 Key 都没余额');
+  const exhausted = agentEvents(events, 'key_exhausted');
+  const stored = aiProviders.find(pid2);
+  check('全部 Key 无余额时只遍历一遍(每 Key 一次)', seen.length === 2, String(seen.length));
+  check('两个 Key 都被判定无余额', exhausted.map((e) => e.key).join(',') === 'k1,k2', JSON.stringify(exhausted.map((e) => e.key)));
+  check('本轮以 error 收尾(不静默卡死)', t.reason?.kind === 'error', JSON.stringify(t.reason));
+  check('错误文案指引充值 + 重置', /充值/.test(t.errors[0]?.message || '') && /重置/.test(t.errors[0]?.message || ''), t.errors[0]?.message);
+  check('该提供商已无任何可用 Key', usableKeys(stored).length === 0, JSON.stringify(usableKeys(stored)));
 }
 
 console.warn = realWarn;

@@ -6,6 +6,7 @@
 // 视觉语言:一条「待命轴」——头部脉冲点与列表节点同轴贯穿,第一条(下一个执行)常亮,
 // 其余为空心节点;文字之外的装饰(徽标/胶囊/描边/emoji)一律不做,操作图标只在行悬浮时浮现。
 import React from 'react';
+import { displayMentionText } from '../../utils/mentionRefs';
 import './QueuePanel.scss';
 
 /** 待执行队列项(与后端 queueSnapshot 的 {id, text, attach} 结构一致;attach=附件数) */
@@ -57,7 +58,10 @@ export default function QueuePanel({ queue, onRunNow, onEdit, onDelete }: QueueP
         <span className="queue-hint">本轮结束后按顺序自动执行</span>
       </div>
       <ul className="queue-list">
-        {queue.map((item, i) => (
+        {queue.map((item, i) => {
+          // 队列里存的是上行正文(@source:完整路径):展示同样只留 @文件名,与消息气泡一致
+          const text = displayMentionText(item.text);
+          return (
           <li
             className={`queue-item${i === 0 ? ' is-next' : ''}`}
             key={item.id}
@@ -66,7 +70,7 @@ export default function QueuePanel({ queue, onRunNow, onEdit, onDelete }: QueueP
           >
             {/* 待命轴节点:第一条 = 下一个执行 */}
             <span className="queue-node" aria-hidden />
-            <span className="queue-text" data-tip={item.text} data-tip-ellipsis="">{item.text}</span>
+            <span className="queue-text" data-tip={text} data-tip-ellipsis="">{text}</span>
             {!!item.attach && (
               <span className="queue-attach" data-tip={`${item.attach} 个附件`}>
                 <IconPaperclip />
@@ -91,7 +95,8 @@ export default function QueuePanel({ queue, onRunNow, onEdit, onDelete }: QueueP
               </button>
             </span>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );

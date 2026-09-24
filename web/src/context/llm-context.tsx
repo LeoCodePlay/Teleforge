@@ -1,5 +1,5 @@
 // LLM 配置全局状态:右侧连接面板与聊天输入框下方的「提供方/模型」切换器共享同一份状态
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { PROVIDERS, DEFAULT_PROVIDER } from '../data/llm-providers';
 import { isRealSessionId } from '../utils/preview';
@@ -71,6 +71,8 @@ export interface LlmContextValue {
   updateProvider: (id: string, d: ProviderDraft) => Promise<boolean>;
   duplicateProvider: (id: string) => Promise<void>;
   removeProvider: (id: string) => Promise<void>;
+  /** 清除某 Key 的「无余额」标记(充值后点「重置」,下次重试会再次尝试它);省略 key = 全部重置 */
+  resetProviderKey: (id: string, key?: string) => Promise<boolean>;
   err: string;
   setErr: React.Dispatch<React.SetStateAction<string>>;
 }
@@ -183,10 +185,21 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     : FALLBACK_CONTEXT;
   const effBaseUrl = provider.baseUrl;
   const effKey = isMock ? '' : apiKey;
+  // 该提供商当前可用的 Key:去重后排除已标记「无余额」的。
+  // 服务端轮询只用这份列表 —— 所以被标记的 Key 在用户点「重置」前不会被再次尝试。
+  const usableApiKeys = useMemo(() => {
+    if (isMock) return [] as string[];
+    const uniq = [...new Set([apiKey, ...(provider.apiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))];
+    return uniq.filter((k) => provider.keyStates?.[k]?.exhausted !== true);
+  }, [apiKey, provider, isMock]);
 
   // 统一生效的 llm 下发载荷(baseUrl/key/model + 上下文能力 + 多模态/生图开关)
   const llmPayload = () => ({
-    baseUrl: effBaseUrl, apiKey: effKey, model: effModel,
+    baseUrl: effBaseUrl, apiKey: usableApiKeys[0] || effKey, model: effModel,
+    // 多 Key 轮询:只下发「可用」的 Key(已排除无余额的),服务端据此自动切换
+    apiKeys: usableApiKeys,
+    // 提供商 id:服务端把「无余额」标记写回该提供商,供界面展示与重置
+    providerId: isUser ? providerId : '',
     contextWindow: effModelContext.contextWindow || 0,
     maxTokens: effModelContext.maxTokens || 0,
     multimodal: effModelContext.multimodal === true,
@@ -267,7 +280,12 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
         const r = await fetch('/api/providers/' + id, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiKey: key })
+          // 连同完整 Key 列表一起提交:只发单个 apiKey 会把多 Key 列表截断成一条
+          body: JSON.stringify({
+            apiKey: key,
+            apiKeys: [...new Set([key, ...(allProviders.find((x) => x.id === id)?.apiKeys || [])]
+              .map((k) => String(k || '').trim()).filter(Boolean))]
+          })
         });
         if (!r.ok) return;
         const j = await r.json();
@@ -313,7 +331,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       } catch { /* 后端写失败不阻塞 UI,下次变更会重试 */ }
     }, 400);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen, apiKey, model, customModel, isMock, sidEpoch]);
+  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen, apiKey, model, customModel, isMock, sidEpoch, usableApiKeys]);
 
   // 后端重启/WS 断线重连后:agent.llm 是后端内存态,重启即清空。
   // 前端不刷新时不会重新触发上面的配置 effect,这里监听 open 重连后按当前生效
@@ -324,7 +342,21 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     });
     return () => { off(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen]);
+  }, [effBaseUrl, effKey, effModel, providerId, effModelContext.contextWindow, effModelContext.maxTokens, effModelContext.multimodal, effModelContext.imageGen, usableApiKeys]);
+
+  // 服务端把某个 Key 判定为「余额不足」并已写回提供商配置:重新拉取列表,
+  // 界面据此刷新「无余额」徽标与「重置」按钮(该 Key 在重置前不会参与轮询)。
+  useEffect(() => {
+    const off = api.on('agent', (ev: any) => {
+      if (ev?.event !== 'key_exhausted') return;
+      fetch('/api/providers')
+        .then((r) => r.json())
+        .then((j) => { if (Array.isArray(j?.userProviders)) setUserProviders(j.userProviders as LlmProvider[]); })
+        .catch(() => { /* 拉取失败不阻塞对话;徽标会在下次操作时补上 */ });
+    });
+    return () => { off(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- 添加 / 编辑 / 复制 / 删除「我的提供商」(增删改均写入服务端配置文件) ----
   // 添加成功后自动切换为当前使用;返回 true/false 供弹窗决定是否关闭
@@ -388,6 +420,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: p.name + '(副本)', baseUrl: p.baseUrl, models: p.models, apiKey: p.apiKey,
+          apiKeys: p.apiKeys || (p.apiKey ? [p.apiKey] : []),
           ...(p.modelConfig ? { modelConfig: p.modelConfig } : {})
         })
       });
@@ -395,6 +428,25 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       if (!r.ok) throw new Error(j.error || '复制失败');
       setUserProviders(Array.isArray(j.userProviders) ? j.userProviders as LlmProvider[] : []);
     } catch (e) { setErr('复制提供商失败:' + (e as Error).message); }
+  };
+
+  // 清除某 Key 的「无余额」标记:充值后点「重置」,下次重试轮询会再次尝试它。
+  // 省略 key 时清空该提供商全部标记。
+  const resetProviderKey = async (id: string, key?: string): Promise<boolean> => {
+    try {
+      const r = await fetch('/api/providers/' + id + '/reset-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(key ? { key } : {})
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || '重置失败');
+      if (Array.isArray(j.userProviders)) setUserProviders(j.userProviders);
+      return true;
+    } catch (e) {
+      setErr('重置 API Key 状态失败:' + (e as Error).message);
+      return false;
+    }
   };
 
   const removeProvider = async (id: string): Promise<void> => {
@@ -430,7 +482,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     model, setModel, customModel, setCustomModel, apiKey, setApiKey,
     effModel, effModelContext, effBaseUrl, effKey,
     switchProvider, trackSession, rememberSessionModel, forgetSessionModel,
-    addProvider, updateProvider, duplicateProvider, removeProvider,
+    addProvider, updateProvider, duplicateProvider, removeProvider, resetProviderKey,
     err, setErr
   };
   // 提供方配置未就绪前不渲染应用:避免首帧 provider 缺失回退为 mock、请求返回后再跳变引起的抖动

@@ -34,6 +34,13 @@ export interface LlmOptions {
   multimodal?: boolean;
   /** 是否为生图模型:agent 跳过文本对话与工具循环,整轮改走 /images/* 端点 */
   imageGen?: boolean;
+  /** 同一提供商的多个 API Key(首位为主 Key)。某个 Key 余额不足时自动轮询到下一个,
+   *  全部耗尽才停止重试。上层只下发「当前可用」的 Key(已排除被标记无余额的)。 */
+  apiKeys?: string[];
+  /** 提供商 id(前端下发):余额不足时据此把「无余额」标记写回提供商配置,供界面展示与重置 */
+  providerId?: string;
+  /** 某个 Key 被判定余额不足时回调:上层据此持久化「无余额」标记,供界面展示与重置 */
+  onKeyExhausted?: (key: string, reason: string) => void;
 }
 
 /** 生图端点返回的一张成图(字节已在内存,由调用方落盘为附件) */
@@ -87,6 +94,10 @@ export interface ChatOptions {
 export class LlmClient {
   baseUrl: string;
   apiKey: string;
+  /** 候选 API Key 列表(含主 Key,已去重去空)。chat() 按序轮询,余额不足就换下一个 */
+  apiKeys: string[];
+  /** Key 余额不足回调(见 LlmOptions.onKeyExhausted) */
+  onKeyExhausted?: (key: string, reason: string) => void;
   model: string;
   maxTokens: number;
   // 输入上下文窗口(token):>0 时启用对话历史自动压缩(见 compact.js);未配置则沿用字符预算裁剪
@@ -99,9 +110,11 @@ export class LlmClient {
    *  字段仅为兼容旧的提供方配置保留,agent 主循环不再读取 */
   maxIters: number;
 
-  constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters, multimodal, imageGen }: LlmOptions) {
+  constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters, multimodal, imageGen, apiKeys, onKeyExhausted }: LlmOptions) {
     this.baseUrl = (baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
     this.apiKey = apiKey || '';
+    this.apiKeys = normalizeApiKeys(apiKeys, this.apiKey);
+    this.onKeyExhausted = onKeyExhausted;
     this.model = model || 'deepseek-chat';
     this.maxTokens = maxTokens || 8192;
     this.contextWindow = Number(contextWindow) > 0 ? Math.floor(Number(contextWindow)) : 0;
@@ -128,6 +141,13 @@ export class LlmClient {
     const requestMessages = prepareMessagesForWire(messages, { tools: hasTools, model: this.model });
     validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
     const url = `${this.baseUrl}/chat/completions`;
+    // ---- 多 API Key 轮询 ----
+    // 本次调用固定一份候选 Key 列表(上层下发的都是「当前可用」的 Key,已排除无余额的)。
+    // 某个 Key 返回余额不足 → 标记它、换下一个,新 Key 重新获得满额重试次数;
+    // 所有 Key 都耗尽才停止重试(见下面 isBalanceError 分支)。
+    const keyList = this.apiKeys.length ? [...this.apiKeys] : [''];
+    let keyIdx = 0;
+    let activeKey = keyList[keyIdx];
     // 最小兼容请求体:不加 stream_options(部分聚合网关不支持),tools 时显式 tool_choice
     const body: Record<string, any> = {
       model: this.model,
@@ -169,11 +189,12 @@ export class LlmClient {
       const map: Record<string, string> = { off: 'low', low: 'low', high: 'high', xhigh: 'high', max: 'high' };
       body.reasoning_effort = map[reasoning] || 'high';
     }
-    // 失败重试策略(见文件末尾 LLM_RETRY):网络抖动、网关 5xx、限流 429、以及「流已经建立
-    // 但中途被掐断/被截断/返回空响应」一律重试 —— 按指数退避并尊重网关给的 Retry-After /
-    // retryAfterSeconds,单次 chat 调用的重试总预算默认 10 分钟、最多 20 次请求。
+    // 失败重试策略(见文件末尾 LLM_RETRY):网络抖动、网关 5xx、限流 429、超时无响应、以及
+    // 「流已经建立但中途被掐断/被截断/返回空响应」一律重试 —— 按指数退避并尊重网关给的
+    // Retry-After / retryAfterSeconds,单次 chat 调用最多 10 次请求(次数用尽是唯一放弃条件)。
     // - 用户中止立即停止,不重试;
-    // - 鉴权/余额/参数这类「重试也不会变好」的错误不空等,直接给出可操作提示;
+    // - 唯一不靠重试解决的错误是「余额不足」:此时自动轮询到该提供商的其它可用 API Key;
+    //   只有所有 Key 都被判定无余额,才停止重试并回报给用户(见 _rotateKey)。
     // - 关键:流已吐过内容后失败同样重试。重试会重发这一步,所以必须先作废「已流出但尚未
     //   落盘」的增量(onRetry 带 discard=true,由上层回滚前端显示),否则重试成功后
     //   正文会与上一次的半成品拼接重复。
@@ -185,8 +206,7 @@ export class LlmClient {
     let emittedChars = 0;    // 本次尝试已通过 onDelta 吐出的字符数(正文/思考/工具参数)
     let attempt = 0;         // 已发起的请求次数(含首次)
     let idleFired = false;   // 本次尝试是否因长期收不到任何数据被看门狗掐断
-    let deadlineFired = false; // 本次尝试是否因重试总预算用尽被 deadline 掐断
-    const startedAt = Date.now();
+    let startedAt = Date.now(); // 仅用于在最终错误里报告「整轮已耗时」;换 Key 时会重置
     const trackedDelta = (d: { kind: string; text?: string; index?: number }) => {
       if (d.text) emittedChars += d.text.length;
       onDelta?.(d);
@@ -200,12 +220,14 @@ export class LlmClient {
         }
         const elapsedMs = Date.now() - startedAt;
         const delayMs = retryDelayMs(attempt, lastFailure.retryAfterMs);
-        if (attempt >= LLM_RETRY.MAX_ATTEMPTS || elapsedMs + delayMs > LLM_RETRY.BUDGET_MS) {
-          throw toFriendlyLlmError(lastErr, lastFailure, { attempts: attempt, elapsedMs, budgetExhausted: true });
+        // 次数用尽是唯一的放弃条件:除「余额不足」这类确定性账号问题外(由 Key 轮询专门处理),
+        // 其余失败一律重试,不再因总时长超限提前停止(旧行为:600s 预算一到就停)。
+        if (attempt >= LLM_RETRY.MAX_ATTEMPTS) {
+          throw toFriendlyLlmError(lastErr, lastFailure, { attempts: attempt, elapsedMs, exhausted: true });
         }
         console.warn(
           `[llm] ${this.model} 请求失败(${lastFailure.text.slice(0, 200)}),${(delayMs / 1000).toFixed(1)}s 后重试`
-          + `(第 ${attempt} 次重试,预算剩余 ${Math.max(0, Math.round((LLM_RETRY.BUDGET_MS - elapsedMs) / 1000))}s)`
+          + `(第 ${attempt} 次重试,上限 ${LLM_RETRY.MAX_ATTEMPTS} 次)`
         );
         onRetry?.({
           retry: attempt,
@@ -220,41 +242,39 @@ export class LlmClient {
       }
       emittedChars = 0; // 每次尝试独立计数
       attempt++;
-      // 单次尝试的取消控制器:外层 signal(用户停止)、静默看门狗、预算 deadline 合并成一路。
-      // idleMs 不超过剩余预算,deadline 则直接钉在「预算用尽」那一刻:前者管「一个字节都不来」,
-      // 后者管「一直有数据在流却永远不结束」——两条合起来保证总时长不超预算,且一次尝试
-      // 吃不掉整轮预算(否则就成了「只重试 1 次就放弃」)。
-      const budgetLeftMs = Math.max(250, LLM_RETRY.BUDGET_MS - (Date.now() - startedAt));
-      const idleMs = Math.min(LLM_RETRY.IDLE_MS, budgetLeftMs);
+      // 单次尝试的取消控制器:外层 signal(用户停止)、静默看门狗、单次总时长上限合并成一路。
+      // 看门狗管「一个字节都不来」:等待 idleMs(默认 300s)仍收不到任何数据就作废本次尝试,
+      // 按可重试的流中断处理——于是「网关假死 / 连接超时」变成一次新的重试,直到次数用尽。
+      const idleMs = LLM_RETRY.IDLE_MS;
       const attemptAc = new AbortController();
       idleFired = false;
-      deadlineFired = false;
+      let attemptTimedOut = false; // 本次尝试是否因超过单次总时长上限(ATTEMPT_MS)被掐断
       const onOuterAbort = () => attemptAc.abort();
       signal?.addEventListener('abort', onOuterAbort, { once: true });
       if (signal?.aborted) attemptAc.abort();
       let watchdog: ReturnType<typeof setTimeout> | null = null;
-      let deadline: ReturnType<typeof setTimeout> | null = null;
+      let attemptTimer: ReturnType<typeof setTimeout> | null = null;
       const kick = () => {
         if (watchdog) clearTimeout(watchdog);
         watchdog = setTimeout(() => { idleFired = true; attemptAc.abort(); }, idleMs);
       };
       const stopWatchdog = () => {
         if (watchdog) { clearTimeout(watchdog); watchdog = null; }
-        if (deadline) { clearTimeout(deadline); deadline = null; }
+        if (attemptTimer) { clearTimeout(attemptTimer); attemptTimer = null; }
         signal?.removeEventListener('abort', onOuterAbort);
       };
-      const attemptAbortError = () => (deadlineFired
-        ? new Error(`LLM API 重试总预算已用尽(本次请求超过 ${Math.round(LLM_RETRY.BUDGET_MS / 1000)}s 仍未结束)`)
+      const attemptAbortError = () => (attemptTimedOut
+        ? new Error(`LLM API 单次尝试超过 ${Math.round(LLM_RETRY.ATTEMPT_MS / 1000)}s 仍未结束(流一直没有收尾标记)`)
         : new Error(`LLM API ${Math.round(idleMs / 1000)}s 内没有收到任何数据(连接已被网关中断)`));
       kick();
-      deadline = setTimeout(() => { deadlineFired = true; attemptAc.abort(); }, budgetLeftMs);
+      attemptTimer = setTimeout(() => { attemptTimedOut = true; attemptAc.abort(); }, LLM_RETRY.ATTEMPT_MS);
       let res: Response;
       try {
         res = await outboundFetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.apiKey}`
+            Authorization: `Bearer ${activeKey}`
           },
           body: JSON.stringify(body),
           signal: attemptAc.signal
@@ -263,7 +283,7 @@ export class LlmClient {
         stopWatchdog();
         if (signal?.aborted) throw abortError();
         // 连接层错误(undici terminated / fetch failed / ECONNRESET 等)与静默/预算超时:都是瞬态,重试
-        lastErr = idleFired || deadlineFired ? attemptAbortError() : e;
+        lastErr = idleFired || attemptTimedOut ? attemptAbortError() : e;
         lastFailure = { retryable: true, text: errText(lastErr) };
         continue;
       }
@@ -274,6 +294,39 @@ export class LlmClient {
         // (实测 deepseek 网关:429 回 data.retryAfterSeconds=9~29),先解析再动原文
         const retryAfterMs = parseRetryAfterMs(res, rawBody);
         let text = rawBody;
+        // 余额不足:换 Key 而不是干等重试(该 Key 再试多少次都不会有额度)。
+        // 轮询到下一个可用 Key 并重置重试额度;全部 Key 都耗尽才把错误交给用户。
+        if (isBalanceError(res.status, rawBody)) {
+          this.onKeyExhausted?.(activeKey, rawBody.slice(0, 300));
+          const next = keyIdx + 1;
+          if (next < keyList.length) {
+            const failedKey = activeKey;
+            keyIdx = next;
+            activeKey = keyList[keyIdx];
+            attempt = 0;              // 新 Key 重新给满重试额度:换 Key 不吃上一个 Key 的失败次数
+            startedAt = Date.now();
+            lastPartial = false;      // 上一个 Key 留下的半成品由上层按 discard 语义回滚
+            lastFailure = {
+              retryable: true,
+              status: res.status,
+              text: `API Key ${failedKey.slice(0, 8)}… 余额不足,已切换到第 ${keyIdx + 1}/${keyList.length} 个可用 Key`
+            };
+            lastErr = new LlmRequestError(lastFailure.text, { retryable: true, status: res.status });
+            onRetry?.({ retry: keyIdx, maxRetries: keyList.length, delayMs: 0, error: lastFailure.text });
+            console.warn(`[llm] ${this.model} API Key 余额不足,切换到第 ${keyIdx + 1}/${keyList.length} 个 Key`);
+            continue;
+          }
+          // 所有 Key 都无余额:停止重试,给出「去哪儿充值 / 重置」的可操作指引
+          const allGone = new LlmRequestError(
+            `LLM API ${res.status} [model=${this.model}]: ${rawBody.slice(0, 500)}`,
+            { retryable: false, status: res.status }
+          );
+          throw toFriendlyLlmError(
+            allGone,
+            { retryable: false, status: res.status, text: rawBody },
+            { attempts: attempt, elapsedMs: Date.now() - startedAt, allKeysExhausted: true }
+          );
+        }
         // 网关以「历史 reasoning_content 未完整回传」拒绝(DeepSeek thinking mode 400):
         // 历史中确实存在没有 reasoning_content 的 assistant 消息(网关漏报 / 早期由非思考模型
         // 产生 / 中途切过模型),只靠回传已有的 reasoning 修不好。降级为「剥离历史里全部
@@ -332,7 +385,7 @@ export class LlmClient {
       } catch (e) {
         stopWatchdog();
         if (signal?.aborted) throw abortError();
-        if (idleFired || deadlineFired) e = attemptAbortError();
+        if (idleFired || attemptTimedOut) e = attemptAbortError();
         // 流中断:无论有没有吐出过内容都重试。吐过内容的这次尝试整体作废
         // (onRetry 带 discard,上层丢弃半成品并回滚前端显示),历史里不会留下残句。
         lastErr = e;
@@ -487,14 +540,21 @@ function imageApiError(status: number, model: string, text: string): string {
 function toFriendlyLlmError(
   e: any,
   failure?: LlmFailureInfo,
-  ctx?: { attempts?: number; elapsedMs?: number; budgetExhausted?: boolean }
+  ctx?: { attempts?: number; elapsedMs?: number; exhausted?: boolean; allKeysExhausted?: boolean }
 ): Error {
   const msg = errText(e);
-  // 预算用尽必须写出来:否则用户只看到「重试 N 次仍失败」,分不清是次数用尽还是时间用尽
-  const budgetNote = `重试总预算 ${Math.round(LLM_RETRY.BUDGET_MS / 1000)}s 已用尽`;
+  // 该提供商的全部 API Key 都被判定无余额:停止重试并说明如何恢复
+  if (ctx?.allKeysExhausted) {
+    return new LlmRequestError(
+      `${msg}\n提示:该提供商的全部 API Key 都已余额不足,已停止重试。`
+      + `请为其中任一 Key 充值后,到「设置 → AI 配置」点该 Key 的「重置」按钮恢复使用;`
+      + `重置后下一次重试会重新尝试该 Key。`,
+      { retryable: false, status: failure?.status }
+    );
+  }
   const tried = ctx?.attempts && ctx.attempts > 1
-    ? `已自动重试 ${ctx.attempts - 1} 次(共 ${Math.max(1, Math.round((ctx.elapsedMs || 0) / 1000))}s${ctx.budgetExhausted ? ',预算已用尽' : ''})`
-    : (ctx?.budgetExhausted ? budgetNote : '');
+    ? `已自动重试 ${ctx.attempts - 1} 次(共 ${Math.max(1, Math.round((ctx.elapsedMs || 0) / 1000))}s${ctx.exhausted ? ',重试次数已用尽' : ''})`
+    : '';
   // 确定的账号/入参类错误:重试不会变好,给可操作指引而不是让用户干等
   if (failure && !failure.retryable) {
     const hint = permanentErrorHint(failure.status);
@@ -507,7 +567,7 @@ function toFriendlyLlmError(
   }
   // 连接层/流层中断
   const low = msg.toLowerCase();
-  const hint = /terminated|未收到 finish_reason|不是 sse|返回空响应|没有收到任何数据|重试总预算已用尽/i.test(low) ? '连接被服务端/网关中断' : '网络连接异常';
+  const hint = /terminated|未收到 finish_reason|不是 sse|返回空响应|没有收到任何数据|重试次数已用尽/i.test(low) ? '连接被服务端/网关中断' : '网络连接异常';
   const head = `${tried ? `${tried}仍失败,` : ""}本轮已停止重试`;
   return new Error(`模型连接中断:${hint}(${msg})。${head};可直接发消息让我接着做,或切换模型/检查网络后重试`);
 }
@@ -516,7 +576,7 @@ function toFriendlyLlmError(
 function permanentErrorHint(status?: number): string {
   switch (status) {
     case 401: return '鉴权失败:请在「设置 → AI 配置」里检查该提供方的 API Key 是否有效(过期/被撤销)。';
-    case 402: return '账户余额不足或已欠费:请到提供方充值。重试不会自动恢复,已停止重试。';
+    case 402: return '账户余额不足或已欠费:请到提供方充值。该 Key 会被标记为「无余额」并从重试中排除;充值后在「设置 → AI 配置」点「重置」即可重新启用。';
     case 403: return '无权限使用该模型/端点:请确认账号已开通该模型,或改用有权限的模型。';
     case 404: return '端点或模型不存在:请检查「设置 → AI 配置」里的 Base URL 与模型名是否写对。';
     case 413: return '请求体过大:请压缩会话历史(/compact)或减少附件后重试。';
@@ -524,20 +584,36 @@ function permanentErrorHint(status?: number): string {
   }
 }
 
-// 可重试错误的重试预算耗尽后:说明「为什么还在失败」并给出下一步
+// 重试次数用尽后:说明「为什么还在失败」并给出下一步
 function retryExhaustedHint(status: number, tried: string): string {
   const fatigue = tried ? `${tried}仍失败` : "自动重试仍失败";
+  // 鉴权/权限/端点这类确定性错误:重试到次数用尽后仍要给「去哪儿改什么」的指引
+  const permanent = permanentErrorHint(status);
+  if (permanent) return `${fatigue}:${permanent}`;
   if (status === 429) return `${fatigue}:网关持续限流,稍等一会儿再发一次,或切换到并发额度更高的模型/提供方。`;
   if (status >= 500) return `${fatigue}:上游服务端持续报错,请稍后再试或切换模型。`;
   return `${fatigue}。`;
 }
 
+/** 归一化多 API Key 列表:去空白、去重;主 Key(apiKey)保证在首位且不丢。
+ *  上层可能只下发新的 apiKeys,也可能只下发旧的单 apiKey,两种形态都要能用。 */
+function normalizeApiKeys(apiKeys: string[] | undefined, primary: string): string[] {
+  const out: string[] = [];
+  const push = (k: unknown) => {
+    const s = String(k ?? '').trim();
+    if (s && !out.includes(s)) out.push(s);
+  };
+  push(primary);
+  if (Array.isArray(apiKeys)) apiKeys.forEach(push);
+  return out;
+}
+
 // ---------------- 失败重试策略 ----------------
-// 一次 chat 调用的重试总预算默认 10 分钟、最多 20 次请求;退避 1s→2s→4s→…封顶 30s,
+// 一次 chat 调用最多 10 次请求(MAX_ATTEMPTS);退避 1s→2s→4s→…封顶 30s,
 // 并与网关给的 Retry-After/retryAfterSeconds 取较大值,叠加 ±10% 抖动避免多会话同时撞车。
-// 预算是硬上限:单次尝试的静默超时与 deadline 都按剩余预算收敛,所以「重试了很多次仍是
-// 连不上」不会退化成「只重试 1 次就放弃」,也不会等得比承诺更久。
-// 可用环境变量覆盖(联调/按需调优):LLM_RETRY_BUDGET_MS、LLM_RETRY_MAX_ATTEMPTS、
+// 次数用尽是唯一的放弃条件:不再有总时长预算——旧行为的 600s 预算一到就停,用户看到的是
+// 「等够 600s 未响应就直接停止」,明明还有重试额度却被判失败。
+// 可用环境变量覆盖(联调/按需调优):LLM_RETRY_MAX_ATTEMPTS、
 // LLM_RETRY_BASE_DELAY_MS、LLM_RETRY_MAX_DELAY_MS、LLM_STREAM_IDLE_MS。
 const envNum = (v: string | undefined, fallback: number): number => {
   const n = Number(v);
@@ -545,14 +621,17 @@ const envNum = (v: string | undefined, fallback: number): number => {
 };
 
 export const LLM_RETRY = {
-  BUDGET_MS: envNum(process.env.LLM_RETRY_BUDGET_MS, 600_000),
+  // 已移除 600s 总预算(BUDGET_MS):重试不再因总时长超限提前停止,只有次数用尽才放弃。
   // 单次尝试的静默超时:从发起请求到首个字节、以及流中任意两次数据之间的最长间隔。
-  // 超时即按可重试的流中断处理——把永远卡在生成中变成一次可见的重试或报错。
-  // 60s:上游真的在生成时最长可静默数十秒,而已经死掉的连接 60s 内一定没有任何字节。
-  // 这个值必须远小于 BUDGET_MS——两者相等时,一次「网关假死」就能吃掉整轮预算,
-  // 用户看到的就是「只重试 1 次就放弃」。
-  IDLE_MS: envNum(process.env.LLM_STREAM_IDLE_MS, 60_000),
-  MAX_ATTEMPTS: envNum(process.env.LLM_RETRY_MAX_ATTEMPTS, 20),
+  // 超时即按可重试的流中断处理——等待 300s 仍无任何响应就作废本次尝试、再试一次。
+  // 300s:上游真的在生成时最长可静默数十秒,而已经死掉的连接 300s 内一定没有任何字节。
+  // 超时只作废「本次尝试」并按可重试处理,因此一次「网关假死」只消耗一次重试额度,
+  // 不会让整轮请求直接失败。
+  IDLE_MS: envNum(process.env.LLM_STREAM_IDLE_MS, 300_000),
+  // 单次尝试的总时长上限:兜住「流一直有数据却永远不结束」——静默看门狗每收到数据
+  // 就被重置,这种情形它永远等不到,没有这道上限整轮就会挂死在这里。超时同样按可重试处理。
+  ATTEMPT_MS: envNum(process.env.LLM_ATTEMPT_MS, 300_000),
+  MAX_ATTEMPTS: envNum(process.env.LLM_RETRY_MAX_ATTEMPTS, 10),
   BASE_DELAY_MS: envNum(process.env.LLM_RETRY_BASE_DELAY_MS, 1_000),
   MAX_DELAY_MS: envNum(process.env.LLM_RETRY_MAX_DELAY_MS, 30_000)
 };
@@ -591,10 +670,20 @@ function retryDelayMs(failedAttempts: number, retryAfterMs?: number): number {
   return Math.round(base * (0.9 + Math.random() * 0.2));
 }
 
-/** HTTP 状态是否值得重试:超时/冲突/过载/限流与服务端错误重试,其余 4xx 是确定的入参/账号问题 */
+/** HTTP 状态是否值得重试:除「余额不足」外一律重试。
+ *  需求口径是「除了余额不足以外的错误全部都要重试」——鉴权/参数/找不到这类错误也重试到
+ *  次数用尽,只是在最终失败时附上可操作提示(见 retryExhaustedHint / permanentErrorHint)。
+ *  余额不足不会走到这里:它在 HTTP 分支里被专门拦下并改走 Key 轮询。 */
 function isRetryableStatus(status: number): boolean {
-  if (status >= 500) return true;
-  return status === 408 || status === 409 || status === 425 || status === 429;
+  return !isBalanceError(status, '');
+}
+
+/** 是否「余额不足 / 额度耗尽」类错误:状态码 402,或错误文案命中余额/欠费/额度关键词。
+ *  判定必须足够窄——把普通错误误判成余额不足,会导致「本该重试却直接换成下一个 Key」。 */
+export function isBalanceError(status: number | undefined, text: string): boolean {
+  if (status === 402) return true;
+  if (status !== undefined && status < 400) return false;
+  return /insufficient\s+(balance|quota|credit|funds)|insufficient_quota|(no|out\s+of)\s+credit|exceeded\s+your\s+current\s+quota|balance\s+(is\s+)?(insufficient|exhausted|depleted)|余额不足|余额不够|余额已耗尽|欠费|额度不足|额度已用尽|额度耗尽|配额不足|账户余额/i.test(text || '');
 }
 
 /** 解析网关要求的等待时长:优先 Retry-After 头,其次 body 里的 retryAfterSeconds(实测 deepseek 网关) */
