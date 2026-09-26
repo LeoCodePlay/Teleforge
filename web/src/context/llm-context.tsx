@@ -108,6 +108,8 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     keys: Record<string, string>;
   }>({ providerId: '', customModel: '', models: {}, keys: {} });
   const uiTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 上一次已写回后端的 ui-state 载荷(序列化串):内容相同则跳过,避免重渲染触发无意义 PATCH
+  const lastPushedRef = useRef('');
 
   // 挂载时加载「我的提供商」+「选择级配置」(均存服务端 JSON 文件)
   const keyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -187,11 +189,16 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   const effKey = isMock ? '' : apiKey;
   // 该提供商当前可用的 Key:去重后排除已标记「无余额」的。
   // 服务端轮询只用这份列表 —— 所以被标记的 Key 在用户点「重置」前不会被再次尝试。
+  // 依赖必须取 provider 的字段而非 provider 对象本身:allProviders 每帧新建、provider 每帧
+  // 都是新引用,直接依赖它会让 useMemo 永久失效,usableApiKeys 每帧新数组,
+  // 进而导致下方持久化 effect 每帧重跑(PATCH → setUiStateData → 重渲染)形成自激循环。
+  const providerApiKeys = provider.apiKeys;
+  const providerKeyStates = provider.keyStates;
   const usableApiKeys = useMemo(() => {
     if (isMock) return [] as string[];
-    const uniq = [...new Set([apiKey, ...(provider.apiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))];
-    return uniq.filter((k) => provider.keyStates?.[k]?.exhausted !== true);
-  }, [apiKey, provider, isMock]);
+    const uniq = [...new Set([apiKey, ...(providerApiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))];
+    return uniq.filter((k) => providerKeyStates?.[k]?.exhausted !== true);
+  }, [apiKey, providerApiKeys, providerKeyStates, isMock]);
 
   // 统一生效的 llm 下发载荷(baseUrl/key/model + 上下文能力 + 多模态/生图开关)
   const llmPayload = () => ({
@@ -307,18 +314,23 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
       else LSS('llm.key.' + providerId, apiKey);
     }
     // 选择级配置(当前提供方/模型/Key/自定义模型名)防抖写回后端 JSON(权威存储)
+    // 等值守卫:内容没变就不发请求 —— 持久化成功后会 setUiStateData 触发重渲染,
+    // 若依赖里有引用型值(数组/对象)就会再次进入本 effect 形成"PATCH→setState→PATCH"自激循环。
+    const pushBody = JSON.stringify({
+      providerId,
+      customModel,
+      models: { [providerId]: model },
+      keys: isMock ? {} : { [providerId]: apiKey }
+    });
+    if (pushBody === lastPushedRef.current) return;
+    lastPushedRef.current = pushBody;
     if (uiTimer.current) clearTimeout(uiTimer.current);
     uiTimer.current = setTimeout(async () => {
       try {
         await fetch('/api/ui-state', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            providerId,
-            customModel,
-            models: { [providerId]: model },
-            keys: isMock ? {} : { [providerId]: apiKey }
-          })
+          body: pushBody
         });
         // 同步内存态,避免后续切换/加载读到旧缓存
         setUiStateData((s) => ({

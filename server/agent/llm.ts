@@ -777,7 +777,19 @@ function validateMessages(messages: any[]): void {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error('messages 必须是非空数组');
   }
-  let pending = new Set(); // 最近一个带 tool_calls 的 assistant 定义的待消费 id
+  // 两个方向都要查(与 litellm 的严格校验同口径):
+  //  a) tool 消息必须有前置 assistant tool_calls 认领它;
+  //  b) assistant 声明的每个 tool_call_id 都必须被紧随其后的 tool 消息应答 —— 少一条就是
+  //     上游那句「insufficient tool messages following tool_calls message」,而且这种请求
+  //     重发多少次都一样,必须在本地就拦下来(会话投影已保证配对,这里是最后一道保险)。
+  // 计数口径(不是集合口径):同一条 assistant 里 id 重复时按**条数**配对,
+  // 与上游「insufficient tool messages」的条数校验一致。
+  let pending = new Map<string, number>(); // 待应答 id -> 还差几条 tool 消息
+  const pendingCount = () => [...pending.values()].reduce((n, v) => n + v, 0);
+  const unanswered = () => [...pending.entries()]
+    .filter(([, n]) => n > 0)
+    .map(([id, n]) => (n > 1 ? `${id}×${n}` : id))
+    .join(',');
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (typeof m !== 'object' || m === null || typeof m.role !== 'string') {
@@ -786,14 +798,36 @@ function validateMessages(messages: any[]): void {
     if (m.role === 'tool' && typeof m.tool_call_id !== 'string') {
       throw new Error(`messages[${i}] 是 tool 消息但缺少 tool_call_id`);
     }
-    if (m.role === 'tool' && !pending.has(m.tool_call_id)) {
+    if (m.role === 'tool' && !pending.get(m.tool_call_id)) {
       throw new Error(`messages[${i}] 的 tool 消息(id=${m.tool_call_id})缺少前置 assistant tool_calls,严格提供商会拒绝(400)`);
     }
     if (m.role === 'assistant') {
-      pending = new Set((m.tool_calls || []).map((t: any) => t.id));
+      if (pendingCount() > 0) {
+        throw new Error(`messages[${i}] 之前带 tool_calls 的 assistant 仍未被应答(id=${unanswered()}),`
+          + '严格提供商会以「insufficient tool messages following tool_calls message」拒绝(400);'
+          + '请重开一个会话或删除该条消息后继续');
+      }
+      pending = new Map();
+      for (const t of (m.tool_calls || [])) {
+        const id = (t as any)?.id;
+        if (typeof id !== 'string' || !id) {
+          throw new Error(`messages[${i}] 的 assistant tool_calls 缺少 id,无法与 tool 结果配对(严格提供商会拒绝 400)`);
+        }
+        pending.set(id, (pending.get(id) || 0) + 1);
+      }
     } else if (m.role === 'user') {
-      pending = new Set(); // user 之后工具 id 失效
+      if (pendingCount() > 0) {
+        throw new Error(`messages[${i}] 的 user 消息插在 assistant tool_calls(id=${unanswered()})与它的 tool 结果之间,`
+          + '严格提供商会以「insufficient tool messages following tool_calls message」拒绝(400)');
+      }
+      pending = new Map(); // user 之后工具 id 失效
+    } else if (m.role === 'tool') {
+      pending.set(m.tool_call_id, pending.get(m.tool_call_id)! - 1);
     }
+  }
+  if (pendingCount() > 0) {
+    throw new Error(`messages 末尾带 tool_calls 的 assistant 没有被应答(id=${unanswered()}),`
+      + '严格提供商会以「insufficient tool messages following tool_calls message」拒绝(400)');
   }
 }
 

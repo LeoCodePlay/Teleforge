@@ -35,6 +35,16 @@ export interface LlmMessage {
   [k: string]: any;
 }
 
+/**
+ * 声明了 tool_calls、却没有拿到任何结果的工具调用,在**模型可见面**上补的占位结果。
+ * 只存在于投影结果里,日志与前端显示面都不写这条(前端按真实事件渲染工具卡片)。
+ * 用途见 deriveMessagesWithTrace:严格网关要求 assistant 的每个 tool_call_id 都被随后的
+ * tool 消息应答,否则整次请求 400,且重试永远不会好。
+ */
+export const UNANSWERED_TOOL_RESULT =
+  '（本次工具调用没有返回结果:响应流被中断或本轮在它执行完成前就结束了。'
+  + '请视作调用失败;需要该结果时重新发起调用。）';
+
 export interface SessionEventDataMap {
   'turn/start': { turn: number };
   'turn/end': { turn: number; reason: { kind: string; [k: string]: any } };
@@ -153,14 +163,42 @@ export class Session {
   }
 
   /**
-   * 未闭合的工具调用(有 tool/call 无 tool/result)。
-   * 中止/异常收尾时由调用方补结果;构造时由 _heal 兜底。
+   * 未闭合的工具调用。两类都要报,否则收尾自愈会漏掉一半:
+   * 1) 有 tool/call 无 tool/result(执行中被打断);
+   * 2) **assistant 声明了 tool_calls 却没有任何 tool/call 事件** —— 响应流被截断时工具
+   *    根本不会开始执行(见 agent 的 truncated 分支),并行池被中止时后面的调用也没启动
+   *    (agent._runToolCalls 里"未启动的调用不产生 tool/call 事件")。只按 tool/call 统计
+   *    会漏掉它们,日志里就留下"assistant 声明了调用但没有任何 tool 消息"的尾巴——
+   *    严格网关(agent 的每一次后续请求)都会 400:
+   *    An assistant message with 'tool_calls' must be followed by tool messages responding
+   *    to each 'tool_call_id'. (insufficient tool messages following tool_calls message)
+   * 配对语义与 _heal 一致:user/压缩摘要作废未消费的 id;一个 id 只被一条结果消费。
+   * 只报"日志尾部仍未闭合"的声明(中间被 user 消息截断的那批由投影层补占位,不在尾部补写,
+   * 否则补出来的 tool 消息会落在 user 之后,反而制造非法序列)。
    */
   pendingToolCalls(): any[] {
-    const pending = new Map();
+    const pending = new Map(); // callId -> {turn,step,callId,name}(有 tool/call、无 tool/result)
+    let declared = new Map();  // 最近一条 assistant 声明、尚未被结果消费的调用
     for (const ev of this.events) {
-      if (ev.type === 'tool/call') pending.set(ev.data.callId, ev.data);
-      else if (ev.type === 'tool/result') pending.delete(ev.data.callId);
+      const d = ev.data || {};
+      if (ev.type === 'user/message' || ev.type === 'compaction/done') {
+        declared = new Map(); // user / 摘要之后工具 id 失效
+      } else if (ev.type === 'assistant/message') {
+        declared = new Map();
+        const m = d.message || {};
+        for (const t of (Array.isArray(m.tool_calls) ? m.tool_calls : [])) {
+          if (!t || !t.id) continue;
+          declared.set(t.id, { turn: d.turn, step: d.step, callId: t.id, name: t.function?.name });
+        }
+      } else if (ev.type === 'tool/call') {
+        pending.set(d.callId, d);
+      } else if (ev.type === 'tool/result') {
+        pending.delete(d.callId);
+        declared.delete(d.callId);
+      }
+    }
+    for (const [id, info] of declared) {
+      if (!pending.has(id)) pending.set(id, { ...info, neverStarted: true });
     }
     return [...pending.values()];
   }
@@ -200,16 +238,52 @@ export class Session {
         cpSeq = ev.seq;
       }
     }
-    // 待消费的 tool_call id(最近一条带 tool_calls 的 assistant 声明的,OpenAI 配对语义):
-    // 投影期过滤孤儿 tool/result——构造时自愈(_heal)能清掉落盘损坏,但运行中会话
-    // (旧版压缩产生的孤儿仍驻内存)也要保证投影序列永远合法,严格提供商会 400。
-    let pending = new Set<string>();
+    // 待消费的 tool_call id(最近一条带 tool_calls 的 assistant 声明的,OpenAI 配对语义)。
+    // 两件事都在投影期兜住,否则严格网关(litellm 等)会以
+    // 「An assistant message with 'tool_calls' must be followed by tool messages responding
+    //   to each 'tool_call_id'. (insufficient tool messages following tool_calls message)」400 拒收:
+    //  1) 孤儿 tool/result(前面没有声明的 tool_calls)不投影 —— 构造时自愈(_heal)能清掉落盘
+    //     损坏,但运行中会话(旧版压缩/日志错位产生的孤儿仍驻内存)也必须保证序列合法;
+    //  2) 声明了却没有结果的 tool_call 必须补一条占位 tool 消息(见 flushUnanswered)——
+    //     响应流被截断(工具根本没执行)、中止发生在并行池启动前(只声明未执行)、结果与声明
+    //     之间被插入了一条 user 消息……这些历史都会让"按 id 配对"少一条 tool 消息,而网关按
+    //     条数校验,于是**每次请求**都被 400 拒(重试再多次也不会好)。
+    // pendingIds 保留模型声明的顺序(占位消息按该顺序补,id 重复也逐条补足)。
+    let pendingIds: string[] = [];
+    let pendingSet = new Set<string>();
+    let pendingSeq = -1; // 声明这批调用的 assistant 事件 seq(占位消息沿用它,便于压缩区间映射)
+    const resetPending = (ids: string[], seq: number) => {
+      pendingIds = ids;
+      pendingSet = new Set(ids);
+      pendingSeq = seq;
+    };
+    // 全量结果索引:声明了却没有结果的调用,若日志里存在它的结果(只是位置错位),
+    // 用真实内容顶替占位文案,避免白白丢掉工具输出。
+    const resultByCall = new Map<string, any>();
+    for (const ev of this.events) {
+      if (ev.type === 'tool/result' && ev.data?.callId) resultByCall.set(ev.data.callId, ev.data);
+    }
+    const flushUnanswered = () => {
+      for (const id of pendingIds) {
+        const r = resultByCall.get(id);
+        traced.push({
+          seq: pendingSeq,
+          msg: {
+            role: 'tool',
+            tool_call_id: id,
+            content: r ? String(r.content ?? '') : UNANSWERED_TOOL_RESULT
+          }
+        });
+      }
+      pendingIds = [];
+      pendingSet = new Set();
+    };
     // 摘要 user 消息的插入时机:进入保留区第一个消息面事件之前。插摘要时清空 alive,
     // 与 user/message 同语义(摘要之后的 tool/result 不能依赖摘要之前的 tool_calls——
     // 切点已对齐"工具配对完整",这里只是安全冗余)。
     let cpPlaced = !cp;
     const placeCp = () => {
-      pending = new Set();
+      flushUnanswered(); // 摘要 user 消息同样会作废前面的待应答调用:先补占位再落摘要
       traced.push({ seq: cpSeq, msg: { role: 'user', content: cp?.summary || '【上下文已自动压缩】早期对话已省略。' } });
       cpPlaced = true;
     };
@@ -235,7 +309,8 @@ export class Session {
         case 'user/message':
           if (cp && ev.seq <= (cp.dropThroughSeq ?? -1)) continue; // 被压缩:模型面不可见
           if (!cpPlaced) placeCp();
-          pending = new Set(); // user 之后工具 id 失效
+          flushUnanswered(); // user 之前先把未应答的工具调用补齐(顺序:tool 消息必须在 user 之前)
+          resetPending([], -1); // user 之后工具 id 失效
           traced.push({
             seq: ev.seq,
             msg: {
@@ -253,8 +328,9 @@ export class Session {
           const m = d.message || {};
           const hasCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
           if (!m.content && !hasCalls) break;
-          if (pending.size === 0) flushVision(); // 视觉附件消息必须落在完整工具配对之后
-          pending = new Set(hasCalls ? m.tool_calls.map((t: any) => t.id) : []);
+          flushUnanswered(); // 上一条 assistant 声明的调用若没被应答,先补占位(必须落在本条之前)
+          if (pendingVision.length) flushVision(); // 视觉附件消息必须落在完整工具配对之后
+          resetPending(hasCalls ? m.tool_calls.map((t: any) => t.id) : [], ev.seq);
           traced.push({
             seq: ev.seq,
             msg: {
@@ -270,8 +346,11 @@ export class Session {
           if (cp && ev.seq <= (cp.dropThroughSeq ?? -1)) continue;
           if (!cpPlaced) placeCp();
           // 孤儿 tool/result(无前置 assistant tool_calls):跳过,不进入模型可见面
-          if (!pending.has(d.callId)) break;
-          pending.delete(d.callId);
+          if (!pendingSet.has(d.callId)) break;
+          // 只消费一条声明:同一条 assistant 里 id 重复时(网关偶发)按**条数**配对,
+          // 网关也是按条数校验的,少一条就是 400 insufficient tool messages
+          pendingIds.splice(pendingIds.indexOf(d.callId), 1);
+          pendingSet = new Set(pendingIds);
           traced.push({ seq: ev.seq, msg: { role: 'tool', tool_call_id: d.callId, content: d.content } });
           // 带图片附件的工具结果(如 computer_screenshot):缓存视觉 user 消息,等工具配对完整后插入
           const visionAtt = (d.meta as any)?.visionAttachments;
@@ -280,13 +359,14 @@ export class Session {
             visionCaption = String((d.meta as any)?.visionCaption || '');
             visionSeq = ev.seq;
           }
-          if (pending.size === 0) flushVision();
+          if (pendingSet.size === 0) flushVision();
           break;
         case 'compaction/done':
           // 旧版破坏式压缩遗留(无 dropThroughSeq,早期消息已被物理删除):原位投影摘要
           // user 消息维持旧行为;新版检查点由 placeCp 统一插入,这里只忽略不重复投影。
           if (!cp) {
-            pending = new Set(); // 压缩摘要 user 消息:工具 id 失效(与 user/message 同语义)
+            flushUnanswered(); // 同上:摘要 user 消息之前补齐待应答调用
+            resetPending([], -1); // 压缩摘要 user 消息:工具 id 失效(与 user/message 同语义)
             traced.push({
               seq: ev.seq,
               msg: { role: 'user', content: d.summary || '【上下文已自动压缩】早期对话已省略。' }
@@ -297,7 +377,8 @@ export class Session {
           break; // turn/*、step/* 等结构事件不投影
       }
     }
-    if (pending.size === 0) flushVision();
+    flushUnanswered(); // 收尾:日志尾部仍有未应答的工具调用(截断/中止/日志错位)时补占位
+    if (pendingVision.length) flushVision();
     if (!cpPlaced) placeCp(); // 兜底:压缩后保留区没有消息面事件(理论上不会发生)时摘要收尾
     // 兼容旧版损坏数据:丢弃首个 user 之前的消息
     const firstUser = traced.findIndex((t) => t.msg.role === 'user');
