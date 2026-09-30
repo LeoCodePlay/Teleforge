@@ -117,6 +117,8 @@
   - `run()` 改为**不抛错**,统一返回 `{ res, err, retries, texts }` box —— 失败分支也能断言最终结果,
     不必再写 `.catch((e) => { err = e; })`;
   - 第 7 节(401)断言 = 「重试到 `MAX_ATTEMPTS` 次 + 始终用同一个 Key + 最终文案提示检查 API Key」;
+    **2026-10-01 更新(见 §7)**:该断言只对「单 Key 提供方」成立 —— 配了多个 Key 时
+    401 会换到下一个 Key(§7.4~§7.6),因为排在前面的失效 Key 会把整轮对话打死;
   - **新增 7.1 / 7.2 / 7.3 三节多 Key 用例**:402→换 Key→成功;全部 Key 无余额→只遍历一遍并指引充值+重置;单 Key 402→不轮询。
 - `test/ai-providers-multikey.test.js`(LF,**新增,27/27 通过**):store 层单测 ——
   `normalizeKeys` 归一化、`usableKeys` 过滤、入库对齐、**只给 `apiKeys` 时 `apiKey` 跟随首项**、
@@ -186,9 +188,11 @@ await startApp();
 
 **本任务已收口**,没有阻塞项。若要继续加固,按价值排序:
 
-1. 现在 401/403/404 这类**确定性**错误也会重试满 10 次(退避 1s→2s→…封顶 30s,整轮约 2 分钟)才报错。
-   这是需求口径「除余额不足外一律重试」的直接结果,代码与测试都已对齐;若想省掉这段白等,
-   需要在 `isRetryableStatus()` 里重新划一条「确定性错误立即失败」的线 —— 那会改变用户明确给过的口径,**先问用户**。
+1. 401/403/404 这类**确定性**错误在「没有下一个 Key 可换」时仍会重试满 10 次(退避 1s→2s→…封顶 30s,整轮约 2 分钟)才报错。
+   这是需求口径「除余额不足外一律重试」的直接结果,代码与测试都对齐了这条口径。
+   **2026-10-01 补充(见 §7)**:「还有下一个 Key」时 401/403 现在会换 Key 而不是原地重试;
+   只剩「单 Key / 全部 Key 都失败」这一种情况仍按旧口径空转。若连这段也要省掉,
+   需要在 `isRetryableStatus()` 里划一条「确定性鉴权错误立即失败」的线 —— 那会改变用户明确给过的口径,**先问用户**。
 2. `IMAGES_ONLY_RE`(生图模型被当文本模型用)仍立即失败、不重试(见 §2.1「有意保留的例外」)。
 3. `test/llm-retry-budget.test.js` 文件名与内容已不符(内容是新语义)。改名要同步 `package.json` 的 test 列表。
 
@@ -214,8 +218,11 @@ await startApp();
 | --- | --- |
 | 重试常量 | `server/agent/llm.ts` → `LLM_RETRY` |
 | 重试主循环 | `server/agent/llm.ts` → `chat()` 内 `for (;;)` |
-| 余额不足 → 换 Key | `server/agent/llm.ts` → `if (isBalanceError(res.status, rawBody))` |
+| 余额不足 → 换 Key | `server/agent/llm.ts` → `chat()` 的 `unusable === 'balance'` 分支 |
+| 鉴权失败 → 换 Key | `server/agent/llm.ts` → `chat()` 的 `unusable === 'auth'` 分支 / `isAuthError()` |
 | 余额判定 | `server/agent/llm.ts` → `isBalanceError()` |
+| 鉴权失败判定 | `server/agent/llm.ts` → `isAuthError()` |
+| 生图端点 Key 轮询 | `server/agent/llm.ts` → `_imageRequest()` |
 | Key 归一化 | `server/agent/llm.ts` → `normalizeApiKeys()` |
 | Key 状态持久化 | `server/store/ai-providers-store.ts` → `markKeyExhausted` / `resetKey` / `usableKeys` |
 | Key 列表权威覆盖 | `server/store/ai-providers-store.ts` → `applyKeys()` / `update()` |
@@ -225,6 +232,79 @@ await startApp();
 | 重置入口 | `web/src/context/llm-context.tsx` → `resetProviderKey()` |
 | 无余额徽标 + 重置按钮 | `web/src/components/AiConfigPanel/AiConfigPanel.tsx` → `ProviderCard` |
 | 多 Key 编辑器 | `web/src/components/AiConfigPanel/AiConfigPanel.tsx` → `ProviderModal` |
-| 多 Key 轮询单测 | `test/llm-retry.test.js` → §7.1 / §7.2 / §7.3 |
+| 多 Key 轮询单测 | `test/llm-retry.test.js` → §7.1~§7.6 |
 | store 单测 | `test/ai-providers-multikey.test.js` |
-| 多 Key 端到端 | `test/agent-llm-retry.test.js` → §7 / §8 |
+| 多 Key 端到端 | `test/agent-llm-retry.test.js` → §7 / §8 / §9 |
+
+---
+
+## 7. 后续修复(401 也要换 Key)
+
+### 7.1 症状
+
+用户报:某提供商配了多个 Key,第一个 Key 余额不足(界面已显示「无余额」),把第一个 Key
+**替换成新 Key** 之后,对话直接报 **401 无授权**(「是不是 Key 没传过去?」)。
+
+### 7.2 根因(已用真实 `LlmClient` + 假网关复现)
+
+1. **Authorization 一直都在**:`chat()` 每次请求都带 `Bearer <当前候选 Key>`,不存在「没传 Key」。
+   问题在**换 Key 的触发条件**:原实现只把 `isBalanceError`(402 / 余额关键词)当作换 Key 的信号;
+   `401/403` 被 `isRetryableStatus()` 归到「除余额不足外一律重试」,于是**同一把被网关拒绝的 Key
+   被重试满 10 次**(退避 1s→2s→…封顶 30s,整轮约 2 分钟)才把 401 交给用户,其它可用 Key
+   **一次都没轮到**。
+2. 真实网关对「已停用 / 被撤销 / 欠费被关」的 Key 常常直接回 `401 invalid api key`(而不是 402),
+   所以「第一个 Key 失效」在这套实现里等价于「整轮对话被打死」——这就是用户看到的现象。
+   同族的第二种形态:网关把错误包在 **HTTP 200 + JSON** 里(本仓库测试里已有 `json200` 这种假网关),
+   状态码是 200,于是走的是「流解析失败」分支,旧实现会把它当网络中断重试满 10 次
+   (实测 11 次请求 / 约 150s,最终还报成「连接被中断」),同样轮不到第二个 Key。
+3. 副作用同族问题:生图 / 图生图端点(`_imageRequest`)写死用 `this.apiKey`(= 列表首个),
+   **完全不参与轮询**:首个 Key 失效时文本对话会换 Key、生图却恒 401。
+4. 另外修掉一处「权威列表被旧值污染」:前端 `persistUserKey` 原来把「当前选中 Key(state)」
+   拼到提供商 `apiKeys` 前面,能把用户刚删掉/替换掉的旧 Key 重新插回**首位**(服务端 `applyKeys()`
+   早就按权威列表覆盖,前端这一侧漏了)。列表现在以服务端 `apiKeys` 为准,state 只在
+   「该提供商一条 Key 都没有」时兜底。
+
+### 7.3 改动
+
+- `server/agent/llm.ts`
+  - 新增 `isAuthError(status, text)`(401/403,或文案命中 invalid api key / 鉴权失败 /
+    无效的 key / unauthorized 等),判定与 `isBalanceError` 同样窄 —— 限流、参数错、
+    模型不存在这些**不换 Key**(换了只会在几个 Key 上重放同一个错)。
+  - `chat()`:`isBalanceError || isAuthError` 统一成「Key 不可用」分支,先尝试换 Key;
+    **还有下一个 Key** → 回调标记 + 换 Key + 重置重试额度(401 只在该 Key 上发 1 次);
+    **没有下一个 Key** → 余额不足照旧立即停止并给「充值 + 重置」指引,鉴权失败则落回
+    原口径(重试到次数用尽后给「检查 API Key」指引)—— 单 Key 提供方的行为与旧版本一致。
+  - `onKeyExhausted` 回调新增第三个参数 `kind: 'balance' | 'auth'`。
+  - 换 Key 抽成闭包 `markUnusableAndRotate()`,**两条失败路径共用**:HTTP 非 2xx 分支,
+    以及网关把错误包在 200 里的「流解析失败」分支(用 `errText(e)` 里的报文片段判定)。
+    同一把 Key 在一次 `chat()` 里只上报一次(否则「换不出下一个」时会 10 次落盘 + 10 次广播)。
+  - 无 Key 时**不再发空 `Bearer `**(避免把「没配 Key」伪装成 401),改为不带 Authorization 头,
+    本地不鉴权的网关仍可用。
+  - 最终错误文案在多 Key 都试过时列出「试过哪几个 Key」(只露头尾),用来直接回答
+    「Key 到底有没有传过去」。
+  - `_imageRequest()`:与 `chat()` 共用候选 Key 列表,401/402/403 换 Key 并写回标记;
+    网络中断仍**不重试**(生图按张计费,重发可能重复扣费)。
+- `server/store/ai-providers-store.ts`:`KeyState` 新增 `invalid`(鉴权失败);
+  `usableKeys()` 同时排除 `exhausted` 与 `invalid`;`markKeyExhausted(id, key, reason, kind)`。
+- `server/agent/agent.ts`:回调把 `kind` 传给 store,并带进 `key_exhausted` 事件。
+- `web/src/types/index.ts`:前端 `KeyState.invalid`。
+- `web/src/context/llm-context.tsx`:`usableApiKeys` 同口径过滤;`persistUserKey` 改为权威列表优先。
+- `web/src/components/AiConfigPanel/AiConfigPanel.tsx`:徽标按 `invalid` 显示 **「失效」**,
+  否则「无余额」;两种都可点「重置」恢复。
+
+### 7.4 测试
+
+- `test/llm-retry.test.js` 新增 §7.4~§7.7(75/75 通过):401 换 Key 后成功、
+  401 只在该 Key 上发 1 次、全部 Key 401 时逐个试过并列出试过的 Key、
+  生图端点同样换 Key 且不重复请求、**200 + 鉴权错误 JSON 也换 Key**(只发 2 次请求)。
+- `test/agent-llm-retry.test.js` 新增 §9(48/48 通过):端到端「第一个 Key 401 → 第二个接手 →
+  本轮 completed + `key_exhausted(kind='auth')` + 写回 `invalid` + `usableKeys` 只剩第二个」。
+- `test/ai-providers-multikey.test.js` 新增「鉴权失败标记」一节(33/33 通过):`invalid` 与
+  `exhausted` 分开记、都从 `usableKeys` 排除、`resetAllKeys` 一起清掉。
+- `npm test`(全部 58 个文件)**0 失败**;`npm run build` 通过;web `tsc --noEmit` 0 错误;
+  服务端 `tsc -p tsconfig.server.json` 错误数改动前后同为 68(全是既有基线,0 新增)。
+
+### 7.5 仍未做(需要用户拍板的口径)
+
+鉴权失败但**所有 Key 都试完**时,现在仍按旧口径把最后一个 Key 重试满 10 次(约 2 分钟)才报错。
+要不要改成「确定性错误立即失败」会改变用户明确给过的口径,先留着(见 §4.1)。

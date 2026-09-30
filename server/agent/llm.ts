@@ -34,14 +34,18 @@ export interface LlmOptions {
   multimodal?: boolean;
   /** 是否为生图模型:agent 跳过文本对话与工具循环,整轮改走 /images/* 端点 */
   imageGen?: boolean;
-  /** 同一提供商的多个 API Key(首位为主 Key)。某个 Key 余额不足时自动轮询到下一个,
-   *  全部耗尽才停止重试。上层只下发「当前可用」的 Key(已排除被标记无余额的)。 */
+  /** 同一提供商的多个 API Key(首位为主 Key)。某个 Key 不可用时自动轮询到下一个,
+   *  全部耗尽才停止重试。上层只下发「当前可用」的 Key(已排除被标记不可用的)。 */
   apiKeys?: string[];
-  /** 提供商 id(前端下发):余额不足时据此把「无余额」标记写回提供商配置,供界面展示与重置 */
+  /** 提供商 id(前端下发):Key 不可用时据此把标记写回提供商配置,供界面展示与重置 */
   providerId?: string;
-  /** 某个 Key 被判定余额不足时回调:上层据此持久化「无余额」标记,供界面展示与重置 */
-  onKeyExhausted?: (key: string, reason: string) => void;
+  /** 某个 Key 被判定不可用时回调:上层据此持久化标记(无余额 / 鉴权失败),供界面展示与重置。
+   *  kind:'balance' = 余额不足,'auth' = 鉴权失败(Key 无效/过期/被撤销)。 */
+  onKeyExhausted?: (key: string, reason: string, kind?: KeyUnusableKind) => void;
 }
+
+/** Key 不可用的原因分类:决定界面上的徽标文案与用户的处理方式(充值 / 换 Key) */
+export type KeyUnusableKind = 'balance' | 'auth';
 
 /** 生图端点返回的一张成图(字节已在内存,由调用方落盘为附件) */
 export interface ImageGenResult {
@@ -96,8 +100,8 @@ export class LlmClient {
   apiKey: string;
   /** 候选 API Key 列表(含主 Key,已去重去空)。chat() 按序轮询,余额不足就换下一个 */
   apiKeys: string[];
-  /** Key 余额不足回调(见 LlmOptions.onKeyExhausted) */
-  onKeyExhausted?: (key: string, reason: string) => void;
+  /** Key 不可用回调(见 LlmOptions.onKeyExhausted) */
+  onKeyExhausted?: (key: string, reason: string, kind?: KeyUnusableKind) => void;
   model: string;
   maxTokens: number;
   // 输入上下文窗口(token):>0 时启用对话历史自动压缩(见 compact.js);未配置则沿用字符预算裁剪
@@ -142,9 +146,11 @@ export class LlmClient {
     validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
     const url = `${this.baseUrl}/chat/completions`;
     // ---- 多 API Key 轮询 ----
-    // 本次调用固定一份候选 Key 列表(上层下发的都是「当前可用」的 Key,已排除无余额的)。
-    // 某个 Key 返回余额不足 → 标记它、换下一个,新 Key 重新获得满额重试次数;
-    // 所有 Key 都耗尽才停止重试(见下面 isBalanceError 分支)。
+    // 本次调用固定一份候选 Key 列表(上层下发的都是「当前可用」的 Key,已排除被标记不可用的)。
+    // 某个 Key 不可用(余额不足 / 鉴权失败) → 标记它、换下一个,新 Key 重新获得满额重试次数;
+    // 全部 Key 都试过才停止(见下面 isKeyUnusable 分支)。
+    // 没有下发 Key 时不带 Authorization 头(本地不鉴权的网关仍可用),而不是发「Bearer 」空值
+    // ——空 Bearer 会被网关判成 401,把「没配 Key」伪装成「Key 无效」。
     const keyList = this.apiKeys.length ? [...this.apiKeys] : [''];
     let keyIdx = 0;
     let activeKey = keyList[keyIdx];
@@ -205,25 +211,59 @@ export class LlmClient {
     let degradedReasoning = false; // 已因「reasoning_content 未完整回传」剥离历史 reasoning 降级重试过一次
     let emittedChars = 0;    // 本次尝试已通过 onDelta 吐出的字符数(正文/思考/工具参数)
     let attempt = 0;         // 已发起的请求次数(含首次)
+    // 已被网关判定不可用(余额/鉴权)的 Key:仅用于最终错误里报告「试过哪几个 Key」,
+    // 让「换了 Key 还是 401」这种问题一眼看出是哪个 Key 在拖后腿(只露头尾,不落全量 Key)。
+    const badKeys: string[] = [];
     let idleFired = false;   // 本次尝试是否因长期收不到任何数据被看门狗掐断
     let startedAt = Date.now(); // 仅用于在最终错误里报告「整轮已耗时」;换 Key 时会重置
     const trackedDelta = (d: { kind: string; text?: string; index?: number }) => {
       if (d.text) emittedChars += d.text.length;
       onDelta?.(d);
     };
+    // 当前活跃 Key 被判定不可用(余额不足 / 鉴权失败)时的统一处理:标记它 + 换下一个候选 Key。
+    // 两条失败路径共用(HTTP 非 2xx;以及网关把错误包在 200 + JSON 里的流解析失败):
+    // 同一个 Key 再试多少次都不会有额度/都不会被认,原地重试纯属白等。
+    // @returns true = 已切到下一个 Key(调用方 continue);false = 没有下一个可换。
+    const markUnusableAndRotate = (kind: KeyUnusableKind, reasonText: string, status?: number): boolean => {
+      // 同一个 Key 在一次 chat 里只上报一次:换不出下一个 Key 时会落回通用重试分支,
+      // 每轮都上报会变成「10 次落盘 + 10 次 key_exhausted 事件(前端跟着刷新)」的噪声。
+      if (activeKey && !badKeys.includes(activeKey)) {
+        badKeys.push(activeKey);
+        this.onKeyExhausted?.(activeKey, reasonText.slice(0, 300), kind);
+      }
+      const next = keyIdx + 1;
+      if (next >= keyList.length) return false;
+      const failedKey = activeKey;
+      keyIdx = next;
+      activeKey = keyList[keyIdx];
+      attempt = 0;              // 新 Key 重新给满重试额度:换 Key 不吃上一个 Key 的失败次数
+      startedAt = Date.now();
+      lastPartial = false;      // 上一个 Key 留下的半成品由上层按 discard 语义回滚
+      lastFailure = {
+        retryable: true,
+        status,
+        text: kind === 'balance'
+          ? `API Key ${failedKey.slice(0, 8)}… 余额不足,已切换到第 ${keyIdx + 1}/${keyList.length} 个可用 Key`
+          : `API Key ${failedKey.slice(0, 8)}… 鉴权失败(网关拒绝该 Key),已切换到第 ${keyIdx + 1}/${keyList.length} 个可用 Key`
+      };
+      lastErr = new LlmRequestError(lastFailure.text, { retryable: true, status });
+      onRetry?.({ retry: keyIdx, maxRetries: keyList.length, delayMs: 0, error: lastFailure.text });
+      console.warn(`[llm] ${this.model} API Key ${kind === 'balance' ? '余额不足' : '鉴权失败'},切换到第 ${keyIdx + 1}/${keyList.length} 个 Key`);
+      return true;
+    };
     for (;;) {
       if (attempt > 0) {
         // 上一次失败之后:先决定还要不要再试一次
         if (signal?.aborted) throw abortError();
         if (!lastFailure || !lastFailure.retryable) {
-          throw toFriendlyLlmError(lastErr, lastFailure, { attempts: attempt, elapsedMs: Date.now() - startedAt });
+          throw toFriendlyLlmError(lastErr, lastFailure, { attempts: attempt, elapsedMs: Date.now() - startedAt, keysTried: badKeys });
         }
         const elapsedMs = Date.now() - startedAt;
         const delayMs = retryDelayMs(attempt, lastFailure.retryAfterMs);
         // 次数用尽是唯一的放弃条件:除「余额不足」这类确定性账号问题外(由 Key 轮询专门处理),
         // 其余失败一律重试,不再因总时长超限提前停止(旧行为:600s 预算一到就停)。
         if (attempt >= LLM_RETRY.MAX_ATTEMPTS) {
-          throw toFriendlyLlmError(lastErr, lastFailure, { attempts: attempt, elapsedMs, exhausted: true });
+          throw toFriendlyLlmError(lastErr, lastFailure, { attempts: attempt, elapsedMs, exhausted: true, keysTried: badKeys });
         }
         console.warn(
           `[llm] ${this.model} 请求失败(${lastFailure.text.slice(0, 200)}),${(delayMs / 1000).toFixed(1)}s 后重试`
@@ -274,7 +314,7 @@ export class LlmClient {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${activeKey}`
+            ...(activeKey ? { Authorization: `Bearer ${activeKey}` } : {})
           },
           body: JSON.stringify(body),
           signal: attemptAc.signal
@@ -294,38 +334,29 @@ export class LlmClient {
         // (实测 deepseek 网关:429 回 data.retryAfterSeconds=9~29),先解析再动原文
         const retryAfterMs = parseRetryAfterMs(res, rawBody);
         let text = rawBody;
-        // 余额不足:换 Key 而不是干等重试(该 Key 再试多少次都不会有额度)。
-        // 轮询到下一个可用 Key 并重置重试额度;全部 Key 都耗尽才把错误交给用户。
-        if (isBalanceError(res.status, rawBody)) {
-          this.onKeyExhausted?.(activeKey, rawBody.slice(0, 300));
-          const next = keyIdx + 1;
-          if (next < keyList.length) {
-            const failedKey = activeKey;
-            keyIdx = next;
-            activeKey = keyList[keyIdx];
-            attempt = 0;              // 新 Key 重新给满重试额度:换 Key 不吃上一个 Key 的失败次数
-            startedAt = Date.now();
-            lastPartial = false;      // 上一个 Key 留下的半成品由上层按 discard 语义回滚
-            lastFailure = {
-              retryable: true,
-              status: res.status,
-              text: `API Key ${failedKey.slice(0, 8)}… 余额不足,已切换到第 ${keyIdx + 1}/${keyList.length} 个可用 Key`
-            };
-            lastErr = new LlmRequestError(lastFailure.text, { retryable: true, status: res.status });
-            onRetry?.({ retry: keyIdx, maxRetries: keyList.length, delayMs: 0, error: lastFailure.text });
-            console.warn(`[llm] ${this.model} API Key 余额不足,切换到第 ${keyIdx + 1}/${keyList.length} 个 Key`);
-            continue;
+        // Key 不可用:换 Key 而不是干等重试——同一个 Key 再试多少次都不会有额度/都不会被认。
+        // 两类都先尝试换 Key,但收尾方式不同:
+        //  - 余额不足(balance):该 Key 有额度前一直不可用 → 全部 Key 都无余额就停止重试,
+        //    给出「充值 + 点重置」的指引;
+        //  - 鉴权失败(auth,401/403/无效 Key):只说明「这个 Key 不认」,同提供商的其它 Key
+        //    完全可能可用 —— 这正是「第一个 Key 失效后必须自动落到下一个」的关键路径。
+        //    换不出下一个时才落回通用分支(按既有口径重试到次数用尽,最终给鉴权指引)。
+        const unusable: KeyUnusableKind | null = isBalanceError(res.status, rawBody) ? 'balance'
+          : (isAuthError(res.status, rawBody) ? 'auth' : null);
+        if (unusable) {
+          if (markUnusableAndRotate(unusable, rawBody, res.status)) continue;
+          // 余额不足且再没有下一个 Key:停止重试,给出「去哪儿充值 / 重置」的可操作指引
+          if (unusable === 'balance') {
+            const allGone = new LlmRequestError(
+              `LLM API ${res.status} [model=${this.model}]: ${rawBody.slice(0, 500)}`,
+              { retryable: false, status: res.status }
+            );
+            throw toFriendlyLlmError(
+              allGone,
+              { retryable: false, status: res.status, text: rawBody },
+              { attempts: attempt, elapsedMs: Date.now() - startedAt, allKeysExhausted: true }
+            );
           }
-          // 所有 Key 都无余额:停止重试,给出「去哪儿充值 / 重置」的可操作指引
-          const allGone = new LlmRequestError(
-            `LLM API ${res.status} [model=${this.model}]: ${rawBody.slice(0, 500)}`,
-            { retryable: false, status: res.status }
-          );
-          throw toFriendlyLlmError(
-            allGone,
-            { retryable: false, status: res.status, text: rawBody },
-            { attempts: attempt, elapsedMs: Date.now() - startedAt, allKeysExhausted: true }
-          );
         }
         // 网关以「历史 reasoning_content 未完整回传」拒绝(DeepSeek thinking mode 400):
         // 历史中确实存在没有 reasoning_content 的 assistant 消息(网关漏报 / 早期由非思考模型
@@ -386,6 +417,13 @@ export class LlmClient {
         stopWatchdog();
         if (signal?.aborted) throw abortError();
         if (idleFired || attemptTimedOut) e = attemptAbortError();
+        // 网关把错误包在 HTTP 200 + JSON 里返回(实测存在:正文非 SSE / 空流,报文里写着
+        // invalid api key 或余额不足)。HTTP 状态是 200,但本质仍是「这个 Key 不可用」——
+        // 原地重试 10 次只会白等约 2 分钟,还得不到可读结论(旧行为报成「连接被中断」)。
+        // 所以在这里补一次与 HTTP 错误分支相同的「换 Key」判定。
+        const bodyKind: KeyUnusableKind | null = isBalanceError(undefined, errText(e)) ? 'balance'
+          : (isAuthError(undefined, errText(e)) ? 'auth' : null);
+        if (bodyKind && markUnusableAndRotate(bodyKind, errText(e))) continue;
         // 流中断:无论有没有吐出过内容都重试。吐过内容的这次尝试整体作废
         // (onRetry 带 discard,上层丢弃半成品并回滚前端显示),历史里不会留下残句。
         lastErr = e;
@@ -446,13 +484,16 @@ export class LlmClient {
     return this._imageRequest(`${this.baseUrl}/images/edits`, { method: 'POST', body: form }, signal);
   }
 
-  /** 两个图像端点共用的请求/解析:鉴权注入 + 超时保护 + 用户中止 + 成图字节提取 */
+  /** 两个图像端点共用的请求/解析:鉴权注入 + 超时保护 + 用户中止 + 成图字节提取。
+   *  Key 轮询与 chat() 共用同一份候选列表(见 LlmOptions.apiKeys):排在前面的 Key 被网关
+   *  判为不可用(鉴权失败 / 余额不足)时换下一个,否则会出现「多 Key 配了、文本对话能自动
+   *  切换、生图却恒 401」的割裂行为。只在 401/402/403 这种「网关明确拒绝、不可能已经出图」
+   *  的状态上换 Key;网络中断仍不重试 —— 生图按张计费,重发可能重复扣费。 */
   private async _imageRequest(url: string, init: Omit<RequestInit, 'signal'>, signal?: AbortSignal): Promise<ImageGenResult[]> {
     // 鉴权统一在这里注入:multipart 分支不能手写 Content-Type(会丢 boundary),
     // 若把 Authorization 分散写进各调用点极易漏掉 —— 一旦漏掉就是"文生图能用、
     // 图生图恒 401"这种只在真实网络下才暴露的错。
-    const headers = new Headers(init.headers || {});
-    if (this.apiKey) headers.set('Authorization', `Bearer ${this.apiKey}`);
+    const keyList = this.apiKeys.length ? [...this.apiKeys] : [''];
     // 上游总超时:生图实测 29~35s(方图),大图可能数分钟。给 5 分钟地板,
     // 否则连接被网关半挂起时前端会永远停在"生成中"。
     const ac = new AbortController();
@@ -460,36 +501,51 @@ export class LlmClient {
     const onUserAbort = () => ac.abort(new Error('已停止'));
     signal?.addEventListener('abort', onUserAbort, { once: true });
     try {
-      let res: Response;
-      try {
-        res = await outboundFetch(url, { ...init, headers, signal: ac.signal });
-      } catch (e: any) {
-        if (signal?.aborted) throw new Error('已停止');
-        throw toFriendlyLlmError(e);
-      }
-      if (!res.ok) {
-        const text = (await res.text().catch(() => '')).slice(0, 1200);
-        throw new Error(imageApiError(res.status, this.model, text));
-      }
-      const j: any = await res.json().catch(() => null);
-      const items: any[] = Array.isArray(j?.data) ? j.data : [];
-      const out: ImageGenResult[] = [];
-      for (const it of items) {
-        const meta = { revisedPrompt: it?.revised_prompt, size: j?.size, model: j?.model };
-        if (it?.b64_json) {
-          const buf = Buffer.from(it.b64_json, 'base64');
-          if (buf.length) out.push({ buf, mime: sniffImageMime(buf), ...meta });
-        } else if (typeof it?.url === 'string' && it.url) {
-          // 部分网关返回远端 URL 而非 base64:必须下载回本机,否则成图无法进附件库、
-          // 也就无法作为下一轮图生图的参考图(多轮迭代链路会断)
-          const buf = await this._fetchBytes(it.url, ac.signal);
-          if (buf.length) out.push({ buf, mime: sniffImageMime(buf), ...meta });
+      for (let i = 0; i < keyList.length; i++) {
+        const activeKey = keyList[i];
+        const headers = new Headers(init.headers || {});
+        if (activeKey) headers.set('Authorization', `Bearer ${activeKey}`);
+        let res: Response;
+        try {
+          res = await outboundFetch(url, { ...init, headers, signal: ac.signal });
+        } catch (e: any) {
+          if (signal?.aborted) throw new Error('已停止');
+          throw toFriendlyLlmError(e);
         }
+        if (!res.ok) {
+          const text = (await res.text().catch(() => '')).slice(0, 1200);
+          const unusable: KeyUnusableKind | null = isBalanceError(res.status, text) ? 'balance'
+            : (isAuthError(res.status, text) ? 'auth' : null);
+          if (unusable && i + 1 < keyList.length) {
+            this.onKeyExhausted?.(activeKey, text.slice(0, 300), unusable);
+            // 后面统一以「当前 Key」发起请求:换过 Key 之后它才是这个客户端真正能用的那个
+            this.apiKey = keyList[i + 1];
+            console.warn(`[llm] ${this.model} 生图 Key ${unusable === 'balance' ? '余额不足' : '鉴权失败'},切换到第 ${i + 2}/${keyList.length} 个 Key`);
+            continue;
+          }
+          throw new Error(imageApiError(res.status, this.model, text));
+        }
+        const j: any = await res.json().catch(() => null);
+        const items: any[] = Array.isArray(j?.data) ? j.data : [];
+        const out: ImageGenResult[] = [];
+        for (const it of items) {
+          const meta = { revisedPrompt: it?.revised_prompt, size: j?.size, model: j?.model };
+          if (it?.b64_json) {
+            const buf = Buffer.from(it.b64_json, 'base64');
+            if (buf.length) out.push({ buf, mime: sniffImageMime(buf), ...meta });
+          } else if (typeof it?.url === 'string' && it.url) {
+            // 部分网关返回远端 URL 而非 base64:必须下载回本机,否则成图无法进附件库、
+            // 也就无法作为下一轮图生图的参考图(多轮迭代链路会断)
+            const buf = await this._fetchBytes(it.url, ac.signal);
+            if (buf.length) out.push({ buf, mime: sniffImageMime(buf), ...meta });
+          }
+        }
+        if (!out.length) {
+          throw new Error(`生图接口未返回图片数据${j ? `(响应:${JSON.stringify(j).slice(0, 300)})` : '(响应不是合法 JSON)'}`);
+        }
+        return out;
       }
-      if (!out.length) {
-        throw new Error(`生图接口未返回图片数据${j ? `(响应:${JSON.stringify(j).slice(0, 300)})` : '(响应不是合法 JSON)'}`);
-      }
-      return out;
+      throw new Error(imageApiError(402, this.model, '该提供方的全部 API Key 都不可用(余额不足 / 鉴权失败)'));
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onUserAbort);
@@ -540,9 +596,16 @@ function imageApiError(status: number, model: string, text: string): string {
 function toFriendlyLlmError(
   e: any,
   failure?: LlmFailureInfo,
-  ctx?: { attempts?: number; elapsedMs?: number; exhausted?: boolean; allKeysExhausted?: boolean }
+  ctx?: { attempts?: number; elapsedMs?: number; exhausted?: boolean; allKeysExhausted?: boolean; keysTried?: string[] }
 ): Error {
   const msg = errText(e);
+  // 一条对话里试过多个 Key 还是失败:把「试过哪几个」写进结论,否则用户只看到 401,
+  // 无法判断到底是 Key 没传过去、还是几个 Key 都不行(只露头尾,不落全量 Key)
+  const keysTriedHint = (ctx?.keysTried?.length || 0) > 1
+    ? `\n提示:该提供方配置的 ${ctx!.keysTried!.length} 个 API Key 都已尝试过(`
+      + ctx!.keysTried!.map((k) => (k.length > 12 ? `${k.slice(0, 6)}…${k.slice(-4)}` : k)).join('、')
+      + ');若仍报鉴权失败,请在「设置 → AI 配置」逐个核对它们是否有效/有余额。'
+    : '';
   // 该提供商的全部 API Key 都被判定无余额:停止重试并说明如何恢复
   if (ctx?.allKeysExhausted) {
     return new LlmRequestError(
@@ -563,13 +626,13 @@ function toFriendlyLlmError(
   // 可重试的 HTTP 错误(如 429/5xx)但重试预算已耗尽:保留网关原文 + 收尾建议
   if (failure?.status) {
     const hint = retryExhaustedHint(failure.status, tried);
-    return new LlmRequestError(`${msg}${hint ? `\n提示:${hint}` : ""}`, { retryable: false, status: failure.status });
+    return new LlmRequestError(`${msg}${hint ? `\n提示:${hint}` : ""}${keysTriedHint}`, { retryable: false, status: failure.status });
   }
   // 连接层/流层中断
   const low = msg.toLowerCase();
   const hint = /terminated|未收到 finish_reason|不是 sse|返回空响应|没有收到任何数据|重试次数已用尽/i.test(low) ? '连接被服务端/网关中断' : '网络连接异常';
   const head = `${tried ? `${tried}仍失败,` : ""}本轮已停止重试`;
-  return new Error(`模型连接中断:${hint}(${msg})。${head};可直接发消息让我接着做,或切换模型/检查网络后重试`);
+  return new Error(`模型连接中断:${hint}(${msg})。${head};可直接发消息让我接着做,或切换模型/检查网络后重试${keysTriedHint}`);
 }
 
 // 确定的账号/配置类错误:重试不会变好,直接给「去哪儿改什么」的指引
@@ -673,7 +736,8 @@ function retryDelayMs(failedAttempts: number, retryAfterMs?: number): number {
 /** HTTP 状态是否值得重试:除「余额不足」外一律重试。
  *  需求口径是「除了余额不足以外的错误全部都要重试」——鉴权/参数/找不到这类错误也重试到
  *  次数用尽,只是在最终失败时附上可操作提示(见 retryExhaustedHint / permanentErrorHint)。
- *  余额不足不会走到这里:它在 HTTP 分支里被专门拦下并改走 Key 轮询。 */
+ *  「Key 不可用」(余额不足 / 鉴权失败)不会走到这里:它们在 HTTP 分支里被专门拦下并改走
+ *  Key 轮询;只有已经轮不出下一个 Key 时,才落回本口径重试(见 chat 的 unusable 分支)。 */
 function isRetryableStatus(status: number): boolean {
   return !isBalanceError(status, '');
 }
@@ -684,6 +748,17 @@ export function isBalanceError(status: number | undefined, text: string): boolea
   if (status === 402) return true;
   if (status !== undefined && status < 400) return false;
   return /insufficient\s+(balance|quota|credit|funds)|insufficient_quota|(no|out\s+of)\s+credit|exceeded\s+your\s+current\s+quota|balance\s+(is\s+)?(insufficient|exhausted|depleted)|余额不足|余额不够|余额已耗尽|欠费|额度不足|额度已用尽|额度耗尽|配额不足|账户余额/i.test(text || '');
+}
+
+/** 是否「Key 鉴权失败 / 无效」类错误:状态码 401/403,或错误文案明确指向「这个 Key 不认」。
+ *  与 isBalanceError 一样必须窄:只有确定是「Key 本身不被接受」才换 Key ——
+ *  否则(限流、参数错、模型不存在)换 Key 只会把同一个错误在几个 Key 上重放。
+ *  实践中最常见的是网关对「已停用/被撤销」的 Key 直接回 401 invalid api key(而不是 402),
+ *  于是多 Key 里排在前面的失效 Key 会把整轮对话打死,其它可用 Key 一次都轮不到。 */
+export function isAuthError(status: number | undefined, text: string): boolean {
+  if (status === 401 || status === 403) return true;
+  if (status !== undefined && status < 400) return false;
+  return /invalid\s*[-_ ]?(api[-_ ]?)?key|incorrect\s+api\s+key|api[-_ ]?key\s*(is\s*)?(invalid|expired|revoked|disabled|not\s+found)|authentication\s+fails|unauthori[sz]ed|does\s+not\s+have\s+access|无效的?\s*(api\s*)?key|(api\s*)?key\s*无效|密钥(无效|错误|已过期)|鉴权失败|未授权/i.test(text || '');
 }
 
 /** 解析网关要求的等待时长:优先 Retry-After 头,其次 body 里的 retryAfterSeconds(实测 deepseek 网关) */

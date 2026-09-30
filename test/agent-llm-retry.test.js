@@ -214,6 +214,31 @@ auths = [];
   check('该提供商已无任何可用 Key', usableKeys(stored).length === 0, JSON.stringify(usableKeys(stored)));
 }
 
+// 9) 多 Key 轮询(端到端·鉴权失败):第一个 Key 被网关判为无效(401) -> 自动落到第二个 Key,
+//    并把「失效」写回提供商配置 + 广播带 kind 的事件,界面才能显示「失效」而不是卡在 401。
+const pid3 = 'u_e2e_authfail';
+aiProviders.add({ id: pid3, name: 'E2E3', baseUrl, apiKey: 'dead-key', apiKeys: ['dead-key', 'live-key'], models: ['deepseek-chat'], note: '' });
+script = [
+  { type: 'status', code: 401, body: '{"error":"invalid api key"}' },
+  { type: 'ok', text: '第二个 Key 的回答' }
+];
+seen = [];
+auths = [];
+{
+  const { agent, events } = makeAgent({ apiKey: 'dead-key', apiKeys: ['dead-key', 'live-key'], providerId: pid3 });
+  const t = await runTurn(agent, events, '第一个 Key 失效');
+  const unusable = agentEvents(events, 'key_exhausted');
+  const stored = aiProviders.find(pid3);
+  check('第一个 Key 401 后本轮仍跑完(不再让对话死在 401)', t.reason?.kind === 'completed', JSON.stringify(t.reason));
+  check('最终回复来自第二个 Key', t.assistant.length === 1 && t.assistant[0].content === '第二个 Key 的回答', JSON.stringify(t.assistant.map((m) => m.content)));
+  check('网关收到 2 次请求、第 2 次换了 Key', seen.length === 2 && auths[0] === 'Bearer dead-key' && auths[1] === 'Bearer live-key', JSON.stringify(auths));
+  check('本轮没有报错事件', t.errors.length === 0, JSON.stringify(t.errors));
+  check('换 Key 对用户可见(重试事件说明鉴权失败)', t.retries.length === 1 && /鉴权失败/.test(t.retries[0].error || ''), JSON.stringify(t.retries));
+  check('广播 key_exhausted 且带 auth 分类', unusable.length === 1 && unusable[0].key === 'dead-key' && unusable[0].kind === 'auth', JSON.stringify(unusable));
+  check('「失效」写回提供商配置(invalid 而非 exhausted)', stored?.keyStates?.['dead-key']?.invalid === true && stored?.keyStates?.['dead-key']?.exhausted !== true, JSON.stringify(stored?.keyStates));
+  check('该提供商的可用 Key 只剩第二个', JSON.stringify(usableKeys(stored)) === '["live-key"]', JSON.stringify(usableKeys(stored)));
+}
+
 console.warn = realWarn;
 check('重试过程有可诊断日志', warns.some((w) => /\[llm\]/.test(w)));
 

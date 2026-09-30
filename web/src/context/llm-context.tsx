@@ -189,7 +189,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     : FALLBACK_CONTEXT;
   const effBaseUrl = provider.baseUrl;
   const effKey = isMock ? '' : apiKey;
-  // 该提供商当前可用的 Key:去重后排除已标记「无余额」的。
+  // 该提供商当前可用的 Key:去重后排除已标记「不可用」的(余额不足 / 鉴权失败)。
   // 服务端轮询只用这份列表 —— 所以被标记的 Key 在用户点「重置」前不会被再次尝试。
   // 依赖必须取 provider 的字段而非 provider 对象本身,而且必须是「内容签名」而不是数组/对象引用:
   // allProviders 每帧新建、provider 每帧都是新引用;更隐蔽的是 provider.apiKeys / keyStates 在每次
@@ -203,7 +203,10 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   const usableApiKeys = useMemo(() => {
     if (isMock) return [] as string[];
     const uniq = [...new Set([apiKey, ...(providerApiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))];
-    return uniq.filter((k) => providerKeyStates?.[k]?.exhausted !== true);
+    return uniq.filter((k) => {
+      const st = providerKeyStates?.[k];
+      return st?.exhausted !== true && st?.invalid !== true;
+    });
     // 依赖用内容签名(apiKeysSig / keyStatesSig),它们在内容不变时逐帧相等 → 返回同一个数组引用
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey, apiKeysSig, keyStatesSig, isMock]);
@@ -288,12 +291,18 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   };
 
   // 写回「我的提供商」的 Key:去抖后保存到服务端配置文件(随条目删除一并删除)
+  // 列表以**服务端那份 apiKeys 为准**,当前选中的 Key(state)只在提供商一条 Key 都没有时
+  // 作为唯一来源。绝不能把 state 里的 Key 直接拼到列表前面:用户已经删掉/替换掉的旧 Key
+  // 会被这个动作"复活"成首位并失去旧的「不可用」标记,于是下一轮请求又打到那个废 Key 上
+  // (服务端 update() 里对 patch.apiKeys 的权威覆盖就是为了同一件事)。
   // 等值守卫:载荷与上次成功提交的内容完全一致时直接跳过。写了 keyStates 会随轮询变化、
   // provider.apiKeys 每次服务端回包都是新数组,仅靠依赖比较挡不住「回包 → setState → effect
   // 重跑 → 再提交」的自激循环;这里按内容比对是最后一道闸门(否则会稳定 400ms 一次无限 PATCH)。
   const persistUserKey = (id: string, key: string) => {
-    const list = [...new Set([key, ...(allProviders.find((x) => x.id === id)?.apiKeys || [])]
-      .map((k) => String(k || '').trim()).filter(Boolean))];
+    const authoritative = allProviders.find((x) => x.id === id)?.apiKeys;
+    const list = [...new Set(
+      (authoritative?.length ? authoritative : [key]).map((k) => String(k || '').trim()).filter(Boolean)
+    )];
     const sig = id + '\u0000' + list.join('\u0000');
     if (lastPushedKeyRef.current[id] === sig) return; // 内容没变:不必再写一次盘
     lastPushedKeyRef.current[id] = sig;

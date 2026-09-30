@@ -1308,18 +1308,18 @@ export class Agent {
     const isCfgObject = !!sidOrCfg && typeof sidOrCfg === 'object';
     const sid = isCfgObject ? null : (sidOrCfg != null && sidOrCfg !== '' ? String(sidOrCfg) : null);
     const cfg = isCfgObject ? sidOrCfg : maybeCfg;
-    // 提供商 id(前端随 llm 配置下发):余额不足时用它把「无余额」标记写回提供商配置,
-    // 并广播事件让界面刷新出「无余额」徽标与「重置」按钮。
+    // 提供商 id(前端随 llm 配置下发):Key 不可用时用它把标记写回提供商配置,
+    // 并广播事件让界面刷新出「无余额 / 失效」徽标与「重置」按钮。
     const providerId = String((cfg as any)?.providerId || '');
     const client = new LlmClient({
       ...(cfg || {}),
       onKeyExhausted: providerId
-        ? (key: string, reason: string) => {
+        ? (key: string, reason: string, kind: 'balance' | 'auth' = 'balance') => {
             try {
-              aiProviders.markKeyExhausted(providerId, key, reason);
-              this.emit('agent', { event: 'key_exhausted', providerId, key, reason });
+              aiProviders.markKeyExhausted(providerId, key, reason, kind);
+              this.emit('agent', { event: 'key_exhausted', providerId, key, reason, kind });
             } catch (e: any) {
-              console.warn('标记 API Key 余额不足失败:', e?.message);
+              console.warn('标记 API Key 不可用失败:', e?.message);
             }
           }
         : undefined

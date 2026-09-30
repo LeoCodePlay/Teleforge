@@ -112,11 +112,17 @@ export interface ModelContextConfig {
 export interface KeyState {
   /** true = 已判定「余额不足」,自动轮询会跳过它;点「重置」后清除 */
   exhausted?: boolean;
+  /** true = 已判定「鉴权失败」(Key 无效/过期/被撤销),同样被轮询跳过;点「重置」后清除 */
+  invalid?: boolean;
   /** 判定原因(网关原文摘要),便于排查 */
   reason?: string;
   /** 判定时间(毫秒时间戳) */
   at?: number;
 }
+
+/** Key 是否已被判定不可用(余额不足 / 鉴权失败):不可用的 Key 不参与轮询。
+ *  两个标记的语义不同(充值 vs 换 Key),但过滤口径一致 —— 统一走这里避免两处判断走偏。 */
+export const keyUnusable = (st?: KeyState): boolean => st?.exhausted === true || st?.invalid === true;
 
 /** LLM 提供商(预置 + 用户自定义,userProviders 来自服务端配置文件) */
 export interface LlmProvider {

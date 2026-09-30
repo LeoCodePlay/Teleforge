@@ -10,6 +10,9 @@ export { CONFIG_FILE };
 export interface KeyState {
   /** true = 已判定「余额不足」,自动轮询会跳过它;用户在界面点「重置」后清除 */
   exhausted?: boolean;
+  /** true = 已判定「鉴权失败」(Key 无效 / 过期 / 被网关撤销),同样从轮询里排除。
+   *  与余额不足分开记:界面文案与用户的处理方式不同(充值 vs 换 Key),排查时也一眼可分。 */
+  invalid?: boolean;
   /** 判定原因(网关原文摘要),便于界面展示与排查 */
   reason?: string;
   /** 判定时间(毫秒时间戳) */
@@ -71,10 +74,15 @@ export function normalizeKeys(apiKey: string, apiKeys?: string[]): string[] {
   return out;
 }
 
-/** 该提供商当前「可用」的 Key:排除已标记余额不足的。
- *  全部都被标记时返回空数组,调用方据此判定「所有 Key 都没余额了」并停止重试。 */
+/** 该提供商当前「可用」的 Key:排除已标记不可用(余额不足 / 鉴权失败)的。
+ *  全部都被标记时返回空数组,调用方据此判定「所有 Key 都不能用了」并停止重试。
+ *  注意:这个数组的顺序就是轮询顺序(首位先试),所以绝不能被「已从列表里删掉的旧 Key」污染
+ *  —— 那会让一个已被替换掉的旧 Key 回到首位,把整轮对话打死在它身上。 */
 export function usableKeys(p: AiProvider): string[] {
-  return normalizeKeys(p.apiKey, p.apiKeys).filter((k) => p.keyStates?.[k]?.exhausted !== true);
+  return normalizeKeys(p.apiKey, p.apiKeys).filter((k) => {
+    const st = p.keyStates?.[k];
+    return st?.exhausted !== true && st?.invalid !== true;
+  });
 }
 
 /** 用一份权威 Key 列表覆盖 p:apiKey 镜像首项,并清掉已从列表中删除的 Key 残留的状态
@@ -135,14 +143,17 @@ export const aiProviders = {
     persist();
     return true;
   },
-  /** 标记某 Key 余额不足:自动轮询从此跳过它,直到用户点「重置」 */
-  markKeyExhausted(id: string, key: string, reason?: string): boolean {
+  /** 标记某 Key 不可用:自动轮询从此跳过它,直到用户点「重置」。
+   *  kind:'balance' = 余额不足(充值后重置),'auth' = 鉴权失败(换掉/修好这个 Key 后重置)。 */
+  markKeyExhausted(id: string, key: string, reason?: string, kind: 'balance' | 'auth' = 'balance'): boolean {
     const p = load().find((x) => x.id === id);
     if (!p) return false;
     const k = String(key || '').trim();
     if (!k) return false;
     p.keyStates = { ...(p.keyStates || {}) };
-    p.keyStates[k] = { exhausted: true, reason: String(reason || '').slice(0, 300), at: Date.now() };
+    p.keyStates[k] = kind === 'auth'
+      ? { invalid: true, reason: String(reason || '').slice(0, 300), at: Date.now() }
+      : { exhausted: true, reason: String(reason || '').slice(0, 300), at: Date.now() };
     persist();
     return true;
   },

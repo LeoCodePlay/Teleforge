@@ -98,5 +98,29 @@ console.log('\n== 边界 ==');
   check('删除后查不到', aiProviders.find('p1') === undefined);
 }
 
+console.log('\n== 鉴权失败(失效 Key)标记与「无余额」分开记 ==');
+{
+  const p = aiProviders.add({ id: 'p2', name: 'P2', baseUrl: 'https://x/v1', apiKey: 'bad', apiKeys: ['bad', 'good'], models: ['m'], note: '' });
+  check('初始两个 Key 都可用', JSON.stringify(usableKeys(p)) === '["bad","good"]', JSON.stringify(usableKeys(p)));
+
+  check('标记鉴权失败成功', aiProviders.markKeyExhausted('p2', 'bad', 'HTTP 401 invalid api key', 'auth') === true);
+  const marked = aiProviders.find('p2');
+  check('失效 Key 从可用列表消失(不再参与轮询)', JSON.stringify(usableKeys(marked)) === '["good"]', JSON.stringify(usableKeys(marked)));
+  check('失效标记落在 invalid 而不是 exhausted(界面区分「失效」与「无余额」)',
+    marked.keyStates?.bad?.invalid === true && marked.keyStates?.bad?.exhausted !== true,
+    JSON.stringify(marked.keyStates?.bad));
+
+  aiProviders.markKeyExhausted('p2', 'good', 'HTTP 402 余额不足');
+  const both = aiProviders.find('p2');
+  check('两类标记都让 Key 不可用(全部不可用 -> 空列表)',
+    usableKeys(both).length === 0
+    && both.keyStates?.good?.exhausted === true && both.keyStates?.bad?.invalid === true,
+    JSON.stringify(both.keyStates));
+
+  check('重置后失效标记一起清掉', aiProviders.resetAllKeys('p2') === true && JSON.stringify(usableKeys(aiProviders.find('p2'))) === '["bad","good"]',
+    JSON.stringify(usableKeys(aiProviders.find('p2'))));
+  aiProviders.remove('p2');
+}
+
 console.log(`\nai-providers-multikey: ${pass} 通过 / ${fail} 失败`);
 if (fail) process.exit(1);

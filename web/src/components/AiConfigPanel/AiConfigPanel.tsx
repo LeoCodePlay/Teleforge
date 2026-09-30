@@ -6,7 +6,7 @@ import React, { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLlm } from '../../context/llm-context';
 import { PROVIDERS, getDefaultModelContext } from '../../data/llm-providers';
-import type { LlmProvider, ProviderDraft, ModelContextConfig } from '../../types';
+import type { LlmProvider, ProviderDraft, ModelContextConfig, KeyState } from '../../types';
 import { IconTrashOutline14, IconEye16, IconEyeOff16 } from '../icons/icons';
 import GlassSelect from '../GlassSelect/GlassSelect';
 import './AiConfigPanel.scss';
@@ -78,6 +78,11 @@ function keyList(p: LlmProvider): string[] {
   return [...new Set([p.apiKey, ...(p.apiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))] as string[];
 }
 
+/** Key 是否已被判定不可用(余额不足 / 鉴权失败):两种标记的徽标文案不同,但都不参与轮询 */
+function keyUnusable(st?: KeyState): boolean {
+  return st?.exhausted === true || st?.invalid === true;
+}
+
 /** 展示用脱敏:只露头尾,避免整串 Key 出现在界面上 */
 function maskKey(k: string): string {
   return k.length <= 12 ? k : `${k.slice(0, 6)}…${k.slice(-4)}`;
@@ -107,19 +112,22 @@ function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete, onResetKey }
         <span>{p.models.length > 0 ? `${p.models.length} 个模型` : '无模型(手动输入)'}</span>
         <span>{keyList(p).length > 1 ? `${keyList(p).length} 个 Key` : (p.apiKey ? 'Key 已配置' : '未配置 Key')}</span>
       </div>
-      {/* 多 Key 状态:余额不足的 Key 显示「无余额」并提供「重置」——
-          充值后点重置,下次重试轮询会再次尝试它(否则会被一直跳过) */}
+      {/* 多 Key 状态:被判定不可用的 Key 显示「无余额」(充值)或「失效」(鉴权失败/无效),
+          并给出「重置」——两种都靠重置按钮恢复参与轮询(否则会被一直跳过) */}
       {keyList(p).length > 0 && (
         <div className="pc-keys" onClick={(e) => e.stopPropagation()}>
           {keyList(p).map((k) => {
             const st = p.keyStates?.[k];
+            const bad = keyUnusable(st);
             return (
-              <div key={k} className={'pc-key' + (st?.exhausted ? ' exhausted' : '')}>
+              <div key={k} className={'pc-key' + (bad ? ' exhausted' : '')}>
                 <span className="pc-key-mask">{maskKey(k)}</span>
-                {st?.exhausted
+                {bad
                   ? (
                     <>
-                      <span className="badge warn" title={st.reason || '该 Key 余额不足'}>无余额</span>
+                      <span className="badge warn" title={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
+                        {st?.invalid ? '失效' : '无余额'}
+                      </span>
                       <button className="sm" onClick={() => onResetKey(k)}>重置</button>
                     </>
                   )
@@ -303,17 +311,22 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
             <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://your-gateway/v1" />
           </div>
           <div className="field">
-            <label>API Key(可填多个:某个 Key 余额不足时自动切换到下一个;仅存本机)</label>
+            <label>API Key(可填多个:某个 Key 不可用时自动切换到下一个;仅存本机)</label>
             <div className="key-list">
               {apiKeys.map((k, i) => {
                 const st = isEdit ? editProvider.keyStates?.[k.trim()] : undefined;
+                const bad = keyUnusable(st);
                 const shown = revealed.has(i);
                 return (
-                  <div key={i} className={'key-row' + (st?.exhausted ? ' exhausted' : '')}>
+                  <div key={i} className={'key-row' + (bad ? ' exhausted' : '')}>
                     <input type={shown ? 'text' : 'password'} value={k}
                       placeholder={i === 0 ? 'sk-…(主 Key)' : 'sk-…(备用 Key)'}
                       onChange={(e) => setApiKeys((cur) => cur.map((v, j) => (j === i ? e.target.value : v)))} />
-                    {st?.exhausted && <span className="badge warn" title={st.reason || '该 Key 余额不足'}>无余额</span>}
+                    {bad && (
+                      <span className="badge warn" title={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
+                        {st?.invalid ? '失效' : '无余额'}
+                      </span>
+                    )}
                     {/* 显隐切换:点眼睛在明文/遮罩之间切换(仅影响显示,不改动值) */}
                     <button type="button" className="key-reveal action-icon"
                       title={shown ? '隐藏' : '显示明文'}

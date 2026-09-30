@@ -272,6 +272,95 @@ seen = [];
   check('单 Key 402 上报无余额', exhausted.join(',') === 'only-key', JSON.stringify(exhausted));
   check('单 Key 402 文案提示充值', /充值/.test(String(err?.message)), String(err?.message));
 }
+// 7.4) 第一个 Key 鉴权失败(401 invalid api key) -> 也要自动换到下一个可用 Key。
+//      真实网关常把「已停用/被撤销」的 Key 回成 401 而不是 402;若只认余额不足才换 Key,
+//      排在首位的废 Key 会把整轮对话打死(用户看到的就是「替换了第一个 Key 还是 401」)。
+script = [{ type: 'status', code: 401, body: '{"error":"invalid api key"}' }, { type: 'ok', text: '第二个 Key 的回答' }];
+seen = [];
+auths = [];
+{
+  const exhausted = [];
+  const p = run(new LlmClient({
+    baseUrl, apiKey: 'key-one', apiKeys: ['key-one', 'key-two'], model: 'deepseek-chat', maxTokens: 64,
+    onKeyExhausted: (k, _r, kind) => exhausted.push(`${k}:${kind}`)
+  }));
+  const box = await p;
+  check('第 1 个 Key 401 后自动换 Key 并成功', !box.err && box.res?.content === '第二个 Key 的回答', String(box.err?.message || box.res?.content));
+  check('401 只在该 Key 上发 1 次(不在死 Key 上重试到次数用尽)', seen.length === 2, String(seen.length));
+  check('第 2 次请求用的是第 2 个 Key', auths[1] === 'Bearer key-two', JSON.stringify(auths));
+  check('回调上报「鉴权失败」分类(界面据此显示失效而非无余额)', exhausted.join(',') === 'key-one:auth', JSON.stringify(exhausted));
+  check('换 Key 会通知前端(重试事件说明鉴权失败)', box.retries.length === 1 && /鉴权失败/.test(box.retries[0].error), JSON.stringify(box.retries));
+}
+
+// 7.5) 全部 Key 都鉴权失败:逐个各试一次(而不是在第一个 Key 上重试 10 次),最终给出可操作提示
+script = [
+  { type: 'status', code: 401, body: '{"error":"invalid api key"}' },
+  ...Array.from({ length: 12 }, () => ({ type: 'status', code: 401, body: '{"error":"invalid api key"}' }))
+];
+seen = [];
+auths = [];
+{
+  const p = run(new LlmClient({
+    baseUrl, apiKey: 'k1', apiKeys: ['k1', 'k2'], model: 'deepseek-chat', maxTokens: 64
+  }));
+  const box = await p;
+  check('两个 Key 都被尝试过(第 2 个 Key 也发到了)', auths.includes('Bearer k2'), JSON.stringify(auths.slice(0, 3)));
+  check('最终失败文案提示检查 API Key', /API Key/.test(String(box.err?.message)), String(box.err?.message));
+  check('最终失败文案列出试过的 Key(便于确认 Key 到底有没有传过去)',
+    /都已尝试过/.test(String(box.err?.message)) && /k1/.test(String(box.err?.message)) && /k2/.test(String(box.err?.message)),
+    String(box.err?.message));
+}
+
+// 7.6) 生图/图生图端点同样按 Key 列表轮询:第一个 Key 鉴权失败 -> 换下一个,不重复出图
+{
+  const imgCalls = [];
+  const imgServer = http.createServer((req, res) => {
+    const auth = String(req.headers.authorization || '');
+    imgCalls.push(auth);
+    if (auth !== 'Bearer img-good') {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end('{"error":"invalid api key"}');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' }] }));
+  });
+  await new Promise((r) => imgServer.listen(0, '127.0.0.1', r));
+  const imgBase = `http://127.0.0.1:${imgServer.address().port}/v1`;
+  const marked = [];
+  const c = new LlmClient({
+    baseUrl: imgBase, apiKey: 'img-dead', apiKeys: ['img-dead', 'img-good'], model: 'gpt-image-2', imageGen: true,
+    onKeyExhausted: (k, _r, kind) => marked.push(`${k}:${kind}`)
+  });
+  const out = await c.generateImage({ prompt: 'x' });
+  check('生图第一个 Key 401 后换下一个 Key 并成功出图', out.length === 1, JSON.stringify(out.length));
+  check('生图只在被拒的 Key 上失败一次(不重复计费)', imgCalls.join(',') === 'Bearer img-dead,Bearer img-good', JSON.stringify(imgCalls));
+  check('生图也会上报失效 Key(界面同一套徽标)', marked.join(',') === 'img-dead:auth', JSON.stringify(marked));
+  imgServer.close();
+}
+
+// 7.7) 网关把鉴权错误包在 HTTP 200 + JSON 里(实测存在这种网关):
+//      状态码是 200,但报文写着 invalid api key —— 也要换 Key,不能原地重试到次数用尽后
+//      把它报成「连接被中断」(旧行为:10 次全打在同一把废 Key 上,约 2 分钟白等)。
+script = [
+  { type: 'json200', body: '{"error":{"message":"invalid api key"}}' },
+  { type: 'ok', text: '第二个 Key 的回答' }
+];
+seen = [];
+auths = [];
+{
+  const marked = [];
+  const p = run(new LlmClient({
+    baseUrl, apiKey: 'key-one', apiKeys: ['key-one', 'key-two'], model: 'deepseek-chat', maxTokens: 64,
+    onKeyExhausted: (k, _r, kind) => marked.push(`${k}:${kind}`)
+  }));
+  const box = await p;
+  check('200 + 鉴权错误 JSON 也换 Key 并成功', !box.err && box.res?.content === '第二个 Key 的回答', String(box.err?.message || box.res?.content));
+  check('只发 2 次请求(第一次那个 Key 不再重试)', seen.length === 2, String(seen.length));
+  check('第 2 次请求用的是第 2 个 Key', auths[1] === 'Bearer key-two', JSON.stringify(auths));
+  check('上报分类为鉴权失败', marked.join(',') === 'key-one:auth', JSON.stringify(marked));
+}
+
 // 8) 预算/次数耗尽:重试到 MAX_ATTEMPTS 次才放弃,且文案说明「已重试 N 次」
 script = Array.from({ length: 12 }, () => ({ type: 'status', code: 503, body: 'upstream unavailable' }));
 seen = [];
