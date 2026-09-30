@@ -24,6 +24,7 @@ import { localFs, runWithLocalWorkspaceBinding } from '../core/local-fs.ts';
 import { renderPromptInjectSection } from './prompt-inject.ts';
 import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.ts';
 import * as sessions from '../store/session-store.ts';
+import { consumeCleanQuitFlag } from '../store/clean-quit.ts';
 import { getDefaultPermissionMode as storeDefaultMode, setDefaultPermissionMode as storeSetDefaultMode } from '../store/settings-store.ts';
 import { getAttachment, readImageDataURL, readImageBytes, saveAttachment, isTextLike, attachmentPath, type AttachmentMeta } from '../store/attachments-store.ts';
 import { aiProviders } from '../store/ai-providers-store.ts';
@@ -535,6 +536,22 @@ function reindexEvents(events) {
   return events.map((ev, i) => ({ seq: i, time: ev.time ?? Date.now(), type: ev.type, data: ev.data }));
 }
 
+// 自动续跑:后端进程在生成中途消失(崩溃 / 被杀 / 开发模式热重启)后,由服务端自己接着上一轮做。
+// 用户口径:后端正常跑着突然中断 → 继续;用户自己关掉软件再打开 → 不要继续(见 store/clean-quit.ts)。
+// 指令同时给"接着做"和"别再重做"两条硬约束——半成品可能已落盘也可能没落,只能让模型自己看日志判断。
+const AUTO_RESUME_TEXT = '[自动续跑] 上一轮对话在生成途中被中断(后端进程异常退出),请从中断处接着完成剩余工作:\n'
+  + '1. 先回看上面的对话与工具结果,判断已经做到哪一步;\n'
+  + '2. 不要重做已经完成的步骤,只继续未完成的部分;\n'
+  + '3. 若剩余工作依赖已失效的环境(如断开的服务器连接)而无法继续,直接说明卡在哪里、需要我做什么。';
+/** 待续跑的会话最多等这么久:期间用户没连回来/没配模型就放弃,避免后台一直挂着 */
+const AUTO_RESUME_GIVE_UP_MS = 30 * 60_000;
+/** 链路就绪检查间隔:模型配置与连接状态都是稍后才到的,轮询比逐个挂钩子更不容易漏 */
+const AUTO_RESUME_POLL_MS = 5_000;
+
+// 上次退出是不是"用户主动关掉"(见 store/clean-quit.ts)。必须在构造 Agent 之前读掉:
+// 构造函数里的 _restore() 会载入并自愈活跃会话,那一刻就要知道"要不要自动接着做"。
+const LAST_EXIT_CLEAN = consumeCleanQuitFlag();
+
 export class Agent {
   emit: (event: string, payload: any, extra?: any) => void;
   llm: LlmClient | null = null; // 全局默认配置:草稿/新建会话继承它;每个会话另有自己的快照,见 _llmFor
@@ -544,6 +561,11 @@ export class Agent {
   _llmBySid: Map<string, LlmClient> = new Map(); // 会话级模型快照(sessionId -> LlmClient),见 _llmFor
   _chatOnlyUntil: Map<string, number> = new Map(); // 各会话的工具降级失效时间戳(带 TTL,见 _chatOnlyFor)
   _connKey: string = 'local'; // 会话作用域:连接时 = 服务器键(username@host:port),否则本地工作区模式
+  /** 上次退出是用户主动的(见 store/clean-quit.ts):为真则不做自动续跑 */
+  _lastExitClean: boolean = LAST_EXIT_CLEAN;
+  /** 待自动续跑的会话:sid -> 现场。链路(作用域/模型)没就绪时先挂这里,由 _tryAutoResume 轮询 */
+  _autoResume: Map<string, { session: Session; meta: sessions.SessionMeta | null; at: number }> = new Map();
+  _autoResumeTimer: any = null;
 
   constructor({ emit }: { emit: (event: string, payload: any, extra?: any) => void }) {
     this.emit = emit;            // (event, payload) => void,由 ws 层转发给前端
@@ -554,7 +576,78 @@ export class Agent {
     this._llmBySid = new Map(); // 会话级模型配置快照
     this._chatOnlyUntil = new Map(); // 各会话的工具降级失效时间戳
     this._connKey = 'local';    // 会话作用域:连接时 = 服务器键(username@host:port),否则本地工作区模式
+    this._lastExitClean = LAST_EXIT_CLEAN; // 主动退出过 → 这次不做自动续跑
+    this._autoResume = new Map();
+    this._autoResumeTimer = null;
     this._restore();
+  }
+
+  // ---------------- 中断自动续跑 ----------------
+  /**
+   * 记下"这个会话有一轮被进程中断了,等链路就绪后自动接着做"。
+   * 只由 _loadHealed 调用(自愈出一个非正常结束的轮次时);现场里带着那一轮的 Session 对象,
+   * 省得后面为了拿回它再读一次盘。
+   */
+  _markAutoResume(sid: string, session: Session): void {
+    const meta = sessions.list().find((s) => s.id === sid) || null;
+    this._autoResume.set(sid, { session, meta, at: Date.now() });
+    this._pumpAutoResume();
+  }
+
+  /** 启动/停止续跑轮询:有等待项才开着,全部处理完就关掉(不留常驻定时器) */
+  _pumpAutoResume(): void {
+    if (this._autoResume.size === 0) {
+      if (this._autoResumeTimer) { clearInterval(this._autoResumeTimer); this._autoResumeTimer = null; }
+      return;
+    }
+    if (this._autoResumeTimer) return;
+    this._autoResumeTimer = setInterval(() => this._tryAutoResume(), AUTO_RESUME_POLL_MS);
+    // 定时器不阻止进程退出(测试/脚本里不会因为挂着一个等待项就卡住)
+    if (typeof this._autoResumeTimer?.unref === 'function') this._autoResumeTimer.unref();
+    this._tryAutoResume();
+  }
+
+  /**
+   * 试着把等待中的续跑真正跑起来。三道闸门必须同时满足:
+   *  1) 模型已配置 —— 前端连上后才下发,后端刚起时一定是空的;
+   *  2) 会话作用域与当前作用域一致 —— 远程会话要等那台服务器连回来,否则工具全都用不了;
+   *  3) 该会话不忙。
+   * 任何一条不满足就留到下一次轮询;超过 AUTO_RESUME_GIVE_UP_MS 直接放弃。
+   */
+  _tryAutoResume(): void {
+    if (this._autoResume.size === 0) { this._pumpAutoResume(); return; }
+    for (const [sid, pending] of [...this._autoResume]) {
+      if (Date.now() - pending.at > AUTO_RESUME_GIVE_UP_MS) {
+        this._autoResume.delete(sid);
+        console.warn(`[agent] 中断续跑放弃(等待链路就绪超时): ${sid}`);
+        continue;
+      }
+      if (!this.llm) continue;
+      if (this.busyIds().includes(sid)) continue;
+      const scope = pending.meta?.connKey == null ? this.sessionConnKey() : pending.meta.connKey;
+      if (scope !== this.sessionConnKey()) continue;
+      let rt = this._runtimes.get(sid);
+      if (!rt) {
+        rt = newRuntime(pending.session);
+        // 续跑必须沿用该会话原本的绑定(远程工作区/本地工作区/归属服务器),否则会跑到
+        // 连接级默认工作区里去 —— 那等于"换个目录重做一遍"
+        rt.workspace = pending.meta?.workspace ?? null;
+        rt.localWorkspace = pending.meta?.localWorkspace ?? null;
+        rt.connKey = pending.meta?.connKey ?? null;
+        this._runtimes.set(sid, rt);
+      }
+      this._autoResume.delete(sid);
+      this._notice(rt.session, sid, '后端在生成途中中断,已自动接着上一轮继续(随时发消息可接管)。',
+        { level: 'info', kind: 'auto-resume' });
+      try {
+        this.submit(sid, AUTO_RESUME_TEXT, { auto: true, display: '↻ 后端中断后自动继续' });
+        console.log(`[agent] 中断续跑已开始: ${sid}`);
+      } catch (e: any) {
+        console.error('[agent] 中断续跑启动失败:', e?.message ?? e);
+      }
+      this.emit('agent', { event: 'sessions_changed' });
+    }
+    this._pumpAutoResume();
   }
 
   // 模型不支持工具调用时短暂降级为纯对话,但带 TTL(AGENT.CHAT_ONLY_TTL_MS):
@@ -606,6 +699,12 @@ export class Agent {
     const s = new Session(raw);
     if (s.events.length !== raw.length) {
       try { sessions.saveEvents(id, s.events); } catch { /* 落盘失败不阻塞读取 */ }
+    }
+    // 刚自愈掉一个未闭合轮 = 上次是"生成到一半进程没了"。两种情况不自动接着做:
+    //  - 用户自己关的软件(主动退出标记,见 store/clean-quit.ts);
+    //  - 被中断的那一轮本身就是自动续跑发起的(再续会变成崩溃→续跑→再崩的死循环)。
+    if (s.healedUncleanTurn && !s.openTurnStartedByAutoResume && !this._lastExitClean) {
+      this._markAutoResume(id, s);
     }
     return s;
   }
@@ -1326,8 +1425,10 @@ export class Agent {
    * 自动逐条执行,不再当作 steer 立即打断当前回复。每个会话独立驱动,互不阻塞。
    * 返回的 promise 在该会话整个排空过程(含后续排队的输入)结束后 resolve。
    */
-  submit(sessionId, userText, { reasoning = 'default', attachments = null } = {}) {
+  submit(sessionId, userText, { reasoning = 'default', attachments = null, auto = false, display = null } = {}) {
     if (!this.llm) throw new Error('尚未配置 LLM(设置 -> 模型配置)');
+    // 用户自己发话了 = 不必再替他续跑(手动接管优先于自动接管)
+    if (!auto) this._autoResume.delete(sessionId);
     const rt = sessionId != null ? this._runtimes.get(sessionId) : null;
     if (!rt) throw new Error(`会话不存在: ${sessionId}`);
     const text = String(userText);
@@ -1337,7 +1438,7 @@ export class Agent {
       // 需要打断当前回复立即执行时,由前端"立即执行"操作走 steerQueueItem(inbox 抢先 + 中止当前轮)
       // 手动压缩中(rt.compacting)也走这里:压缩要读整份日志算 drop 区间,此刻开新轮会把
       // 检查点追加进正在流式的轮次;压缩结束由 compactNow 的 finally 统一派发。
-      rt.pending.push({ id: ++rt.queueSeq, text, reasoning, attachments: atts });
+      rt.pending.push({ id: ++rt.queueSeq, text, reasoning, attachments: atts, auto, display });
       this._emitQueue(rt, sessionId);
       return rt.driving;
     }
@@ -1346,7 +1447,7 @@ export class Agent {
       while (rt.pending.length > 0) rt.inbox.push(rt.pending.shift());
       this._emitQueue(rt, sessionId);
     }
-    rt.inbox.push({ text, reasoning, attachments: atts });
+    rt.inbox.push({ text, reasoning, attachments: atts, auto, display });
     return this._drive(rt, sessionId);
   }
 
@@ -1507,7 +1608,7 @@ export class Agent {
           this._runTurnInner(rt, runSessionId, input, boundConn))));
   }
 
-  async _runTurnInner(rt, runSessionId, { text, reasoning, attachments }: { text: string; reasoning: string; attachments?: AttachmentMeta[] | null }, boundConn) {
+  async _runTurnInner(rt, runSessionId, { text, reasoning, attachments, auto = false, display = null }: { text: string; reasoning: string; attachments?: AttachmentMeta[] | null; auto?: boolean; display?: string | null }, boundConn) {
     const session = rt.session; // 锁定本轮操作的运行时与会话,中途切换活跃会话不影响本轮写入
     const signal = (rt.signal = new AbortController());
     rt.boundConn = boundConn;
@@ -1623,7 +1724,8 @@ export class Agent {
 
     // start 事件只展示原始输入(/技能1 /技能2 需求),日志里才写注入后的完整指令,避免刷屏;
     // 附件元数据随事件下发,前端在用户气泡内渲染缩略图/文件 chip
-    const displayText = rawText;
+    // 自动续跑:展示面用短句(见 autoResume 的 display),否则会把整段注入指令糊在气泡里
+    const displayText = display ?? rawText;
     this.emit('agent', {
       event: 'start', text: displayText, sid: runSessionId,
       ...(atts.length ? { attachments: atts } : {})
@@ -1651,7 +1753,9 @@ export class Agent {
         if (step === 1) session.append('user/message', {
           // content=注入后的完整指令(模型历史从它投影,技能必须可见);
           // display=用户原文(前端渲染用,避免历史回放时把技能指令当作用户消息刷屏,对齐 harness)
-          content: text, display: rawText, source: 'user',
+          // source='auto-resume' = 这条不是用户打的,而是后端在进程中断后自动接着跑(见 _tryAutoResume):
+          // 它不算"用户消息"(不参与首条命名/工作区锁定判定),也在下次自愈时用来防止无限续跑。
+          content: text, display: displayText, source: auto ? 'auto-resume' : 'user',
           // 附件元数据随事件持久化:前端历史回放渲染缩略图,请求期多模态注入 image_url
           ...(atts.length > 0 ? { attachments: atts } : {}),
           // 注入的技能详情随事件持久化,历史回放/分支时前端可恢复"已加载技能"折叠行

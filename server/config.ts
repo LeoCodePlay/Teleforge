@@ -44,6 +44,9 @@ export const SESSIONS_DIR       = path.join(DATA_DIR, 'sessions');
 // 子代理运行记录(每次派发一个文件;面板按会话列出并回看其完整对话)
 export const SUBAGENTS_DIR      = path.join(DATA_DIR, 'subagents');
 export const SETTINGS_FILE      = path.join(DATA_DIR, 'settings.json');
+// 「上次是用户主动退出」的标记文件(见 store/clean-quit.ts):用来区分"进程崩了该自动接着做"
+// 与"用户自己关了软件,下次打开只是看看,不该擅自继续"。
+export const QUIT_FLAG_FILE     = process.env.QUIT_FLAG_FILE     || path.join(DATA_DIR, 'clean-quit.flag');
 
 export const PORT = Number(process.env.PORT || 4000);
 export const HOST = process.env.HOST || '127.0.0.1'; // 默认仅本机访问,避免暴露 ✓

@@ -11,6 +11,7 @@ import { sshManager as ssh } from './core/ssh-manager.ts';
 import { computerUse } from './core/computer-use/index.ts';
 import { browserManager } from './core/browser-manager.ts';
 import { closeTunnels } from './core/port-tunnel.ts';
+import { markCleanQuit } from './store/clean-quit.ts';
 import * as sessions from './store/session-store.ts';
 import registerBasic from './api/http/basic.ts';
 import registerProviders from './api/http/providers.ts';
@@ -24,6 +25,23 @@ import registerStatic from './api/http/static.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '../web/dist');
+
+// 进程级兜底:后端一旦静默退出,界面就会看到「与本地服务的连接已断开」(WS 关闭),正在跑的
+// 那一轮连 turn/end 都来不及写,重启后只剩「上一轮对话没有正常结束」——而桌面端的外壳只在
+// 启动时拉一次后端,进程没了就不会再拉,用户只能重启应用。所以这类错误必须"记录下来并活下来",
+// 绝不能让它无声带走整个进程(默认行为:Node 15+ 未处理的 rejection 直接退出进程)。
+// 说明:uncaughtException 之后进程状态不保证干净,但本工具的代价对比很明确——继续跑最多是
+// 某个功能异常,直接退出则是"正在干的长任务全丢 + 界面卡在断连提示"。
+function logFatalGuard(what: string, err: unknown): void {
+  const e = err as any;
+  const detail = e instanceof Error ? (e.stack || e.message) : String(e);
+  // 同步写 stderr:桌面端把它重定向到 backend.log,崩溃现场必须落盘才可排查
+  try {
+    console.error(`\n[致命兜底] ${what} @ ${new Date().toISOString()}\n${detail}\n(后端继续运行;若随后出现异常行为,请把这段日志一并提供)\n`);
+  } catch { /* 日志写不出去也不能再抛 */ }
+}
+process.on('unhandledRejection', (reason) => logFatalGuard('未处理的 Promise 拒绝', reason));
+process.on('uncaughtException', (err) => logFatalGuard('未捕获异常', err));
 
 // 预览浏览器状态里要带上"归属会话标题"(前端左下角显示已连接的会话)。
 // 查询函数在启动时注入浏览器内核,避免 core → store 的模块循环依赖。
@@ -39,7 +57,9 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
   const app = Fastify({
     serverFactory: (handler) => http.createServer(handler),
     bodyLimit: 16 * 1024 * 1024, // 与原先 express.json({ limit: '16mb' }) 一致
-    logger: quiet ? false : { level: 'info' }
+    // 默认 warn:逐请求的 info 日志(每条请求 2 行)在桌面端会一直追加进 backend.log,
+    // 实测一个前端自激循环就写出一份 525MB 的日志文件。排查时用 TELEFORGE_LOG_LEVEL=info 打开。
+    logger: quiet ? false : { level: process.env.TELEFORGE_LOG_LEVEL || 'warn' }
   });
 
   await app.register(registerBasic);
@@ -75,6 +95,9 @@ const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPat
 if (isMain) {
   startApp().then(({ wss, termWss, browserWss, extWss }) => {
     const shutdown = () => {
+      // 先落"主动退出"标记:下次启动据此判断"不该自动续跑"(见 store/clean-quit.ts)。
+      // 桌面端走的是 TerminateProcess(收不到 SIGTERM),标记由外壳在 kill 前写(见 backend.rs)。
+      markCleanQuit('signal');
       console.log('\n正在退出…');
       try { wss.close(); } catch {}
       try { termWss.close(); } catch {}

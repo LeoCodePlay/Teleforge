@@ -189,10 +189,14 @@ export function setupWs(httpServer: Server) {
   computerUse.on('change', onComputerUse);
 
   wss.on('connection', (ws: WebSocket) => {
-    // 心跳探活:连接必须响应服务端 ping,未应答的超时连接会被 terminate(见下方定时器),
-    // 使电脑休眠/网络抖动导致的"假死连接"被及时发现并触发前端自动重连
+    // 心跳探活:连接必须响应服务端 ping,连续两轮(≈60s)未应答才 terminate(见下方定时器),
+    // 使电脑休眠/网络抖动导致的"假死连接"被及时发现并触发前端自动重连;给两轮宽限是因为
+    // 事件循环一旦被长时间的同步活(大文件落盘/大 JSON 序列化)占住,排队的 pong 回调会被压到
+    // 定时器回调之后执行,单轮未应答并不等于连接已死——按单轮 terminate 会把活着的界面误杀成
+    // 「与本地服务的连接已断开」。
     (ws as any).isAlive = true;
-    ws.on('pong', () => { (ws as any).isAlive = true; });
+    (ws as any).missedPongs = 0;
+    ws.on('pong', () => { (ws as any).isAlive = true; (ws as any).missedPongs = 0; });
     disarmAskUserDisconnectGrace(); // 前端上线(含刷新后重连):解除断开宽限,挂起提问继续等待
     flushPending(); // 先补发断线期间缓存的 agent 事件,再下发状态,保证 UI 状态无缝衔接
     send({ type: 'log', level: 'info', message: '前端已连接' });
@@ -212,7 +216,11 @@ export function setupWs(httpServer: Server) {
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code: number, reason: Buffer) => {
+      // 断连必须留下可排查的现场:是服务端主动 terminate(心跳判定假死)还是对端消失,
+      // 决定了「与本地服务的连接已断开」到底该往哪查(参考上方的 closedByHeartbeat 标记)
+      const why = (ws as any).closedByHeartbeat ? '心跳判定假死,服务端主动断开' : '对端关闭/网络中断';
+      console.log(`[ws] 前端连接关闭 code=${code} reason=${String(reason || '') || '(无)'} ← ${why}`);
       // 多浏览器可同时在线:只有全部连接都断开(最后一个前端离开)时才启动作废倒计时
       // (20s 宽限,页面刷新也会瞬断重连,不会误杀;宽限期内任一前端上线即解除),
       // 避免立刻作废导致"刷新后提问面板丢失、agent 干等"
@@ -461,12 +469,27 @@ export function setupWs(httpServer: Server) {
   browserManager.on('closed', onBrowserClosed);
   browserManager.on('renamed', onBrowserRenamed);
 
+  // 心跳:连续 MAX_MISSED_PONGS 轮收不到 pong 才判死并断开(见 wss.on('connection') 的说明);
+  // 判定为假死时打上 closedByHeartbeat 标记,让 close 日志能区分"服务端主动断"与"对端消失"。
   const HEARTBEAT_MS = 30_000;
+  const MAX_MISSED_PONGS = 2;
   const heartbeat = (server: WebSocketServer) => {
     for (const ws of server.clients) {
-      if (!(ws as any).isAlive) { try { ws.terminate(); } catch {} continue; }
-      (ws as any).isAlive = false;
-      try { ws.ping(); } catch {}
+      const c = ws as any;
+      if (c.isAlive) {
+        c.missedPongs = 0;
+        c.isAlive = false;
+        try { ws.ping(); } catch { /* 已断开 */ }
+        continue;
+      }
+      c.missedPongs = (c.missedPongs || 0) + 1;
+      if (c.missedPongs >= MAX_MISSED_PONGS) {
+        c.closedByHeartbeat = true;
+        console.log(`[ws] 连接连续 ${c.missedPongs} 轮未响应心跳,判定假死并断开`);
+        try { ws.terminate(); } catch { /* 已断开 */ }
+        continue;
+      }
+      try { ws.ping(); } catch { /* 已断开 */ }
     }
   };
   const heartbeatTimer = setInterval(() => { heartbeat(wss); heartbeat(termWss); heartbeat(browserWss); heartbeat(extWss); }, HEARTBEAT_MS);

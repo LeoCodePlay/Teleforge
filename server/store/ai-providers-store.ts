@@ -106,6 +106,8 @@ export const aiProviders = {
   update(id: string, patch: Partial<AiProvider>): boolean {
     const p = load().find((x) => x.id === id);
     if (!p) return false;
+    // 内容快照:同一份配置被重复提交时不应再落一次盘(见下)
+    const before = JSON.stringify(p);
     // apiKeys 是权威列表:给了它就完全以它为准,apiKey 由它派生。
     // 这里必须「不把旧 apiKey 拼回去」——否则删掉某个 Key 后,残留的 apiKey 会把它复活。
     if (Array.isArray(patch.apiKeys)) {
@@ -119,7 +121,10 @@ export const aiProviders = {
     } else {
       Object.assign(p, patch);
     }
-    persist();
+    // 脏检查后才落盘:persist 是同步写文件,会在写盘期间阻塞整个事件循环(agent 流式输出、
+    // WS 心跳共用一个线程)。客户端若因状态自激把同一份配置一遍遍 PATCH 上来,重复落盘会
+    // 变成持续的后台卡顿源,故内容没变就只回包、不写盘。
+    if (JSON.stringify(p) !== before) persist();
     return true;
   },
   remove(id: string): boolean {

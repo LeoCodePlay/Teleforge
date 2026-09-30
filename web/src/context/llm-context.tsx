@@ -110,6 +110,8 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   const uiTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 上一次已写回后端的 ui-state 载荷(序列化串):内容相同则跳过,避免重渲染触发无意义 PATCH
   const lastPushedRef = useRef('');
+  // 上一次已写回后端的「提供商 Key 载荷」,按提供商 id 记录:内容相同则跳过 PATCH
+  const lastPushedKeyRef = useRef<Record<string, string>>({});
 
   // 挂载时加载「我的提供商」+「选择级配置」(均存服务端 JSON 文件)
   const keyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -189,16 +191,22 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   const effKey = isMock ? '' : apiKey;
   // 该提供商当前可用的 Key:去重后排除已标记「无余额」的。
   // 服务端轮询只用这份列表 —— 所以被标记的 Key 在用户点「重置」前不会被再次尝试。
-  // 依赖必须取 provider 的字段而非 provider 对象本身:allProviders 每帧新建、provider 每帧
-  // 都是新引用,直接依赖它会让 useMemo 永久失效,usableApiKeys 每帧新数组,
-  // 进而导致下方持久化 effect 每帧重跑(PATCH → setUiStateData → 重渲染)形成自激循环。
+  // 依赖必须取 provider 的字段而非 provider 对象本身,而且必须是「内容签名」而不是数组/对象引用:
+  // allProviders 每帧新建、provider 每帧都是新引用;更隐蔽的是 provider.apiKeys / keyStates 在每次
+  // setUserProviders(服务端回包)之后也是新引用 —— 按引用做依赖会让 useMemo 永远得不到稳定结果,
+  // usableApiKeys 每帧新数组,下方持久化 effect 随之重跑 → PATCH → setUserProviders → 重渲染,
+  // 形成「PATCH → setState → PATCH」自激循环(实测稳定在 400ms 一次、可无限跑下去)。
   const providerApiKeys = provider.apiKeys;
   const providerKeyStates = provider.keyStates;
+  const apiKeysSig = (providerApiKeys || []).join('\u0000');
+  const keyStatesSig = JSON.stringify(providerKeyStates || null);
   const usableApiKeys = useMemo(() => {
     if (isMock) return [] as string[];
     const uniq = [...new Set([apiKey, ...(providerApiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))];
     return uniq.filter((k) => providerKeyStates?.[k]?.exhausted !== true);
-  }, [apiKey, providerApiKeys, providerKeyStates, isMock]);
+    // 依赖用内容签名(apiKeysSig / keyStatesSig),它们在内容不变时逐帧相等 → 返回同一个数组引用
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey, apiKeysSig, keyStatesSig, isMock]);
 
   // 统一生效的 llm 下发载荷(baseUrl/key/model + 上下文能力 + 多模态/生图开关)
   const llmPayload = () => ({
@@ -280,7 +288,15 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
   };
 
   // 写回「我的提供商」的 Key:去抖后保存到服务端配置文件(随条目删除一并删除)
+  // 等值守卫:载荷与上次成功提交的内容完全一致时直接跳过。写了 keyStates 会随轮询变化、
+  // provider.apiKeys 每次服务端回包都是新数组,仅靠依赖比较挡不住「回包 → setState → effect
+  // 重跑 → 再提交」的自激循环;这里按内容比对是最后一道闸门(否则会稳定 400ms 一次无限 PATCH)。
   const persistUserKey = (id: string, key: string) => {
+    const list = [...new Set([key, ...(allProviders.find((x) => x.id === id)?.apiKeys || [])]
+      .map((k) => String(k || '').trim()).filter(Boolean))];
+    const sig = id + '\u0000' + list.join('\u0000');
+    if (lastPushedKeyRef.current[id] === sig) return; // 内容没变:不必再写一次盘
+    lastPushedKeyRef.current[id] = sig;
     if (keyTimer.current) clearTimeout(keyTimer.current);
     keyTimer.current = setTimeout(async () => {
       try {
@@ -288,16 +304,15 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           // 连同完整 Key 列表一起提交:只发单个 apiKey 会把多 Key 列表截断成一条
-          body: JSON.stringify({
-            apiKey: key,
-            apiKeys: [...new Set([key, ...(allProviders.find((x) => x.id === id)?.apiKeys || [])]
-              .map((k) => String(k || '').trim()).filter(Boolean))]
-          })
+          body: JSON.stringify({ apiKey: key, apiKeys: list })
         });
         if (!r.ok) return;
         const j = await r.json();
         if (Array.isArray(j.userProviders)) setUserProviders(j.userProviders);
-      } catch { /* 瞬时失败忽略,后续输入会重存 */ }
+      } catch {
+        // 瞬时失败:清掉守卫,后续输入/变更会重存
+        delete lastPushedKeyRef.current[id];
+      }
     }, 400);
   };
 

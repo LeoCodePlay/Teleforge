@@ -15,6 +15,7 @@ server-trace.log*
 docs/superpowers/
 dbg2.mjs
 _diag_*.cjs
+_repro/
 desktop/.staging/
 
 # 编辑器

@@ -125,6 +125,10 @@ export class Session {
   events: SessionEvent[];
   /** 这份日志是"用户主动截断"的分支切片(见 Agent.forkSession):尾部未闭合的轮次静默收尾,不写崩溃披露 */
   private _forkCut = false;
+  /** 本次构造是否自愈出一个"非正常结束"的轮次(进程中途消失)。上层据此决定要不要自动续跑 */
+  healedUncleanTurn = false;
+  /** 被自愈的那个未闭合轮,本身是不是"自动续跑"发起的(是则不能再续,防死循环) */
+  openTurnStartedByAutoResume = false;
 
   constructor(events: SessionEvent[] = [], opts: { forkCut?: boolean } = {}) {
     // 载入/迁移的事件统一按位置重排 seq;time 缺失时补当前时间
@@ -490,17 +494,25 @@ export class Session {
    */
   _healOpenTurn(): void {
     let open: { turn: number } | null = null;
-    for (const ev of this.events) {
-      if (ev.type === 'turn/start') open = { turn: Number(ev.data?.turn) || 0 };
+    let openIdx = -1; // 未闭合轮的 turn/start 下标:据此判断这一轮是不是"自动续跑"发起的
+    for (let i = 0; i < this.events.length; i++) {
+      const ev = this.events[i];
+      if (ev.type === 'turn/start') { open = { turn: Number(ev.data?.turn) || 0 }; openIdx = i; }
       else if (ev.type === 'turn/end') open = null;
     }
     if (!open) return;
     if (!this._forkCut) {
+      // 未闭合的这一轮里若已经有"自动续跑"注入的指令,说明上一轮也是被自动续跑的 —— 再续一次
+      // 就会形成「崩溃 → 续跑 → 再崩 → 再续跑」的死循环,所以记下来让上层放弃续跑。
+      this.openTurnStartedByAutoResume = this.events
+        .slice(openIdx)
+        .some((e) => e.type === 'user/message' && e.data?.source === 'auto-resume');
       this.append('notice', {
         text: '上一轮对话没有正常结束:服务进程在生成中途退出或被重启(例如开发模式的热重启),'
           + '本轮已落盘的输入保留在上方,生成到一半的内容可能未能落盘。直接继续或重新发送即可。',
         level: 'warn', kind: 'unclean-shutdown'
       });
+      this.healedUncleanTurn = true;
     }
     this.append('turn/end', {
       turn: open.turn,
