@@ -28,7 +28,7 @@ import { LoadedSkillsRow } from './LoadedSkillsRow';
 import { matchSlashCommand } from '../../utils/slashCommand';
 import { atTokenAt, displayMentionText, restoreMentionInput, serializeMention, splitMentions } from '../../utils/mentionRefs';
 import { mergeTrailingCommandCards } from '../../utils/commandCard';
-import { tailAssistantIndex } from '../../utils/compactionOrder';
+import { tailAssistantIndex, applyRetryNotice, isRealUserRow } from '../../utils/compactionOrder';
 import { mergeAttachments } from '../../utils/mergeAttachments';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
@@ -270,15 +270,42 @@ function dropStaleCompaction(msgs: ChatMessage[]): ChatMessage[] {
   return msgs.some((m) => m.compaction?.running) ? msgs.filter((m) => !m.compaction?.running) : msgs;
 }
 
-// 消息结束(完成/停止/出错)或历史回放时,把聚合结果挂到 assistant 消息上
-function attachFileChanges(msg: ChatMessage | undefined) {
-  if (msg && msg.role === 'assistant') msg.filesChanged = collectFileChanges(msg);
+// 收尾时清掉「重试提示行紧跟的、还没来得及产出内容的空气泡」。
+// 重试在等待期间被用户停止 / 本轮直接失败时,失败点分界出来的新气泡可能一个字符都没流出来,
+// 留着会在对话末尾多出一块空白。
+function dropEmptyRetryBubble(msgs: ChatMessage[]): ChatMessage[] {
+  return msgs.filter((m, i) => {
+    if (m.role !== 'assistant' || m.streaming) return true;
+    if ((m.segments && m.segments.length) || (m.attachments && m.attachments.length)) return true;
+    const prev = msgs[i - 1];
+    return !(prev && prev.role === 'notice' && prev.retry);
+  });
+}
+
+// 本轮收尾时把文件变更汇总挂到 assistant 消息上。
+// 一轮回复可能被重试提示拆成多段(见 live 的 retry 分支与 turnsToMessages):只统计收尾段
+// 会漏掉重试之前的改动,所以这里把「本轮(最后一条 user 之后)所有片段的工具调用」合并后再聚合。
+function attachTurnFileChanges(msgs: ChatMessage[], lastIdx: number) {
+  if (lastIdx < 0 || lastIdx >= msgs.length) return;
+  let start = 0;
+  for (let i = lastIdx; i >= 0; i--) {
+    if (isRealUserRow(msgs[i])) { start = i + 1; break; }
+  }
+  const merged: ChatMessage = {
+    role: 'assistant',
+    segments: msgs.slice(start, lastIdx + 1).flatMap((m) => m.segments || [])
+  };
+  msgs[lastIdx].filesChanged = collectFileChanges(merged);
 }
 
 // 把服务端持久化的 turns 转成渲染消息数组:
 // 一次 run 的多轮 assistant/tool 在渲染上合并为一条回复,按「思考 / 文本 / 连续工具组」实际发生顺序分段
 function turnsToMessages(turns: any[]): ChatMessage[] {
   const out: ChatMessage[] = [];
+  // 本轮(最后一条 user 消息之后)已落下的重试行下标。同一轮里重复的重试(同一原因 /
+  // 断线补发 / 每个 step 都先撞到无余额的 Key)只占一行:第一次出现的位置就是失败发生的
+  // 真实位置,后续原地更新计数与原因,不再堆成多行、也不再因此把回复拆成多段。
+  let lastRetryOutIdx = -1;
   // 记录每个 turns 下标对应到 out 里的投影下标:服务端原位投影后,压缩标记行的
   // compaction.retainedFrom 是 turns 下标(保留区首条消息面在 turns 里的位置)。
   // 由于 tool 被折叠、assistant 多轮合并,out 的长度不等于 turns 的长度,
@@ -304,6 +331,9 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
       continue; // tool 消息本身不渲染,只作为结果并入上游工具组
     }
     if (t.role === 'user') {
+      // 新一轮开始:上一轮的重试行不再参与合并。压缩标记行(compaction)的 role 也是 'user',
+      // 但它不是新一轮对话 —— 把它当分界会让压缩之后的每次重试都另起一行(长会话必踩)。
+      if (!t.compaction) lastRetryOutIdx = -1;
       const pushBack = () => {
         const idx = out.length;
         out.push({
@@ -373,22 +403,29 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
     if (t.role === 'notice') {
       // 提示行(⚠ 中断原因 / 截断披露)与重试记录:服务端已把它们作为「显示面」事件持久化,
       // 这里必须原样渲染 —— 它们不进模型上下文,但要留在对话里发生的位置上。
-      // 重试记录在日志里是「一次一条」,回放时合并成一行:重试序号递增(1→2→3…)属于同一次
-      // 失败的重试,原地更新计数(与实时流处理一致);序号回到 1 说明新一轮请求重新开始重试,
-      // 才另起一行。合并行沿用最新那条的 forkTail,分支点下标仍与服务端 turns 对齐。
-      const prevRow = out[out.length - 1];
-      if (t.retry && prevRow?.role === 'notice' && prevRow.retry
-        && Number(t.retry.retry) >= Number(prevRow.retry.retry)) {
-        out[out.length - 1] = {
-          ...prevRow, content: t.content || '', retry: t.retry,
+      // 重试记录在日志里是「一次一条」:同一轮里重复的重试合并到首次出现的那一行(见
+      // lastRetryOutIdx),原地更新计数与失败原因。这样重试行落在失败发生的真实位置,
+      // 且一次重试只显示一次;序号回到 1 且换了轮(遇到新的 user 消息)才另起一行。
+      if (t.retry) {
+        if (lastRetryOutIdx >= 0 && out[lastRetryOutIdx]?.retry) {
+          out[lastRetryOutIdx] = {
+            ...out[lastRetryOutIdx], content: '', retry: t.retry, time: t.time, forkTail: ti
+          };
+          turnToOut[ti] = lastRetryOutIdx;
+          continue;
+        }
+        const idx = out.length;
+        out.push({
+          role: 'notice', content: '', retry: t.retry,
           level: t.level, kind: t.kind, time: t.time, forkTail: ti
-        };
-        turnToOut[ti] = out.length - 1;
+        });
+        lastRetryOutIdx = idx;
+        turnToOut[ti] = idx;
         continue;
       }
       const idx = out.length;
       out.push({
-        role: 'notice', content: t.content || '', retry: t.retry,
+        role: 'notice', content: t.content || '',
         level: t.level, kind: t.kind, time: t.time, forkTail: ti
       });
       turnToOut[ti] = idx;
@@ -397,8 +434,21 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
     // 其余角色跳过
   }
   // 标记行保持原位投影(服务端 projectEvents 已经按事件日志顺序投影,不复排)。
-  // 文件变更汇总:历史回放的工具 meta 已随 tool/result 持久化,按消息聚合挂载
-  for (const m of out) if (m.role === 'assistant') attachFileChanges(m);
+  // 文件变更汇总:历史回放的工具 meta 已随 tool/result 持久化,按轮聚合挂载。
+  // 一轮回复可能被重试提示拆成多段:每段各挂「本轮到目前为止」的汇总,只有收尾那段会显示
+  // (中间片段在渲染层被当作 fragments 静默),于是卡片仍统计整轮改动,不会因重试而漏文件。
+  {
+    let runStart = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (isRealUserRow(out[i])) { runStart = i + 1; continue; }
+      if (out[i].role !== 'assistant') continue;
+      const merged: ChatMessage = {
+        role: 'assistant',
+        segments: out.slice(runStart, i + 1).flatMap((m) => m.segments || [])
+      };
+      out[i].filesChanged = collectFileChanges(merged);
+    }
+  }
   return out;
 }
 
@@ -498,13 +548,15 @@ interface ChatPanelProps {
 // 单行折叠行,不占大块警示横幅——收起时只显示「等待/已重试模型请求(N/M) · Xs」实时倒计时,
 // 展开可看重试延迟与失败原因。等待中文字带扫光动画,同一失败重试原地更新不堆叠。
 function RetryRow({ data }: { data: NonNullable<ChatMessage['retry']> }) {
-  const { retry, maxRetries, delayMs, error, state, discard } = data;
+  const { retry, maxRetries, delayMs, error, state, discard, kind } = data;
+  // 换 Key(kind='switch')是立即重发,没有"等待"这回事:不做倒计时、也不显示"重试延迟"
+  const isKeySwitch = kind === 'switch';
   const scheduledSeconds = Math.max(1, Math.ceil(delayMs / 1000));
   const [seconds, setSeconds] = useState(scheduledSeconds);
 
   useEffect(() => {
     // 仅"等待重试"阶段走实时倒计时;开始/取消后定格为该次的计划等待秒数
-    if (state !== 'scheduled') { setSeconds(scheduledSeconds); return; }
+    if (isKeySwitch || state !== 'scheduled') { setSeconds(scheduledSeconds); return; }
     // 倒计时锚定浏览器时钟(事件时间与 Date.now() 可能不同钟),每秒校准
     const deadline = Date.now() + delayMs;
     const tick = () => setSeconds(Math.max(1, Math.ceil((deadline - Date.now()) / 1000)));
@@ -512,19 +564,27 @@ function RetryRow({ data }: { data: NonNullable<ChatMessage['retry']> }) {
     if (Math.max(1, Math.ceil(delayMs / 1000)) <= 1) return;
     const timer = window.setInterval(tick, 250);
     return () => window.clearInterval(timer);
-  }, [delayMs, retry, state, scheduledSeconds]);
+  }, [delayMs, retry, state, scheduledSeconds, isKeySwitch]);
 
-  const label = state === 'started' ? '已重试模型请求'
-    : state === 'cancelled' ? '模型请求重试已取消'
-    : '等待重试模型请求';
+  const label = isKeySwitch
+    ? (state === 'scheduled' ? '正在切换 API Key' : '已切换 API Key')
+    : state === 'started' ? '已重试模型请求'
+      : state === 'cancelled' ? '模型请求重试已取消'
+        : '等待重试模型请求';
 
   return (
     <details className={`retry-msg${state === 'scheduled' ? ' active' : ''}`}>
       <summary>
-        <span className="retry-text">{label}({retry}/{maxRetries}) · {seconds}s</span>
+        <span className="retry-text">
+          {isKeySwitch
+            ? `${label}(第 ${retry}/${maxRetries} 个 Key)`
+            : `${label}(${retry}/${maxRetries}) · ${seconds}s`}
+        </span>
       </summary>
       <div className="retry-details">
-        <div><span className="retry-detail-label">重试延迟：</span>{delayMs}ms</div>
+        {isKeySwitch
+          ? <div><span className="retry-detail-label">切换：</span>该 Key 不可用,已改用第 {retry} 个可用 Key(共 {maxRetries} 个);立即重新发送这一步,不等待</div>
+          : <div><span className="retry-detail-label">重试延迟：</span>{delayMs}ms</div>}
         <div><span className="retry-detail-label">失败原因：</span>{error}</div>
         {discard ? (
           <div><span className="retry-detail-label">已回滚：</span>这一步已输出的半成品作废,重试后重新生成</div>
@@ -899,12 +959,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               setSessionImgJob(activeRef.current, null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
               push((msgs) => {
                 const c = dropStaleCompaction([...msgs]);
-                // 尾部还挂着「等待重试」的行:这一步失败后正在退避等待重发,本轮并没有结束。
-                // 此时不能解除流式,否则渲染层会立刻把「已修改文件」卡与复制/分支按钮当成
-                // 收尾产物显示出来(用户明确要求:重试途中不出现这些)。真正结束由
-                // done/error/stopped 收尾,它们会自行把 streaming 置回 false。
-                const tail = c[c.length - 1];
-                const retryPending = tail?.role === 'notice' && !!tail.retry && tail.retry.state === 'scheduled';
+                // 本轮还挂着「等待重试」的行(重试行可能夹在回复气泡之间,不再是列表末尾):
+                // 这一步失败后正在退避等待重发,本轮并没有结束。此时不能解除流式,否则渲染层
+                // 会立刻把「已修改文件」卡与复制/分支按钮当成收尾产物显示出来(用户明确要求:
+                // 重试途中不出现这些)。真正结束由 done/error/stopped 收尾,它们会自行置回 false。
+                let pendingRetry: ChatMessage['retry'] | undefined;
+                for (let i = c.length - 1; i >= 0; i--) {
+                  if (isRealUserRow(c[i])) break;
+                  const rt = c[i]?.retry;
+                  if (rt) { pendingRetry = rt; break; }
+                }
+                const retryPending = !!pendingRetry && pendingRetry.state === 'scheduled';
                 if (!retryPending) {
                   const li = tailAssistantIndex(c);
                   if (li >= 0 && c[li].streaming) c[li].streaming = false;
@@ -953,7 +1018,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               push((msgs) => {
                 const c = [...msgs];
                 for (let k = c.length - 1; k >= 0; k--) {
-                  if (c[k].role === 'user') { c[k] = { ...c[k], skillsInjected: m.skills }; break; }
+                  // 挂到最近一条「真正的用户消息」上(压缩标记行的 role 也是 'user',不算)
+                  if (isRealUserRow(c[k])) { c[k] = { ...c[k], skillsInjected: m.skills }; break; }
                 }
                 return c;
               });
@@ -1089,13 +1155,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             turnClosedRef.current = true; // 本轮真正结束:此后重试事件不再把气泡点亮成流式
             setSessionImgJob(activeRef.current, null); // 本轮结束:状态行不再显示"正在生成图片"(成图失败时也不会卡住)
             push((msgs) => {
-              const copy = [...msgs];
+              const copy = dropEmptyRetryBubble([...msgs]);
               const li = tailAssistantIndex(copy);
               if (li >= 0) {
                 const last = copy[li];
                 last.streaming = false;
                 // 文件变更汇总:所有 tool_result 已落定,聚合「N 个文件已更改」卡片数据
-                attachFileChanges(last);
+                // (本轮被重试拆成多段时汇总整轮,避免只统计重试之后的部分)
+                attachTurnFileChanges(copy, li);
                 // 最终文本通常已由 text_delta 流式拼好;这里只补上未流出的部分
                 // (如达到最大迭代次数后追加的提示),避免重复
                 const cur = segText(last);
@@ -1112,9 +1179,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'stopped':
             setAgentState('idle'); turnClosedRef.current = true; setSessionImgJob(activeRef.current, null);
             push((msgs) => {
-              const c = [...msgs];
+              const c = dropEmptyRetryBubble([...msgs]);
               const li = tailAssistantIndex(c);
-              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachFileChanges(l); }
+              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachTurnFileChanges(c, li); }
               // 用户停下 Agent 时,尚在倒计时中的重试随之取消(对齐 harness llm/retry-started 的 cancelled 态)
               for (let i = c.length - 1; i >= 0; i--) {
                 const rt = c[i]?.retry;
@@ -1126,9 +1193,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           case 'error':
             setAgentState('error'); turnClosedRef.current = true; setErrorMsg(m.message); setSessionImgJob(activeRef.current, null);
             push((msgs) => {
-              const c = [...msgs];
+              const c = dropEmptyRetryBubble([...msgs]);
               const li = tailAssistantIndex(c);
-              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachFileChanges(l); }
+              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachTurnFileChanges(c, li); }
               // 重试耗尽/不可重试的直接失败:倒计时中的重试随本轮中止取消(对齐 harness cancelled 态)
               for (let i = c.length - 1; i >= 0; i--) {
                 const rt = c[i]?.retry;
@@ -1242,26 +1309,18 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'retry':
             // 模型请求失败进入重试:渲染为 harness 风格的单行状态行(实时倒计时 + 可展开失败详情)。
-            // 位置:排在当前回复气泡**之后**——重试是「这一步没跑完,接着再来」,提示行必须跟在
-            // 已输出的最新内容下面;下次重试成功后接上来的增量继续写回上面那个气泡(重试后直接接上,
-            // 不另起一段)。因此这里只 push/插到气泡后面,绝不 splice 到气泡前面。
-            // 一次失败的重试全程只占一行:重复事件(断线补发)与后续重试(1→2→3…)都在同一行里
-            // 原地更新计数(1/10 → 2/10),不堆叠成多行;只有重试序号回到 1(新一轮请求重新开始重试)
-            // 才另起一行,历史重试行不会被吃掉。
+            // 位置:把「失败发生的那一刻」当分界点 —— 当前回复气泡在失败点收尾,重试行紧跟其后,
+            // 之后重新生成的内容流进一个新气泡。提示行因此夹在前后内容之间,而不是永远贴在整轮
+            // 回复的最下面(与刷新后 turnsToMessages 的投影同一口径)。
+            // 一次失败的重试全程只占一行:同一轮里的重复重试(同一原因 / 断线补发 / 每个 step 都
+            // 先撞到无余额的 Key)原地更新计数(1/10 → 2/10),不堆叠成多行、也不重复拆气泡。
             // m.discard=true 表示这次失败前已经流出过内容:重试会重发这一步,必须先把它整段回滚,
             // 否则重试成功后的正文会和这段半成品拼在一起重复。
             // m.persisted=true:服务端已落库(占一个消息面下标),本地分支点计数器同步 +1。
             if (m.persisted === true) forkTurnRef.current += 1;
             push((msgs) => {
               const c = [...msgs];
-              const payload = {
-                retry: Number(m.retry) || 1,
-                maxRetries: Number(m.maxRetries) || 10,
-                delayMs: Number(m.delayMs) || 2000,
-                error: String(m.error || '网络错误').slice(0, 120),
-                discard: m.discard === true,
-                state: 'scheduled' as const
-              };
+              // discard:这次失败前已流出过内容 → 先回滚当前流式气泡的半成品,再落重试行
               if (m.discard === true) {
                 for (let i = c.length - 1; i >= 0; i--) {
                   const msg = c[i];
@@ -1270,40 +1329,18 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   break;
                 }
               }
-              // 本轮回复仍在进行中:重试只是这一步重发,不是对话结束。必须保持 streaming=true,
-              // 否则渲染层会把「已修改文件」汇总卡、复制按钮、分支按钮一并当成收尾产物显示出来
-              // (三者的显示条件都只看 !streaming)。重试成功后增量继续写回这个气泡。
-              // turnClosedRef 挡住断线补发的陈旧重试事件:本轮已收尾就不该再被点亮成流式。
-              if (!turnClosedRef.current) {
-                for (let i = c.length - 1; i >= 0; i--) {
-                  if (c[i]?.role === 'assistant') { c[i] = { ...c[i], streaming: true }; break; }
-                }
-              }
-              // 本轮的落点气泡:仅在本轮回复仍在流式时参与合并。
-              // 重试行只可能属于「正在跑的这一步」,因此只认本轮气泡之后的那条重试行 ——
-              // 一旦本轮气泡还没出现(老重试行都在上一轮气泡后面),就绝不能回头改历史行。
-              const li = tailAssistantIndex(c);
-              const streaming = li >= 0 && c[li].streaming;
-              // 从本轮气泡往后找第一条重试行:找到就原地更新计数,不新增行
-              for (let i = c.length - 1; i > li; i--) {
-                const prev = c[i]?.retry;
-                if (!prev) continue;
-                // 序号递增或持平(1→2、断线补发)都算同一次失败的重试:原地更新成最新计数。
-                // 序号回落到 1 说明这是新一轮请求的重试,另起一行,历史记录保留。
-                if (payload.retry >= prev.retry) {
-                  c[i] = { role: 'notice', content: '', retry: payload };
-                  return c;
-                }
-                break;
-              }
-              // 首次重试:插到本轮气泡正后方(流式中即紧随气泡;气泡已收尾时落到末尾),
-              // 保证提示行显示在最新内容下面而不是最上面。
-              if (streaming) {
-                c.splice(li + 1, 0, { role: 'notice', content: '', retry: payload });
-              } else {
-                c.push({ role: 'notice', content: '', retry: payload });
-              }
-              return c;
+              // 落点规则见 utils/compactionOrder 的 applyRetryNotice(首次重试在失败点拆开,
+              // 同轮重复重试原地更新;已收尾的陈旧事件只落一行)
+              return applyRetryNotice(c, {
+                retry: Number(m.retry) || 1,
+                maxRetries: Number(m.maxRetries) || 10,
+                // 不再把 0 顶成 2000:换 Key(delayMs=0)是立即重发,显示「等待 2 秒」会误导
+                // (历史回放走 projectEvents,那里本来也是 `|| 0`,两条路径口径要一致)
+                delayMs: Math.max(0, Number(m.delayMs) || 0),
+                error: String(m.error || '网络错误').slice(0, 120),
+                discard: m.discard === true,
+                ...(m.kind === 'switch' ? { kind: 'switch' as const } : {})
+              }, { turnClosed: turnClosedRef.current, forkFaceIdx: forkTurnRef.current - 1 });
             });
             break;
           case 'history_compacted':
@@ -2318,6 +2355,21 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 模型提问挂起时锁定输入与暂停(须先作答或取消提问);会话切换加载中也锁定,避免发到错误会话
   const canSend = (!!workspace || !!localWorkspace || noWorkspace || localNoWorkspace) && !askPending && !switching;
 
+  // 一轮回复被重试提示拆成多段时,只有收尾那段承载收尾产物(已修改文件卡 / 复制 / 分支按钮);
+  // 中间片段保持安静,避免重试一次就多出一套按钮。判定:该 assistant 之后、下一个 assistant
+  // 之前是否夹着重试行(同轮内)。
+  const fragmentIdx = new Set<number>();
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role !== 'assistant') continue;
+    let sawRetry = false;
+    for (let j = i + 1; j < messages.length; j++) {
+      const x = messages[j];
+      if (isRealUserRow(x)) break;
+      if (x.role === 'assistant') { if (sawRetry) fragmentIdx.add(i); break; }
+      if (x.role === 'notice' && x.retry) sawRetry = true;
+    }
+  }
+
   return (
     // 根为 fragment:跳转点(chat-dots)渲染在 chatwrap 之外,作为 tab-body 的子元素
     // 始终锚定对话区最左侧,不随限宽列移动(见 chat-dots 样式注释)
@@ -2398,8 +2450,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       </div>
                     )}
                   </div>
-                  {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表) */}
-                  {!m.streaming && !!m.filesChanged?.length && (
+                  {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表);
+                      被重试拆出的中间片段不显示,卡片只挂在收尾那段(汇总整轮改动) */}
+                  {!m.streaming && !fragmentIdx.has(i) && !!m.filesChanged?.length && (
                     <FilesChangedCard
                       items={m.filesChanged}
                       workspace={(connected ? workspace : localWorkspace) ?? undefined}
@@ -2407,7 +2460,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       onOpenLocalFile={onOpenLocalFile}
                     />
                   )}
-                  {!m.streaming && (
+                  {!m.streaming && !fragmentIdx.has(i) && (
                     <MessageActions
                       text={segText(m)}
                       onBranch={() => onFork?.(m.forkTail ?? -1)}

@@ -80,6 +80,9 @@ export interface RetryInfo {
   /** 上次失败前已经流出过增量:上层必须丢弃这段尚未落盘的半成品(前端回滚显示),
    *  否则重试会把同一步的正文重新生成一遍,界面出现重复内容 */
   discard?: boolean;
+  /** 'switch' = 只是切换到同一个提供商的另一个可用 Key(立即重发、不等待);
+   *  缺省 = 退避后重发同一个 Key。前端据此决定显示「已切换 API Key」还是「等待重试」。 */
+  kind?: 'retry' | 'switch';
 }
 
 export interface ChatOptions {
@@ -102,6 +105,11 @@ export class LlmClient {
   apiKeys: string[];
   /** Key 不可用回调(见 LlmOptions.onKeyExhausted) */
   onKeyExhausted?: (key: string, reason: string, kind?: KeyUnusableKind) => void;
+  /** 本客户端生命周期内已判定不可用的 Key(余额不足 / 鉴权失败)。
+   *  一次对话轮会锁定同一个客户端跑完所有 step(见 agent.ts「本轮锁定的模型」),若不记住这些
+   *  Key,后续每个 step 都会先撞一遍同一个无余额的 Key 再切换 —— 白费一次请求,还会让界面上
+   *  重复冒出「已切换到第 N 个可用 Key」的重试行。 */
+  private deadKeys = new Set<string>();
   model: string;
   maxTokens: number;
   // 输入上下文窗口(token):>0 时启用对话历史自动压缩(见 compact.js);未配置则沿用字符预算裁剪
@@ -129,6 +137,12 @@ export class LlmClient {
 
   get isMock(): boolean { return this.model === 'mock'; }
 
+  /** 候选 Key:跳过本客户端已判定不可用的;全被标记时回退全量,以便最终错误里仍能报告"试过哪几个 Key" */
+  private availableKeys(): string[] {
+    const alive = this.apiKeys.filter((k) => !this.deadKeys.has(k));
+    return alive.length ? alive : [...this.apiKeys];
+  }
+
   /**
    * 流式对话
    * reasoning 推理等级(default|off|low|high|xhigh|max),对应 reasoning_effort 参数
@@ -151,7 +165,8 @@ export class LlmClient {
     // 全部 Key 都试过才停止(见下面 isKeyUnusable 分支)。
     // 没有下发 Key 时不带 Authorization 头(本地不鉴权的网关仍可用),而不是发「Bearer 」空值
     // ——空 Bearer 会被网关判成 401,把「没配 Key」伪装成「Key 无效」。
-    const keyList = this.apiKeys.length ? [...this.apiKeys] : [''];
+    const availKeys = this.availableKeys();
+    const keyList = availKeys.length ? availKeys : [''];
     let keyIdx = 0;
     let activeKey = keyList[keyIdx];
     // 最小兼容请求体:不加 stream_options(部分聚合网关不支持),tools 时显式 tool_choice
@@ -229,6 +244,7 @@ export class LlmClient {
       // 每轮都上报会变成「10 次落盘 + 10 次 key_exhausted 事件(前端跟着刷新)」的噪声。
       if (activeKey && !badKeys.includes(activeKey)) {
         badKeys.push(activeKey);
+        this.deadKeys.add(activeKey); // 本轮后续 step 直接跳过它,不再白撞一次
         this.onKeyExhausted?.(activeKey, reasonText.slice(0, 300), kind);
       }
       const next = keyIdx + 1;
@@ -247,7 +263,7 @@ export class LlmClient {
           : `API Key ${failedKey.slice(0, 8)}… 鉴权失败(网关拒绝该 Key),已切换到第 ${keyIdx + 1}/${keyList.length} 个可用 Key`
       };
       lastErr = new LlmRequestError(lastFailure.text, { retryable: true, status });
-      onRetry?.({ retry: keyIdx, maxRetries: keyList.length, delayMs: 0, error: lastFailure.text });
+      onRetry?.({ retry: keyIdx, maxRetries: keyList.length, delayMs: 0, error: lastFailure.text, kind: 'switch' });
       console.warn(`[llm] ${this.model} API Key ${kind === 'balance' ? '余额不足' : '鉴权失败'},切换到第 ${keyIdx + 1}/${keyList.length} 个 Key`);
       return true;
     };
@@ -493,7 +509,8 @@ export class LlmClient {
     // 鉴权统一在这里注入:multipart 分支不能手写 Content-Type(会丢 boundary),
     // 若把 Authorization 分散写进各调用点极易漏掉 —— 一旦漏掉就是"文生图能用、
     // 图生图恒 401"这种只在真实网络下才暴露的错。
-    const keyList = this.apiKeys.length ? [...this.apiKeys] : [''];
+    const availKeys = this.availableKeys();
+    const keyList = availKeys.length ? availKeys : [''];
     // 上游总超时:生图实测 29~35s(方图),大图可能数分钟。给 5 分钟地板,
     // 否则连接被网关半挂起时前端会永远停在"生成中"。
     const ac = new AbortController();
@@ -517,6 +534,7 @@ export class LlmClient {
           const unusable: KeyUnusableKind | null = isBalanceError(res.status, text) ? 'balance'
             : (isAuthError(res.status, text) ? 'auth' : null);
           if (unusable && i + 1 < keyList.length) {
+            this.deadKeys.add(activeKey); // 本客户端后续请求直接跳过它
             this.onKeyExhausted?.(activeKey, text.slice(0, 300), unusable);
             // 后面统一以「当前 Key」发起请求:换过 Key 之后它才是这个客户端真正能用的那个
             this.apiKey = keyList[i + 1];

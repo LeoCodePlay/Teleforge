@@ -236,7 +236,31 @@ auths = [];
   check('换 Key 会通知前端(不消耗重试次数)', box.retries.length === 1 && /余额不足/.test(box.retries[0].error), JSON.stringify(p.retries));
 }
 
-// 7.2) 所有 Key 都余额不足:停止重试,并指引「充值 + 重置」
+// 7.1b) 同一客户端第二次调用:已判定无余额的 Key 直接跳过。
+//       根因:一次对话轮会锁定同一个 LlmClient 跑完所有 step,若不记住已废的 Key,每个 step
+//       都会先撞一遍无余额的 Key 再切换 —— 界面就会重复冒出同一条「已切换到第 N 个可用 Key」。
+script = [];
+seen = [];
+auths = [];
+{
+  const client = new LlmClient({
+    baseUrl, apiKey: 'key-one', apiKeys: ['key-one', 'key-two'], model: 'deepseek-chat', maxTokens: 64
+  });
+  // 第一次调用(本轮第一个 step):key-one 402 -> 换 key-two 成功
+  script = [{ type: 'status', code: 402, body: '{"error":"insufficient balance"}' }, { type: 'ok', text: '第一次' }];
+  const b1 = await run(client);
+  check('已废 Key:第一次调用换 Key 后成功', !b1.err && b1.res?.content === '第一次', String(b1.err?.message || b1.res?.content));
+  check('已废 Key:第一次调用恰有一次换 Key 通知', b1.retries.length === 1, JSON.stringify(b1.retries));
+  // 第二次调用(同一轮的下一个 step):应直接用 key-two,不再白撞 key-one
+  seen = []; auths = [];
+  script = [{ type: 'ok', text: '第二次' }];
+  const b2 = await run(client);
+  check('已废 Key:第二次调用直接成功', !b2.err && b2.res?.content === '第二次', String(b2.err?.message || b2.res?.content));
+  check('已废 Key:第二次调用只发 1 次请求(不再先撞无余额的 Key)', seen.length === 1, String(seen.length));
+  check('已废 Key:第二次调用直接用第 2 个 Key', auths[0] === 'Bearer key-two', JSON.stringify(auths));
+  check('已废 Key:第二次调用不再产生换 Key 重试事件', b2.retries.length === 0, JSON.stringify(b2.retries));
+}
+
 script = [{ type: 'status', code: 402, body: '{"error":"insufficient balance"}' }, { type: 'status', code: 402, body: '{"error":"insufficient balance"}' }];
 seen = [];
 auths = [];

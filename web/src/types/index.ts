@@ -342,10 +342,12 @@ export interface ChatMessage {
     retry: number;
     /** 最大重试次数 */
     maxRetries: number;
-    /** 本次重试的等待时长(ms) */
+    /** 本次重试的等待时长(ms);换 Key(kind='switch')时为 0——那是立即重发,不是等待 */
     delayMs: number;
     /** 失败原因摘要 */
     error: string;
+    /** 'switch' = 切换到下一个可用 API Key(立即重发);缺省 = 退避后重试同一个 Key */
+    kind?: 'retry' | 'switch';
     /** 状态:scheduled=等待重试(倒计时中) → started=已开始重试 / cancelled=已取消 */
     state: 'scheduled' | 'started' | 'cancelled';
     /** 本次重试是否作废了上一次已流出的半成品(true 时该气泡的可变段已被回滚) */

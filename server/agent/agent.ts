@@ -332,7 +332,9 @@ export function projectEvents(events) {
           delayMs: Number(d.delayMs) || 0,
           error: String(d.error || '网络错误'),
           discard: d.discard === true,
-          state: d.state === 'cancelled' ? 'cancelled' : 'started'
+          state: d.state === 'cancelled' ? 'cancelled' : 'started',
+          // 换 Key 的老日志没有这个字段 → 缺省按「退避重试」渲染,保持历史回放一致
+          ...(d.kind === 'switch' ? { kind: 'switch' as const } : {})
         }
       });
     } else if (ev.type === 'compaction/done') {
@@ -1945,7 +1947,9 @@ export class Agent {
               // 不进模型上下文(见 session.ts 的 llm/retry 说明)。
               session.append('llm/retry', {
                 retry: r.retry, maxRetries: r.maxRetries, delayMs: r.delayMs,
-                error: r.error, discard: r.discard === true, state: 'started'
+                error: r.error, discard: r.discard === true, state: 'started',
+                // 'switch' = 换 Key(立即重发):前端显示「已切换 API Key」而不是「等待重试」
+                ...(r.kind === 'switch' ? { kind: 'switch' } : {})
               });
               this.emit('agent', { event: 'retry', ...r, sid: runSessionId, persisted: true });
             }
