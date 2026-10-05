@@ -29,11 +29,26 @@ export type ToolAccess = 'meta' | 'read' | 'write' | 'command';
 /** 工具未声明 access 时的兜底类别:fail-closed,按最需要审批的一档处理 */
 export const DEFAULT_TOOL_ACCESS: ToolAccess = 'write';
 
+// 工具名别名:技能库(server/skills/**/SKILL.md)与 Claude Code 生态里写的是
+// Glob/Grep(以及小写 glob/grep),而实现名分远程/本地两套。按候选顺序取**第一个
+// 已注册**的实现:SSH 会话下 Glob/Grep 落到远程工作区的 glob/grep,未连接时回落
+// glob_local/grep_local。只作用于**查找**(get/execute),不额外投影 schema,
+// 所以模型看到的工具清单里不会出现重复项。全部候选都未注册时原样返回,
+// 报错信息仍然是模型给的那个名字。
+const TOOL_ALIASES: Record<string, string[]> = {
+  Glob: ['glob', 'glob_local'], glob: ['glob', 'glob_local'],
+  Grep: ['grep', 'grep_local'], grep: ['grep', 'grep_local']
+};
+
 export interface ToolDef {
   name: string;
   description?: string;
   parameters?: object;
   run: (args: any, ctx: any) => any | Promise<any>;
+  /**
+   * 执行超时(毫秒):>0 用自身值;===0 表示**显式不设超时**(长任务,如子代理这类
+   * "派发—等结果"的调研);未声明/非法值落到注册表兜底 DEFAULT_TIMEOUT_MS。
+   */
   timeoutMs?: number;
   remote?: boolean;
   /**
@@ -76,6 +91,8 @@ export class ToolRegistry {
   // schemas() 投影缓存:键 = 启用工具名集合 + localOnly。注册/注销/启停/模式切换
   // 任一变化都会改变键,天然失效。省掉每步对 20+ 工具 schema 的深拷贝序列化。
   private _schemasCache: { key: string; schemas: any[] } | null = null;
+  /** 别名候选可用性判定(见 setAliasFilter);默认全部可用 */
+  private aliasFilter: (def: ToolDef) => boolean = () => true;
 
   /** 注册一个工具,返回卸载器(对齐 harness register 的 disposer 语义) */
   register(def: ToolDef): () => void {
@@ -95,7 +112,24 @@ export class ToolRegistry {
     };
   }
 
-  get(name: string): ToolDef | undefined { return this.tools.get(name); }
+  /** 工具名归一:精确命中优先;未命中时按别名候选顺序取第一个**当前可用**的实现 */
+  canonical(name: string): string {
+    if (this.tools.has(name)) return name;
+    for (const candidate of TOOL_ALIASES[name] ?? []) {
+      const def = this.tools.get(candidate);
+      if (def && this.aliasFilter(def)) return candidate;
+    }
+    return name;
+  }
+
+  /**
+   * 设置别名候选的可用性判定(默认全部可用)。注册方用它表达"当前这台机器上
+   * 哪些实现真的能用"——例如未连接 SSH 时跳过 remote 工具,让 Glob/Grep 回落到
+   * 本机实现,而不是把调用丢给一个必然被 SSH 守卫拒绝的工具。
+   */
+  setAliasFilter(fn: (def: ToolDef) => boolean): void { this.aliasFilter = fn; }
+
+  get(name: string): ToolDef | undefined { return this.tools.get(this.canonical(name)); }
 
   /** 全部已注册工具定义(设置面板列出用;含启用状态) */
   listAll(): Array<{ name: string; description?: string; enabled: boolean }> {
@@ -149,10 +183,11 @@ export class ToolRegistry {
     const started = Date.now();
     const fail = (content: string): ToolResult => ({ isError: true, content, ms: Date.now() - started });
 
-    const tool = this.tools.get(name);
+    const canonical = this.canonical(name);
+    const tool = this.tools.get(canonical);
     if (!tool) return fail(`未知工具: ${name}`);
     // 被禁用的工具(设置 → 工具插件):模型看不到其 schema,这里拒绝兜底
-    if (!toolSettings.isEnabled(name)) return fail(`工具 ${name} 已被禁用(可在设置 → 工具插件中重新启用)`);
+    if (!toolSettings.isEnabled(canonical)) return fail(`工具 ${name} 已被禁用(可在设置 → 工具插件中重新启用)`);
 
     let parsed: any;
     try {
@@ -166,12 +201,17 @@ export class ToolRegistry {
     // await 兼容异步守卫(权限守卫的审批会阻塞到用户作答)
     for (const guard of this.guards) {
       let reason: any;
-      try { reason = await guard(name, parsed, { signal, ...(invokeCtx || {}) }); } catch { reason = '守卫执行异常'; }
+      try { reason = await guard(canonical, parsed, { signal, ...(invokeCtx || {}) }); } catch { reason = '守卫执行异常'; }
       if (reason) return fail(`工具调用被拒绝: ${reason}`);
     }
 
     try {
-      const rawResult = await runWithTimeout(tool.run(parsed, { signal, ...(invokeCtx || {}) }), tool.timeoutMs || DEFAULT_TIMEOUT_MS, signal);
+      // 超时取值:>0 用工具自身声明;===0 表示"显式不设超时"(长任务,如子代理);
+      // 未声明/非法值用注册表兜底。注意不能用 `||`:0 是合法语义,不能被兜底吞掉。
+      const declaredTimeout = tool.timeoutMs;
+      const timeoutMs = typeof declaredTimeout === 'number' && declaredTimeout >= 0
+        ? declaredTimeout : DEFAULT_TIMEOUT_MS;
+      const rawResult = await runWithTimeout(tool.run(parsed, { signal, ...(invokeCtx || {}) }), timeoutMs, signal);
       // 工具可返回字符串(普通)、{content, concludesTurn}(显式收尾信号)或
       // {content, meta}(结构化 UI 数据,如终端卡的 exitCode/cwd,见 tools.js)
       const content = typeof rawResult === 'string' ? rawResult
@@ -180,7 +220,7 @@ export class ToolRegistry {
       const concludesTurn = !!(rawResult && typeof rawResult === 'object' && rawResult.concludesTurn === true);
       const meta = rawResult && typeof rawResult === 'object' ? rawResult.meta : undefined;
       return {
-        isError: false, content: spillResult(content, name), ms: Date.now() - started,
+        isError: false, content: spillResult(content, canonical), ms: Date.now() - started,
         ...(concludesTurn ? { concludesTurn: true } : {}),
         ...(meta !== undefined ? { meta } : {})
       };
@@ -190,14 +230,21 @@ export class ToolRegistry {
   }
 }
 
-// 带超时/中止的执行包装:超时或 signal 中止时立刻拒绝
+// 带超时/中止的执行包装:超时或 signal 中止时立刻拒绝。
+// ms <= 0 表示**不设超时**:只挂中止监听、不挂 timer——"派发—等结果"的长任务
+// (如子代理)由父轮停止来收尾,而不是被固定时限掐成半成品。
 function runWithTimeout(p: any, ms: number, signal?: AbortSignal): Promise<any> {
   const promise = p instanceof Promise ? p : Promise.resolve(p);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`工具执行超时(${Math.round(ms / 1000)}s)`)), ms);
-    const onAbort = () => { clearTimeout(timer); reject(new Error('已停止')); };
+    const timed = Number.isFinite(ms) && ms > 0;
+    const timer = timed ? setTimeout(() => reject(new Error(`工具执行超时(${Math.round(ms / 1000)}s)`)), ms) : null;
+    const onAbort = () => { if (timer) clearTimeout(timer); reject(new Error('已停止')); };
     signal?.addEventListener('abort', onAbort, { once: true });
-    const done = (fn: any) => (v: any) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); fn(v); };
+    const done = (fn: any) => (v: any) => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      fn(v);
+    };
     promise.then(done(resolve), done(reject));
   });
 }

@@ -4,7 +4,7 @@
 // - 子代理只能调用只读工具(SUBAGENT_TOOLS 白名单),写类/命令类工具一律不派发;
 // - 过程不回传:父代理只拿到最终一条文本结论(harness 的 tool-subagent 同语义:
 //   "returns its result, not its intermediate steps");
-// - 回传长度与超时有硬上限(步数不设上限,跑到模型自己收尾);父轮被停止时子代理立即中止。
+// - 步数与时长都不设上限(跑到模型自己收尾),回传长度有上限;父轮被停止时子代理立即中止。
 //
 // 与 harness 的差异(有意为之的最小实现,见 docs/superpowers/specs/2026-09-19-subagent-in-process-design.md):
 // - 只有 in-process 一种 provider(harness 有 fork/spawn/DSH-SDK/ACP/Claude Code/Codex 六种);
@@ -88,7 +88,8 @@ export interface SubagentRunOptions {
   /** 父会话 id(仅用于日志与子工具上下文透传) */
   sid?: string | null;
   signal?: AbortSignal;
-  // 步数不设上限:子代理跑到模型自己收尾(受 TIMEOUT_MS 与父轮停止约束)。
+  // 步数与时长都不设上限:子代理跑到模型自己收尾,只受父轮停止(signal)约束——
+  // "派发—等结果"的长任务不该被固定时限掐成半成品(工具层 timeoutMs=0 即不超时)。
   /**
    * 变更通知(每次落盘后触发):工具层接到 agent 事件总线,右侧面板据此实时刷新。
    * 只传 runId 与状态,面板自己去拉最新记录,避免事件体携带大段对话正文。

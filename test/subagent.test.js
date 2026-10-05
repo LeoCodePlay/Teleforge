@@ -5,7 +5,7 @@
 // - 过程隔离:父会话只多一条 tool/call + tool/result,中间步骤不回传、可回放;
 // - 停止:父轮中止立即传播;不设步数上限,模型不再发起工具调用即自然收敛;
 // - 提供商:默认且唯一 internal(本项目内置 agent),外部 agent 明确拒绝、不冒充;
-// - 注册与权限:subagent 已注册、声明 write、mutating(并行池独占)。
+// - 注册与权限:subagent 已注册、声明 write、并发安全(可并行)、不设工具级超时。
 // 说明:ESM 静态 import 先于代码执行,故用顶层 await 在导入 agent 前设置 DATA_DIR
 import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -47,8 +47,9 @@ async function main() {
     const def = toolRegistry.get('subagent');
     check('subagent 已注册', !!def);
     check('subagent 声明为 write(confirm 下审批 / plan 下拒绝)', def?.access === 'write', String(def?.access));
-    check('subagent 为 mutating(并行池独占,不与其它工具并发)', def?.mutating === true);
-    check('subagent 未声明并发安全', toolRegistry.isConcurrencySafe('subagent') === false);
+    check('subagent 不再独占并行池(已去掉 mutating)', def?.mutating !== true);
+    check('subagent 声明并发安全(同一消息里的多个子代理并行)', toolRegistry.isConcurrencySafe('subagent') === true);
+    check('subagent 不设工具级超时(0 = 派发后一直等结果)', def?.timeoutMs === 0, String(def?.timeoutMs));
     check('子代理不能再派生子代理(白名单不含 subagent,杜绝递归)', !SUBAGENT_TOOLS.has('subagent'));
     check('白名单含只读工具、不含写/命令工具',
       SUBAGENT_TOOLS.has('read_file') && SUBAGENT_TOOLS.has('list_local_dir')

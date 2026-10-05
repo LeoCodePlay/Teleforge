@@ -11,7 +11,7 @@
 //      而本服务不处理 OPTIONS,预检失败后真实请求根本不会发出。
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { browserBridge } from '../../core/browser-bridge.ts';
-import { PORT } from '../../config.ts';
+import { PORT, IS_DESKTOP_SHELL } from '../../config.ts';
 
 export default async function registerBrowserBridgeHttp(app: FastifyInstance) {
   // 扩展 popup 点「连接」时调用:拿 token + WS 地址,然后建立 /ws/ext 长连接
@@ -24,6 +24,8 @@ export default async function registerBrowserBridgeHttp(app: FastifyInstance) {
     return reply.send({
       token: browserBridge.token(),
       wsUrl: `ws://127.0.0.1:${port}/ws/ext`,
+      // 'desktop' / 'web':扩展 popup 据此标出这个端口是桌面端还是网页端(纯展示)
+      kind: IS_DESKTOP_SHELL ? 'desktop' : 'web',
       status: browserBridge.status()
     });
   });

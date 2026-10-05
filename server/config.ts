@@ -51,6 +51,10 @@ export const QUIT_FLAG_FILE     = process.env.QUIT_FLAG_FILE     || path.join(DA
 export const PORT = Number(process.env.PORT || 4000);
 export const HOST = process.env.HOST || '127.0.0.1'; // 默认仅本机访问,避免暴露 ✓
 
+// 是否跑在桌面端外壳里(由 src-tauri/src/backend.rs 注入 TELEFORGE_SHELL=desktop)。
+// 只用来让浏览器扩展在服务端列表里标出「桌面端 / 网页端」,不影响任何连接行为。
+export const IS_DESKTOP_SHELL = process.env.TELEFORGE_SHELL === 'desktop';
+
 // 「不使用工作区」哨兵值:作为会话绑定值(SessionMeta.workspace / localWorkspace)与
 // set_workspace / set_local_workspace 的 path 传入,表示该侧不绑定任何目录,
 // 文件边界放宽到整台机器:本机 = 所有盘符(POSIX 为根目录 /),远程 = 整个远程文件系统。
@@ -141,10 +145,12 @@ export const AGENT = {
   REPEAT_ARG_PREVIEW: 500,      // 重复调用提醒里引用的参数预览上限(字符,对齐 harness)
   // 子代理(subagent 工具,in-process 只读调研代理;见 agent/subagent.ts):
   SUBAGENT: {
-    // 不设步数上限:子代理跑到模型自己收尾为止(只受下面的 TIMEOUT_MS 与父轮停止约束),
+    // 不设步数上限、也不设时长上限:子代理跑到模型自己收尾为止(只受父轮停止约束),
     // 长调研不会被硬截断成"达到上限后收敛"的半成品结论。
     RESULT_MAX_CHARS: 12_000,   // 回传父级的结论上限;超出截断(完整过程只存在于子代理自己的内存会话)
-    TIMEOUT_MS: 600_000,        // 工具级超时(比注册表兜底 660s 短,让超时原因来自子代理自身)
+    // 工具级超时:0 = **不设超时**。子代理是"派发—等结果"的长任务,固定时限只会把长调研
+    // 掐成半成品结论;需要提前结束时统一由父轮停止(AbortSignal)中止(见 registry.runWithTimeout)。
+    TIMEOUT_MS: 0,
     // 提示词契约:父对话必须自己写清任务与边界;prompt 与 objective+scope 两条路径满足其一
     MIN_PROMPT_CHARS: 60,       // 只给 prompt 时,完整提示词的最小长度
     MIN_FIELD_CHARS: 6,         // 给结构化字段时,objective / scope 各自的最小长度

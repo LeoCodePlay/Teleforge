@@ -79,6 +79,7 @@ const COMMAND_TOOLS = new Set(['run_command', 'run_local_command']);
 const READ_TOOLS = new Set([
   'list_directory', 'read_file', 'search_code', 'get_workspace_info', 'web_search',
   'list_local_dir', 'read_local_file', 'search_local_code', 'get_local_info',
+  'glob', 'grep', 'glob_local', 'grep_local',
   'browser_snapshot',
   'computer_screenshot', 'computer_windows', 'computer_ui', 'computer_ocr'
 ]);

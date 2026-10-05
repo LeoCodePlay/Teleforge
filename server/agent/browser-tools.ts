@@ -10,7 +10,7 @@
 // 设计取舍:AI 拿到的不是截图而是「结构化文本快照」(+ 可选的截图附件)。
 // 纯文本模型无法内联看图,而带 ref 的快照能精确点击/输入,比像素坐标稳得多。
 import { browserManager, defaultBrowserIdFor, normalizePreviewUrl, ownerFromBrowserId } from '../core/browser-manager.ts';
-import { nativeAvailable, nativeInventory, nativeOpsFor, previewOps } from './browser-backends.ts';
+import { nativeAvailable, nativeInventory, nativeOpsFor, previewOps, sessionNativeTab } from './browser-backends.ts';
 import type { BrowserOps } from './browser-backends.ts';
 import { resolvePreviewUrl } from '../core/port-tunnel.ts';
 import { saveAttachment, attachmentUrl } from '../store/attachments-store.ts';
@@ -90,8 +90,9 @@ function resolveBrowserId(args: any, invokeCtx: any, opts: { preferOwn?: boolean
 /** 真机浏览器相关的工具参数说明(所有 browser_* 工具共用) */
 const TARGET_DESC = '作用在哪个浏览器上:auto(默认)= 有扩展连接就用本机真机浏览器,否则用内置预览;'
   + 'native = 强制真机浏览器(未连接会直接报错);preview = 强制内置预览浏览器';
-const TAB_ID_DESC = '真机浏览器的标签 id(来自 browser_open 的返回或 ext_status 的标签清单);省略 = 当前活动标签。'
-  + '仅 target=native 时有意义';
+const TAB_ID_DESC = '真机浏览器的标签 id(来自 browser_open 的返回或 ext_status 的标签清单)。'
+  + '省略 = 本对话正在操作的那个标签(browser_open 打开后自动绑定,用户切标签也不会改变它);'
+  + '本对话还没绑定过标签时才回落到浏览器当前活动标签。仅 target=native 时有意义';
 
 /**
  * 选择这次调用作用在哪个浏览器上(两种后端见 agent/browser-backends.ts)。
@@ -104,6 +105,7 @@ function resolveOps(args: any, ctx: any, opts: { preferOwn?: boolean } = {}): Br
   const forceNative = want === 'native' || rawBrowserId.startsWith('native:');
   const forcePreview = want === 'preview';
   if (forceNative || (!forcePreview && nativeAvailable())) {
+    const sid = callerSid(ctx);
     const rawTab = args?.tab_id ?? args?.tabId;
     let tabId: number | null = null;
     if (rawTab !== undefined && rawTab !== null && rawTab !== '') {
@@ -111,8 +113,12 @@ function resolveOps(args: any, ctx: any, opts: { preferOwn?: boolean } = {}): Br
       if (!Number.isFinite(tabId)) throw new Error(`tab_id 必须是数字(收到 ${rawTab})`);
     } else if (rawBrowserId.startsWith('native:tab:')) {
       tabId = Number(rawBrowserId.slice('native:tab:'.length));
+    } else {
+      // 没显式指定:用本对话绑定的标签。**不能**回落到"当前活动标签" ——
+      // 那是用户正在看的标签,用户随手一切就会把 AI 的目标带跑偏。
+      tabId = sessionNativeTab(sid);
     }
-    return nativeOpsFor(tabId);
+    return nativeOpsFor(tabId, sid);
   }
   return previewOps(resolveBrowserId(args, ctx, opts), callerSid(ctx));
 }
@@ -172,6 +178,8 @@ export const browserToolDefs: ToolDef[] = [
       + 'When connected to an SSH server the loopback address is automatically tunneled to the remote host '
       + '(pass tunnel=false to force a direct connection). After opening, use browser_snapshot / browser_click / '
       + 'browser_type to drive the page and verify the UI actually works. '
+      + 'In the user\'s real browser (extension connected) this opens a new tab and binds this conversation to it: '
+      + 'later browser_* calls without tab_id keep targeting that same tab even if the user switches to another tab. '
       + 'IMPORTANT: a dev server started with a foreground run_command is KILLED when that tool times out '
       + '(default 300s), which makes the printed address dead (ERR_CONNECTION_REFUSED). Start it as a managed '
       + 'running terminal instead: call run_command with background=true (do NOT use nohup ... &). The process keeps '

@@ -18,6 +18,7 @@ import { IMAGE_QUALITIES, IMAGE_SIZES } from '../store/settings-store.ts';
 import { webSearch, renderSearchResult } from './web-search.ts';
 import { browserToolDefs } from './browser-tools.ts';
 import { computerUseToolDefs } from './computer-use-tools.ts';
+import { fsSearchToolDefs, GLOB_MAX_RESULTS, VCS_EXCLUDES } from './fs-search.ts';
 import { runSubagent, SUBAGENT_PROVIDERS } from './subagent.ts';
 import type { ToolAccess, ToolDef, ToolRegistry } from './registry.ts';
 
@@ -502,24 +503,50 @@ const toolDefs: ToolDef[] = [
       required: ['pattern']
     },
     async run({ pattern, path, include }) {
-      const p = normalizeRemote(path || ssh.workspace || '.');
-      let engine = await detectSearchEngine();
-      if (!engine) {
-        // 兜底:先自动安装缺失的搜索工具,再重新探测一次(连接时也做过一轮,这里覆盖"安装未生效"的场景)
-        const ensured = await ensureSearchTools().catch(() => null);
-        // 工具已就绪(原本就有或刚装好)时强制刷新探测缓存,避免命中首次探测失败遗留的 null 缓存
-        if (ensured && ensured.ok) clearSearchEngine();
-        engine = await detectSearchEngine();
-      }
-      if (!engine) throw new Error('远程未找到可用搜索工具(rg/grep/python/busybox),自动安装未生效;请 run_command 手动安装 ripgrep 或 grep(需 root 或免密 sudo)');
-      const cmd = buildSearchCommand(engine, pattern, p, include);
-      const res = await ssh.exec(cmd, { timeout: 60_000 });
-      const err = (res.stderr || '').trim();
-      if (res.code !== 0 && err.toLowerCase().includes('no such')) throw new Error(`路径不存在: ${p}`);
-      if (res.code !== 0 && !res.stdout) {
-        return err ? `搜索失败(退出码 ${res.code}): ${err}` : `无匹配(退出码 ${res.code})`;
-      }
-      return capOutputBytes(`匹配结果(${res.stdout.split('\n').filter(Boolean).length} 行):\n${res.stdout}`);
+      return runRemoteContentSearch(pattern, path, include);
+    }
+  },
+
+  {
+    // 远端 glob:与本地 glob_local 同一套语义(pattern/path、按修改时间排序、上限 100、
+    // 相对工作区输出),但跑在远程工作区上。远端只有 ripgrep 有等价的"按路径模式发现
+    // 文件"能力(grep/findstr/python/busybox 都只能搜内容),所以这里只认 rg;
+    // 缺失时先走一次自动安装(与 search_code 同一条链路),仍缺则给出可操作的报错。
+    name: 'glob',
+    description: '按路径 glob 模式在**远程工作区**查找文件,返回文件路径(不返回目录),按修改时间从新到旧排序。'
+      + `单次最多返回 ${GLOB_MAX_RESULTS} 个;底层是远程 ripgrep,支持 ** * ? [] {} 语法(如 "**/*.ts"、"**/*.{json,md}")。`
+      + '需要远端已安装 ripgrep(缺失时会先尝试自动安装);按内容搜索请用 grep。',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'glob 模式,匹配的是文件路径,如 "**/*.ts"、"src/**/*.test.js"、"**/*.{json,md}"' },
+        path: { type: 'string', description: '搜索起点目录,缺省为远程工作区' }
+      },
+      required: ['pattern']
+    },
+    async run({ pattern, path: p }) {
+      return runRemoteGlob(pattern, p);
+    }
+  },
+
+  {
+    // 远端 grep:与 search_code 共用同一条内核(引擎探测 → 自动安装 → 拼命令 → 执行),
+    // 这里存在的意义是**名字对齐**:技能库与 DSH 里写的是 Grep,SSH 会话下应当落到远程
+    // 工作区而不是本机。行为与 search_code 完全一致(含 include 与行号),两者可互换。
+    name: 'grep',
+    description: '用 ripgrep/grep 正则在**远程工作区**搜索文件内容,返回带行号的匹配行(相对工作区路径)。'
+      + '遵循远端搜索工具的默认忽略规则(排除 .git/node_modules);需要命中处的上下文时,再对命中的文件调用 read_file。',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: '正则或普通文本(ripgrep 语法)' },
+        path: { type: 'string', description: '要搜索的文件或目录,缺省为远程工作区' },
+        include: { type: 'string', description: '只搜匹配该通配的文件,如 "*.ts"、"*.{js,jsx}"' }
+      },
+      required: ['pattern']
+    },
+    async run({ pattern, path: p, include }) {
+      return runRemoteContentSearch(pattern, p, include);
     }
   },
 
@@ -1154,11 +1181,12 @@ const subagentToolDefs: ToolDef[] = [
       },
       required: ['description']
     },
-    // 比注册表兜底 660s 短:超时原因来自子代理自身,而不是被注册表掐断
+    // 不设超时(AGENT.SUBAGENT.TIMEOUT_MS = 0):子代理是"派发—等结果"的长任务,
+    // 由父轮停止(AbortSignal)中止,而不是被固定时限掐成半成品结论。
     timeoutMs: AGENT.SUBAGENT.TIMEOUT_MS,
-    // 会起一轮额外的模型+工具循环(消耗 token):按写类处理——confirm 下审批一次,plan 下拒绝;
-    // 并行池里独占执行,避免多个子代理同时挤一条 SSH 连接。
-    mutating: true,
+    // 会起一轮额外的模型+工具循环(消耗 token):按写类处理——confirm 下审批一次,plan 下拒绝。
+    // 并发安全(见 CONCURRENCY_SAFE_TOOLS):同一条 assistant 消息里的多个子代理并行执行,
+    // 也能与只读工具并行——主会话不会被它们串行排队堵住(各自独立会话,互不共享状态)。
     async run(args: any, { sid, signal, llm, registry, emit }: any = {}) {
       const description = String(args?.description || '').trim();
       const prompt = String(args?.prompt || '').trim();
@@ -1207,7 +1235,9 @@ function dangerGuard(name: string, args: any) {
 // SSH,绝不能纳入此集——否则未连接时加载技能、写任务清单会被误伤报"SSH 连接已断开"。
 const SSH_ONLY_TOOLS = new Set([
   'list_directory', 'read_file', 'write_file', 'edit_file', 'run_command',
-  'create_directory', 'delete_path', 'search_code', 'get_workspace_info'
+  'create_directory', 'delete_path', 'search_code', 'get_workspace_info',
+  // 远端文件发现:跑在远程工作区上,未连接时既不可见也不可调用
+  'glob', 'grep'
 ]);
 
 /** 把全部内置工具与守卫注册到注册表(由 agent 启动时调用一次) */
@@ -1218,7 +1248,11 @@ export function registerTools(registry: ToolRegistry) {
   const CONCURRENCY_SAFE_TOOLS = new Set([
     'list_directory', 'read_file', 'search_code', 'get_workspace_info', 'web_search', 'skill',
     'list_local_dir', 'read_local_file', 'search_local_code', 'get_local_info',
-    'run_command', 'run_local_command'
+    'glob', 'grep', 'glob_local', 'grep_local',
+    'run_command', 'run_local_command',
+    // 子代理:各自独立会话 + 只读工具白名单,彼此不共享可变状态,并行不会互相踩;
+    // 串行排队只会让 N 个调研的耗时叠加成 N 倍。它不设工具级超时,长任务靠父轮停止收尾。
+    'subagent'
   ]);
   const withSafety = (def: ToolDef): ToolDef => ({ ...def, concurrencySafe: CONCURRENCY_SAFE_TOOLS.has(def.name) });
   // 访问类别显式声明(权限守卫判定依据,见 permission.ts):
@@ -1230,6 +1264,8 @@ export function registerTools(registry: ToolRegistry) {
     | 'skill_copy_builtin' | 'get_workspace_info' | 'web_search' | 'list_local_dir'
     | 'read_local_file' | 'write_local_file' | 'edit_local_file' | 'create_local_dir'
     | 'delete_local_path' | 'search_local_code' | 'run_local_command' | 'get_local_info'
+    | 'glob_local' | 'grep_local'
+    | 'glob' | 'grep'
     | 'ask_user_question' | 'generate_image' | 'subagent'
     | 'list_project_terminals' | 'stop_project_terminal',
     ToolAccess
@@ -1238,6 +1274,10 @@ export function registerTools(registry: ToolRegistry) {
     list_directory: 'read', read_file: 'read', search_code: 'read', get_workspace_info: 'read',
     web_search: 'read', list_local_dir: 'read', read_local_file: 'read',
     search_local_code: 'read', get_local_info: 'read',
+    // 文件发现(内置 ripgrep):只读,不拦
+    glob_local: 'read', grep_local: 'read',
+    // 远端文件发现(远程工作区):同样只读
+    glob: 'read', grep: 'read',
     // 宿主协调(任何模式都不拦)
     todo_write: 'meta', skill: 'meta', ask_user_question: 'meta',
     // 改变外部状态
@@ -1259,6 +1299,10 @@ export function registerTools(registry: ToolRegistry) {
   for (const def of toolDefs) registry.register(SSH_ONLY_TOOLS.has(def.name) ? { ...prepare(def), remote: true } : prepare(def));
   for (const def of interactionToolDefs) registry.register(prepare(def));
   for (const def of localToolDefs) registry.register(prepare(def));
+  // 文件发现工具(glob_local / grep_local):不依赖 SSH(内置 ripgrep 搜本机),
+  // 因此不加 remote 标记,本地模式下也可用。它们自带 access 声明,但 access/
+  // concurrencySafe 仍由上面的名字表统一覆盖(见 TOOL_ACCESS 的穷举联合类型)。
+  for (const def of fsSearchToolDefs) registry.register(prepare(def));
   // 子代理工具:不依赖 SSH,也没有本机镜像
   for (const def of subagentToolDefs) registry.register(prepare(def));
   // 浏览器预览工具(browser_*):驱动前端「浏览器预览」标签里的真实 Chromium。
@@ -1269,6 +1313,9 @@ export function registerTools(registry: ToolRegistry) {
   // 同样自带 access 声明(见 computer-use-tools.ts),不参与上面的名字表;截图/操作都必须
   // 先 computer_control(action="start") 开启控制(开启即显示「AI 操控中」悬浮窗)。
   for (const def of computerUseToolDefs) registry.register(withSafety(def));
+  // 别名可用性:未连接 SSH 时,技能里的 Glob/Grep 不落到"必然被 SSH 守卫拒绝"的远程
+  // 实现上,而是回落到本机实现(glob_local / grep_local)——本地模式下技能照样能用。
+  registry.setAliasFilter((def: ToolDef) => !(def.remote && !ssh.connected));
   // 守卫 1:SSH 连接状态 —— 仅真正依赖 SSH 的远程工具需要连接;本地工具(local_*)、
   // 交互工具与技能/任务清单等非远程工具不受影响,连接断开时绝不误伤本机工具链
   registry.guard((name: string) => (SSH_ONLY_TOOLS.has(name) && !ssh.connected ? 'SSH 连接已断开' : undefined));
@@ -1972,6 +2019,96 @@ for dp, dn, fn in os.walk(root):
             pass
 sys.exit(0 if found else 1)
 `;
+
+// ---------------- 远端文件发现内核(glob / grep / search_code 共用) ----------------
+
+/**
+ * 远端内容搜索内核:引擎探测 → 缺失时自动安装再探测 → 拼命令 → 执行。
+ * search_code 与 grep 都走这里(同一份实现,两个名字),行为完全一致。
+ * @param {string} pattern 正则或普通文本
+ * @param {string} [path] 搜索起点,缺省为远程工作区
+ * @param {string} [include] 文件通配
+ * @returns {Promise<string>} 已按输出上限裁剪的模型可见文本
+ */
+async function runRemoteContentSearch(pattern: string, path?: string, include?: string) {
+  const p = normalizeRemote(path || ssh.workspace || '.');
+  let engine = await detectSearchEngine();
+  if (!engine) {
+    // 兜底:先自动安装缺失的搜索工具,再重新探测一次(连接时也做过一轮,这里覆盖"安装未生效"的场景)
+    const ensured = await ensureSearchTools().catch(() => null);
+    // 工具已就绪(原本就有或刚装好)时强制刷新探测缓存,避免命中首次探测失败遗留的 null 缓存
+    if (ensured && ensured.ok) clearSearchEngine();
+    engine = await detectSearchEngine();
+  }
+  if (!engine) throw new Error('远程未找到可用搜索工具(rg/grep/python/busybox),自动安装未生效;请 run_command 手动安装 ripgrep 或 grep(需 root 或免密 sudo)');
+  const cmd = buildSearchCommand(engine, pattern, p, include);
+  const res = await ssh.exec(cmd, { timeout: 60_000 });
+  const err = (res.stderr || '').trim();
+  if (res.code !== 0 && err.toLowerCase().includes('no such')) throw new Error(`路径不存在: ${p}`);
+  if (res.code !== 0 && !res.stdout) {
+    return err ? `搜索失败(退出码 ${res.code}): ${err}` : `无匹配(退出码 ${res.code})`;
+  }
+  return capOutputBytes(`匹配结果(${res.stdout.split('\n').filter(Boolean).length} 行):\n${res.stdout}`);
+}
+
+/**
+ * 远端 glob:按路径模式发现文件,只认 ripgrep —— 其余引擎(grep/findstr/python/busybox)
+ * 只能搜内容,没有等价的路径模式匹配,硬凑出的是"能跑但结果不对"的实现,不如直接报错。
+ * 与本地 glob_local 对齐:排除 VCS 目录与 node_modules、按修改时间排序、上限 100、
+ * 输出相对远程工作区的路径。
+ * @param {string} pattern glob 模式
+ * @param {string} [path] 搜索起点目录,缺省为远程工作区
+ * @returns {Promise<string>} 模型可见文本
+ */
+async function runRemoteGlob(pattern: string, path?: string) {
+  if (pattern === undefined || pattern === null || String(pattern).trim() === '') throw new Error('pattern 不能为空');
+  const target = normalizeRemote(path || ssh.workspace || '.');
+  let engine = await detectSearchEngine();
+  if (!engine || engine.kind !== 'rg') {
+    // 与 search_code 同一条自动安装链路:rg 缺失时先尝试装 ripgrep,再重新探测
+    const ensured = await ensureSearchTools().catch(() => null);
+    if (ensured && ensured.ok) clearSearchEngine();
+    engine = await detectSearchEngine();
+  }
+  if (!engine || engine.kind !== 'rg') {
+    throw new Error('远程 glob 需要 ripgrep(rg):'
+      + (engine ? `当前可用引擎是 ${engine.kind},不支持按路径模式发现文件;` : '当前未探测到任何搜索工具;')
+      + '请 run_command 安装 ripgrep(如 apt-get install -y ripgrep / apk add ripgrep)后重试,或改用 list_directory / search_code');
+  }
+  const q = shQuote;
+  const args = [
+    'rg', '--files',
+    `--glob=${q(String(pattern))}`,
+    '--sort=modified',
+    '--no-ignore',
+    '--hidden',
+    ...VCS_EXCLUDES.flatMap((n: string) => [`--glob=${q(`!**/${n}`)}`, `--glob=${q(`!**/${n}/**`)}`])
+  ];
+  if (!target.split(/[\\/]/).includes('node_modules')) {
+    args.push(`--glob=${q('!**/node_modules')}`, `--glob=${q('!**/node_modules/**')}`);
+  }
+  args.push('--', q(target));
+  const run = (a: string[]) => ssh.exec(a.join(' '), { timeout: 60_000 });
+  let res = await run(args);
+  // --sort 是较新版本才有的开关(老服务器上的 rg 会以退出码 2 报未知参数):
+  // 这类失败不该让整个发现能力失效,去掉排序重跑一次即可。
+  if (res.code === 2 && /sort/i.test(res.stderr || '')) {
+    res = await run(args.filter((a) => a !== '--sort=modified'));
+  }
+  if (res.code !== 0 && res.code !== 1 && !String(res.stdout || '').trim()) {
+    const err = (res.stderr || '').trim();
+    throw new Error(`远程 glob 失败(退出码 ${res.code}):${err ? err.slice(-500) : '(无错误输出)'}`);
+  }
+  const ws = normalizeRemote(ssh.workspace || '');
+  const rel = (s: string) => (ws && s !== ws && s.startsWith(ws + '/') ? s.slice(ws.length + 1) : s);
+  const all = String(res.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean).map(rel);
+  if (all.length === 0) return `无匹配文件(pattern=${pattern},根目录=${target})`;
+  const shown = all.slice(0, GLOB_MAX_RESULTS);
+  const more = all.length - shown.length;
+  return `找到 ${all.length} 个匹配文件(按修改时间从新到旧,相对 ${ws || target}):\n`
+    + shown.join('\n')
+    + (more > 0 ? `\n\n[已达单次上限 ${GLOB_MAX_RESULTS} 个,另有 ${more} 个未列出;请收窄 pattern 或 path]` : '');
+}
 
 // 依探测到的引擎拼出搜索命令。pattern/path 一律经 shQuote 单引号包裹,
 // 修复原先 rg 分支 pattern/path 未加引号导致 `|`/空格被 shell 当成管道/分词的问题。

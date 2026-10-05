@@ -46,7 +46,9 @@ function ToolCallBranch({ call, workspace, onOpenFile, onOpenSubagent }: { call:
     view = <TerminalRow call={call} onOpenFile={onOpenFile} inspect={inspect} />;
   } else if (name === 'read_file' || name === 'read_local_file') {
     view = <ReadRow call={call} workspace={workspace} onOpenFile={onOpenFile} inspect={inspect} />;
-  } else if (name === 'search_code' || name === 'search_local_code') {
+  } else if (name === 'search_code' || name === 'search_local_code' || name === 'glob' || name === 'grep' || name === 'glob_local' || name === 'grep_local') {
+    // glob/grep 同样走搜索卡片:grep 侧输出就是 'path:line:content',glob 侧只有文件
+    // 路径(无 ':行号:'),卡片自然退化成路径清单 + 原文输出
     view = <SearchRow call={call} workspace={workspace} inspect={inspect} />;
   } else if (name === 'write_file' || name === 'write_local_file' || name === 'edit_file' || name === 'edit_local_file') {
     view = <DiffRow call={call} workspace={workspace} onOpenFile={onOpenFile} inspect={inspect} />;

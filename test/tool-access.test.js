@@ -46,6 +46,8 @@ assert.deepEqual(badMutating, [], `以下 mutating 工具却声明为只读:${ba
 const expectAccess = {
   read_file: 'read', list_directory: 'read', search_code: 'read', get_workspace_info: 'read',
   read_local_file: 'read', list_local_dir: 'read', search_local_code: 'read', get_local_info: 'read',
+  glob_local: 'read', grep_local: 'read',
+  glob: 'read', grep: 'read',
   web_search: 'read',
   write_file: 'write', edit_file: 'write', create_directory: 'write', delete_path: 'write',
   write_local_file: 'write', edit_local_file: 'write', create_local_dir: 'write', delete_local_path: 'write',

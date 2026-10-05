@@ -8,7 +8,10 @@ import { sshManager as ssh } from '../server/core/ssh-manager.ts';
 const tools = {};
 const registry = {
   register: (def) => { tools[def.name] = def; },
-  guard: () => {}
+  guard: () => {},
+  // 真实 ToolRegistry 的别名可用性判定接口(registerTools 会调用);
+  // 本测试只关心 search_code 的引擎恢复,给个空实现即可
+  setAliasFilter: () => {}
 };
 registerTools(registry);
 const searchCode = tools['search_code'];

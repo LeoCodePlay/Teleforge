@@ -537,7 +537,7 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
 
 ### 14.2 子代理首版(in-process 只读版)
 
-- 工具:`subagent`(`description` + `objective`/`scope`/`deliverable`/`context`/`prompt` + 可选 `provider`,声明 `access:'write'`、`mutating:true`,并行池独占)。
+- 工具:`subagent`(`description` + `objective`/`scope`/`deliverable`/`context`/`prompt` + 可选 `provider`,声明 `access:'write'`、并发安全(多个子代理并行)、`timeoutMs:0` 不设超时)。
   提示词由**父对话自己生成**:`prompt`(≥60 字符)或 `objective`+`scope`(各 ≥6 字符)二选一,
   `composeSubagentPrompt()` 校验并按 `【任务目标】/【边界(必须遵守)】/【回传要求】/【已知线索】` 标注拼接;
   写不清就返回结构化错误(附模板),而不是把模糊任务丢给子代理。

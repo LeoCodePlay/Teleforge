@@ -120,17 +120,184 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cm-foldGutter span:hover { background: var(--glass-bg-hover); }
 .fviewer .cm-foldGutter span:hover::before { border-color: var(--accent-2); }
 
-/* 搜索面板 / 补全提示浮层 */
-.fviewer .cm-panels { background: var(--code-bg); color: var(--text); }
-.fviewer .cm-panels.cm-panels-top { border-bottom: 1px solid var(--line-soft); }
-.fviewer .cm-panels .cm-textfield {
-  background: var(--glass-bg-inset); color: var(--text);
-  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
-  padding: 3px 8px; font-size: 12px;
+/* ---- 搜索面板(Ctrl+F):卡片式两行布局 ----
+   原生面板的 DOM 是扁平流式节点(input / 一排按钮 / 若干 label 包 checkbox / 右上角绝对定位的 ×),
+   在小宽度下会挤成一坨、文字与背景同色。这里改成:
+   顶行 = 搜索图标 + 输入框 + 计数 + 上一个/下一个/关闭(× 脱离绝对定位回归文档流),
+   第二行 = 「匹配」选项组(三个自绘开关 chip)+ 右侧替换输入框与替换按钮。
+   所有颜色取主题令牌,深浅主题自动翻转。 */
+/* 面板容器:CodeMirror 把搜索面板挂在编辑器底部(.cm-panels-bottom),
+   这里给两种落位都铺上实体表面,避免面板透出下方代码导致文字糊在一起 */
+.fviewer .cm-panels {
+  background: transparent;
+  color: var(--text);
+  z-index: 4;
 }
-.fviewer .cm-panels button { padding: 3px 10px; font-size: 12px; border-radius: var(--r-sm); }
-.fviewer .cm-searchMatch { background: var(--warn-bg); outline: 1px solid var(--warn-border); }
-.fviewer .cm-searchMatch.cm-searchMatch-selected { background: var(--accent-soft); outline-color: var(--accent-border); }
+.fviewer .cm-panels-top,
+.fviewer .cm-panels-bottom {
+  background: var(--code-bg-solid);
+  background-image: linear-gradient(180deg, var(--code-bg-solid), var(--code-bg));
+}
+.fviewer .cm-panels-top { border-bottom: 1px solid var(--line); }
+.fviewer .cm-panels-bottom { border-top: 1px solid var(--line); }
+.fviewer .cm-panel.cm-search {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 6px 8px;
+  /* 上下留白 + 右侧避让关闭钮,不再沿用原生的 2px 紧凑内边距 */
+  padding: 9px 10px;
+  background: transparent;
+  font-family: var(--font-ui);
+}
+
+/* 搜索框:玻璃内嵌暗槽,聚焦时描边点亮 */
+.fviewer .cm-panel.cm-search input.cm-textfield[name=search] {
+  flex: 1 1 200px; min-width: 140px; width: auto;
+  height: 28px; margin: 0; padding: 0 10px 0 30px;
+  background: var(--glass-bg-inset);
+  background-image: linear-gradient(transparent, transparent);
+  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  color: var(--text); font-size: 12.5px; font-family: var(--mono);
+  outline: none; transition: border-color .18s, box-shadow .18s, background .18s;
+}
+.fviewer .cm-panel.cm-search input.cm-textfield[name=search]::placeholder { color: var(--placeholder); }
+.fviewer .cm-panel.cm-search input.cm-textfield[name=search]:focus {
+  border-color: var(--accent-border);
+  background: var(--code-bg-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft), inset 0 1px 0 var(--glass-hi);
+}
+
+/* 放大镜:用 SVG 背景画(圆 + 斜柄),避免额外图标依赖 */
+.fviewer .cm-panel.cm-search::before {
+  content: ''; order: -1; flex: none;
+  width: 16px; height: 16px; margin-left: 7px; margin-right: -26px;
+  background: currentColor; color: var(--muted); opacity: .85;
+  -webkit-mask: var(--cm-search-lens) center / contain no-repeat;
+  mask: var(--cm-search-lens) center / contain no-repeat;
+  pointer-events: none;
+  --cm-search-lens: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='M15.5 15.5 20.5 20.5'/%3E%3C/svg%3E");
+}
+
+/* 第二行的「匹配」前缀:视觉分组标签,由 CSS 生成不占 DOM */
+.fviewer .cm-panel.cm-search::after {
+  content: '匹配'; order: 9; flex: none;
+  margin-left: 2px; margin-right: -3px;
+  font-size: 11px; letter-spacing: .5px; color: var(--text-faint);
+}
+
+/* 面板内按钮:次按钮(上一个/下一个/替换)与主按钮(全部/全部替换)区分 */
+.fviewer .cm-panel.cm-search button.cm-button {
+  order: 9; flex: none;
+  height: 26px; margin: 0; padding: 0 11px;
+  display: inline-flex; align-items: center;
+  background: linear-gradient(135deg, var(--fill-2), var(--fill-2-lo));
+  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  color: var(--text-2); font-size: 12px; font-family: inherit; line-height: 1;
+  cursor: pointer; transition: background .16s, border-color .16s, color .16s;
+}
+.fviewer .cm-panel.cm-search button.cm-button:hover {
+  background: linear-gradient(135deg, var(--bar-tint-strong-a), var(--bar-tint-strong-b));
+  border-color: var(--glass-border-hover); color: var(--text);
+}
+.fviewer .cm-panel.cm-search button.cm-button:active { background: var(--fill-1); }
+/* 上一个/下一个:紧贴搜索框右侧,成为输入框的延伸 */
+.fviewer .cm-panel.cm-search button.cm-button[name=prev] { order: 2; }
+.fviewer .cm-panel.cm-search button.cm-button[name=next] { order: 3; }
+/* 全选匹配 / 全部替换:强调色描边 + 强调色文字(用 --accent 而非更淡的 --accent-2,浅色主题下仍清晰可读) */
+.fviewer .cm-panel.cm-search button.cm-button[name=select],
+.fviewer .cm-panel.cm-search button.cm-button[name=replaceAll] {
+  order: 11;
+  color: var(--accent); font-weight: 600;
+  border-color: var(--accent-border);
+  background: var(--accent-fill-soft);
+}
+.fviewer .cm-panel.cm-search button.cm-button[name=select]:hover,
+.fviewer .cm-panel.cm-search button.cm-button[name=replaceAll]:hover {
+  background: var(--accent-fill); color: var(--accent);
+}
+
+/* 关闭钮:取消原生 absolute 定位,回到同行右端,做成圆形图标钮 */
+.fviewer .cm-panel.cm-search button[name=close] {
+  order: 12; flex: none; margin: 0 0 0 auto;
+  position: static; inset: auto;
+  width: 26px; height: 26px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: var(--r-pill);
+  box-shadow: none; color: var(--text-faint);
+  font-size: 15px; font-family: inherit; line-height: 1; cursor: pointer;
+  transition: color .16s, background .16s, border-color .16s;
+}
+.fviewer .cm-panel.cm-search button[name=close]:hover {
+  color: var(--text); background: var(--hover-bg-strong); border-color: var(--line);
+}
+
+/* 选项 chip:label + checkbox 自绘成胶囊。
+   勾选框做成真实的迷你方块(仅靠 :checked 自身着色),即使 WebView 不支持 :has(),
+   选中状态也始终可见;支持 :has() 时再叠加整颗 chip 的强调色底 —— 渐进增强而非唯一依靠。 */
+.fviewer .cm-panel.cm-search label {
+  order: 10; flex: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; margin: 0; padding: 0 10px;
+  background: var(--glass-bg); border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  color: var(--muted); font-size: 11.5px; line-height: 1;
+  white-space: pre; cursor: pointer;
+  transition: color .16s, background .16s, border-color .16s;
+}
+.fviewer .cm-panel.cm-search label:hover { color: var(--text-2); border-color: var(--glass-border-hover); }
+.fviewer .cm-panel.cm-search label input[type=checkbox] {
+  appearance: none; -webkit-appearance: none;
+  flex: none; width: 11px; height: 11px; margin: 0; padding: 0;
+  border: 1px solid var(--line-strong); border-radius: 3px;
+  background: transparent; cursor: pointer;
+  transition: background .16s, border-color .16s;
+}
+.fviewer .cm-panel.cm-search label input[type=checkbox]:checked {
+  background: var(--accent); border-color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--code-bg-solid);
+}
+.fviewer .cm-panel.cm-search label:has(input:checked) {
+  color: var(--accent); font-weight: 600;
+  background: var(--accent-fill-soft);
+  border-color: var(--accent-border);
+}
+.fviewer .cm-panel.cm-search label:has(input:focus-visible) {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 换行符:强制「查找行 / 替换行」两行布局 */
+.fviewer .cm-panel.cm-search br { display: none; }
+.fviewer .cm-panel.cm-search input.cm-textfield[name=replace] {
+  order: 20; flex: 1 1 160px; min-width: 120px; width: auto;
+  height: 28px; margin: 0; padding: 0 10px;
+  background: var(--glass-bg-inset);
+  background-image: linear-gradient(transparent, transparent);
+  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  color: var(--text); font-size: 12.5px; font-family: var(--mono);
+  outline: none; transition: border-color .18s, box-shadow .18s, background .18s;
+}
+.fviewer .cm-panel.cm-search input.cm-textfield[name=replace]::placeholder { color: var(--placeholder); }
+.fviewer .cm-panel.cm-search input.cm-textfield[name=replace]:focus {
+  border-color: var(--accent-border);
+  background: var(--code-bg-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft), inset 0 1px 0 var(--glass-hi);
+}
+.fviewer .cm-panel.cm-search button.cm-button[name=replace] { order: 21; }
+
+/* 匹配高亮:全部匹配弱化,当前匹配用强调色描边突出 */
+.fviewer .cm-searchMatch {
+  background: var(--warn-bg);
+  outline: 1px solid var(--warn-border);
+  border-radius: 2px;
+}
+.fviewer .cm-searchMatch.cm-searchMatch-selected {
+  background: var(--accent-fill);
+  outline: 1px solid var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+/* 「选中相同词」高亮(.cm-selectionMatch)默认是硬编码浅绿,浅色主题下几乎看不见,改用主题色 */
+.fviewer .cm-selectionMatch { background: var(--accent-soft); border-radius: 2px; }
+.fviewer .cm-searchMatch .cm-selectionMatch { background: transparent; }
 .fviewer .cm-tooltip {
   background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo)); color: var(--text);
   backdrop-filter: var(--blur-md);
@@ -174,4 +341,10 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   .fviewer-back { min-height: 36px; }
   /* CodeMirror 触控:加大点击目标与字号(编辑器内部由 CM 自己处理触摸) */
   .fviewer .cm-line { padding: 0 8px; }
+  /* 搜索面板:输入框独占整行,按钮/开关自动换行,触控目标加高 */
+  .fviewer .cm-panel.cm-search { padding: 8px; gap: 6px; }
+  .fviewer .cm-panel.cm-search input.cm-textfield[name=search],
+  .fviewer .cm-panel.cm-search input.cm-textfield[name=replace] { flex: 1 1 100%; }
+  .fviewer .cm-panel.cm-search button.cm-button { height: 30px; padding: 0 13px; }
+  .fviewer .cm-panel.cm-search label { height: 28px; }
 }

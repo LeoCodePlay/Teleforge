@@ -98,6 +98,9 @@ impl SpawnSpec {
             .env("PORT", self.port.to_string())
             .env("HOST", "127.0.0.1")
             .env("DATA_DIR", &self.data_dir)
+            // 让服务端知道自己跑在桌面端外壳里(配对接口据此回传 kind:'desktop',
+            // 浏览器扩展靠它在服务端列表里标出「桌面端 / 网页端」)
+            .env("TELEFORGE_SHELL", "desktop")
             .current_dir(&self.res)
             .stdout(open_log(&self.log_path))
             .stderr(open_log(&self.log_path));

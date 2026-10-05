@@ -5,7 +5,7 @@
   <style>
     :root { color-scheme: dark; }
     body {
-      width: 300px; margin: 0; padding: 12px;
+      width: 320px; margin: 0; padding: 12px;
       font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
       background: #1b1d21; color: #e6e7e9;
     }
@@ -28,10 +28,23 @@
     button:hover { background: #2d3238; }
     button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
     button.primary:hover { background: #3b7bf5; }
+    button:disabled { opacity: .55; cursor: default; }
     .check { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: #e6e7e9; font-size: 12px; }
     .err { color: #f87171; font-size: 12px; min-height: 16px; margin: 8px 0 0; word-break: break-all; }
     .hint { color: #7c828c; font-size: 11px; margin: 10px 0 0; }
     code { background: #262a30; padding: 1px 4px; border-radius: 3px; }
+    .srv-title { display: flex; align-items: center; color: #7c828c; font-size: 11px; margin: 12px 0 4px; }
+    .srv-title button { flex: 0 0 auto; padding: 2px 6px; font-size: 11px; }
+    .srv {
+      display: flex; align-items: center; gap: 6px; padding: 5px 7px; border-radius: 6px;
+      background: #23262b; margin-bottom: 4px;
+    }
+    .srv .dot { width: 7px; height: 7px; }
+    .srv .addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .srv .addr em { color: #7c828c; font-style: normal; font-size: 11px; }
+    .srv .st { color: #7c828c; font-size: 11px; }
+    .srv button { flex: 0 0 auto; padding: 3px 7px; font-size: 11px; }
+    .srv .why { color: #f87171; font-size: 11px; margin: 0 0 6px 20px; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -42,13 +55,19 @@
     <span id="ver"></span>
   </header>
 
-  <label for="server">Teleforge 服务地址(留空 = 自动查找)</label>
-  <input id="server" type="text" placeholder="留空自动查找,或填 http://127.0.0.1:4000" />
+  <label for="server">服务地址(可只填端口,留空则自动扫描)</label>
+  <input id="server" type="text" placeholder="例如 4011,或 127.0.0.1:4011" />
 
   <div class="row">
-    <button id="pair" class="primary">查找并连接</button>
-    <button id="disconnect">断开</button>
+    <button id="connect" class="primary">连接</button>
+    <button id="scan">扫描全部</button>
   </div>
+
+  <div class="srv-title">
+    <span>已连接的服务端</span>
+    <button id="disconnectAll">全部断开</button>
+  </div>
+  <div id="list"></div>
 
   <label class="check">
     <input type="checkbox" id="paused" />
@@ -61,8 +80,8 @@
 
   <p class="err" id="err"></p>
   <p class="hint">
-    桌面端每次启动端口可能不同,地址留空点「查找并连接」会自动扫描
-    <code>127.0.0.1:4000-4019</code> 找到它。<br />
+    可以同时连接多个 Teleforge(网页端和桌面端各连各的,互不顶替)。桌面端每次启动端口可能不同,
+    留空点「扫描全部」会扫 <code>127.0.0.1:4000-4019</code>;知道端口就直接填,例如 <code>4011</code>。<br />
     连接后 AI 就能操作这个浏览器。默认只允许操作它自己新开的标签,以及你在 Teleforge 面板里
     「交给 AI」的标签。被操作的标签顶部会出现「正在调试此浏览器」提示,这是 Chrome 强制的。
   </p>

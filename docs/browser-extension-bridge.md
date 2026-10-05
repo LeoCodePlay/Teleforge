@@ -129,6 +129,20 @@ extension/
 - 断线指数退避重连(1s→2s→5s→15s,上限 30s)+ `chrome.alarms` 每 30s 兜底唤醒。
 - 若实测仍被杀,升级为 **offscreen document** 持有 WS(官方推荐的 MV3 长连接做法),SW 只做消息中转。
 
+### 3.6 多服务端(每服务端一条 WebSocket)
+
+一台机器上常常同时跑着桌面端和开发用的网页端(`npm run dev`),各自占 `4000-4019` 里的一个端口,
+`data/browser-bridge.json` 里的配对 token 也是各自的。扩展因此**对每个服务端各持一条 WS**
+(`background.js` 的 `conns` 表),而不是只连一个:
+
+- 只连一个时,后连的会顶掉先连的 —— 表现就是"连上网页端后桌面端再也用不了";
+- `ext_result` 只发回发起该 `ext_call` 的那条连接(每个服务端有各自的 `snapshotScript`,按连接保存);
+- `ext_event`(`tabs_changed`)与暂停开关是浏览器全局的,广播给所有连接;
+- 单个服务端侧仍然只服务一个扩展连接(新连接顶掉旧的),这条不变。
+
+配对响应里多带一个 `kind`(`desktop` / `web`,由 `TELEFORGE_SHELL=desktop` 环境变量判定),
+扩展 popup 只用它把列表里的每一项标成「桌面端」还是「网页端」,不参与任何连接逻辑。
+
 ---
 
 ## 4. 服务端桥接(`server/core/browser-bridge.ts`,新增)
@@ -163,6 +177,25 @@ export const browserBridge = new BrowserBridge();
 |---|---|
 | `ai-tabs`(**默认**) | AI 自己创建的标签 + 用户在 popup/面板里显式"交给 AI"的标签 |
 | `all` | 所有标签(含已登录站点;需用户在 UI 明确开启并二次确认) |
+
+**会话级标签绑定(用户手动操作不受干扰的前提)**
+
+`resolveOps()` 每次工具调用都新建一个 ops,闭包里的 `cur` 只在这一次调用内有效 —— 所以
+"没传 `tab_id`"时如果没有别的依据,就只能回落到**当前活动标签**,也就是用户此刻正在看的那个:
+用户随手切一下标签,AI 下一步就可能对着别的标签快照/点击(默认 `ai-tabs` 下被 `canOperate`
+拒掉变成一步失败,`all` 模式下更会真的操作错标签)。
+
+因此 `browser_open` 打开标签后会把它记到**发起它的会话**上(`browser-backends.ts` 的
+`sessionTabs`),之后该会话所有不带 `tab_id` 的 `browser_*` 都作用于这个标签;标签被关掉
+(或扩展重连后清单里没了)时绑定自动失效,回落到旧的"活动标签 + 授权校验",不会拿死 tabId 去撞。
+显式传 `tab_id` 始终优先。回归测试见 `test/browser-native-tab-binding.test.js`。
+
+**互不干扰的边界(必须让用户知道)**
+
+- 调试器是 per-tab 的:只有 AI 碰过的标签会被 attach(顶部黄条),用户其它标签完全不受影响;
+- 反过来,用户在同一标签里的手动操作、以及打开 DevTools,都会影响 AI 那一步(同一个页面 / 调试器被抢);
+- 同一浏览器 profile 的 cookie 与登录态是共享的,AI 的登录/登出会影响用户其它标签 —— 这是浏览器层面的行为,无法隔离;
+- `browser_open` 会新开前台标签并抢一次焦点(标签本来就是给用户看的)。
 
 所有 native 操作写审计日志(时间、方法、tabId、URL),落 `data/browser-bridge.log` 或现有日志通道。
 

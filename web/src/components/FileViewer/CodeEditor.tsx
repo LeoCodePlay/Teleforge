@@ -1,6 +1,6 @@
 // CodeMirror 6 编辑器封装:代码高亮 + 左侧行号 + 编辑能力 + 右键菜单
 // 主题与配色全部走主题令牌(见 FileViewer.scss 与 codeMirrorTheme.ts),随深浅主题自动翻转。
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   EditorView,
@@ -23,6 +23,24 @@ import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } 
 import { searchKeymap } from '@codemirror/search';
 import { langOf, syntaxStyle } from './codeMirrorTheme';
 import { scrollMovesPanel } from '../../utils/scrollClose';
+
+/** Ctrl+F 搜索面板的中文短语:CodeMirror 原生面板文案默认英文,这里整体替换为中文 */
+const CM_PHRASES: Record<string, string> = {
+  Find: '查找',
+  Replace: '替换为',
+  next: '下一个',
+  previous: '上一个',
+  all: '全选匹配',
+  'match case': '区分大小写',
+  regexp: '正则',
+  'by word': '全词',
+  replace: '替换',
+  'replace all': '全部替换',
+  close: '关闭',
+  'current match': '当前匹配',
+  'on line': '位于第',
+  go: '跳转'
+};
 
 interface CodeEditorProps {
   /** 文件名,用于推断语言高亮 */
@@ -57,6 +75,8 @@ export default function CodeEditor({ fileName, path, initial, onEdit, onSave }: 
   // 每次渲染刷新回调引用,让编辑器内闭包永远拿到最新 onEdit/onSave
   const cbRef = useRef({ onEdit, onSave });
   cbRef.current = { onEdit, onSave };
+  // 短语表是静态的,只构造一次(避免每次渲染产生新的 facet 值)
+  const phrases = useMemo(() => EditorState.phrases.of(CM_PHRASES), []);
 
   useEffect(() => {
     const parent = hostRef.current;
@@ -70,6 +90,8 @@ export default function CodeEditor({ fileName, path, initial, onEdit, onSave }: 
       state: EditorState.create({
         doc: initial,
         extensions: [
+          // 面板/无障碍文案中文化(查找、替换、下一个…)——放在最前,保证覆盖默认英文
+          phrases,
           lineNumbers(),
           highlightActiveLineGutter(),
           highlightSpecialChars(),
