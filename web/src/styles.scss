@@ -145,13 +145,16 @@ button.primary:hover:not(:disabled) {
 }
 button.primary:active:not(:disabled) { background: var(--btn-hover-b); }
 
+/* 危险按钮:与普通按钮**同一个底**、同一条描边,只靠文字色(与悬浮时的红 scrim)表达危险。
+   之前它单独用 --glass-bg(比普通按钮暗 16),同一排操作按钮里两个底色并排,
+   看着像两种不同层级的控件 —— 这正是"配色怪"的来源之一。 */
 button.danger {
-  background: var(--glass-bg);
+  background: var(--fill-2);
   border-color: var(--line); color: var(--err-text);
 }
 button.danger:hover:not(:disabled) {
   border-color: var(--line-strong);
-  background: var(--danger-soft-strong);
+  background-image: linear-gradient(var(--danger-soft-strong), var(--danger-soft-strong));
 }
 button.ghost { background: transparent; border-color: transparent; }
 button.ghost:hover:not(:disabled) {
@@ -232,8 +235,10 @@ button.action-icon { border-color: transparent; }
 .seg button { flex: 1; border-radius: var(--r-sm); border-color: transparent; background: transparent; box-shadow: none; }
 .seg button:hover:not(:disabled):not(.on) { background: var(--glass-bg-hover); }
 .seg button.on {
-  background: var(--accent-fill);
-  border-color: var(--accent-border); color: var(--accent-2);
+  /* 选中态:中性抬升底 + 强调色文字。不再叠 accent 填充 + accent 描边,
+     一段控件里出现"蓝底蓝字蓝框"会让整排按钮都染蓝 */
+  background: var(--hover-bg-strong);
+  border-color: transparent; color: var(--accent-2);
 }
 
 .check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin: 8px 0; cursor: pointer; }
@@ -292,11 +297,65 @@ button.action-icon { border-color: transparent; }
 @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
 .modal {
   width: 560px; max-width: 92vw;
-  background: var(--pop-bg);
+  background: var(--overlay-bg);
   border: 1px solid var(--line); border-radius: var(--r-lg);
   overflow: hidden;
   box-shadow: var(--glass-shadow-lg);
   animation: modal-in .16s ease-out;
+}
+
+/* ---- 浮层面板(弹窗/对话框):局部把阶梯整体上移一档 ----
+   为什么要动:深色主题里「面板 vs 页面底」只差 9 级,弹窗又停在原点 --surface,
+   被蒙层压暗后与背后背景实测只差 Δ9 —— 看起来不是浮起来的卡片,而是在蒙层上挖了个洞。
+   抬到浮层档(--overlay-bg,深色下比 --surface 亮 16)后 Δ≈22,配合描边与投影边界才立得住。
+
+   本体抬了,内部的卡片/控件就必须同步上移,否则它们反而比本体更暗,层次倒过来。
+   这里把同一套派生关系相对 --overlay-bg 重新表达一遍:用 color-mix 在 CSS 里算
+   (项目里已在多处使用),而不是把 JS 的派生算式抄第二遍 —— 抄了就有两份真相,
+   改一处漏一处。悬浮/按下用的半透明 scrim 本身自适应父层,因此无需重定义。
+
+   另:作用域内把 --pop-bg 换成 --pop-bg-2,让嵌在弹窗里的下拉菜单仍浮在本体之上。 */
+.modal, .settings {
+  --ovl: var(--overlay-bg);
+  background: var(--ovl);
+  --pop-bg: var(--pop-bg-2);
+  /* 描边族跟着本体底走 —— 否则描边比本体还亮,卡片看着像空框 */
+  --line: color-mix(in srgb, var(--text) 13%, var(--ovl));
+  --line-soft: color-mix(in srgb, var(--text) 9%, var(--ovl));
+  --line-faint: color-mix(in srgb, var(--text) 6%, var(--ovl));
+  --line-strong: color-mix(in srgb, var(--text) 21%, var(--ovl));
+  --line-dash: color-mix(in srgb, var(--text) 10%, var(--ovl));
+  --glass-border: var(--line);
+  --glass-border-hover: var(--line-strong);
+  /* 凹陷槽(输入框 / 代码块 / 内嵌列表):相对本体向下,但仍须明显高于页面底。
+     基准用 --bg-deep(页面底)—— 主题里没有 --bg 这个变量,写错会让整条 color-mix 失效。 */
+  --glass-bg-inset: color-mix(in srgb, var(--bg-deep) 32%, var(--ovl));
+  --surface-inset: var(--glass-bg-inset);
+  --code-bg: color-mix(in srgb, var(--bg-deep) 34%, var(--ovl));
+  --bg-code: color-mix(in srgb, var(--bg-deep) 34%, var(--ovl));
+  --code-bg-soft: color-mix(in srgb, var(--bg-deep) 24%, var(--ovl));
+  --code-bg-solid: color-mix(in srgb, var(--bg-deep) 42%, var(--ovl));
+  /* 卡片 / 控件 / 填充:相对本体向上,各档语义与全局一致 */
+  --glass-bg: color-mix(in srgb, var(--text) 6%, var(--ovl));
+  --card-hover: color-mix(in srgb, var(--text) 12%, var(--ovl));
+  --glass-bg-strong: color-mix(in srgb, var(--text) 16%, var(--ovl));
+  --fill-1: color-mix(in srgb, var(--text) 5%, var(--ovl));
+  --fill-1-lo: color-mix(in srgb, var(--text) 4%, var(--ovl));
+  --fill-2: color-mix(in srgb, var(--text) 10%, var(--ovl));
+  --fill-2-lo: color-mix(in srgb, var(--text) 7%, var(--ovl));
+  /* 弹窗内白板/预览类高亮面,同样跟着本体走 */
+  --surface-2: color-mix(in srgb, var(--text) 8%, var(--ovl));
+  --surface-3: color-mix(in srgb, var(--text) 13%, var(--ovl));
+  /* 文字色族**也必须跟着重算** —— 它们原本是按 --surface 调好的灰阶,
+     本体一抬、里面的卡片和按钮跟着变亮,同样的灰字就直接掉到 WCAG AA 以下
+     (实测次级文字 3.72:1)。这里按同一个"相对本体"的关系重新表达一遍。 */
+  --text-2: color-mix(in srgb, var(--text) 86%, var(--ovl));
+  --muted: color-mix(in srgb, var(--text) 76%, var(--ovl));
+  --text-faint: color-mix(in srgb, var(--text) 68%, var(--ovl));
+  --placeholder: color-mix(in srgb, var(--text) 68%, transparent);
+  /* 危险文字在更亮的按钮底上要再提一档亮度才够 4.5:1(用 --red 与 --text 现算,
+     不能写 var(--err-text) —— 那是同一个变量,会自引用) */
+  --err-text: color-mix(in srgb, var(--red) 62%, var(--text));
 }
 @keyframes modal-in {
   from { opacity: 0; transform: scale(.98) translateY(8px); }
@@ -364,14 +423,17 @@ select option { background: var(--code-bg-solid); color: var(--text); }
 select optgroup { background: var(--code-bg-solid); color: var(--muted); }
 select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 
-/* 状态徽标(连接/模型/主题等处共用) */
+/* 状态徽标(连接/模型/主题等处共用):语义只靠**文字色**,描边保持中性 ——
+   绿字 + 绿框的"发光小胶囊"是上一版的遗留,和全站「不用彩色描边」的规则打架 */
 .badge {
   flex: none; font-size: 11px; padding: 1px 9px; border-radius: var(--r-pill);
-  border: 1px solid var(--glass-border); color: var(--muted);
-  background: var(--glass-bg);
+  border: 1px solid var(--line-soft); color: var(--muted);
+  /* 凹陷档而不是卡片档:badge 基本都长在卡片上,用 --glass-bg(与卡片同色)会只剩一圈描边,
+     看着像"没填色的空框";用凹陷档才读得出是一个贴上去的标签。 */
+  background: var(--glass-bg-inset);
 }
-.badge.ok { color: var(--green); border-color: var(--ok-border); }
-.badge.warn { color: var(--amber); border-color: var(--warn-border); }
+.badge.ok { color: var(--green); }
+.badge.warn { color: var(--amber); }
 
 /* ---- AI 配置:我的提供商列表:实色卡片(AiConfigPanel/SkillsPanel/PluginsPanel 共用) ---- */
 .provider-list { display: flex; flex-direction: column; gap: 8px; }
@@ -381,10 +443,13 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
   background: var(--glass-bg);
   transition: background .16s ease, border-color .16s ease;
 }
-.provider-card:hover { border-color: var(--line-strong); background: var(--glass-bg-hover); }
+.provider-card:hover { border-color: var(--line-strong); background: var(--card-hover); }
+/* 选中卡片:中性抬升底 + 强调色描边。
+   不给它铺 accent 填充 —— 卡片整块面积一铺强调色,整片面板就变蓝,和旁边的中性卡片打架;
+   底色也刻意不比 hover 更亮(描边已经足够表达"选中的是这张"),这样悬停选中卡片不会闪一下 */
 .provider-card.active {
   border-color: var(--accent-border);
-  background: var(--accent-fill);
+  background: var(--card-hover);
 }
 .pc-head { display: flex; align-items: center; gap: 8px; }
 .pc-name { font-weight: 600; font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -401,8 +466,8 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
   color: var(--muted); background: transparent; font-size: 13px; box-shadow: none;
 }
 .provider-add:hover:not(:disabled) {
-  border-color: var(--accent); color: var(--accent-2);
-  background: var(--accent-soft);
+  border-color: var(--accent-border); color: var(--accent-2);
+  background: var(--hover-bg);
 }
 .provider-add .pa-icon { font-size: 15px; }
 .provider-empty { border: 1px dashed var(--line-dash); border-radius: var(--r-md); padding: 14px; text-align: center; color: var(--muted); font-size: 12px; }

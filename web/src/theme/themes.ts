@@ -190,14 +190,24 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
   const alt = hueShift(t.accent, 58);
 
   return {
-    /* ---- 文字层级:从主题的 surface 向 text 插值,保证每一级都够读 ---- */
+    /* ---- 文字层级:从主题的 surface 向 text 插值,保证每一级都够读 ----
+       下限按**最亮的常见底**取值,而不是只看表面底:弱化文字经常长在卡片/浅灰徽标上,
+       按表面底调到"看着达标",落上去就只剩 4.4(低于 AA)。 */
     '--text-2': tint(0.78),
-    '--text-faint': dark ? tint(0.52) : tint(0.60),
-    '--muted': tint(0.62),
+    '--text-faint': dark ? tint(0.56) : tint(0.68),
+    '--muted': dark ? tint(0.62) : tint(0.70),
     '--placeholder': withAlpha(t.text, 0.60),
     '--code-ink': t.text,
     '--danger': t.danger,
     '--ok': t.success,
+    /* 危险 / 成功色在本项目里主要当**前景文字**用(30+ 处 color: var(--red))。
+       未经调整的品牌原色在抬升面(卡片、浮层、悬浮态)上会掉到 WCAG AA 以下:
+       深色主题里往 text 提亮,浅色主题里往 text 压深(浅色下 bg 比 surface 更暗,
+       单纯"往背景方向调"会越调越亮)。需要品牌原色时用 --red-raw / --green-raw。 */
+    '--red': mix(t.danger, t.text, dark ? 0.20 : 0.10),
+    '--green': mix(t.success, t.text, dark ? 0.08 : 0.12),
+    '--red-raw': t.danger,
+    '--green-raw': t.success,
     '--warn': warn,
     '--amber': warn,
     '--amber-bright': warn,
@@ -205,7 +215,7 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
     /* ---- 表面:三级抬升 + 一级内嵌,全部不透明实色 ---- */
     '--surface-2': dark ? tint(0.05) : sink(0.34),
     '--surface-3': dark ? tint(0.10) : t.surface,
-    '--surface-inset': sink(0.45),
+    '--surface-inset': dark ? sink(0.45) : tint(0.06),
 
     /* 顶栏/侧栏/底栏:与表面同色,靠发丝描边与主区分开 */
     '--bar-tint-a': t.surface,
@@ -213,12 +223,25 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
     '--bar-tint-strong-a': dark ? tint(0.05) : t.surface,
     '--bar-tint-strong-b': dark ? tint(0.03) : t.surface,
 
-    /* 兼容层:老令牌名继续可用,值改为实色。
-       --glass-border 与 --line 取同一个值:按钮/控件无论引用哪一个,描边都完全一致 */
+    /* 兼容层:老令牌名继续可用。
+       --glass-border 与 --line 取同一个值:按钮/控件无论引用哪一个,描边都完全一致。
+
+       层级模型的**原点(零基准)是 --surface**:tint(k) 一律向上派生(卡片/按钮/chip),
+       sink(k) 一律向下派生(输入框/代码块/凹槽)。因此任何**承载内容的面板本体**
+       必须落在 --surface 这一级 —— 用了 --pop-bg(比 surface 亮 10%)当面板底,
+       面板内的卡片、按钮就会比面板本身更暗,整片区域变成"凹坑"。
+       --pop-bg 只用于**只装行、不装卡片**的小型弹层(菜单/下拉/右键菜单),
+       它们的行悬浮用的是半透明叠加,不受基准影响。 */
     '--glass-bg': tint(0.04),
-    '--glass-bg-strong': dark ? tint(0.10) : t.surface,
+    /* 容器类卡片(provider / theme / skill card)的悬浮与选中底。
+       刻意比 --glass-bg-hover 弱一档:卡片里还嵌着按钮,如果卡片悬浮底比按钮静止底还亮,
+       悬停卡片时里面的按钮就会反过来显得"凹进去"(两层嵌套的层级就翻了)。
+       --glass-bg-hover 留给叶子目标(列表行、菜单项、图标按钮)——它们内部没有嵌套控件。 */
+    '--card-hover': tint(dark ? 0.08 : 0.06),
+    /* 必须保持不透明:这些表面浮在图片 / 内容之上(附件缩略图、悬浮球、浏览器面板按钮) */
+    '--glass-bg-strong': dark ? tint(0.105) : t.surface,
     '--glass-bg-hover': withAlpha(t.text, dark ? 0.12 : 0.11),
-    '--glass-bg-inset': sink(0.45),
+    '--glass-bg-inset': dark ? sink(0.45) : tint(0.055),
     '--glass-border': dark ? tint(0.13) : tint(0.18),
     '--glass-border-hover': dark ? tint(0.22) : tint(0.26),
     '--glass-hi': 'transparent',
@@ -226,32 +249,51 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
     '--glass-shadow': `0 1px 2px ${sh1}, 0 6px 18px ${sh2}`,
     '--glass-shadow-lg': `0 2px 6px ${sh1}, 0 18px 44px ${sh2}`,
 
-    /* 弹层/下拉/右键菜单表面 */
-    '--pop-bg': dark ? tint(0.10) : t.surface,
-    '--pop-bg-lo': dark ? tint(0.10) : t.surface,
-    '--pop-bg-strong': dark ? tint(0.14) : t.surface,
+    /* 弹层/下拉/右键菜单表面。
+       刻意压在 --fill-2(按钮静止底)之下:这些浮层里放的是**按钮和行**,不装卡片,
+       所以只要比 surface 高一档就够"浮起来"(外加投影),但必须低于按钮底,
+       否则浮层里的按钮会和浮层同色,变成一块没有边界的平板。 */
+    '--pop-bg': dark ? tint(0.075) : t.surface,
+    '--pop-bg-lo': dark ? tint(0.075) : t.surface,
+    '--pop-bg-strong': dark ? tint(0.145) : t.surface,
+    /* 嵌套在弹窗内部的浮层(设置面板里的下拉菜单等)底。
+       弹窗本体已经站在浮层档上,嵌在它里面的菜单必须再高一档,否则和本体同色、边界消失。 */
+    '--pop-bg-2': dark ? tint(0.19) : t.surface,
+    /* 对话框(设置 / 各弹窗)本体底。
+       语义上等同于"浮层档",单独给一个名字是因为弹窗作用域内要把 --pop-bg 换成
+       --pop-bg-2,而内部阶梯的派生基准仍必须是本体这一档 —— 靠这个不会被覆盖的名字
+       才能在同一个作用域里既抬本体、又保留基准(直接写 var(--pop-bg) 会自引用)。
+       为什么不继续停在原点 --surface:深色主题里 --surface 与页面底 --bg 只差 9 级,
+       再被蒙层压暗后,弹窗与背后背景实测只差 Δ9 —— 看起来不是浮起来的卡片,
+       而是在蒙层上挖了个洞。抬到浮层档后 Δ≈22,配合描边与投影边界才立得住。 */
+    '--overlay-bg': dark ? tint(0.075) : t.surface,
 
-    /* 填充与交互态。
-       注意:悬浮态一律用「以文字色为底的半透明叠加」,而不是固定实色 ——
-       列表行可能盖在 surface / pop-bg / 卡片 等不同层上,固定实色无法保证
-       「比父层更亮」,会出现"行悬浮和父面板几乎同色、悬浮等于没有"的问题;
-       半透明叠加无论盖在哪一层上都能给出稳定可辨的亮(深色)/暗(浅色)变化。 */
-    '--fill-1': dark ? tint(0.03) : sink(0.20),
-    '--fill-1-lo': dark ? tint(0.02) : sink(0.14),
-    '--fill-2': dark ? tint(0.06) : sink(0.28),
-    '--fill-2-lo': dark ? tint(0.04) : sink(0.20),
+    /* 填充与交互态。两个方向都从 --surface 这个原点出发:
+       「抬起」= 往 text 靠(tint),「凹下」= 往 bg 靠(sink);浅色主题里 bg 反而比 surface
+       更暗,所以凹下在浅色主题里要往 text 压灰,不能再用 sink —— 否则输入框、代码块
+       在浅色下会比面板更白,层级直接翻过来。
+       **悬浮/按下态**一律用「以文字色为底的半透明叠加」:它们会被用在 surface / pop-bg /
+       卡片 等不同层上,固定实色无法保证比父层更亮(深色)或更暗(浅色),
+       旧实现就出现过"行和父面板几乎同色、悬浮等于没有"。 */
+    '--fill-1': dark ? tint(0.03) : tint(0.045),
+    '--fill-1-lo': dark ? tint(0.02) : tint(0.035),
+    /* 按钮静止态:必须明显高于卡片底(--glass-bg / --card-hover)和浮层底(--pop-bg),
+       否则按钮会显得嵌进卡片里、或和浮层同色变成一块没有边界的平板 */
+    '--fill-2': dark ? tint(0.115) : tint(0.08),
+    '--fill-2-lo': dark ? tint(0.07) : tint(0.06),
     '--row-hover': withAlpha(t.text, dark ? 0.09 : 0.08),
     '--hover-bg': withAlpha(t.text, dark ? 0.12 : 0.11),
     '--hover-bg-strong': withAlpha(t.text, dark ? 0.16 : 0.14),
     '--hover-bg-hard': withAlpha(t.text, dark ? 0.21 : 0.18),
     '--ins-hl': 'transparent',
 
-    /* 代码/内嵌表面 */
-    '--code-bg': sink(0.42),
-    '--code-bg-soft': sink(0.28),
-    '--code-bg-solid': sink(0.55),
+    /* 代码/内嵌表面:一律「凹」(sink),与原点 --surface 相反方向 */
+    '--code-bg': dark ? sink(0.42) : tint(0.05),
+    '--code-bg-soft': dark ? sink(0.28) : tint(0.035),
+    /* 原生 select 的弹出层:系统弹层里半透明会失真串色,必须不透明 */
+    '--code-bg-solid': dark ? sink(0.55) : tint(0.07),
     '--code-bor': dark ? tint(0.10) : tint(0.12),
-    '--bg-code': sink(0.42),
+    '--bg-code': dark ? sink(0.42) : tint(0.05),
     /* 终端:两方向都取主题最深端,保证终端内容对比度 */
     '--xterm-bg': darkest,
 
@@ -279,7 +321,7 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
     '--ok-border': withAlpha(t.success, dark ? 0.36 : 0.38),
     '--err-bg': withAlpha(t.danger, dark ? 0.11 : 0.10),
     '--err-border': withAlpha(t.danger, dark ? 0.40 : 0.45),
-    '--err-text': mix(t.danger, t.text, 0.10),
+    '--err-text': mix(t.danger, t.text, dark ? 0.30 : 0.10),
     '--warn-bg': withAlpha(warn, dark ? 0.11 : 0.12),
     '--warn-border': withAlpha(warn, dark ? 0.38 : 0.42),
     '--danger-fill': withAlpha(t.danger, 0.12),
@@ -302,7 +344,7 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
     /* ---- 危险按钮 ---- */
     '--btn-danger-a': t.danger,
     '--btn-danger-b': t.danger,
-    '--btn-danger-text': readableOn(t.danger, lightest, darkest),
+    '--btn-danger-text': readableOn(dark ? mix(t.danger, t.text, 0.20) : mix(t.danger, t.text, 0.10), lightest, darkest),
     '--btn-danger-bor': withAlpha(t.danger, 0.45),
     '--btn-danger-glow': withAlpha(t.danger, 0.18),
 

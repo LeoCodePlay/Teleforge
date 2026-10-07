@@ -1,7 +1,9 @@
-/* ---- 设置面板独有样式(左侧菜单 + 右侧内容):统一实色浮层(与 .modal 同配方) ---- */
+/* ---- 设置面板独有样式(左侧菜单 + 右侧内容):浮层面板,阶梯由 styles.scss 的
+   `.modal, .settings` 作用域整体上移 ----
+   本体底走 --overlay-bg(浮层档),与背后被压暗的页面拉开 Δ≈22 的边界。 */
 .settings {
   width: 860px; max-width: 94vw; height: 76vh;
-  background: var(--pop-bg);
+  background: var(--overlay-bg);
   border: 1px solid var(--line); border-radius: var(--r-lg);
   overflow: hidden; display: flex; flex-direction: column;
   box-shadow: var(--glass-shadow-lg);
@@ -15,7 +17,9 @@
 .settings-menu {
   width: 190px; flex: none; border-right: 1px solid var(--line-soft);
   padding: 10px 8px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
-  background: var(--fill-1-lo);
+  /* 左栏**不再用下沉底色**:之前它比弹窗本体还暗一档,在弹窗内部形成一个反方向的层,
+     还和页面底撞色(看着像漏下去了)。导航列的分层交给右侧那条发丝线,足够了。 */
+  background: transparent;
 }
 .settings-menu button {
   display: flex; align-items: center; gap: 8px; text-align: left;
@@ -26,8 +30,18 @@
 }
 .settings-menu button:hover { background: var(--glass-bg-hover); transform: none; box-shadow: none; }
 .settings-menu button.on {
-  background: var(--accent-fill);
-  color: var(--accent-2); border-color: var(--accent-border);
+  /* 选中态:与「卡片选中」**同一档抬升底**(--card-hover),再叠一个强调色信号。
+       · 不给它铺 accent 填充 —— 菜单项多,整列铺蓝会让面板发蓝、也让强调色失去强调作用;
+       · 抬升档位必须和卡片选中一致:同一个面板里"选中"只有一种深度,用户才不用重新学。
+     用左侧 2px 指示条而不是描边:导航项是行,行用指示条,卡片是块,块用描边。 */
+  position: relative;
+  background: var(--card-hover);
+  color: var(--accent-2);
+  border-color: transparent;
+}
+.settings-menu button.on::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 2px; height: 15px; border-radius: 0 1px 1px 0; background: var(--accent);
 }
 .settings-menu button span { flex: none; }
 .settings-menu .menu-cat { font-size: 11px; color: var(--muted); padding: 10px 12px 2px; letter-spacing: .5px; }

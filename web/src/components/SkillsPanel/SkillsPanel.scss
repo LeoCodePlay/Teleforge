@@ -1,11 +1,10 @@
 /* ---- SkillsPanel 独有样式:技能卡片(文件形态,项目级/用户级) + 标题行/筛选工具条 ---- */
 .skill-card {
   border: 1px solid var(--glass-border); border-radius: var(--r-md); padding: 11px 13px;
-  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
-  box-shadow: inset 0 1px 0 var(--glass-hi);
-  transition: all .18s ease;
+  background: var(--glass-bg);
+  transition: background .16s ease, border-color .16s ease;
 }
-.skill-card:hover { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); box-shadow: inset 0 1px 0 var(--glass-hi); }
+.skill-card:hover { border-color: var(--line-strong); background: var(--card-hover); }
 .skill-desc {
   color: var(--text); font-size: 12.5px; margin-top: 5px; line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;

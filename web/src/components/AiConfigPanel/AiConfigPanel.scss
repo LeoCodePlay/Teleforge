@@ -60,8 +60,8 @@
   padding: 4px 12px; font-size: 12px;
 }
 .provider-chips button.on {
-  color: var(--accent-2); border-color: var(--line-strong);
-  background: var(--accent-fill);
+  color: var(--accent-2); border-color: transparent;
+  background: var(--hover-bg-strong);
 }
 
 /* ---- AI 配置:添加/编辑提供商弹窗 ---- */

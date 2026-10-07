@@ -151,11 +151,14 @@ function ThemePreview({ t, badge }: { t: CustomThemeDraft; badge?: string }) {
       </div>
       <span className="tp-meta">
         <span className="tp-name" style={{ color: t.text }}>{t.name || '未命名主题'}</span>
-        <span className="tp-desc" style={{ color: mix(t.surface, t.text, 0.38) }}>
+        {/* 16 进制色值读数是给人看的次要信息,不能压在 3.4:1 —— 用与全站 --muted
+            同一档的插值比例,保证在任意主题的 bg 上都过 AA */}
+        <span className="tp-desc" style={{ color: mix(t.surface, t.text, 0.55) }}>
           {t.bg} · {t.accent}
         </span>
       </span>
-      {badge && <span className="badge ok" style={{ borderColor: t.accent, color: t.accent }}>{badge}</span>}
+      {/* 状态徽标只靠文字色表达语义:inline 的 borderColor 会重新引入彩色描边 */}
+      {badge && <span className="badge ok" style={{ color: t.success }}>{badge}</span>}
     </div>
   );
 }
