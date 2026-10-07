@@ -248,8 +248,8 @@ function SkillModal({ edit, connected, onClose, onSaved }: SkillModalProps) {
     }
   };
 
-  // portal 到 body:同 AiConfigPanel 提供商弹窗 —— .settings 的 backdrop-filter 会让
-  // 内联 .modal 的液态玻璃失效(采样不到真实页面),fixed 遮罩也被困在面板内
+  // portal 到 body:同 AiConfigPanel 提供商弹窗 —— 避免 fixed 遮罩被设置面板困住,
+  // 也让遮罩覆盖整页而不是只覆盖面板内部
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal skill-modal" onClick={(e) => e.stopPropagation()}>

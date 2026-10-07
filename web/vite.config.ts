@@ -34,7 +34,12 @@ const DSH_ALIAS: { find: string; replacement: string }[] = [
   { find: '@deepseek-ai/dsh-client-shortcuts', replacement: adapter('shortcuts/index.ts') },
   { find: '@deepseek-ai/dsh-session', replacement: adapter('session/index.ts') },
   { find: '@deepseek-ai/dsh-typert-protocol', replacement: dsh('typert-protocol/src/index.ts') },
+  // 终端面板(ui-sidebar-terminal)要的两个 dsh 包:只提供类型面,运行时模型由 TerminalPanelHost 实现。
+  { find: '@deepseek-ai/dsh-api-terminal-controller', replacement: adapter('api-terminal-controller/index.ts') },
+  { find: '@deepseek-ai/dsh-client-ui-theme', replacement: adapter('ui-theme/index.ts') },
   { find: '@deepseek-ai/dsh-util-workspace-path', replacement: dsh('util-workspace-path/src/index.ts') },
+  // 文档预览面板的 code 分支:ui-primitives/markdown/highlight.ts 要的语言语法表(零 npm 依赖,整包搬进 dsh/)。
+  { find: '@deepseek-ai/dsh-util-code-language', replacement: dsh('util-code-language/src/index.ts') },
   // 这两个包按**构建产物**消费:类型走 lib/types/*.d.ts,运行时走 lib/*.js。
   // 原因:它们的 TS 源码是按 dsh 自己的基础配置写的,进不了本项目的严格编译程序
   // (cordis 源码在本项目选项下 45 个错)。dsh 自己的 exports 也正是这么声明的。

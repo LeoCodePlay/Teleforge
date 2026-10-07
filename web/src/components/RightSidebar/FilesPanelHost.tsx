@@ -41,8 +41,7 @@ function filesInstance(sid: string): ReturnType<typeof filesStore.create> {
   return instance;
 }
 
-/** 本项目的目录条目(FsEntry)→ dsh 树认的 `WorkspaceDirectoryEntry`。 */
-function toWorkspaceEntry(parent: string, entry: DirEntry): WorkspaceDirectoryEntry {
+/** 本项目的目录条目(FsEntry)→ dsh 树认的 `WorkspaceDirectoryEntry`。 */function toWorkspaceEntry(parent: string, entry: DirEntry): WorkspaceDirectoryEntry {
   const type: WorkspaceDirectoryEntry['type'] =
     entry.type === 'dir' ? 'directory' : entry.type === 'file' ? 'file' : entry.type === 'link' ? 'symlink' : 'other';
   return {
@@ -64,6 +63,15 @@ function toWorkspaceEntry(parent: string, entry: DirEntry): WorkspaceDirectoryEn
 const watch: WatchWorkspaceDirectory = async function* () {
   yield 'ready';
 };
+
+/**
+ * 槽位框架在 session 作用域的子槽上注入的 Provider(dsh 的 `SessionAreaProps`)。
+ * 本项目不注册 `sidebar.right.tab.files.actions` 的任何条目 —— renderSlot 是空实现,
+ * 所以这里只需要一个透传壳让类型成立。
+ */
+function SessionProvider({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
 
 interface Props {
   /** dockkit 给的标签 id(面板按它给自己的树分桶) */
@@ -96,8 +104,9 @@ export default function FilesPanelHost({ tabId, sid, cwd, local, onOpenFile }: P
       const get = (): S => {
         const next = selector(instance.getSnapshot());
         const cached = cache.current;
-        if (cached === null || !equal(cached.value, next)) cache.current = { value: next };
-        return cache.current.value;
+        if (cached !== null && equal(cached.value, next)) return cached.value;
+        cache.current = { value: next };
+        return next;
       };
       return useSyncExternalStore(instance.subscribe, get, get);
     };
@@ -144,6 +153,8 @@ export default function FilesPanelHost({ tabId, sid, cwd, local, onOpenFile }: P
   const tab = useMemo<PanelTabInfo>(() => ({
     id: tabId,
     signal,
+    // 文件树没有「后台空转」的顾虑(dsh 的 attend/轮询语义在文件面板里不存在),恒为可见。
+    visible: true,
     refreshShortcut: undefined,
     actions: {
       bindCommands(commands) {
@@ -168,6 +179,7 @@ export default function FilesPanelHost({ tabId, sid, cwd, local, onOpenFile }: P
       {...inject}
       t={t}
       renderSlot={() => null}
+      SessionProvider={SessionProvider}
     />
   );
 }

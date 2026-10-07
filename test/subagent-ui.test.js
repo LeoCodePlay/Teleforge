@@ -5,7 +5,8 @@
 //   - 入口在会话头部动作区(不是对话区悬浮胶囊、不是右侧大抽屉);
 //   - catalog 弹层宽 336px(ui-subagent 的 SubagentHeaderLineage.module.css 原值);
 //   - 进了子会话后,根会话的 count 入口让位给面包屑里的切换器(与 dsh 的 lineage 槽一致);
-//   - 子会话的输入位是一块只读说明框(one-shot 子代理),而不是禁用输入框。
+//   - 子会话的输入位是**正常输入框**(默认派发的是可继续的 continuable 子代理):
+//     能发后续消息、能暂停当前这一轮 —— 只有一次性子代理才换成只读说明框。
 //
 // 环境要求:web/dist 已构建(npm run build)+ 本机有 Chrome/Edge(或 BROWSER_PREVIEW_EXECUTABLE)。
 // 缺任一项则整段跳过并算通过 —— 那是环境问题,不是代码回归。
@@ -158,6 +159,9 @@ try {
     .evaluate((el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), w: Math.round(r.width) }; });
   const mainMsgBox = await page.locator('.agent-slot:not(.hide) .chatwrap .msg').first()
     .evaluate((el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), w: Math.round(r.width) }; });
+  // 输入卡落位也一起量:子会话用的是同一个组件,落位必须与父会话一致(不是"再适配一次")
+  const mainComposerBox = await page.locator('.agent-slot:not(.hide) .composer-box').first()
+    .evaluate((el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), w: Math.round(r.width) }; });
 
   // ---- 卡片行尾「查看会话」→ 在主对话区打开子智能体会话(dsh 的 openChild)----
   const openBtn = card.locator('.dsh-rowAction').first();
@@ -165,9 +169,14 @@ try {
   await openBtn.waitFor({ timeout: 25000 });
   check('卡片上有「查看会话」入口', (await openBtn.count()) > 0);
   await openBtn.click();
-  const view = page.locator('[data-subagent-conversation]').first();
+  // 子会话现在就是**父会话那套 ChatPanel**(同一组件、同一套对话系统),只是 sid 是派发记录 id
+  const view = page.locator('.subagent-pane').first();
   await view.waitFor({ timeout: 15000 });
-  check('主对话区打开了子智能体会话', await view.isVisible());
+  check('主对话区打开了子智能体会话(同一个 ChatPanel)', await view.isVisible());
+  check('子会话用的是父会话的对话组件(.chatwrap + 回合折叠行)',
+    (await view.locator(':scope > .chatwrap').count()) === 1
+    && (await view.locator('[data-turn-process]').count()) >= 1,
+    String(await view.locator('[data-turn-process]').count()));
 
   // 面包屑:进了子会话,根会话的 count 入口让位给标题切换器(与 dsh 的 lineage 槽一致)
   const switcher = page.locator('[data-subagent-catalog="switcher"]').first();
@@ -177,28 +186,34 @@ try {
     (await page.locator('[data-subagent-catalog="count"]').count()) === 0);
   check('面包屑里有回父会话的入口', (await page.locator('[data-session-crumb]').count()) === 1);
 
-  // 详情区照搬正常对话:工具调用以主对话同款工具行(.dsh-tooltree)出现
-  await view.locator('.sa-chat .dsh-tooltree').first().waitFor({ timeout: 15000 });
+  // 详情区照搬正常对话:回合默认收起 —— 先展开(与父会话同一交互:点折叠行),
+  // 工具调用才是主对话同款工具行(.dsh-tooltree)
+  await view.locator('[data-turn-process]').first().click();
+  await view.locator('.dsh-tooltree').first().waitFor({ timeout: 15000 });
   // 可能是多次派发:等「这次」的结论真的渲染出来再读文本,避免读到中间态/别的记录
-  await view.locator('.sa-chat').getByText('结论:目录可读').first().waitFor({ timeout: 25000 });
+  await view.getByText('结论:目录可读').first().waitFor({ timeout: 25000 });
   await page.waitForTimeout(400);
   const viewText = await view.innerText();
   check('对话首条是父对话生成的任务与边界', viewText.includes('任务目标') && viewText.includes('边界(必须遵守)'), viewText.slice(0, 200));
   check('对话里有子代理的真实工具调用(主对话同款工具行)',
-    (await view.locator('.sa-chat [data-tool="get_local_info"]').count()) > 0);
+    (await view.locator('[data-tool="get_local_info"]').count()) > 0);
   check('对话里有子代理的结论', viewText.includes('结论:目录可读'), viewText.slice(-120));
-  check('不再显示步数/调用次数等过程元信息', !/\d+\s*步/.test(viewText) && !/次调用/.test(viewText), viewText.slice(-80));
   check('详情区用正常对话样式(用户气泡 + 助手气泡)',
-    (await view.locator('.sa-chat .msg.user .bubble.user-bubble').count()) > 0
-    && (await view.locator('.sa-chat .msg.assistant .bubble.ai-bubble').count()) > 0);
-  // 输入位被只读说明框顶掉(dsh 对 one-shot 子代理的同样处理)
-  const readonly = view.locator('[data-subagent-readonly]').first();
-  check('子会话的输入位是只读说明框', await readonly.isVisible());
-  check('只读说明文案是「一次性子智能体记录」',
-    (await readonly.innerText()).includes('一次性子智能体记录'), await readonly.innerText());
-  check('子会话里没有任何修改入口(只读回看)',
-    !(await view.locator('button').allInnerTexts()).some((t) => /删除|停止|重跑|编辑/.test(t)));
-  check('看子会话时主会话输入框已隐藏', !(await page.locator('.chatwrap textarea').first().isVisible()));
+    (await view.locator('.msg.user .bubble.user-bubble').count()) > 0
+    && (await view.locator('.msg.assistant .bubble.ai-bubble').count()) > 0);
+  // 输入位:与父会话同一个输入卡(可继续的子代理保留默认 composer —— dsh 同语义)
+  const composer = view.locator('.composer-box').first();
+  check('子会话的输入位就是父会话那个输入卡(可继续发消息)', await composer.isVisible());
+  check('子会话里没有只读说明框(它不是一次性子代理)',
+    (await view.locator('[data-subagent-readonly]').count()) === 0);
+  const composerInput = composer.locator('textarea').first();
+  check('输入框可打字(不是禁用状态)', await composerInput.isEnabled());
+  check('父会话专属控件已收起(工作区 chip / 权限选择 / 附件 / 模型菜单)',
+    (await view.locator('.ws-chip').count()) === 0
+    && (await view.locator('.composer-add').count()) === 0
+    && (await view.locator('.wsbar-row .tb-model').innerText()).includes('继承父会话'),
+    (await view.locator('.wsbar-row').innerText()).slice(0, 80));
+  check('看子会话时主会话输入框已隐藏', !(await page.locator('.agent-slot.hide textarea').first().isVisible()));
 
   // ---- 布局体检:头部是 dsh 的那条带;子会话正文与主对话同一条中轴 ----
   const headStyle = await page.locator('[data-session-header]').first().evaluate((el) => {
@@ -209,21 +224,51 @@ try {
   check('会话头部下方有一条分隔线', parseFloat(headStyle.borderB) > 0, headStyle.borderB);
   check('会话头部高度约 50px(dsh 无视图 tab 条时的高度)', headStyle.h >= 48 && headStyle.h <= 54, String(headStyle.h));
 
-  const subCol = await view.evaluate((el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), w: Math.round(r.width) }; });
+  const subCol = await view.locator(':scope > .chatwrap').first().evaluate((el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), w: Math.round(r.width) }; });
   const subMsgBox = await view.locator('.msg').first()
     .evaluate((el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), w: Math.round(r.width) }; });
   check('子会话正文列与主对话同一中轴(同宽同 x)',
     subCol.x === mainCol.x && subCol.w === mainCol.w, JSON.stringify({ subCol, mainCol }));
   check('子会话消息列与主对话消息列同宽同 x',
     subMsgBox.x === mainMsgBox.x && subMsgBox.w === mainMsgBox.w, JSON.stringify({ subMsgBox, mainMsgBox }));
-  // 面板内边距 24px(dsh SubagentReadOnlyComposer 的 margin: 0 24px 20px)
-  const roBox = await readonly.boundingBox();
-  check('只读输入位按 dsh 的 24px 内边距落位',
-    !!roBox && Math.abs((roBox.x - mainCol.x) - 24) <= 1, JSON.stringify(roBox && { dx: roBox.x - mainCol.x }));
+  // 输入卡与父会话同一落位(同一个 ChatPanel,不需要单独调样式)
+  const roBox = await composer.boundingBox();
+  const boxDx = roBox ? Math.abs(roBox.x - mainComposerBox.x) : -1;
+  const boxDw = roBox ? Math.abs(roBox.width - mainComposerBox.w) : -1;
+  check('子会话输入位与父会话同一落位(同一组件,无需单独适配)',
+    !!roBox && boxDx <= 2 && boxDw <= 2,
+    JSON.stringify({ dx: boxDx, dw: boxDw, child: roBox, main: mainComposerBox }));
   // 面包屑不能把标题画两遍(dsh 里子会话那一节交给 lineage 槽,只出现一次)
   const headerText = await page.locator('[data-session-header]').first().innerText();
   check('面包屑里子智能体标题只出现一次',
     (headerText.match(/看工作区目录/g) || []).length === 1, headerText.replace(/\n/g, ' | '));
+
+  // ---- 续聊 + 暂停:默认派发的子代理是常驻的(可继续/可暂停)----
+  // 用的是父会话同一个输入卡与同一个「停止」按钮:.send-btn.stop → stop_agent{ sid } → 子代理暂停
+  console.log('\n[子会话续聊 + 暂停]');
+  {
+    const watchStop = (async () => {
+      for (let i = 0; i < 150; i++) {
+        if ((await view.locator('.send-btn.stop').count()) > 0) return true;
+        await page.waitForTimeout(40);
+      }
+      return false;
+    })();
+    await composerInput.fill('再补一句证据');
+    await composerInput.press('Enter');
+    const stopSeen = await watchStop;
+    check('子代理跑起来时出现父会话同款「停止」按钮(= 暂停当前这一轮)', stopSeen, '');
+    await view.getByText('再补一句证据').first().waitFor({ timeout: 15000 });
+    check('子会话里能看到人类发出的后续消息(subagent_prompt 链路通)', true);
+    // 跑完后回到空闲(按钮从「停止」变回「发送」),而不是终局
+    await page.waitForFunction(
+      () => { const el = document.querySelector('.subagent-pane .composer-box .send-btn'); return !!el && !el.classList.contains('stop'); },
+      null, { timeout: 20000 },
+    );
+    check('跑完回到可继续状态(还能再发消息)', await composerInput.isEnabled());
+    check('子会话里多了第二个回合(工具行 + 折叠行都走同一套渲染)',
+      (await view.locator('[data-turn-process]').count()) >= 2, String(await view.locator('[data-turn-process]').count()));
+  }
 
   // 留一张截图作为证据
   mkdirSync(path.resolve('output/playwright'), { recursive: true });
@@ -233,9 +278,9 @@ try {
   // ---- 回主会话:点面包屑里父会话那一节 ----
   await page.locator('[data-session-crumb]').first().click();
   await page.waitForTimeout(500);
-  check('点父会话面包屑回到主会话', (await page.locator('[data-subagent-conversation]').count()) === 0);
+  check('点父会话面包屑回到主会话', (await page.locator('.subagent-pane').count()) === 0);
   check('回主会话后 catalog 入口恢复', await page.locator('[data-subagent-catalog="count"]').first().isVisible());
-  check('回主会话后输入框可用', await page.locator('.chatwrap textarea').first().isVisible());
+  check('回主会话后输入框可用', await page.locator('.agent-slot:not(.hide) .chatwrap textarea').first().isVisible());
 
   // ---- catalog 弹层:336px、列出这次派发、Esc 关闭 ----
   console.log('\n[子智能体 catalog 弹层]');
@@ -251,7 +296,7 @@ try {
   check('弹层里列出这次派发', await row.isVisible());
   const rowText = await row.innerText();
   check('行上有子智能体描述', rowText.includes('看工作区目录'), rowText);
-  check('行上有「一次性」模式标记', rowText.includes('一次性'), rowText);
+  check('行上有「可继续」模式标记(默认派发的是 continuable 子代理)', rowText.includes('可继续'), rowText);
   check('行尾有「在侧边栏打开」按钮', await page.locator('[data-subagent-aside]').first().isVisible());
 
   // 行内左侧不留分支占位的空块;状态点必须在行高里垂直居中
@@ -276,9 +321,9 @@ try {
   await page.locator('[data-subagent-catalog="count"]').first().click();
   await page.locator('[data-subagent-menu]').first().waitFor({ timeout: 8000 });
   await page.locator('[data-subagent-row]').first().click();
-  await page.locator('[data-subagent-conversation]').first().waitFor({ timeout: 10000 });
+  await page.locator('.subagent-pane').first().waitFor({ timeout: 10000 });
   check('点 catalog 一行在主对话区打开子智能体',
-    (await page.locator('[data-subagent-conversation]').count()) === 1);
+    (await page.locator('.subagent-pane').count()) === 1);
   await page.locator('[data-session-crumb]').first().click();
   await page.waitForTimeout(400);
 
@@ -302,39 +347,27 @@ try {
   await page.waitForTimeout(800);
   check('切回原对话:头部入口又出现', await page.locator('[data-subagent-catalog="count"]').first().isVisible());
 
-  // ---- 子智能体会话进右侧栏(对照阅读)----
-  // 放在最后:开右侧栏会压缩主区域宽度,前面的断言依赖全宽布局。
-  console.log('\n[子智能体会话进右侧栏]');
+  // ---- 行尾按钮:与行点击同一条路(产品决定见 docs/task-session-topbar-dsh-parity.md:
+  //      「子智能体走侧栏的那条路不该再进侧栏」)——不出现右侧栏,也不重复开一份 ----
+  console.log('\n[子智能体行尾按钮]');
   await page.locator('[data-subagent-catalog="count"]').first().click();
   await page.locator('[data-subagent-menu]').first().waitFor({ timeout: 8000 });
   const asideBtn = page.locator('[data-subagent-aside]').first();
   await asideBtn.waitFor({ timeout: 20000 });
-  check('catalog 行里有「在侧边栏打开」入口', await asideBtn.isVisible());
+  check('catalog 行尾有第二个入口', await asideBtn.isVisible());
 
   await asideBtn.click();
-  const rsb = page.locator('.sidebar-right').first();
-  await rsb.waitFor({ timeout: 10000 });
-  check('右侧栏打开', await rsb.isVisible());
-  check('侧栏里恰好一个子智能体标签', (await rsb.locator('[data-dockkit-tab]').count()) === 1,
-    String(await rsb.locator('[data-dockkit-tab]').count()));
-  // 正文用与主对话区同一份渲染层(conversation.tsx):任务/边界 + 工具行 + 结论都要在
-  const rsbView = rsb.locator('[data-subagent-conversation]').first();
-  await rsbView.waitFor({ timeout: 20000 });
-  const rsbText = await rsbView.innerText();
-  check('侧栏显示任务与边界', rsbText.includes('任务目标') && rsbText.includes('边界(必须遵守)'), rsbText.slice(0, 200));
-  check('侧栏显示子代理的工具调用', (await rsbView.locator('.sa-chat [data-tool="get_local_info"]').count()) > 0);
-  check('侧栏显示子代理的结论', rsbText.includes('结论:目录可读'), rsbText.slice(-160));
-  check('侧栏标注了只读', rsbText.includes('一次性子智能体记录'), rsbText.slice(-160));
-  check('侧栏没有任何修改入口(与主对话区同为只读回看)',
-    !(await rsbView.locator('button').allInnerTexts()).some((t) => /删除|停止|重跑|编辑/.test(t)));
-
-  // 再点一次:内容身份是 runId,不该重复开标签
-  await page.locator('[data-subagent-catalog="count"]').first().click();
-  await page.locator('[data-subagent-menu]').first().waitFor({ timeout: 8000 });
-  await page.locator('[data-subagent-aside]').first().click();
   await page.waitForTimeout(400);
-  check('再次打开同一子智能体不重复开标签', (await rsb.locator('[data-dockkit-tab]').count()) === 1,
-    String(await rsb.locator('[data-dockkit-tab]').count()));
+  check('行尾按钮同样在主对话区打开子会话(不开右侧栏)',
+    (await page.locator('.subagent-pane').count()) === 1
+    && !(await page.locator('.sidebar-right').first().isVisible()));
+  // 打开的是同一份对话:任务/边界 + 工具行 + 结论 + 父会话那一个输入卡
+  const pane = page.locator('.subagent-pane').first();
+  const paneText = await pane.innerText();
+  check('打开的是同一个子会话(任务与边界)', paneText.includes('任务目标') && paneText.includes('边界(必须遵守)'), paneText.slice(0, 160));
+  check('对话里有子代理的工具行与结论',
+    (await pane.locator('[data-tool="get_local_info"]').count()) > 0 && paneText.includes('结论:目录可读'), paneText.slice(-120));
+  check('输入卡是父会话那一个(可继续发消息)', (await pane.locator('.composer-box textarea').count()) === 1);
 } catch (e) {
   fail++;
   console.log(`  ✗ 用例异常:${e?.message || e}`);

@@ -40,6 +40,8 @@ export interface PanelTabInfo {
   readonly id: TabId;
   /** 标签记录的生存期;中止即表示这条标签没了(面板据此忘掉自己的状态桶)。 */
   readonly signal: AbortSignal;
+  /** 这条标签正文当前是不是「可见的」(dsh 用它决定要不要 fit / focus / 轮询)。 */
+  readonly visible: boolean;
   /** 「重新读取」按钮上挂的快捷键提示;本项目不注册快捷键,故为 undefined。 */
   readonly refreshShortcut?: { readonly keys?: readonly string[]; readonly aria?: string } | undefined;
   readonly actions: PanelTabActions;

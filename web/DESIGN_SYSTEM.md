@@ -1,0 +1,238 @@
+# 实色界面 Solid UI —— 设计规范
+
+> 本文档是本项目 UI 的**唯一视觉事实来源**(Single Source of Truth)。
+> 任何新增页面、组件、弹窗必须遵循本文规范。
+> 旧版「液态玻璃 Liquid Glass」规范已废弃并删除,毛玻璃 / 模糊 / 内高光 / 外发光全部不再使用。
+
+---
+
+## 一、设计理念
+
+**Solid UI = 不透明实色表面 + 1px 发丝描边 + 极淡单一投影。**
+
+- **材质**:界面元素是一块块**不透明实色**。层次靠「表面明度差 + 描边」表达,不靠模糊。
+- **光线**:没有内高光、没有外发光、没有镜面反光。深度只由一层极淡的、由主题背景色派生的投影承担。
+- **形体**:克制的圆角梯度(6 / 10 / 14 / 999),边界干净。
+- **色彩**:全站只有**一个强调色**,只用在「可点击 / 可选中 / 焦点」上。
+
+**禁止**:`backdrop-filter`(毛玻璃)、`--glass-hi/--glass-lo` 式内高光、`0 0 Npx` 外发光、
+`text-shadow` 光晕、渐变实体表面、极光/光斑动画、纯黑投影。
+
+---
+
+## 二、6 色令牌体系(核心)
+
+> **页面里出现的每一个颜色,都由用户自定义的 6 个颜色派生。**
+
+`theme/themes.ts` 的 `deriveThemeVars()` 把这 6 色展开成 100+ 个 CSS 变量。
+组件只消费变量,**禁止**出现任何硬编码色值(hex / rgb / rgba)。
+
+| # | 字段 | 语义 | 作用范围 |
+|---|---|---|---|
+| 1 | `bg` | 背景基色 | 页面底色;**它的明暗决定整套主题是深色还是浅色** |
+| 2 | `surface` | 表面色 | 顶栏 / 侧栏 / 底栏 / 面板 / 卡片 / 弹层 |
+| 3 | `text` | 文字主色 | 文字,并派生全部次级文字与描边深浅 |
+| 4 | `accent` | 强调色 | 主按钮 / 选中 / 链接 / 焦点环 / 进度 |
+| 5 | `success` | 成功色 | 连接正常 / 通过 / diff 新增 |
+| 6 | `danger` | 危险色 | 错误 / 删除 / diff 删除 |
+
+### 2.1 派生规则
+
+| 目标 | 派生方式 |
+|---|---|
+| 文字层级 `--text-2 / --muted / --text-faint / --placeholder` | `surface → text` 插值 |
+| 表面抬升 `--surface-2 / --surface-3 / --surface-inset` | `surface ↔ bg` 混合(全不透明) |
+| 描边 `--line-faint / --line-soft / --line / --line-strong` | `surface → text` 低比例插值 |
+| 悬浮 / 选中 `--hover-bg / --glass-bg-hover / --row-hover` | `surface → text` 约 4%–13% |
+| 阴影 `--glass-shadow / --glass-shadow-lg` | 深色主题用 **bg 压暗**、浅色主题用 **text 压暗**(永不出现纯黑) |
+| 主按钮 / 危险按钮文字 | 从主题自身「最亮端 / 最暗端」二选一,保证对比度 |
+| 警告色 `--amber` | `hueShift(danger, +44°)`(红 → 琥珀) |
+| 次强调色 `--violet` | `hueShift(accent, +58°)`(与主色同族但不撞色) |
+| diff 增删 | 新增走 `success`、删除走 `danger` |
+| 滚动条 / 进度条 / 遮罩 | `text`(或 `bg`)加透明度派生 |
+
+### 2.2 兼容层
+
+为了让既有 60+ 个组件样式零改名换肤,派生表同时输出旧变量名
+(`--glass-bg`、`--fill-*`、`--pop-*`、`--bar-tint-*`、`--line-*` …),
+只是**值全部换成实色**:
+
+- `--glass-hi` / `--glass-lo` / `--ins-hl` / `--btn-sheen` = `transparent`(内高光整体失效)
+- `--blur-sm/md/lg` = `none`(残留的 `backdrop-filter: var(--blur-*)` 一律退化为 `none`)
+- `--glare` = `transparent`(扫光动效失效)
+
+---
+
+## 三、预设主题(三深一浅)
+
+| id | 名称 | bg | surface | text | accent | success | danger |
+|---|---|---|---|---|---|---|---|
+| `ink` | 墨黑 | `#0d0f13` | `#16191f` | `#e7eaf0` | `#5b8cff` | `#3fb26f` | `#ef5f5f` |
+| `graphite` | 石墨 | `#0d1117` | `#171b22` | `#e6edf3` | `#2cc4b8` | `#3fb950` | `#f0564a` |
+| `dusk` | 暮色 | `#141110` | `#1e1a17` | `#f0e9e1` | `#e3a343` | `#5cba7d` | `#e5624f` |
+| `paper` | 纸白(浅) | `#eef1f5` | `#ffffff` | `#16191f` | `#2f6feb` | `#1a7f4b` | `#c93a3a` |
+
+自定义主题:主题面板提供 **6 个取色器 + 名称**,右侧实时预览一张迷你界面
+(背景 / 表面 / 文字 / 主按钮 / 成功 / 危险同屏可见),保存即生效、localStorage 持久化。
+
+---
+
+## 四、形状 / 描边 / 投影 / 动效 / 悬浮反馈
+
+| 项 | 规范 |
+|---|---|
+| 圆角梯度 | `--r-sm: 6px`(小控件、按钮)/ `--r-md: 10px`(面板、卡片)/ `--r-lg: 14px`(弹窗)/ `--r-pill: 999px`(仅非按钮的 chip/badge、开关) |
+| 描边 | 一律 1px;分隔用 `--line-faint/soft`,组件边界用 `--line`,悬浮用 `--line-strong` |
+| 投影 | 只有浮层(弹窗 / 菜单 / 下拉 / Toast)有;按钮、卡片、输入框 **零投影** |
+| 焦点环 | `box-shadow: 0 0 0 2px var(--accent-soft)` + 描边 `--accent-border` |
+| 悬浮 | **叠加层模型**:底色不动,在上面叠一层以文字色为底的半透明 scrim(见下) |
+| 按下 | 叠更厚一档的 scrim |
+| 弹层进入 | `pop-in`:淡入 + `scale(.98)` + `translateY(3px)`,140–180ms |
+| 动效频率 | 只保留「真实状态」的呼吸(后端断线、AI 操控中、等待回答),其余静止 |
+
+### 4.1 悬浮/按下必须是「叠加层」,不能是固定实色
+
+悬浮色一律用 `withAlpha(text, α)` 的半透明 scrim,而不是某个固定的实色:
+
+| 令牌 | 深色 | 浅色 | 用途 |
+|---|---|---|---|
+| `--row-hover` | α .07 | α .06 | 表格行、列表行 |
+| `--hover-bg` | α .10 | α .09 | 菜单项、下拉项、列表选项(按钮类) |
+| `--hover-bg-strong` | α .14 | α .13 | 按下态 |
+| `--hover-bg-hard` | α .20 | α .17 | 强反馈(工具条图标、拖拽落点) |
+| `--glass-bg-hover` | α .12 | α .11 | 行/卡片/图标按钮的常规悬浮 |
+
+**为什么必须是半透明**:列表行可能盖在 `--surface` / `--pop-bg` / 卡片 等不同层上。
+固定实色无法同时保证「比每一层都更亮」(深色)或「更暗」(浅色)——
+旧实现就出现过「菜单项悬浮色比它所在的 pop 面板还暗,色差只有个位数」的情况,
+悬浮等于没有。半透明 scrim 无论盖在哪一层上,都稳定给出可辨的亮/暗变化。
+
+实现上分两种写法(二选一,不要混用):
+
+```css
+/* ① 半透明元素(菜单项、列表行、幽灵按钮):直接给底色 */
+.menu-item:hover { background: var(--hover-bg); }
+
+/* ② 自带不透明底色的控件(普通按钮):底色不动,悬浮叠一层 */
+button { background-color: var(--fill-2); background-image: none; }
+button:hover:not(:disabled) {
+  background-image: linear-gradient(var(--hover-bg), var(--hover-bg));
+}
+```
+
+**验收标准**:任意可交互元素,悬浮态与静止态的底色差值 **ΔRGB ≥ 12**(当前实测最小 Δ20)。
+
+---
+
+## 五、组件规范
+
+### 5.1 按钮(全站只有一套形状)
+
+按钮的形状由 `styles.scss` 的**形状统一锁**强制收口,组件只允许改语义色,
+不允许再引入第二种形状:
+
+| 项 | 规范 |
+|---|---|
+| 圆角 | `--r-sm`(6px),**所有按钮**;全站禁止胶囊(999px)/ 圆形(50%)按钮 |
+| 描边 | 静止态一律 `1px solid var(--line)`;hover 提亮到 `--line-strong` |
+| 底色 | 普通 `--fill-2` / 幽灵 `transparent` / 主按钮 `--accent` / 危险 `--danger-soft` |
+| 语义 | 只靠**底色 + 文字色**表达(选中/危险/警告),不再出现绿框、红框、蓝框按钮 |
+| 投影 | 零投影 |
+| padding / 字号 | `7px 13px` / `13px`;小号 `button.sm` = `4px 11px` / `12px` |
+
+结构件例外(共 3 处,已在 `styles.scss` 内联注明):
+
+1. 贴在标签条上的导航标签 `.btab` / `.tabstrip-add` / `.fm-tab` → 保留上圆角
+   `--r-sm --r-sm 0 0`;
+2. 附件缩略图按钮 `.msg-att-img` / `.att-thumb` → 跟随图片容器 `--r-lg`;
+3. 开关滑块轨道 `.mc-switch` / `.plugin-switch` → 形状本身即「开关」语义,保留 `--r-pill`。
+
+实现方式:`button { border-radius: var(--r-sm) !important; }` —— 历史上 20+ 个组件
+各自把按钮写成胶囊/圆形/8~12px 圆角,`!important` 保证不再有漏网的第二种形状。
+
+### 5.2 列表行 / 行内次要操作(一行 = 一个可点单元)
+
+一行里同时有「主操作」和「次要操作」(删除 / 对比 / 侧栏 / 打开)时,
+**不能让两个按钮各自为政** —— 那是高度不一致、悬停像两个无关控件的根源。
+
+规则:
+
+| 项 | 规范 |
+|---|---|
+| 谁负责悬停底色 | **行容器**(`.ws-pick-item` / `.fcc-item` / `li`) |
+| 行内控件 | 一律 `background: transparent` + `border: 0`,不给自己第二块底色 |
+| 盒模型 | 行内所有控件 `min-height` 与内边距**完全一致**,`align-items: stretch`,上下沿严格对齐 |
+| 次要操作 | 只用**文字色**表达状态(静止 `--text-faint`/`--muted`,悬停 `--red`/`--accent-2`/`--text`),不套彩色边框 |
+| 出现时机 | 默认 `opacity: 0`,与整行悬停**同时**出现(不做独立淡入) |
+| 圆角 | 与行容器同一档 `--r-sm` |
+
+反例(禁止):把次要按钮做成 `height: 19px` + `border-radius: pill` + 自己的边框和背景。
+结果就是「行的左半边亮、右边按钮那截不亮」,以及一行里出现两个不同高度的控件。
+
+```scss
+/* ✅ 正确:底色的唯一归属是行容器 */
+.row { display: flex; align-items: stretch; border-radius: var(--r-sm); }
+.row:hover { background: var(--hover-bg); }
+.row-main, .row-action {
+  display: inline-flex; align-items: center;
+  min-height: 30px; padding: 0 11px;
+  background: transparent; border: 0; border-radius: var(--r-sm);
+}
+.row-action { color: var(--text-faint); }
+.row:hover .row-action, .row-action:hover { color: var(--red); }  /* 只换色,不加底色 */
+```
+
+### 5.3 其它组件
+
+| 组件 | 规范 |
+|---|---|
+| 顶栏 / 侧栏 / 底栏 | `--surface` 实色 + 1px `--line` 分隔 |
+| 标签页 `.btab.active` | `--accent-fill` 填充 + `--accent-border` 描边 |
+| 输入框 / 文本域 / 下拉 | `--glass-bg-inset` 内嵌实色槽 + `--line` 描边,焦点环 2px `--accent-soft` |
+| 弹窗 / 菜单 / 下拉 | `--pop-bg` 实色 + `--line` 描边 + `--glass-shadow` |
+| chip / badge(非按钮) | 允许胶囊形状 + 实色小标签 + 描边 |
+| 卡片 | `--glass-bg` 实色 + `--line` 描边;选中 = `--accent-fill` |
+| 终端 xterm | **例外**:底取主题最深端(`--xterm-bg`),保证内容对比度 |
+
+移动端:`<768` 弹窗全屏化;断点与 `App.scss` / `useMediaQuery.ts` 保持一致
+(`<768 phone` / `768–1279 tablet` / `≥1280 desktop`)。
+
+---
+
+## 六、例外(唯一)
+
+以下两类颜色**不参与 6 色派生**,因为它们是「内容着色」而非界面着色,
+强行收敛会让代码 / 终端无法阅读:
+
+1. **终端 ANSI 色板**:`ConsolePanel.tsx` / `AiTermPanel.tsx` / `dsh/ui-sidebar-terminal` 的
+   xterm `theme` 与 `--dsw-static-blue-*`。
+2. **代码语法高亮**:`dsh-shiki.scss` 的 `--shiki-token-*` 色板。
+
+除此之外,`--dsw-static-neutral-00` / `--dsw-static-neutral-bluish-300`
+(文件类型图标的字形与图标色)同属内容标识,保留固定值;
+`--dsw-static-*` 中**当表面/文字使用**的条目已全部改走主题 token。
+
+---
+
+## 七、性能红线
+
+1. 禁止 `backdrop-filter`(全站已清零,`--blur-*` 统一为 `none`)。
+2. 页面背景只有一层**静态**强调色顶光,不做动画。
+3. 动画只用 `transform` / `opacity` / `background-color`;禁止 animate `width` / `top` / `left`。
+4. 全部动效遵守 `prefers-reduced-motion`。
+
+---
+
+## 八、验收清单(新组件合并前自查)
+
+- [ ] 没有任何硬编码色值,颜色全部来自 CSS 变量
+- [ ] 按钮形状统一:6px 圆角 + `--line` 描边(仅 3 处结构件例外)
+- [ ] 悬浮/按下用半透明 scrim,且与静止态底色差值 ΔRGB ≥ 12(不能"悬浮等于没有")
+- [ ] 列表行的悬停底色挂在**行容器**上;行内主区与次要操作 `background: transparent` 且盒模型一致(同高、同为 6px 圆角)
+- [ ] 没有 `backdrop-filter` / 内高光(`--glass-hi`) / 外发光(`0 0 Npx`)/ `text-shadow` 光晕
+- [ ] 圆角取自 `--r-sm / --r-md / --r-lg / --r-pill`
+- [ ] 投影只出现在浮层,且用 `--glass-shadow*`
+- [ ] hover / active / focus 三态齐全
+- [ ] 文字对比度 ≥ 4.5:1(终端与代码区除外)
+- [ ] 深色与浅色两套预设下都检查过(至少 `ink` 与 `paper`)
+- [ ] 移动端 `<768` 的折叠规则已显式写出

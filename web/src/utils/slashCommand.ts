@@ -9,12 +9,16 @@
 // 看起来成功,但服务端从未产生 compaction/done 事件、也没有落盘——切换会话重新载入历史,
 // 那行压缩标记自然消失。
 //
-// 规则:仅当**整条输入的第一个词**是已注册命令名时才判定为命令(大小写不敏感,允许 `/`
-// 与命令名之间有空格)。这样 `/usr/bin/node`(词里含后续斜杠)、句中的 @引用、未注册的
-// `/某技能名` 都不会被误拦——技能仍按原路径交给后端解析注入。
+// 规则:仅当**整条输入的第一个词**是已注册命令名(或它的中文 token,如 `/计划`、`/目标`)时
+// 才判定为命令(大小写不敏感,允许 `/` 与命令名之间有空格)。这样 `/usr/bin/node`(词里含后续
+// 斜杠)、句中的 @引用、未注册的 `/某技能名` 都不会被误拦——技能仍按原路径交给后端解析注入。
+//
+// 中文 token 的由来:teleforge 是中文产品,deepseek-harness 的 zh 词条把 /plan 显示为「计划」、
+// /goal 显示为「目标」,用户也按中文输入(见 harness 的 command-menu-zh 用例)。因此命令可以
+// 同时按规范名(plan/goal,服务端与日志用它)与中文 token(计划/目标,输入与菜单用它)命中。
 
 export interface SlashCommandMatch {
-  /** 命中的命令名(小写,不含斜杠) */
+  /** 命中的命令名(小写,不含斜杠);可能是中文 token,调用方据此查回命令 */
   name: string;
   /** 命令词之后的剩余文本(已去首尾空白);无参数时为空串 */
   args: string;
@@ -23,7 +27,8 @@ export interface SlashCommandMatch {
 export function matchSlashCommand(text: string, commandNames: string[]): SlashCommandMatch | null {
   const trimmed = String(text ?? '').trim();
   if (!trimmed.startsWith('/')) return null;
-  const m = /^\/\s*([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/i.exec(trimmed);
+  // token 允许中日韩字符:中文 token(/计划、/目标)必须与 ASCII 命令名等价命中
+  const m = /^\/\s*([a-z0-9\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff][a-z0-9\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]*)(?:\s+([\s\S]*))?$/i.exec(trimmed);
   if (!m) return null;
   const name = m[1].toLowerCase();
   if (!commandNames.some((c) => String(c).toLowerCase() === name)) return null;

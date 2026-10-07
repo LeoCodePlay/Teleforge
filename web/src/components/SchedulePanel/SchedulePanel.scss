@@ -1,0 +1,172 @@
+/* ---- 自动化任务大页面 ----
+   视觉沿用本项目的实色界面规范(web/DESIGN_SYSTEM.md):颜色一律走主题 token,
+   布局与圆角/描边/悬停态与其它面板保持一致(参考 ChangesReview.scss / SettingsPanel.scss)。
+   结构:顶栏(标题 + 搜索 + 新建) / 左列表 / 右详情;窄容器(<760px)上下堆叠。 */
+
+.sch-root {
+  display: flex; flex-direction: column; height: 100%; min-height: 0;
+  color: var(--text); font-size: 13px; background: transparent;
+}
+
+/* ---- 顶栏 ---- */
+.sch-head {
+  display: flex; flex: 0 0 auto; align-items: center; gap: 8px;
+  height: 44px; padding: 0 12px; border-bottom: .5px solid var(--line);
+}
+.sch-title { font-weight: 600; font-size: 14px; }
+.sch-sub { color: var(--text-faint); font-size: 12px; }
+.sch-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.sch-search {
+  width: 180px; height: 28px; padding: 0 10px; font: inherit; font-size: 12px;
+  color: var(--text); background: var(--glass-bg-inset);
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm); outline: none;
+}
+.sch-search::placeholder { color: var(--placeholder); }
+.sch-search:focus { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--focus-ring); }
+.sch-new { height: 28px; padding: 0 12px; font-size: 12px; }
+
+/* ---- 主体 ---- */
+.sch-body { flex: 1 1 auto; min-height: 0; display: flex; }
+.sch-list {
+  flex: 0 0 42%; min-width: 280px; max-width: 520px;
+  display: flex; flex-direction: column; gap: 2px;
+  overflow: auto; padding: 8px; border-right: .5px solid var(--line);
+}
+.sch-detail { flex: 1 1 auto; min-width: 0; overflow: auto; padding: 12px; }
+
+.sch-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 2px 6px; }
+
+/* ---- chip / 按钮 ---- */
+.sch-chip {
+  height: 24px; padding: 0 10px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.sch-chip:hover { color: var(--text); background: var(--hover-bg); }
+.sch-chip.on { color: var(--text); background: var(--accent-fill); border-color: var(--line); }
+
+.sch-item {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 8px; border-radius: var(--r-sm); cursor: pointer; border: 1px solid transparent;
+}
+.sch-item:hover { background: var(--hover-bg); }
+.sch-item.on { background: var(--accent-soft); border-color: var(--accent-border); }
+.sch-item.done .sch-item-title { color: var(--muted); }
+.sch-item-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sch-item-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sch-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.sch-item-meta {
+  display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-faint);
+}
+.sch-sep { opacity: .5; }
+.sch-ws { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+/* 状态点:绿=启用 / 蓝=运行中 / 红=过期未跑 / 灰=暂停或已完成 */
+.sch-dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--muted); }
+.sch-dot.ok { background: var(--green); }
+.sch-dot.run { background: var(--running); }
+.sch-dot.err { background: var(--red); }
+.sch-dot.off { background: var(--text-faint); opacity: .6; }
+
+.sch-tag {
+  flex: none; padding: 0 6px; border-radius: var(--r-pill); font-size: 11px; line-height: 16px;
+  color: var(--muted); background: var(--hover-bg-hard);
+}
+.sch-tag.run { color: var(--accent-2); background: var(--accent-fill); }
+.sch-tag.warn { color: var(--amber); background: var(--warn-bg); }
+
+/* 行内操作:平时隐起,悬停/选中才出现,避免列表显得吵 */
+.sch-item-ops { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity .12s; }
+.sch-item:hover .sch-item-ops, .sch-item.on .sch-item-ops { opacity: 1; }
+.sch-icon {
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); font-size: 12px; cursor: pointer;
+}
+.sch-icon:hover { color: var(--text); background: var(--hover-bg-hard); }
+.sch-icon.danger:hover { color: var(--red); background: var(--danger-soft); }
+
+/* ---- 文案基元 ---- */
+.sch-note { margin: 4px 0; font-size: 12px; color: var(--text-faint); line-height: 1.5; }
+.sch-note.err, .sch-preview .err, .sch-form .err { color: var(--err-text); }
+.sch-empty { padding: 16px 8px; }
+.sch-empty-title { margin: 0 0 4px; font-weight: 500; }
+.mono, .sch-prompt, .sch-table td.mono { font-family: var(--mono); }
+
+/* ---- 详情 ---- */
+.sch-detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sch-detail-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sch-detail-title .sch-dot { margin-top: 0; }
+.sch-detail-ops { margin-left: auto; display: flex; gap: 6px; }
+.sch-tabs { display: flex; gap: 6px; margin: 10px 0; }
+.sch-kv {
+  display: grid; grid-template-columns: 88px 1fr; gap: 6px 10px; margin: 0 0 12px;
+  font-size: 12px;
+}
+.sch-kv dt { color: var(--text-faint); }
+.sch-kv dd { margin: 0; color: var(--text); word-break: break-all; }
+.sch-link {
+  padding: 0; border: 0; background: transparent; color: var(--accent);
+  font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline dotted;
+}
+.sch-prompt {
+  margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word;
+  font-size: 12px; line-height: 1.55; color: var(--code-ink);
+  background: var(--code-bg-soft); border: 1px solid var(--code-bor); border-radius: var(--r-sm);
+}
+
+/* ---- 表单 ---- */
+.sch-form { display: flex; flex-direction: column; gap: 12px; max-width: 720px; }
+.sch-form-head { display: flex; align-items: center; gap: 8px; }
+.sch-form-head-ops { margin-left: auto; display: flex; gap: 6px; }
+.sch-field { display: flex; flex-direction: column; gap: 4px; }
+.sch-field > span { font-size: 12px; color: var(--text-faint); }
+.sch-field input, .sch-field textarea, .sch-tz {
+  padding: 6px 8px; font: inherit; font-size: 13px; color: var(--text);
+  background: var(--glass-bg-inset); border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm); outline: none; resize: vertical;
+}
+.sch-field input:focus, .sch-field textarea:focus, .sch-tz:focus {
+  border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.sch-field input.mono { font-family: var(--mono); }
+.sch-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.sch-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sch-inline input[type='number'] { width: 96px; }
+.sch-unit { font-size: 12px; color: var(--text-faint); }
+.sch-mini {
+  height: 24px; padding: 0 8px; border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.sch-mini:hover { color: var(--text); background: var(--hover-bg); }
+.sch-tz { max-width: 260px; }
+
+.sch-preview {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px; font-size: 12px;
+  background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+}
+.sch-preview details summary { cursor: pointer; color: var(--text-faint); }
+.sch-next { margin: 6px 0 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.sch-form-foot { padding-top: 4px; border-top: .5px solid var(--line-soft); }
+
+/* ---- 运行记录 ---- */
+.sch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sch-table th {
+  text-align: left; font-weight: 500; color: var(--text-faint);
+  padding: 6px 8px; border-bottom: .5px solid var(--line);
+}
+.sch-table td { padding: 6px 8px; border-bottom: .5px solid var(--line-faint); vertical-align: top; }
+.sch-table tr:hover td { background: var(--row-hover); }
+.sch-res { padding: 0 6px; border-radius: var(--r-pill); line-height: 18px; }
+.sch-res.success { color: var(--green); background: var(--ok-bg); }
+.sch-res.failure, .sch-res.missed { color: var(--err-text); background: var(--err-bg); }
+.sch-res.skipped { color: var(--amber); background: var(--warn-bg); }
+
+/* ---- 窄容器(手机 / 窄右栏):列表与详情上下堆叠 ---- */
+@media (max-width: 760px) {
+  .sch-body { flex-direction: column; }
+  .sch-list { flex: 1 1 auto; max-width: none; min-width: 0; border-right: 0; border-bottom: .5px solid var(--line); }
+  .sch-detail { flex: 1 1 auto; }
+  .sch-search { width: 120px; }
+  .sch-item-ops { opacity: 1; }
+}

@@ -3,9 +3,10 @@
 //
 // 与 dsh 的差别有两处,都是**数据形态**带来的:
 //   1. 数据来源:dsh 读 session 投影(subagentCatalog + tokenUsage + subagentTiming,可嵌套成树);
-//      本项目的子智能体是**一次性派发**(父对话拿到结论即结束,不可续聊、也不允许再派孙代理),
-//      所以这里是一层平铺列表 —— mode 恒为「一次性」(与 dsh 对 one-shot 子代理的文案一致),
-//      token 取 run 的 promptTokens+completionTokens,时长取 startedAt→endedAt(运行中取 now)。
+//      本项目读派发记录(subagent_list);子智能体默认是**常驻后台**(可续聊/可暂停,也不能再派孙代理),
+//      显式前台派发才是一次性 —— 所以这里是一层平铺列表,mode 按记录的 mode 显示
+//      「可继续」/「一次性」(与 dsh 的 mode.continuable / mode.oneShot 文案一致),
+//      token 取 run 的 promptTokens+completionTokens,时长取 startedAt→endedAt(常驻中取 now)。
 //   2. 行首不留分支占位:dsh 给叶子行渲染一个 14px 的 `.disclosureSpace`,是为了让同一层的
 //      可展开行与叶子行左边界对齐;这里**整层都是叶子**,留这个空位只会让每行左边多出
 //      14px + 6px 的空白,所以不渲染它(状态点直接贴着行的 9px 左内边距)。
@@ -81,9 +82,10 @@ function tokenTotal(run: SubagentRunInfo): number | undefined {
   return total > 0 ? total : undefined;
 }
 
-/** 一次派发的活跃时长:结束后取真实耗时,运行中按 now 递增。 */
+/** 一次派发的活跃时长:结束后取真实耗时,常驻(running/idle)按 now 递增。 */
 function durationOf(run: SubagentRunInfo, now: number): number {
-  const end = run.endedAt ?? (run.status === 'running' ? now : run.startedAt);
+  const alive = run.status === 'running' || run.status === 'idle';
+  const end = run.endedAt ?? (alive ? now : run.startedAt);
   return Math.max(0, end - run.startedAt);
 }
 
@@ -109,7 +111,7 @@ interface CatalogRowsProps {
 function CatalogRows({ source, currentRunId, actions, closeCatalog }: CatalogRowsProps) {
   const { runs, loading, error } = source;
   const [now, setNow] = useState(() => Date.now());
-  const running = runs.some(run => run.status === 'running');
+  const running = runs.some(run => run.status === 'running' || run.status === 'idle');
 
   // 运行中时每秒走一次,时长那一格才会真实递增(与 dsh 同一做法)
   useEffect(() => {
@@ -140,7 +142,9 @@ function CatalogRows({ source, currentRunId, actions, closeCatalog }: CatalogRow
         const isCurrent = run.runId === currentRunId;
         const label = run.description || run.runId;
         const activity = activityOf(run);
-        const mode = tSub('mode.oneShot');
+        // 模式标记与 dsh 的 mode.oneShot / mode.continuable 同一套文案:
+        // 默认(后台、可续聊)= 可继续;显式前台等结果 = 一次性
+        const mode = (run.mode ?? 'continuable') === 'one-shot' ? tSub('mode.oneShot') : tSub('mode.continuable');
         const activityText = activity === 'running'
           ? tSub('activity.running')
           : activity === 'completed' ? tSub('activity.completed') : tSub('activity.inactive');

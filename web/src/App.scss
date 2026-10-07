@@ -3,15 +3,12 @@
 /* 布局 */
 .app { display: flex; flex-direction: column; height: 100vh; }
 
-/* ---- 顶栏:悬浮玻璃条 ---- */
+/* ---- 顶栏:实色条,靠发丝描边与主区分开 ---- */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   height: 48px; padding: 0 16px;
-  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
-  border-bottom: 1px solid var(--line-soft);
-  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 24px var(--shadow-1);
+  background: var(--bar-tint-a);
+  border-bottom: 1px solid var(--line);
   position: relative; z-index: 20;
 }
 /* 桌面壳自定义标题栏:中部拖拽带撑满空白区(拖动窗口,不影响两侧按钮) */
@@ -41,7 +38,7 @@
 .preview-chip {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 600; white-space: nowrap;
-  color: var(--accent, #7aa2f7); border-color: var(--accent-border);
+  color: var(--accent); border-color: var(--accent-border);
   background: var(--accent-fill-soft);
 }
 .preview-chip:hover:not(:disabled) { color: var(--text); border-color: var(--accent-border); }
@@ -52,46 +49,47 @@
   .preview-chip { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; display: block; padding: 4px 8px; }
   .preview-chip-x { display: none; }
 }
+/* 标签条上「🕘 自动化任务」的小红点:有"到点却没跑"的任务时亮起(入口就在「⌨️ 终端」右边) */
+.btab-dot {
+  position: absolute; top: -2px; right: -4px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--red);
+}
 .edge-toggle:hover:not(:disabled) {
   color: var(--text); background: var(--glass-bg-hover);
-  border-color: var(--glass-border);
+  border-color: var(--line);
 }
 
 /* 右上角 SSH 连接状态入口(可点击打开连接弹窗) */
 .conn-chip {
-  padding: 5px 13px; border-radius: var(--r-pill); font-size: 12px; cursor: pointer;
-  background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--muted);
-  white-space: nowrap; backdrop-filter: var(--blur-sm);
-  -webkit-backdrop-filter: var(--blur-sm);
-  box-shadow: inset 0 1px 0 var(--glass-hi);
-  transition: all .18s ease;
+  padding: 5px 13px; font-size: 12px; cursor: pointer;
+  background: var(--glass-bg); border: 1px solid var(--line); color: var(--muted);
+  white-space: nowrap;
+  transition: background .16s ease, border-color .16s ease, color .16s ease;
 }
 .conn-chip:hover:not(:disabled) {
-  border-color: var(--glass-border-hover); color: var(--text);
+  border-color: var(--line-strong); color: var(--text);
   background: var(--glass-bg-hover);
 }
-.conn-chip.ok { color: var(--green); border-color: var(--ok-border); }
-.conn-chip.warn { color: var(--amber); border-color: var(--warn-border); }
+.conn-chip.ok { color: var(--green); }
+.conn-chip.warn { color: var(--amber); }
 .conn-chip.off { color: var(--accent-2); }
 .ws-path { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-2); }
 
 .layout { display: flex; flex: 1; min-height: 0; }
 
-/* ---- 左侧栏:大块磨砂玻璃面板 ---- */
+/* ---- 左侧栏:实色面板 ---- */
 .sidebar {
   min-width: 0; display: flex; flex-direction: column; overflow: hidden;
-  background: linear-gradient(160deg, var(--bar-tint-a), var(--bar-tint-b));
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
+  background: var(--bar-tint-a);
 }
 .sidebar-left {
   position: relative; width: 320px; min-width: 220px;
-  border-right: 1px solid var(--line-soft);
-  box-shadow: inset -1px 0 0 var(--ins-hl), 8px 0 32px var(--shadow-1);
+  border-right: 1px solid var(--line);
 }
 .sidebar.hidden { display: none; }
 .resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 10; }
-.resizer:hover { background: var(--accent-glow); box-shadow: 0 0 12px var(--accent-glow); }
+.resizer:hover, .resizer.dragging { background: var(--accent); }
 body.resizing { cursor: col-resize; user-select: none; }
 body.resizing * { cursor: col-resize !important; }
 
@@ -101,16 +99,16 @@ body.resizing * { cursor: col-resize !important; }
 .side-divider {
   flex: none; height: 6px; cursor: row-resize; position: relative; z-index: 11;
   display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(180deg, var(--bar-tint-b), var(--bar-tint-a));
+  background: var(--bar-tint-a);
   border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
 }
 .side-divider::before {
   content: ''; width: 32px; height: 3px; border-radius: var(--r-pill);
-  background: var(--glass-border);
-  transition: all .15s;
+  background: var(--line-strong);
+  transition: background .15s;
 }
 .side-divider:hover::before, body.splitting .side-divider::before {
-  background: var(--accent-2); box-shadow: 0 0 10px var(--accent-glow);
+  background: var(--accent-2);
 }
 body.splitting { cursor: row-resize; user-select: none; }
 body.splitting * { cursor: row-resize !important; }
@@ -123,10 +121,8 @@ body.splitting * { cursor: row-resize !important; }
 .tabstrip {
   display: flex; align-items: flex-end; gap: 2px;
   flex: none; padding: 8px 10px 0;
-  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
-  backdrop-filter: var(--blur-sm);
-  -webkit-backdrop-filter: var(--blur-sm);
-  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
 /* 固定段:不参与滚动,始终完整可见 */
 .tabstrip-pinned { display: flex; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
@@ -168,10 +164,8 @@ body.splitting * { cursor: row-resize !important; }
 }
 .btab:hover:not(.active) { background: var(--glass-bg-hover); color: var(--text); }
 .btab.active {
-  color: var(--accent-2); background: var(--accent-soft);
+  color: var(--accent-2); background: var(--accent-fill);
   border-color: var(--accent-border);
-  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 -2px 16px var(--accent-soft);
-  text-shadow: 0 0 12px var(--accent-glow);
 }
 .btab.pinned { color: var(--text); }
 .btab-icon { flex: none; font-size: 12px; }
@@ -179,7 +173,7 @@ body.splitting * { cursor: row-resize !important; }
 .btab-close {
   flex: none; display: flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; padding: 0; margin: 0 -5px 0 -2px;
-  border: none; border-radius: var(--r-pill);
+  border: none;
   background: transparent; box-shadow: none;
   font-size: 11px; line-height: 1; color: var(--muted); cursor: pointer;
   opacity: 0; transition: opacity .12s, background .12s;
@@ -197,12 +191,11 @@ body.splitting * { cursor: row-resize !important; }
 /* ---- 命令台(chat/console 切页容器):常驻挂载,隐藏时仅 display:none ---- */
 .tab-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .tab-pane.hide { display: none; }
-/* 子智能体在主对话区"替换"显示:面板本身不能隐藏(子视图是它的子节点,会被一起 display:none),
-   只把对话内容(ChatPanel 的根 .chatwrap)让位 */
-.tab-pane.subagent-open .chatwrap { display: none; }
+/* 子智能体在主对话区"替换"显示:由 .agent-slot 的 .hide 负责(见下方两个内容槽),
+   这里不再需要按 .chatwrap 隐藏 —— 留这条反而会在将来误伤别的直接子节点。 */
 
 /* 主对话区里的两个可换内容槽:主会话 ChatPanel 与子智能体会话视图。
-   两者都常驻挂载(看子会话时 ChatPanel 只是隐藏),这样草稿与滚动位置不会因为来回切换丢掉。 */
+   两者都常驻挂载(看子会话时父会话那个槽只是 .hide),这样草稿与滚动位置不会因为来回切换丢掉。 */
 .agent-slot { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .agent-slot.hide { display: none; }
 
@@ -306,12 +299,15 @@ body.splitting * { cursor: row-resize !important; }
 /* ---- AI 电脑操控进行中指示(顶栏):AI 能看屏/动手时这里常驻可见 ---- */
 .cu-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  color: var(--text); border-color: var(--warn-border); background: var(--glass-bg);
+  color: var(--text); background: var(--warn-bg);
   border: 1px solid var(--warn-border);
-  animation: cu-chip-pulse 1.6s ease-in-out infinite;
 }
-.cu-chip .cu-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+/* 呼吸点表达「正在操控」这一真实状态,不是装饰动效 */
+.cu-chip .cu-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: cu-chip-pulse 1.6s ease-in-out infinite; }
 @keyframes cu-chip-pulse {
-  0%, 100% { box-shadow: inset 0 1px 0 var(--glass-hi); }
-  50% { box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 12px var(--accent-soft); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: .3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cu-chip .cu-dot { animation: none; }
 }

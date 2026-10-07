@@ -6,6 +6,8 @@
 .dsh-dot[data-state='done'] { color: var(--green); }
 .dsh-dot[data-state='warning'] { color: var(--amber); }
 .dsh-dot[data-state='error'] { color: var(--red); }
+/* idle = 没在跑但也没结束(dsh 的 activity.inactive):用最安静的中性灰,别让人误读成"跑着"或"成了" */
+.dsh-dot[data-state='idle'] { color: var(--muted); }
 .dsh-dot-cell { fill: currentColor; opacity: .15; animation: dsh-state-dot-chase 1s infinite; }
 @keyframes dsh-state-dot-chase {
   0%, 12.4% { opacity: 1; } 12.5%, 24.9% { opacity: .6; } 25%, 37.4% { opacity: .35; } 37.5%, 100% { opacity: .15; }

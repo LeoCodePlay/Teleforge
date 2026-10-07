@@ -16,6 +16,7 @@ import { registerSubagent } from '../server/api/rpc/subagent.ts';
 import { registerComputerUse } from '../server/api/rpc/computer-use.ts';
 import { registerExtension } from '../server/api/rpc/extension.ts';
 import { registerChanges } from '../server/api/rpc/changes.ts';
+import { registerSchedule } from '../server/api/rpc/schedule.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -36,7 +37,7 @@ const scratchRpc = () => {
 
 const GOLDEN = {
   ssh:      ['connect', 'disconnect', 'conn_disconnect', 'conn_switch', 'ssh_profiles_list', 'ssh_profile_save', 'ssh_profile_delete'],
-  agent:    ['speak', 'stop_agent', 'get_history', 'permission_get', 'permission_default_get', 'permission_set', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_delete_group', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
+  agent:    ['speak', 'stop_agent', 'get_history', 'permission_get', 'permission_default_get', 'permission_set', 'plan_command', 'goal_command', 'clear_history', 'compact_now', 'session_list', 'session_create', 'session_switch', 'session_delete', 'session_delete_group', 'session_rename', 'session_fork', 'message_delete', 'message_rewind', 'queue_steer', 'queue_remove'],
   skills:   ['skills_list', 'skill_get', 'skill_save', 'skill_delete', 'skill_copy_builtin'],
   config:   ['llm', 'get_status', 'build_info', 'tools_list', 'tool_toggle', 'prompt_inject_get', 'prompt_inject_set'],
   local:    ['list_local_dir', 'read_local_file', 'write_local_file', 'create_local_dir', 'local_delete', 'local_copy', 'local_rename', 'set_local_workspace', 'local_reveal'],
@@ -47,10 +48,11 @@ const GOLDEN = {
   ref:      ['ref_candidates'],
   browser:  ['browser_list', 'browser_open', 'browser_open_native', 'browser_navigate', 'browser_back', 'browser_forward', 'browser_reload', 'browser_resize', 'browser_info', 'browser_selection', 'browser_close', 'browser_close_all'],
   'ai-term': ['ai_term_list', 'ai_term_log', 'ai_term_resize', 'ai_term_delete'],
-  'subagent': ['subagent_list', 'subagent_get'],
+  'subagent': ['subagent_list', 'subagent_get', 'subagent_prompt', 'subagent_interrupt'],
   'computer-use': ['computer_use_status', 'computer_use_set'],
   extension: ['ext_status', 'ext_tabs', 'ext_grant', 'ext_revoke', 'ext_set_mode'],
-  changes:  ['changes_find', 'changes_summary', 'changes_diff']
+  changes:  ['changes_find', 'changes_summary', 'changes_diff'],
+  schedule: ['schedule_list', 'schedule_catalog', 'schedule_history', 'schedule_delete', 'schedule_update', 'schedule_preview']
 };
 
 // 各模块 golden:逐个注册到 scratch,类型清单一致
@@ -70,7 +72,8 @@ for (const [name, fn, types] of [
   ['subagent', registerSubagent, GOLDEN.subagent],
   ['computer-use', registerComputerUse, GOLDEN['computer-use']],
   ['extension', registerExtension, GOLDEN.extension],
-  ['changes', registerChanges, GOLDEN.changes]
+  ['changes', registerChanges, GOLDEN.changes],
+  ['schedule', registerSchedule, GOLDEN.schedule]
 ]) {
   const rpc = scratchRpc();
   fn(rpc);

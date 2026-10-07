@@ -12,6 +12,7 @@ import { computerUse } from './core/computer-use/index.ts';
 import { browserManager } from './core/browser-manager.ts';
 import { closeTunnels } from './core/port-tunnel.ts';
 import { markCleanQuit } from './store/clean-quit.ts';
+import { scheduleService } from './schedule/index.ts';
 import * as sessions from './store/session-store.ts';
 import registerBasic from './api/http/basic.ts';
 import registerProviders from './api/http/providers.ts';
@@ -74,6 +75,10 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
 
   const { wss, termWss, browserWss, extWss } = setupWs(app.server);
 
+  // 自动化任务:载入任务表后立刻 requestDrive(迁移自 dsh schedule 包的 ScheduleRuntime,
+  // 见 server/schedule/)。必须在 setupWs 之后启动 —— 广播 hub 是在那里注入的。
+  void scheduleService.start();
+
   // AI 电脑操控:把实际监听端口交给控制器,悬浮窗「停止」按钮要回调本机 HTTP 急停接口
   computerUse.configure({ port });
   await app.listen({ port, host });
@@ -99,6 +104,7 @@ if (isMain) {
       // 桌面端走的是 TerminateProcess(收不到 SIGTERM),标记由外壳在 kill 前写(见 backend.rs)。
       markCleanQuit('signal');
       console.log('\n正在退出…');
+      void scheduleService.dispose(); // 停表 + 等在途投递收尾,别在退出过程中再投递任务
       try { wss.close(); } catch {}
       try { termWss.close(); } catch {}
       try { browserWss.close(); } catch {}

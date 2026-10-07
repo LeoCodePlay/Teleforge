@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../../api';
 import { useLlm } from '../../context/llm-context';
@@ -9,7 +9,7 @@ import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import ModelMenu from '../ModelMenu/ModelMenu';
 import ContextMeter, { type ContextUsage } from '../ContextMeter/ContextMeter';
-import StatsPills from '../StatsPills/StatsPills';
+import StatsPills, { TurnUsagePill } from '../StatsPills/StatsPills';
 import TodoPanel from '../TodoPanel/TodoPanel';
 import SlashMenu, { rankSlashItems, rankByName, SLASH_MENU_MAX } from '../SlashMenu/SlashMenu';
 import type { SlashItem } from '../SlashMenu/SlashMenu';
@@ -20,15 +20,18 @@ import AskPanel from '../AskPanel/AskPanel';
 import QueuePanel, { QueueItem } from '../QueuePanel/QueuePanel';
 import PermissionSelect, { isPermissionMode } from '../PermissionSelect/PermissionSelect';
 import type { PermissionMode } from '../PermissionSelect/PermissionSelect';
+// 一次性子智能体的输入位:用 dsh 的只读说明框顶掉输入卡(而不是给一个禁用的输入框让人猜)
+import { SubagentReadOnlyComposer } from '../SessionHeader/SubagentReadOnlyComposer';
 import { ToolCallList } from '../ToolCallList/ToolCallList';
 import { ProcessGroup } from '../ProcessGroup/ProcessGroup';
 import { ProcessFold } from '../ProcessGroup/ProcessFold';
-import { planGroups, isGroupLive, groupedFor, TRANSCRIPT_MODE } from '../../utils/processGroups';
+import { planGroups, isGroupLive, groupedFor, TRANSCRIPT_MODE, formatRunDuration } from '../../utils/processGroups';
 import { AssistantSegment, ReasoningSegment } from './assistantText';
 import { CompactionRow } from './CompactionRow';
 import { FilesChangedCard } from './FilesChangedCard';
 import DeliverablesCard from '../DeliverablesCard/DeliverablesCard';
 import { CommandCard } from './CommandCard';
+import GoalBar from '../GoalBar/GoalBar';
 import { LoadedSkillsRow } from './LoadedSkillsRow';
 import { matchSlashCommand } from '../../utils/slashCommand';
 import { atTokenAt, displayMentionText, restoreMentionInput, serializeMention, splitMentions } from '../../utils/mentionRefs';
@@ -41,6 +44,7 @@ import { IconChevronDownOutline14 } from '../icons/icons';
 import { AttachRail, MessageAttachments, Lightbox, classifyKind } from '../Attachments/Attachments';
 import type { ComposerAttachment, LightboxSrc } from '../Attachments/Attachments';
 import type { AttachmentInfo } from '../../types';
+import type { GoalInfo } from '../../types';
 import './ChatPanel.scss';
 
 // 新会话(尚未创建服务端会话)的前端占位 sid:用于"草稿式"新建——
@@ -107,6 +111,16 @@ function formatMsgTime(ts?: number) {
 // - 复制:复制该条回复的全文,成功后图标短暂换成 ✓(1s)
 // - 分支:从这条回复处开启新会话继续——作用于任意一条历史消息,不只最新一条;
 //   新会话克隆到该条回复为止的事件日志,后续对话从分支点另起炉灶(原会话保留)
+// - 统计行(dsh 的 turn-tail):图标簇之后跟「用量胶囊 + 本轮用时」——
+//   一轮跑完看到「🗄 用量 31.2M tok  2分19秒」,点胶囊展开本轮用量明细
+//
+// 用时取的是**本轮权威耗时**(服务端 turn/end 的 turnElapsedMs,与折叠行
+// 「已完成,用时 2分19秒」同一个字段、同一个格式化器),而不是消息时钟,
+// 也不用前端本地推算 —— 刷新/切会话后历史回放与实时显示同一个值。
+/** 本轮用时的纯文本(显示与 title 共用一份,避免两处口径漂移) */
+function runDurationText(ms: number): string {
+  return formatRunDuration(ms).map((p) => p.text).join('');
+}
 const IconCopy = () => (
   <svg width={15} height={15} viewBox="0 0 16 16" fill="none" aria-hidden="true">
     <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
@@ -127,9 +141,13 @@ const IconBranch = () => (
   </svg>
 );
 
-function MessageActions({ text, onBranch }: {
+function MessageActions({ text, onBranch, elapsedMs, usage }: {
   text: string;
   onBranch?: () => void;
+  /** 本轮用时(ms,服务端权威下发):统计行右端显示「此次回复用时」 */
+  elapsedMs?: number;
+  /** 本轮 token 用量;缺省(网关不报用量)时只显示用时,不显示用量胶囊 */
+  usage?: TokenUsageTotals;
 }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -142,6 +160,7 @@ function MessageActions({ text, onBranch }: {
       timerRef.current = setTimeout(() => { timerRef.current = null; setCopied(false); }, 1000);
     } catch { /* 剪贴板不可用时静默 */ }
   };
+  const dur = elapsedMs === undefined ? null : runDurationText(elapsedMs);
   return (
     <div className="msg-actions">
       <button type="button" className="msg-action action-icon" aria-label="复制"
@@ -154,6 +173,16 @@ function MessageActions({ text, onBranch }: {
           onClick={onBranch}>
           <IconBranch />
         </button>
+      )}
+      {/* 统计行(照搬 dsh turn-tail 的排布:图标簇之后接统计信息)。
+          用时就是本轮的权威耗时(与折叠行「已完成,用时 X」同字段同格式化器),
+          所以历史回放与实时显示同一个值;用量缺失(网关不报)时只留用时,
+          整行不渲染"0 tok"的假数字 */}
+      {(usage || dur) && (
+        <span className="msg-actions-stats" data-turn-tail-stats>
+          {usage && <TurnUsagePill usage={usage} />}
+          {dur && <span className="msg-actions-time" title="本轮用时">{dur}</span>}
+        </span>
       )}
     </div>
   );
@@ -178,8 +207,10 @@ const IconRewind = () => (
 // - 回到本轮对话发起前:把对话回退到这条消息之前(移除它及其之后的所有内容)
 function UserMessageActions({ text, onDelete, onRewind }: {
   text: string;
-  onDelete: () => void;
-  onRewind: () => void;
+  /** 删除这条消息(缺省不渲染:子智能体会话不支持改历史,见 ChatPanel 的 childMode) */
+  onDelete?: () => void;
+  /** 回到本轮对话发起前(缺省不渲染) */
+  onRewind?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,14 +229,18 @@ function UserMessageActions({ text, onDelete, onRewind }: {
         data-tip={copied ? '已复制' : '复制'} onClick={onCopy}>
         {copied ? <IconCheck /> : <IconCopy />}
       </button>
-      <button type="button" className="msg-action action-icon danger" aria-label="删除消息"
-        data-tip="删除消息" onClick={onDelete}>
-        <IconTrash />
-      </button>
-      <button type="button" className="msg-action action-icon" aria-label="回到本轮对话发起前"
-        data-tip="回到本轮对话发起前" onClick={onRewind}>
-        <IconRewind />
-      </button>
+      {onDelete && (
+        <button type="button" className="msg-action action-icon danger" aria-label="删除消息"
+          data-tip="删除消息" onClick={onDelete}>
+          <IconTrash />
+        </button>
+      )}
+      {onRewind && (
+        <button type="button" className="msg-action action-icon" aria-label="回到本轮对话发起前"
+          data-tip="回到本轮对话发起前" onClick={onRewind}>
+          <IconRewind />
+        </button>
+      )}
     </div>
   );
 }
@@ -347,6 +382,8 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
           ...(Array.isArray(t.attachments) && t.attachments.length ? { attachments: t.attachments } : {}),
           // 手动调用技能(`/技能名`)的记录随历史回放,用户气泡下方恢复「已加载技能」行
           ...(Array.isArray(t.skillsInjected) && t.skillsInjected.length ? { skillsInjected: t.skillsInjected } : {}),
+          // 目标自动续跑轮:气泡渲染成「🎯 目标第 N 轮」而不是一段像用户说的话
+          ...(t.goalRound ? { goalRound: t.goalRound } : {}),
           ...(t.compaction ? { compaction: t.compaction } : {})
         });
         turnToOut[ti] = idx;
@@ -392,6 +429,8 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         // 回合耗时/结束原因:折叠行「已完成,用时 X」用(服务端在 turn/end 时回填到本轮各行)
         if (t.turnElapsedMs !== undefined) prev.turnElapsedMs = t.turnElapsedMs;
         if (t.turnEndReason !== undefined) prev.turnEndReason = t.turnEndReason;
+        // 本轮用量:统计行「用量 X tok + 用时」用(同一轮回填值相同,合并时后者覆盖即可)
+        if (t.turnUsage) prev.turnUsage = t.turnUsage;
         // 成果物交付声明:同一轮里可能多次 present,逐批累加而不是覆盖
         if (Array.isArray(t.deliverables) && t.deliverables.length) {
           prev.deliverables = mergeDeliverables(prev.deliverables, t.deliverables);
@@ -407,6 +446,7 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         if (Array.isArray(t.attachments) && t.attachments.length) nm.attachments = t.attachments;
         if (t.turnElapsedMs !== undefined) nm.turnElapsedMs = t.turnElapsedMs;
         if (t.turnEndReason !== undefined) nm.turnEndReason = t.turnEndReason;
+        if (t.turnUsage) nm.turnUsage = t.turnUsage;
         if (Array.isArray(t.deliverables) && t.deliverables.length) nm.deliverables = t.deliverables;
         if (t.imageJob) nm.imageJob = t.imageJob;
         const idx = out.length;
@@ -563,6 +603,13 @@ interface ChatPanelProps {
   onOpenLocalFileAside?: (path: string) => void;
   /** 查看某文件的改动对比(右侧栏 changes-review 标签;与「打开文件」是两条链路) */
   onOpenChanges?: (path: string) => void;
+  /**
+   * 子智能体会话模式:同一个 ChatPanel,只是把**父会话专属**的控件收起来 ——
+   * 工作区选择、权限/模型选择、附件与 @ / 技能菜单、消息删除/回退。
+   * 历史、发送、停止、排队这些全部走同一套 RPC(服务端按 sid 前缀分流到子代理运行时),
+   * 所以子会话的呈现与父会话完全一样(同一套回合折叠、工具行、操作栏、统计)。
+   */
+  childMode?: boolean;
 }
 
 // 模型请求失败进入重试的状态行(照搬 deepseek-harness 的 ModelRetryItem):
@@ -666,7 +713,7 @@ function railPreview(parts: string[], limit: number): string {
   return unread ? `${normalized}…` : normalized;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, onOpenFileAside, onOpenLocalFileAside, onOpenChanges, onOpenSubagent, compact = false }: ChatPanelProps) {
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, onOpenFileAside, onOpenLocalFileAside, onOpenChanges, onOpenSubagent, compact = false, childMode = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -733,6 +780,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const [errorMsg, setErrorMsg] = useState('');
   // 会话切换加载指示:切换期间保留上一会话内容 + 顶部提示,历史到达后再整体替换,避免空白闪烁
   const [switching, setSwitching] = useState(false);
+  // 子智能体会话的运行记录信息(mode/resident):一次性派发要把输入位换成只读说明,
+  // 不常驻(服务重启过)要在输入卡上方提示"再发一条会把它冷恢复过来"
+  const [childInfo, setChildInfo] = useState<{ mode: string; resident: boolean } | null>(null);
+  const refreshChildInfo = useCallback(() => {
+    const target = activeRef.current;
+    if (!childMode || !target || target === NEW_SESSION_ID) return;
+    api.request('subagent_get', { runId: target }, 8000, 'subagent_run')
+      .then((r: any) => setChildInfo(r?.run ? { mode: String(r.run.mode ?? 'continuable'), resident: r.run.resident !== false } : null))
+      .catch(() => { /* 拉不到就按"可继续"处理,发送失败时服务端会给出确切原因 */ });
+  }, [childMode]);
   // 抑制入场动画:历史整表载入(挂载/切换会话/后台刷新)时给 .chat 加 no-anim,
   // 连最新一条消息的 msg-in 淡入也不播——切换瞬间就该是静止的成品画面;
   // 只有用户实时发送(start 追加新消息)才解除,让新消息保留浮现动效
@@ -781,6 +838,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 新会话草稿态先取全局默认(permission_default_get),发送时随 session_create 落地
   const [permMode, setPermMode] = useState<PermissionMode>('confirm');
   const permTouchedRef = useRef(false); // 草稿态用户是否手动改过权限档位(避免把服务端默认误当"用户选择"提交)
+  // 会话级长期目标(移植自 harness 的 goal 投影):get_history 的 goal 字段回填,
+  // goal_changed 事件实时同步;目标条据此渲染,命令卡由 /目标 的 RPC 结果驱动。
+  const [goal, setGoal] = useState<GoalInfo | null>(null);
+  const [goalPending, setGoalPending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // ---- 自动触底(吸附底部)控制 ----
   // stick=true 时流式更新/消息变化跟随触底;用户手动上滑离开底部即暂停(方便回看上下文),
@@ -912,6 +973,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 收纳文件:分类 → 本地预览 → 立即上传(逐个独立,失败只影响自身);
   // 图片仅在多模态模型下接受,其余类型(文件)不受限
   const intakeFiles = (files: File[]) => {
+    // 子智能体会话不支持附件(服务端会拒绝):连上传入口一起关掉,别让用户白等一次上传
+    if (childMode) return;
     const list = files.filter(Boolean);
     if (!list.length) return;
     const room = 10 - attachments.length;
@@ -1016,6 +1079,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   msgRef.current = messages;
   // 首次连接(页面加载,历史尚在加载中)不做重连校准,已在线上线后才视为"重连"
   const everConnectedRef = useRef(false);
+  // 子智能体会话:挂载/切换 runId 时拉一次运行记录信息(模式 + 是否常驻)
+  useEffect(() => { refreshChildInfo(); }, [sid, refreshChildInfo]);
 
   useEffect(() => {
     const subs = [
@@ -1040,6 +1105,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         switch (m.event) {
           case 'status':
             setAgentState(m.status === 'running' ? 'working' : 'idle');
+            // 子智能体会话:状态变化时刷新一次运行记录(冷恢复后 resident 会变 true)
+            if (childMode) refreshChildInfo();
             if (m.status !== 'running') {
               setSessionImgJob(activeRef.current, null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
               push((msgs) => {
@@ -1125,6 +1192,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 访问权限模式切换广播(任意前端/任意窗口发起,服务端确认后下发):
             // 只作用于当前正在查看的会话,其他会话的模式在切回时经 get_history 回填
             if (m.sid && m.sid === activeRef.current && isPermissionMode(m.mode)) setPermMode(m.mode);
+            break;
+          case 'goal_changed':
+            // 长期目标变更广播(命令 / 模型工具 / 自动续跑轮的上限受阻都会发):
+            // 只作用于当前正在查看的会话,其他会话的目标在切回时经 get_history 回填
+            if (!m.sid || m.sid === activeRef.current) setGoal((m.goal ?? null) as GoalInfo | null);
             break;
           case 'iteration':
             // 每次迭代对应一条 assistant/message turn;truncate 重开会重复相同 iter,去重
@@ -1326,7 +1398,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     // 权威耗时由服务端下发(与刷新后投影同一口径),覆盖 done/stopped/error
                     // 那几处按本地时刻打的近似值 —— 避免"刚跑完显示 1 秒、刷新后显示 2 分"的漂移
                     const el = typeof m.elapsedMs === 'number' ? m.elapsedMs : undefined;
-                    c[i] = { ...c[i], forkTail: Math.max(0, m.faceCount - 1), ...(el !== undefined ? { turnElapsedMs: el } : {}) };
+                    // 本轮用量:与耗时同一处回填(统计行「用量 X tok + 用时」)。
+                    // samples=0(整轮没报用量)时**不打戳**,与刷新后投影的"缺省"语义一致
+                    const u = m.usage && typeof m.usage === 'object' && Number(m.usage.samples) > 0
+                      ? m.usage as TokenUsageTotals : undefined;
+                    c[i] = {
+                      ...c[i],
+                      forkTail: Math.max(0, m.faceCount - 1),
+                      ...(el !== undefined ? { turnElapsedMs: el } : {}),
+                      ...(u !== undefined ? { turnUsage: u } : {})
+                    };
                     break;
                   }
                 }
@@ -1515,6 +1596,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 顺带取消挂起的跳转点度量帧
   useEffect(() => () => { persistDrafts(); if (dotRafRef.current) cancelAnimationFrame(dotRafRef.current); }, []);
 
+  // 模型(或它的上下文窗口)变了:上一次请求上报的窗口已经不代表这个模型,先清掉;
+  // 仪表盘随即改用当前模型的窗口(见 ContextMeter 的 serverWin 回退)。否则切模型后会继续
+  // 显示上一个模型的窗口 —— 看起来就像"所有模型都变成了同一个窗口"。
+  useEffect(() => {
+    setCtxUsage(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [llm.effModel, llm.effModelContext?.contextWindow]);
+
   // 挂载或会话切换时,载入当前活跃会话的历史。
   // 不先清空消息:保留上一会话内容 + 「正在加载会话」提示,新会话历史到达后再整体替换,
   // 避免切换出现空白闪烁;已加载过的会话走缓存秒开,后台静默刷新保持最新。
@@ -1559,6 +1648,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     // null 表示没有生图在途——状态行回到「Agent 正在运行…」,不沿用上一个会话的文案
     setSessionImgJob(target, target && target !== NEW_SESSION_ID ? imgJobsRef.current.get(target) ?? null : null);
     setQueue([]); // 切会话先复位队列,避免串到上一会话;真实队列随 get_history 返回
+    setGoal(null); // 目标随会话走:切走先清空,防止把上一个会话的目标条画到新会话上
     clearAttachments(); // 草稿附件不跨会话携带(纯内存,发送时才随消息上行)
 
     // 新会话草稿态(sid 为占位符):不请求历史,显示空对话;sid=null(App 初次加载尚未定向)
@@ -1596,7 +1686,19 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         if (!alive || hasLive.current || activeRef.current !== target) return;
         // 历史 turns 长度即该会话已累计的消息面 turn 数,作为后续流式递增的基准
         forkTurnRef.current = (r.turns || []).length;
+        // 目标状态随历史一起回填:目标是持久状态,切走再切回必须显示同一条(与服务端 goal_changed 同一口径)
+        setGoal(r.goal === undefined ? null : (r.goal as GoalInfo | null));
         const msgs = turnsToMessages(r.turns || []);
+        // 该会话此刻正在生成压缩摘要:compaction_start 只是实时事件、不落盘,切走再切回时历史
+        // 整表重载会把那行「正在压缩…」丢掉,看起来像"压缩记录不见了"。服务端随 get_history
+        // 如实回报 compacting,这里按与 compaction_start 完全相同的口径把运行行补回来(插在流式
+        // assistant 之前,位置保持一致);完成/失败时由 compaction_done / compaction_failed 原地改写。
+        if (r.compacting === true && !msgs.some((x) => x.compaction?.running)) {
+          const li0 = tailAssistantIndex(msgs);
+          const runRow = { role: 'user' as const, content: '', compaction: { running: true } };
+          if (li0 >= 0) msgs.splice(li0, 0, runRow);
+          else msgs.push(runRow);
+        }
         // 切回一个仍在运行中的会话:末条回复标记为流式中,继续接收后续增量事件。
         // 历史末尾不是 assistant(本轮模型尚未流出任何内容/纯工具调用步骤)时补一个
         // 流式占位气泡:后续 text/reasoning/tool 事件只认"末尾 assistant",
@@ -2143,12 +2245,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 这些路径过去都不执行命令,而是把 "/compact" 当普通消息发给模型(表现为"假压缩")。
   // 匹配规则见 utils/slashCommand.ts:仅整条输入的首词命中命令名才算命令,技能与路径不误伤。
   const dispatchSlashFromInput = (): boolean => {
-    const hit = matchSlashCommand(input, slashCommands.map((c) => c.name));
+    // 命中集合同时包含规范名与中文 token(/计划 与 /plan 等价)
+    const tokens = slashCommands.flatMap((c) => (c.token ? [c.name, c.token] : [c.name]));
+    const hit = matchSlashCommand(input, tokens);
     if (!hit) return false;
-    const cmd = slashCommands.find((c) => c.name === hit.name);
+    const cmd = slashCommands.find((c) => c.name === hit.name || c.token === hit.name);
     if (!cmd || !cmd.run) return false;
     closeSlash();
-    // 命令即消费本次输入:与发送一样清掉输入框/草稿/附件,但不产生任何对话消息
+    // 命令即消费本次输入:与发送一样清掉输入框/草稿/附件,但不产生任何对话消息。
+    // 附件元数据必须在 clearAttachments 之前取:两条命令都可能把它随命令上行
+    // (harness:/plan <message> 与 /goal <objective> 的附件语义)。
+    const atts = attachments.filter((a) => a.att).map((a) => a.att!);
     if (sid === NEW_SESSION_ID) delete draftsRef.current[NEW_DRAFT_KEY];
     else if (sid) delete draftsRef.current[sid];
     saveDrafts(draftsRef.current);
@@ -2156,7 +2263,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     inputValueRef.current = ''; // 同步最新输入,防止随后的草稿保存把已执行命令回写
     clearAttachments();
     scrollToBottomNow();
-    Promise.resolve(cmd.run(hit.args)).catch((e) => toast.error((e as Error).message));
+    Promise.resolve(cmd.run(hit.args, { attachments: atts })).catch((e) => toast.error((e as Error).message));
     return true;
   };
 
@@ -2164,7 +2271,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     // 斜杠命令优先于发送:命中已注册系统命令(/compact、/clear、/fork)时执行命令本身并终止,
     // 绝不把命令词当普通消息上行 speak —— 否则模型会「假装压缩」:前端当场有画面,
     // 服务端却没有 compaction/done 事件落盘,切换会话重载历史后压缩标记随之消失。
-    if (dispatchSlashFromInput()) return;
+    if (!childMode && dispatchSlashFromInput()) return;
     // 工作中仍可发送:服务端会把消息放入待执行队列(当前轮结束后按序自动执行,不打断回复);
     // 提问挂起时禁止发送(须先作答或取消);纯附件消息(无文字)也允许发送
     const atts = attachments.filter((a) => a.att).map((a) => a.att!);
@@ -2216,8 +2323,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     clearAttachments(); // 附件随消息上行,清空草稿轨道并回收本地预览
     scrollToBottomNow(); // 发起对话:恢复吸附并回到底部,让用户新消息与回复立即可见
     setMessages((m) => [...m]);
-    // 发送消息的那一刻即通知 App 锁定该会话的工作区(不等服务端 msgCount 落盘回传)
-    onSessionTouched?.(realSid);
+    // 发送消息的那一刻即通知 App 锁定该会话的工作区(不等服务端 msgCount 落盘回传)。
+    // 子智能体会话没有"工作区锁定"这回事(它继承父会话的绑定),不通知。
+    if (!childMode) onSessionTouched?.(realSid);
     api.send('speak', { text, reasoning, sid: sidArg(realSid), ...(atts.length ? { attachments: atts } : {}), ...(refs.length ? { refs } : {}) });
   };
 
@@ -2261,16 +2369,18 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 压缩本身的持久披露由「压缩标记行」(CompactionRow)承担:成功时它是这次 /compact 的
   // 唯一记录(命令卡让位,避免底部并排两条「已压缩 N 条早期消息」)。
   const cmdSeqRef = useRef(0);
-  const pushCmd = (cmd: { state: 'running' | 'ok' | 'error'; text?: string }, id?: number) => {
+  const pushCmd = (name: string, cmd: { state: 'running' | 'ok' | 'error'; text?: string }, id?: number) => {
     const cid = id ?? ++cmdSeqRef.current;
-    // 只保留最新一条命令卡:再次执行 /compact 时先移除上一条结果,避免底部累积多张卡片。
+    // 只保留最新一条命令卡:再次执行同一命令时先移除上一条结果,避免底部累积多张卡片。
     // 压缩成功的持久披露由「压缩标记行」(CompactionRow)承担,命令卡只是本次命令的就地反馈。
-    setMessages((msgs) => [...msgs.filter((m) => !m.command), { role: 'command', cmdId: cid, command: { name: 'compact', ...cmd } }]);
+    setMessages((msgs) => [...msgs.filter((m) => !m.command), { role: 'command', cmdId: cid, command: { name, ...cmd } }]);
     scrollToBottomNow();
     return cid;
   };
   const patchCmd = (id: number, patch: { state: 'running' | 'ok' | 'error'; text?: string }) => {
-    setMessages((msgs) => msgs.map((m) => (m.cmdId === id ? { ...m, command: { name: 'compact', ...patch } } : m)));
+    setMessages((msgs) => msgs.map((m) => (m.cmdId === id
+      ? { ...m, command: { state: patch.state, text: patch.text, name: m.command?.name || 'command' } }
+      : m)));
   };
 
   // ---- / 命令菜单(照搬 deepseek-harness 的行内命令交互) ----
@@ -2286,10 +2396,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         // 命令卡按同一条失败态呈现,语义不变但不再依赖前端视图状态。
         // 新会话草稿态还没有服务端会话可压缩:明确报错,而不是让请求落到别的会话上
         if (sid == null || sid === NEW_SESSION_ID) {
-          pushCmd({ state: 'error', text: '当前会话还没有内容,无法压缩;请先发一条消息' });
+          pushCmd('compact', { state: 'error', text: '当前会话还没有内容,无法压缩;请先发一条消息' });
           return true;
         }
-        const id = pushCmd({ state: 'running', text: '正在压缩当前会话上下文…' });
+        const id = pushCmd('compact', { state: 'running', text: '正在压缩当前会话上下文…' });
         try {
           const r = await api.request('compact_now', { sid: sidArg(sid) }, 120000);
           // 压缩成功时服务端先广播 history_compacted → 前端重拉历史,持久「压缩标记行」
@@ -2301,6 +2411,49 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           // 压缩失败(如摘要生成失败/shrink 校验不通过):会话原样保留,
           // 命令卡显示失败原因(对齐 harness ManualCompactionError 的呈现)
           patchCmd(id, { state: 'error', text: (e as Error).message || '压缩失败,会话历史保持不变' });
+        }
+        return true;
+      }
+    },
+    {
+      // /计划(移植自 harness plan/plan-mode 的 /plan):进入/退出计划模式。
+      // 计划模式 = 权限档位「计划模式」:写/执行类工具被 guard 直接拒绝,模型只调研并给出计划;
+      // 模型可用 exit_plan_mode 把计划交你审阅,批准即退出计划模式。
+      name: 'plan', kind: 'command', token: '计划',
+      description: '进入或退出计划模式',
+      run: async (query: string, ctx?: { attachments: any[] }) => {
+        if (sid == null || sid === NEW_SESSION_ID) {
+          pushCmd('plan', { state: 'error', text: '请先开始对话(或选好工作区)再切换计划模式' });
+          return true;
+        }
+        const id = pushCmd('plan', { state: 'running', text: '正在切换计划模式…' });
+        try {
+          const r = await api.request('plan_command', { input: query || '', sid: sidArg(sid), attachments: ctx?.attachments || [] }, 20000);
+          if (r.mode && isPermissionMode(r.mode)) setPermMode(r.mode);
+          patchCmd(id, { state: r.kind === 'error' ? 'error' : 'ok', text: r.text });
+        } catch (e) {
+          patchCmd(id, { state: 'error', text: (e as Error).message || '计划模式切换失败' });
+        }
+        return true;
+      }
+    },
+    {
+      // /目标(移植自 harness command-goal 的 /goal):创建/查看/编辑/暂停/恢复/清除长期目标。
+      // 目标 active 且已授权时,空闲会自动接着跑下一轮(轮次上限默认 256)。
+      name: 'goal', kind: 'command', token: '目标',
+      description: '设置或查看长期任务目标',
+      run: async (query: string, ctx?: { attachments: any[] }) => {
+        if (sid == null || sid === NEW_SESSION_ID) {
+          pushCmd('goal', { state: 'error', text: '请先开始对话(或选好工作区)再设置目标' });
+          return true;
+        }
+        const id = pushCmd('goal', { state: 'running', text: '正在处理目标…' });
+        try {
+          const r = await api.request('goal_command', { input: query || '', sid: sidArg(sid), attachments: ctx?.attachments || [] }, 20000);
+          if (r.goal !== undefined) setGoal(r.goal ?? null);
+          patchCmd(id, { state: r.kind === 'error' ? 'error' : 'ok', text: r.text });
+        } catch (e) {
+          patchCmd(id, { state: 'error', text: (e as Error).message || '目标操作失败' });
         }
         return true;
       }
@@ -2330,6 +2483,23 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   ];
   const slashAll: SlashItem[] = [...slashCommands, ...slashSkills];
 
+  // 目标条动作(暂停/恢复/编辑/清除):与 /目标 命令共用同一条 RPC 与同一套语法
+  // (harness 的 GoalBar 动作就是 /goal 子命令的语法子集),命令卡给出可见反馈。
+  const runGoalAction = async (sub: string) => {
+    if (sid == null || sid === NEW_SESSION_ID) return;
+    setGoalPending(true);
+    const id = pushCmd('goal', { state: 'running', text: '正在处理目标…' });
+    try {
+      const r = await api.request('goal_command', { input: sub, sid: sidArg(sid) }, 20000);
+      if (r.goal !== undefined) setGoal((r.goal ?? null) as GoalInfo | null);
+      patchCmd(id, { state: r.kind === 'error' ? 'error' : 'ok', text: r.text });
+    } catch (e) {
+      patchCmd(id, { state: 'error', text: (e as Error).message || '目标操作失败' });
+    } finally {
+      setGoalPending(false);
+    }
+  };
+
   // 拉取技能目录填充 slashSkills(未连接也返回内置+本机技能);仅首次(避免每次输入 / 都请求)
   const openSlash = () => {
     if (slashSkills.length > 0) return;
@@ -2343,7 +2513,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 输入 / 唤醒菜单:行首 或 空白后 的 / 且其后是词尾时开启(对齐 harness 的 leadingInput,
   // 并支持选完技能后,在需求文字后再输空格 + / 继续追加技能)
   const syncSlash = (text: string) => {
-    const m = /(?:^|\s)\/([a-z0-9-]*)$/i.exec(text);
+    // 过滤词允许中日韩字符:中文 token(/计划、/目标)在输入途中也要能打开并过滤菜单
+    const m = /(?:^|\s)\/([a-z0-9\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]*)$/i.exec(text);
     if (m) {
       setSlashQuery(m[1] || '');
       setSlashOpen(true);
@@ -2380,7 +2551,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     }
     closeSlash();
     updateInput('');
-    item.run?.(query);
+    // 附件随命令上行(harness 的 /plan <message> 与 /goal <objective> 都接受附件):
+    // 取"已上传完成"的附件元数据,由命令自己决定用法(/计划 off 会拒绝带附件)
+    item.run?.(query, { attachments: attachments.filter((a) => a.att).map((a) => a.att!) });
   };
 
   // ---- @ 引用菜单(与 / 命令并行的行内交互) ----
@@ -2526,6 +2699,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
 
   // 发送后等待回答 / agent 工作期间都应允许暂停:busy(服务端 status) 与 agentState 任一命中即视为工作中
   const working = busy || agentState === 'working';
+  // 一次性子智能体(显式 run_in_background:false):历史留在记录里,但不能再发消息 ——
+  // 输入卡换成只读说明(dsh 的 SubagentReadOnlyComposer 接管规则)。可继续的照常给输入卡。
+  const childOneShot = childMode && childInfo?.mode === 'one-shot';
   // 状态行文案只反映当前会话:imgJob 的 owner 不是当前 sid 时按「无生图在途」渲染,
   // 切会话瞬态(复位 effect 尚未跑)也不会把上一个会话的「正在生成图片」画到新会话上
   const rowImgJob = imgJob && (imgJob.owner == null || imgJob.owner === sid) ? imgJob : null;
@@ -2533,7 +2709,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 发送条件:远程或本地任一侧「有工作区」或「已选择不使用工作区(整台服务器/整台电脑)」——
   // 两侧完全独立,只要有一侧确定了边界即可发起对话;两侧都没选则不允许发送。
   // 模型提问挂起时锁定输入与暂停(须先作答或取消提问);会话切换加载中也锁定,避免发到错误会话
-  const canSend = (!!workspace || !!localWorkspace || noWorkspace || localNoWorkspace) && !askPending && !switching;
+  const canSend = (childMode || !!workspace || !!localWorkspace || noWorkspace || localNoWorkspace) && !askPending && !switching;
 
   // 一轮回复被重试提示拆成多段时,只有收尾那段承载收尾产物(已修改文件卡 / 复制 / 分支按钮);
   // 中间片段保持安静,避免重试一次就多出一套按钮。判定:该 assistant 之后、下一个 assistant
@@ -2581,6 +2757,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               {m.role === 'user' && !m.compaction && (
                 <>
                   <div className="bubble user-bubble">
+                    {/* 目标自动续跑轮:不是用户打的字,气泡头标出「🎯 目标第 N 轮」 */}
+                    {m.goalRound && (
+                      <div className="goal-round-tag">🎯 目标第 {m.goalRound.round} 轮</div>
+                    )}
                     {/* 附件(图片/文件)渲染在正文上方:单图 singleFit,多图方块平铺 */}
                     {!!m.attachments?.length && (
                       <MessageAttachments items={m.attachments} onOpen={setLightbox} />
@@ -2591,8 +2771,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     {!!m.time && <span className="user-msg-time">{formatMsgTime(m.time)}</span>}
                     <UserMessageActions
                       text={displayMentionText(m.content || '')}
-                      onDelete={() => deleteMsg(m, i)}
-                      onRewind={() => rewindMsg(m, i)}
+                      onDelete={childMode ? undefined : () => deleteMsg(m, i)}
+                      onRewind={childMode ? undefined : () => rewindMsg(m, i)}
                     />
                   </div>
                   {/* 手动调用技能(`/技能名`):正文已注入本轮上下文,给出可见确认与正文预览 */}
@@ -2637,11 +2817,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                             return (
                               <div key={`g${ui}`} className="dsh-procslot"
                                 hidden={foldable && !foldOpen ? true : undefined}>
-                                {/* 与 dsh 同构的两层折叠:外层是整轮控件,内层**每个过程组自己也有组头**
-                                    (standard=总是折叠、detailed=回合结束后折叠、verbose=不折叠)。
-                                    组头就是「已读取文件并搜索代码」那一行,带活动图标与展开箭头。 */}
+                                {/* 与 dsh 同构的两层折叠:外层是整轮控件,内层按 **flat** 渲染
+                                    —— 不渲染组头、不限高:外层已经承担了收起职责,
+                                    再叠一层组头就要点两次、再叠一个 400px 限高就会出现滚动条
+                                    (见上方注释与 test/subagent-ui.test.js 的断言)。 */}
                                 <ProcessGroup summary={u.summary} live={isGroupLive(u.items)}
-                                  collapsed={groupedFor(TRANSCRIPT_MODE, !!m.streaming)}>
+                                  collapsed={groupedFor(TRANSCRIPT_MODE, !!m.streaming)} flat>
                                   {u.memberIndexes.map((si) => {
                                     const seg = segs[si];
                                     if (!seg) return null;
@@ -2720,6 +2901,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     <MessageActions
                       text={segText(m)}
                       onBranch={() => onFork?.(m.forkTail ?? -1)}
+                      elapsedMs={m.turnElapsedMs}
+                      usage={m.turnUsage}
                     />
                   )}
                 </div>
@@ -2756,11 +2939,29 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       {/* 任务计划面板:输入区玻璃面板之外,独立玻璃卡片悬浮(默认折叠;清单还有未完成项就一直显示,含跨轮,全部完成或无计划则隐藏) */}
       <TodoPanel todos={todos} />
       <div className="composer">
+        {/* 子智能体会话的顶部提示:没有常驻实例(服务重启过)时说明"再发一条会把它恢复过来",
+            但**不**顶掉输入框 —— 只有一次性派发才是真的不能再发。 */}
+        {childMode && childInfo && childInfo.mode !== 'one-shot' && !childInfo.resident && (
+          <div className="muted" data-subagent-dormant="" style={{ padding: '2px 6px 8px', fontSize: 12 }}>
+            这个子智能体当前没有常驻实例(服务重启过):发一条消息会从运行记录里把它恢复过来继续跑。
+          </div>
+        )}
         {/* 模型提问面板(ask_user_question):内联显示在输入框上方,无遮罩;作答/取消前锁定输入。
             onBootChange:刷新后拉取挂起提问期间扣住输入区,防止"输入框→面板"闪跳 */}
         <AskPanel sid={sid} onPendingChange={setAskPending} onBootChange={setAskChecking} />
         {/* 待执行消息队列:对话进行中发送的消息在此排队等待,当前轮结束后按 FIFO 自动执行 */}
         <QueuePanel queue={queue} onRunNow={runQueueNow} onEdit={editQueueItem} onDelete={deleteQueueItem} />
+        {/* 长期目标条(移植自 harness ui-goal 的 GoalBar):停在输入卡上方,目标已清除/已完成时不渲染 */}
+        <GoalBar goal={goal} pending={goalPending}
+          onPause={() => runGoalAction('pause')}
+          onResume={() => runGoalAction('resume')}
+          onClear={() => runGoalAction('clear')}
+          onEdit={(objective) => runGoalAction(`edit ${objective}`)} />
+        {/* 一次性子智能体:输入卡换成只读说明框(dsh 的 SubagentReadOnlyComposer)。
+            可继续的子智能体与父会话一样,给完整输入卡。 */}
+        {childOneShot ? (
+          <SubagentReadOnlyComposer reason="one-shot" />
+        ) : (
         <div className={`composer-box ${dragOver ? 'drag-over' : ''}`} ref={composerBoxRef}
           onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); setDragOver(true); } }}
           onDragLeave={(e) => { if (e.currentTarget.contains(e.relatedTarget as Node)) return; setDragOver(false); }}
@@ -2771,8 +2972,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setDragOver(false);
             intakeFiles(Array.from(e.dataTransfer.files));
           }}>
-          {/* / 命令菜单:输入 / (行首或空格后)时浮在输入框上方,前缀优先+模糊匹配过滤 */}
-          {slashOpen && (
+          {/* / 命令菜单:输入 / (行首或空格后)时浮在输入框上方,前缀优先+模糊匹配过滤。
+              子智能体会话不提供:它的工具白名单里没有 skill,也没有任何会话级命令 */}
+          {slashOpen && !childMode && (
             <SlashMenu
               items={slashAll}
               query={slashQuery}
@@ -2783,8 +2985,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               anchorRef={composerBoxRef}
             />
           )}
-          {/* @ 引用菜单:输入 @ 时浮在输入框上方,列出远程+本地工作区的文件/文件夹 */}
-          {atOpen && (
+          {/* @ 引用菜单:输入 @ 时浮在输入框上方,列出远程+本地工作区的文件/文件夹。
+              子智能体会话不提供:@ 引用要由服务端在一轮里解析成路径提示,子代理这条链路不做这件事 */}
+          {atOpen && !childMode && (
             <AtMenu
               items={atCandidates}
               loading={atLoading}
@@ -2912,6 +3115,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             {/* 左下角:"+"上传附件菜单(图片/文件)+ AI 访问权限模式。
                 图片项仅在模型开启多模态时可用(关闭时给出原因提示) */}
             <div className="composer-foot-left">
+            {/* 子智能体会话:上传附件与 / 技能、@ 引用都不适用(它只读,也拿不到附件),整块入口收起 */}
+            {!childMode && (
             <div className="composer-add-wrap" ref={addWrapRef}>
               <button type="button" className={`composer-add ${addMenuOpen ? 'on' : ''}`}
                 data-tip="添加附件" aria-label="添加附件" aria-haspopup="menu" aria-expanded={addMenuOpen}
@@ -2958,10 +3163,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               <input ref={fileInputRef} type="file" multiple hidden
                 onChange={(e) => { intakeFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
             </div>
+            )}
             {/* AI 访问权限模式(变更前确认/自动编辑/计划模式/完全访问)。
-                仅切换中锁定;草稿态(新会话)也开放选择:模式先存本地,随 session_create 落地 */}
-            <PermissionSelect value={permMode} disabled={switching}
-              onChange={changePermMode} anchorRef={composerBoxRef} />
+                仅切换中锁定;草稿态(新会话)也开放选择:模式先存本地,随 session_create 落地。
+                子智能体会话不给这个选择器:它的权限在派发时固定,不能从会话内部放宽(harness 同语义) */}
+            {!childMode && (
+              <PermissionSelect value={permMode} disabled={switching}
+                onChange={changePermMode} anchorRef={composerBoxRef} />
+            )}
             <span className="muted composer-tip">{compact ? '点 ➤ 发送 · 换行直接回车' : 'Enter 发送 · Shift+Enter 换行'}</span>
             </div>
             <ContextMeter messages={messages} input={composedInput}
@@ -2975,8 +3184,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   disabled={!canSend || (!input.trim() && attachments.length === 0)} onClick={send}>➤</button>}
           </div>
         </div>
+        )}
         {/* 工作区 + 模型:工作区在左,模型在右;模型为二级菜单(模型清单按提供商分组 / 推理等级) */}
         <div className="wsbar-row">
+          {childMode ? (
+            /* 子智能体会话:工作区与模型都继承父会话(harness 的子代理路由也是继承来的),
+               所以这里不给可切换的 chip,只如实说明;统计行仍然照常显示。 */
+            <span className="muted tb-model" data-tip="子智能体继承父会话的连接、工作区与模型:它不能自己换工作区,模型也跟随父会话">
+              子智能体会话 · 继承父会话的工作区与模型
+            </span>
+          ) : (<>
           {connected && (
             <div className="wsbar" ref={wsBarRef}>
               <button
@@ -3003,7 +3220,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                             <span className="ws-pick-path">{lastPathSegment(p)}</span>
                             {workspace === p && <span className="ws-pick-cur">✓</span>}
                           </button>
-                          <button type="button" className="ws-pick-del action-icon danger" aria-label={`从历史中删除工作区 ${p}`}
+                          <button type="button" className="ws-pick-del" aria-label={`从历史中删除工作区 ${p}`}
                             onClick={() => removeWs(p)}>🗑</button>
                         </div>
                       ))}
@@ -3053,7 +3270,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                           <span className="ws-pick-path">{lastPathSegment(p)}</span>
                           {localWorkspace === p && <span className="ws-pick-cur">✓</span>}
                         </button>
-                        <button type="button" className="ws-pick-del action-icon danger" aria-label={`从历史中删除本地工作区 ${p}`}
+                        <button type="button" className="ws-pick-del" aria-label={`从历史中删除本地工作区 ${p}`}
                           onClick={() => removeLocalWs(p)}>🗑</button>
                       </div>
                     ))}
@@ -3087,6 +3304,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               placeholder="自定义模型名"
               title="输入模型名" />
           )}
+          </>)}
         </div>
         {/* 对话统计(轮/步 · 解码速度、token 总量/缓存命中率):服务端 fold 整个会话日志得出。
             独立成行铺在面板最底部 —— 不再嵌进输入卡玻璃盒(那里是操作按钮的地盘)。

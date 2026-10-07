@@ -75,12 +75,12 @@
   display: inline-flex; align-items: center; gap: 5px;
   transition: opacity .15s ease, transform .2s ease;
 }
-/* 组内新建按钮:20px 玻璃胶囊,淡入 + 逆时针旋入(与 .seg/.session-item.active 同源 accent 表面) */
+/* 组内新建按钮:20px 实色方块,淡入 + 逆时针旋入 */
 .s-group-header .s-group-add {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; padding: 0; border-radius: var(--r-pill);
-  color: var(--accent-2); border: 1px solid var(--accent-border);
-  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  width: 20px; height: 20px; padding: 0;
+  color: var(--accent-2); border: 1px solid var(--line);
+  background: var(--accent-fill);
   box-shadow: inset 0 1px 0 var(--btn-sheen), 0 2px 8px var(--shadow-1);
   opacity: 0; transform: rotate(-90deg) scale(.55); pointer-events: none;
   transition: opacity .15s ease, transform .24s cubic-bezier(.2, .9, .3, 1.2),
@@ -147,11 +147,11 @@
 .session-item .s-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .session-item .s-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
 /* 会话运行中徽标(多会话并行:该会话有任务正在后台执行) */
-.session-item .s-run { color: var(--green); box-shadow: 0 0 8px var(--ok-border); }
+.session-item .s-run { color: var(--green); }
 /* 待用户操作(模型提问挂起):运行点变黄,提示切回该会话作答/取消 */
-.session-item .s-run.warn { color: var(--amber); box-shadow: 0 0 8px var(--warn-border); }
+.session-item .s-run.warn { color: var(--amber); }
 /* 空闲行:小点隐去但格子照留(7px + 6px 行间距),所有会话标题左边缘严格同列 */
-.session-item .s-run.term { color: var(--running); box-shadow: 0 0 8px var(--run-border); }
+.session-item .s-run.term { color: var(--running); }
 .session-item .s-run.idle { visibility: hidden; animation: none; }
 @keyframes s-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .session-item .s-actions { display: flex; gap: 2px; }
@@ -230,8 +230,8 @@
 }
 .s-group.dragging > .s-group-header {
   border-color: var(--accent-border);
-  background: var(--glass-bg-hover);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, .42), inset 0 1px 0 var(--btn-sheen);
+  background: var(--surface-3);
+  box-shadow: var(--glass-shadow-lg);
   transform: scale(1.02);
 }
 .s-list.reordering, .s-list.reordering .s-group-header { cursor: grabbing; }

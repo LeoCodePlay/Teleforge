@@ -12,29 +12,36 @@
 .fcc-chevron { flex: none; color: var(--muted); transition: transform 0.18s ease; }
 .fcc-chevron.flip { transform: rotate(180deg); }
 .fcc-list { list-style: none; margin: 0; padding: 4px 0 8px; border-top: 1px solid var(--line-soft); }
-.fcc-item { display: block; }
+/* 行容器负责整行高亮:主行与次要入口落在**同一个底色块**里,
+   不再出现「左半边亮、右边按钮那截不亮」的分裂感 */
+.fcc-item { display: block; transition: background .14s ease; }
 /* 有次要入口(对比 / 在侧栏打开)时改成一行 flex:主行占满,按钮贴右 */
-.fcc-item.has-aside, .fcc-item.has-compare { display: flex; align-items: center; }
+.fcc-item.has-aside, .fcc-item.has-compare { display: flex; align-items: stretch; }
 .fcc-item.has-aside .fcc-row, .fcc-item.has-compare .fcc-row { flex: 1 1 auto; min-width: 0; }
-/* 次要入口默认隐藏(悬停或键盘聚焦时出现),避免每行都多一个按钮的噪声 */
+.fcc-item.openable:hover,
+.fcc-item.has-aside:hover,
+.fcc-item.has-compare:hover { background: var(--hover-bg); }
+/* 次要入口:行内文字按钮 —— 无边框、无自己的背景、与行同高。
+   默认隐藏避免每行噪声,悬停整行时与底色**同时**出现(不再各管各的),
+   悬停自身只换文字色,不再叠出第二块底色 */
 .fcc-aside {
-  flex: none; margin-right: 10px; padding: 1px 7px; height: 19px;
-  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
-  background: var(--glass-bg); color: var(--muted);
-  font-size: 10.5px; line-height: 17px; cursor: pointer; white-space: nowrap;
-  opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease;
+  flex: none; align-self: center; margin: 0 8px 0 0; padding: 0 8px;
+  display: inline-flex; align-items: center; height: 20px;
+  background: transparent; border: 0; border-radius: var(--r-sm);
+  color: var(--muted); font-size: 11.5px; line-height: 1;
+  cursor: pointer; white-space: nowrap;
+  opacity: 0; transition: opacity .12s ease, color .12s ease;
 }
+/* 「对比」看的是改动前后(只读 diff):用强调色**文字**与「侧栏」区分,
+   而不是再给它套一个彩色边框(那正是「格格不入」的来源) */
+.fcc-compare { color: var(--accent-2); }
 .fcc-item.has-aside:hover .fcc-aside,
 .fcc-item.has-compare:hover .fcc-compare,
 .fcc-aside:focus-visible { opacity: 1; }
-.fcc-aside:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
-/* 「对比」是看改动前后(只读 diff),用强调色与「打开文件」区分开 */
-.fcc-compare { color: var(--accent-2); border-color: var(--accent-border); }
-.fcc-compare:hover { color: var(--text); background: var(--accent-soft); border-color: var(--accent-border); }
+.fcc-aside:hover { color: var(--text); }
 /* 行布局:按钮与纯展示行共用(fcc-row),两者视觉一致 */
-.fcc-row { display: flex; align-items: baseline; gap: 8px; width: 100%; box-sizing: border-box; padding: 4px 12px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12.5px; line-height: 18px; text-align: left; white-space: nowrap; }
+.fcc-row { display: flex; align-items: baseline; gap: 8px; width: 100%; box-sizing: border-box; padding: 4px 12px; min-height: 26px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12.5px; line-height: 18px; text-align: left; white-space: nowrap; }
 .fcc-item.openable .fcc-row { cursor: pointer; }
-.fcc-item.openable:hover .fcc-row { background: var(--hover-bg-hard); }
 .fcc-item.openable:hover .fcc-name { text-decoration: underline; text-decoration-color: var(--placeholder); text-underline-offset: 3px; }
 .fcc-item.openable .fcc-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fcc-item.deleted .fcc-row { opacity: 0.5; }

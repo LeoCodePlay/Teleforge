@@ -4,7 +4,7 @@
 /* 失败/中断的颜色现在挂在 .dsh-summary 的 data 属性上(styles.scss),
    因为状态要按 dsh 的做法用文字颜色表达,而不是换前导图标 */
 .dsh-bodyWrap { display: flex; flex-direction: column; }
-.dsh-inspectButton { display: inline-flex; align-self: flex-start; align-items: center; gap: 4px; margin: 4px 0 2px 4px; padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; color: var(--text-2); font-size: 11px; line-height: 16px; cursor: pointer; opacity: 0; transition: opacity 100ms ease; }
+.dsh-inspectButton { display: inline-flex; align-self: flex-start; align-items: center; gap: 4px; margin: 4px 0 2px 4px; padding: 2px 8px; border: 1px solid var(--line); background: transparent; color: var(--text-2); font-size: 11px; line-height: 16px; cursor: pointer; opacity: 0; transition: opacity 100ms ease; }
 .dsh-tool:hover .dsh-inspectButton, .dsh-inspectButton:focus-visible { opacity: 1; }
 .dsh-inspectButton:hover { background: var(--glass-bg-hover); color: var(--text); }
 
@@ -20,8 +20,8 @@
 .dsh-fileLink { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; border: none; background: none; font: inherit; text-align: left; font-size: 14px; line-height: 24px; color: var(--text-2); text-decoration: underline; text-decoration-color: var(--placeholder); text-underline-offset: 3px; cursor: pointer; }
 .dsh-fileLink:hover { color: var(--text); text-decoration-color: currentColor; }
 /* 折叠态行尾入口(如子代理「查看会话」):不抢摘要的宽度,不触发行展开 */
-.dsh-rowAction { flex: none; margin-left: 2px; padding: 2px 9px; border-radius: var(--r-pill); border: 1px solid var(--glass-border); background: var(--glass-bg-inset); color: var(--text-2); font: inherit; font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer; transition: color .14s ease, border-color .14s ease, background .14s ease, transform .14s ease; }
-.dsh-rowAction:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.dsh-rowAction { flex: none; margin-left: 2px; padding: 2px 9px; border: 1px solid var(--line); background: var(--glass-bg-inset); color: var(--text-2); font: inherit; font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer; transition: color .14s ease, border-color .14s ease, background .14s ease; }
+.dsh-rowAction:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--line-strong); }
 .dsh-rowAction:active { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) { .dsh-rowAction { transition: none; } }
 

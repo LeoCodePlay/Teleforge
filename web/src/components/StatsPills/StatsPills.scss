@@ -7,7 +7,7 @@
 .stat-pill {
   display: inline-flex; align-items: center; gap: 5px;
   height: 24px; padding: 0 8px;
-  border: none; border-radius: 999px;
+  border: none;
   background: transparent; color: var(--muted);
   font-size: 11.5px; font-family: var(--mono); line-height: 1;
   white-space: nowrap; cursor: pointer;
@@ -29,10 +29,9 @@
   min-width: 208px; max-width: 320px;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--glass-bg, var(--panel));
-  backdrop-filter: blur(14px);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .28);
+  border-radius: var(--r-md);
+  background: var(--pop-bg);
+  box-shadow: var(--glass-shadow);
   color: var(--text); font-size: 12px;
 }
 .stat-dialog-title { font-size: 11.5px; color: var(--muted); margin-bottom: 7px; }

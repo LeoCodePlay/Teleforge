@@ -31,6 +31,8 @@ function normalizeQuestions(questions: any[]): any[] {
       id: String(q.id || `q${Math.random().toString(36).slice(2, 7)}`),
       question: String(q.question),
       ...(typeof q.header === 'string' && q.header.trim() ? { header: String(q.header) } : {}),
+      // 长正文(如计划模式的计划审阅):前端以等宽正文渲染,上限 20000 字符防止刷屏
+      ...(typeof q.detail === 'string' && q.detail.trim() ? { detail: String(q.detail).slice(0, 20000) } : {}),
       ...(Array.isArray(q.options) && q.options.length
         ? {
             options: q.options

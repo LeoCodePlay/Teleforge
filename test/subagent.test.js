@@ -236,6 +236,8 @@ async function main() {
               id: 'p1', name: 'subagent',
               arguments: JSON.stringify({
                 description: '看目录',
+                // 前台模式(等结果)必须显式声明:缺省是后台派发,见 test/subagent-background.test.js
+                run_in_background: false,
                 objective: 'PARENT-OBJECTIVE-MARKER 列出工作区目录并确认 note.txt',
                 scope: 'PARENT-SCOPE-MARKER 只读本机工作区;不要写文件、不要执行命令',
                 deliverable: '结论 + 证据',
@@ -272,6 +274,9 @@ async function main() {
     check('事件日志里恰好一条 subagent tool/result', subResult.length === 1, `实际 ${subResult.length}`);
     check('tool/result 携带结构化 meta(步数/调用数)', subResult[0]?.data?.meta?.subagent?.steps === 2 && subResult[0]?.data?.meta?.subagent?.toolCalls === 1,
       JSON.stringify(subResult[0]?.data?.meta));
+    check('前台派发在 meta 里标记为一次性(与缺省的后台派发区分)',
+      subResult[0]?.data?.meta?.subagent?.mode === 'one-shot' && subResult[0]?.data?.meta?.subagent?.background === false,
+      JSON.stringify(subResult[0]?.data?.meta?.subagent));
     check('父会话事件日志里没有子代理的事件(独立会话)', !events.some((e) => e.data?.source === 'subagent'));
 
     // 运行记录:父会话只留一条结论,但这次派发的完整过程要能在右侧面板回看

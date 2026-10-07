@@ -119,6 +119,27 @@ console.log('== 「工具降级纯对话」标记按会话隔离 ==');
   check('A 自己换模型才清掉自己的降级标记', agent._chatOnlyFor(a.id) === false);
 }
 
+console.log('== 新会话「用过之后」固化模型:别的会话改全局默认不能把它带走 ==');
+{
+  // 线上故障(用户报):A 会话在跑(用模型 A)。新建会话 B、切成模型 B,第一次发送正确用 B,
+  // 第二次发送却用了 A。根因:新会话 B 第一次发送时只是「回落到全局默认」,并没有属于自己的
+  // 快照;此后全局默认被改回 A(别的会话/新建草稿态下发不带 sid 的配置),B 就跟着漂移。
+  // 修复契约:会话一旦真正跑过一轮,就把当时生效的模型固化为自己的快照,不再跟随全局默认。
+  agent.configureLlm({ baseUrl, apiKey: 'test', model: 'model-b' }); // 草稿态:全局默认 = B
+  const g = agent.createSession('G');
+  check('新建会话此时还没有自己的快照(跟随全局默认 B)', agent._llmFor(g.id)?.model === 'model-b' && !agent._llmBySid.has(g.id), String(agent._llmFor(g.id)?.model));
+  script = [{ type: 'ok', text: 'G 第一次' }, { type: 'ok', text: 'G 第二次' }];
+  seen = [];
+  await runTurn(g.id);
+  check('第一次发送用当时的全局默认 B', seen[0]?.model === 'model-b', String(seen[0]?.model));
+  check('第一次发送后该会话已固化自己的模型快照', agent._llmBySid.get(g.id)?.model === 'model-b', String(agent._llmBySid.get(g.id)?.model));
+  // 期间:另一个会话(或在跑会话 A)把全局默认改成了 A
+  agent.configureLlm({ baseUrl, apiKey: 'test', model: 'model-a' });
+  await runTurn(g.id);
+  check('第二次发送仍用自己锁定的 B(不再被全局默认改成 A)', seen[1]?.model === 'model-b', String(seen[1]?.model));
+  check('全局默认确实已被改成 A(证明隔离来自会话快照)', agent.llm?.model === 'model-a', String(agent.llm?.model));
+}
+
 server.close();
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

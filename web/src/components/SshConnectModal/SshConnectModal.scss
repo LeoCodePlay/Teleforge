@@ -31,7 +31,7 @@
 }
 .ssh-add:hover:not(:disabled) {
   border-color: var(--accent); color: var(--accent-2);
-  background: var(--accent-soft); transform: none; box-shadow: 0 0 18px var(--accent-soft);
+  background: var(--accent-soft);
 }
 .ssh-save-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .ssh-save-check { margin: 0; white-space: nowrap; }

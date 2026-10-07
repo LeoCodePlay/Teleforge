@@ -272,7 +272,10 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     const mem = sessionModelsRef.current[sid];
     if (!mem) return;
     if (mem.providerId && mem.providerId !== providerId) switchProvider(mem.providerId);
-    if (mem.model && mem.model !== model) setModel(mem.model);
+    // 无条件按会话记忆落定模型:switchProvider 会先把 model 覆盖成"该提供商的全局最近模型"。
+    // 若沿用 `mem.model !== model`(闭包里的旧值)判断,"同名模型跨提供商"时这次恢复会被跳过,
+    // 会话自己的模型没恢复,连带它的上下文窗口也跟着串到别的模型上。
+    if (mem.model) setModel(mem.model);
     if (mem.customModel !== customModel) setCustomModel(mem.customModel);
   };
   // 将当前生效模型固化到指定会话:新会话草稿发送首条消息成功后,把草稿期选定的模型

@@ -18,8 +18,12 @@ export interface SlashItem {
   description: string;
   /** 命令种类:系统命令(compact/fork/clear 等)或技能 */
   kind: 'command' | 'skill';
-  /** 选中后回调:返回 true 表示命令已消费(= harness dispatch),false 表示仅补全文本 */
-  run?: (query: string) => boolean | void | Promise<boolean | void>;
+  /** 中文显示 token(如 计划 / 目标):菜单按 harness 的 zh 词条渲染成「/计划 plan」,
+   *  输入时 `/计划` 与规范名 `/plan` 等价命中。缺省时菜单只显示规范名。 */
+  token?: string;
+  /** 选中后回调:返回 true 表示命令已消费(= harness dispatch),false 表示仅补全文本。
+   *  ctx.attachments 为执行当刻输入卡里已上传完成的附件元数据(供 /目标 /计划 把附件随命令上行)。 */
+  run?: (query: string, ctx?: { attachments: any[] }) => boolean | void | Promise<boolean | void>;
 }
 
 export interface SlashMenuProps {
@@ -41,9 +45,10 @@ export interface SlashMenuProps {
 /**
  * 对齐 harness fuzzyCandidates 的通用名称排序:前缀匹配最优先,其后按模糊顺序子序列
  * 评分排序(连续/靠前加分;短的靠前)。作用于任意含 name 字段的对象,供 / 命令与 @ 文件
- * 菜单复用。rawQuery 空时原样返回(列出全部)。
+ * 菜单复用。rawQuery 空时原样返回(列出全部)。alt 可选给出第二个参与评分的名字
+ * (命令的中文 token:输入 `/计划` 也要能排到 plan 上),取两者中更高的分。
  */
-export function rankByName<T extends { name: string }>(items: T[], rawQuery: string): T[] {
+export function rankByName<T extends { name: string }>(items: T[], rawQuery: string, alt?: (item: T) => string | undefined): T[] {
   const q = rawQuery.toLowerCase();
   if (!q) return items;
   const score = (name: string): number | null => {
@@ -63,15 +68,17 @@ export function rankByName<T extends { name: string }>(items: T[], rawQuery: str
   };
   const ranked: { item: T; s: number }[] = [];
   for (const it of items) {
-    const s = score(it.name);
+    const primary = score(it.name);
+    const secondary = alt ? score(alt(it) || '') : null;
+    const s = primary === null ? secondary : secondary === null ? primary : Math.max(primary, secondary);
     if (s !== null) ranked.push({ item: it, s });
   }
   return ranked.sort((a, b) => b.s - a.s).map((r) => r.item);
 }
 
-/** / 命令菜单的名称排序:适配 SlashItem 的薄封装 */
+/** / 命令菜单的名称排序:适配 SlashItem 的薄封装(中文 token 与规范名都参与评分) */
 export function rankSlashItems(items: SlashItem[], rawQuery: string): SlashItem[] {
-  return rankByName(items, rawQuery);
+  return rankByName(items, rawQuery, (it) => it.token);
 }
 
 export default function SlashMenu({ items, query, active, onPick, onClose, onActiveChange, anchorRef }: SlashMenuProps) {
@@ -127,7 +134,7 @@ export default function SlashMenu({ items, query, active, onPick, onClose, onAct
           onMouseEnter={() => onActiveChange(i)}
           onClick={() => onPick(it, query)}
         >
-          <span className={`slash-badge ${it.kind}`}>/{it.name}</span>
+          <span className={`slash-badge ${it.kind}`}>{it.token ? `/${it.token} ${it.name}` : `/${it.name}`}</span>
           <span className="slash-desc">{it.description || (it.kind === 'skill' ? '技能' : '命令')}</span>
         </button>
       ))}

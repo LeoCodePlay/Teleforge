@@ -59,10 +59,10 @@
 .cr-status { margin: 0; padding: 16px; font-size: 13px; color: var(--muted); }
 .cr-status-error { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .cr-retry {
-  padding: 4px 12px; border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  padding: 4px 12px; border: 1px solid var(--line);
   background: var(--glass-bg); color: var(--text); font-size: 12px; cursor: pointer;
 }
-.cr-retry:hover { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
+.cr-retry:hover { border-color: var(--line-strong); background: var(--glass-bg-hover); }
 
 /* ---- 对比本体 ---- */
 .cr-diff {

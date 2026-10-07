@@ -1,7 +1,7 @@
 // 全局自定义 tooltip(替代浏览器原生 title 提示):
 // 在应用根部挂载一次 <TooltipHost />,之后任意 HTML 元素挂 data-tip="提示文本"
 // (支持表达式 data-tip={...};可选 data-tip-side="top|bottom|left|right",默认 top),
-// 悬停(hover)或键盘聚焦时统一渲染液态玻璃风格气泡。不在元素外包壳,零布局侵入。
+// 悬停(hover)或键盘聚焦时统一渲染实色提示气泡。不在元素外包壳,零布局侵入。
 // 可选扩展属性:
 //   data-tip-ellipsis 仅当元素文本被省略号截断(scrollWidth > clientWidth)时弹出,否则静默;
 //   data-tip-follow    气泡跟随鼠标位置出现在指针旁边(而非目标元素居中);

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { useCoarsePointer } from '../../hooks/useMediaQuery';
@@ -89,11 +90,16 @@ interface ConsolePanelProps {
   activeConn?: string | null;
   /** 当前活动 SSH 连接的 IP(未连接时为 null);远程终端未重命名时显示它 */
   hostIp?: string | null;
+  /**
+   * 窄容器模式(右侧栏):隐藏右边那条 200px 的终端列表,改用工具栏里的「⌨ 终端 ▾」切换器。
+   * 与触屏设备走同一套交互 —— 侧栏通常只有 300~460px,列表会把终端挤得没法用。
+   */
+  compact?: boolean;
 }
 
 // 真实终端:xterm.js 前端 + 服务端 /ws/term shell 通道(每个会话一条独立 WS)
 // 文本帧(JSON)= 控制消息,二进制帧 = 终端原始数据(键盘输入上行 / 屏幕输出下行)
-export default function ConsolePanel({ connected, visible, activeConn, hostIp }: ConsolePanelProps) {
+export default function ConsolePanel({ connected, visible, activeConn, hostIp, compact = false }: ConsolePanelProps) {
   const connectedRef = useRef(connected);
   connectedRef.current = connected;
   const visibleRef = useRef(visible);
@@ -135,6 +141,11 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
 
   // 右侧终端列表宽度(可拖拽调整)
   const [listW, setListW] = useState(200);
+  /**
+   * 右栏(窄容器)里那条终端列表做成**默认折叠**的抽屉:收起来时把宽度全让给终端,
+   * 展开后点条目/右键菜单就跟主区原来的布局一样。触屏不走这条(那边是工具栏的下拉切换器)。
+   */
+  const [railOpen, setRailOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   const getSession = (id: number) => sessions.current.get(id) || null;
@@ -387,6 +398,14 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
   const activeDesc = descs.find((d) => d.id === activeId) || descs[0];
   const visibleDescId = activeDesc?.id ?? null;
 
+  // --- 卸载:收掉本实例的全部会话 ---
+  // 右栏把终端做成一条**可关闭的标签**,关掉标签会卸载本组件;不收的话 WS 与它背后的 shell 会一直挂着
+  // (服务端只在 WS 断开时才结束 shell)。主区那份是常驻挂载,永远走不到这里,行为不变。
+  useEffect(() => () => {
+    for (const ses of [...sessions.current.values()]) disposeSession(ses);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // --- 初始:挂载默认列表(远程 + 本地)的会话 ---
   const createdInitial = useRef(false);
   useEffect(() => {
@@ -530,7 +549,11 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
             </div>
           ))}
         </div>
-        {menu && (
+        {/* 右键菜单走 portal 到 body:`.term-menu` 是 position:fixed,而它原来挂在 `.console-main`
+            里面 —— 右栏那层玻璃底带 backdrop-filter,会让 fixed 退化成"相对那个祖先定位",
+            于是菜单被推到侧栏外面、再被 overflow:hidden 剪掉(右栏右键"没反应"就是这个原因)。
+            挂到 body 底下没有过滤/变换祖先,fixed 才真的是视口坐标。 */}
+        {menu && createPortal(
           <div
             className="term-menu"
             ref={menuRef}
@@ -543,7 +566,8 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
             <button className="term-menu-item" disabled={st !== 'running'} onClick={() => { pasteClipboard(); setMenu(null); }}>
               <span>粘贴</span><span className="term-menu-key">Ctrl+Shift+V</span>
             </button>
-          </div>
+          </div>,
+          document.body
         )}
         <div className="term-bar">
           <span className={`term-state ${st === 'running' ? 'ok' : st === 'closed' ? 'err' : ''}`}>
@@ -556,7 +580,15 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
             ))}
           </div>
           <div className="grow" />
-          {/* 触屏设备:右侧终端列表在手机上隐藏,这里提供终端切换器(桌面鼠标无此控件) */}
+          {/* 右栏窄容器:列表默认折叠,这里只做一个开合开关(展开后在右边缘那条抽屉里点选终端) */}
+          {compact && !coarse && (
+            <button className="chip-btn" aria-expanded={railOpen} title="终端列表(默认折叠)"
+              onClick={() => setRailOpen((v) => !v)}>
+              ☰ 终端列表 {railOpen ? '▸' : '◂'}
+            </button>
+          )}
+          {/* 触屏(粗指针):右侧列表整条不渲染,用这个下拉切换器。
+              右栏窄容器不渲染它 —— 那边走「默认折叠的列表抽屉」,见下方 term-list。 */}
           {coarse && (
             <div className="term-switch" ref={termMenuRef}>
               <button className="chip-btn" onClick={() => setTermMenuOpen((v) => !v)}>
@@ -588,9 +620,12 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
         </div>
       </div>
 
-      {/* 右侧终端列表(可拖拽排序;名称即用即显:远程 = IP/离线,本地 = 本地) */}
-      <aside ref={listRef} className="term-list" style={{ width: listW }}>
-        <div className="term-list-resizer" data-tip="拖动调整宽度" onPointerDown={startListResize} />
+      {/* 右侧终端列表(可拖拽排序;名称即用即显:远程 = IP/离线,本地 = 本地)。
+          右栏窄容器里默认折叠:不占宽度,点工具栏的「☰ 终端列表 ◂」展开,展开后就是主区那套布局
+          (点条目切换、右键重命名/删除、＋远程/＋本地)。触屏整条不渲染,用工具栏的下拉切换器。 */}
+      {!coarse && (!compact || railOpen) && (
+      <aside ref={listRef} className="term-list" style={{ width: compact ? 150 : listW }}>
+        {!compact && <div className="term-list-resizer" data-tip="拖动调整宽度" onPointerDown={startListResize} />}
         <div className="term-list-head">
           <span className="term-list-title">终端</span>
           <div className="term-list-add">
@@ -667,7 +702,7 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
             );
           })}
         </div>
-        {listMenu && (
+        {listMenu && createPortal(
           <div
             className="term-menu"
             ref={listMenuRef}
@@ -689,10 +724,12 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp }:
             }}>
               <span>删除终端</span>{descs.length <= 1 && <span className="term-menu-key">至少保留一个</span>}
             </button>
-          </div>
+          </div>,
+          document.body
         )}
         <div className="term-list-hint">拖拽排序 · 右键重命名/删除 · 远程终端跟随当前 SSH 服务器</div>
       </aside>
+      )}
     </div>
   );
 }

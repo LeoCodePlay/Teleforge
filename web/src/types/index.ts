@@ -216,6 +216,10 @@ export interface ToolCallMeta {
     description?: string;
     provider?: string;
     runId?: string;
+    /** 派发方式:continuable = 后台常驻(默认,可续聊/可暂停);one-shot = 前台等结果的一次性 */
+    mode?: 'one-shot' | 'continuable';
+    /** 是否是后台派发(返回时还没结果) */
+    background?: boolean;
     steps?: number;
     toolCalls?: number;
     ms?: number;
@@ -231,7 +235,14 @@ export interface SubagentRunInfo {
   sid: string | null;
   description: string;
   provider: string;
-  status: 'running' | 'done' | 'error' | 'stopped';
+  /** 派发方式:continuable = 常驻后台、可续聊可暂停(默认);one-shot = 前台一次性 */
+  mode?: 'one-shot' | 'continuable';
+  /** running = 正在跑某一轮;idle = 常驻但当前没在跑(可继续);done/error/stopped = 一次性派发的终局 */
+  status: 'running' | 'idle' | 'done' | 'error' | 'stopped';
+  /** 还有多少条消息/轮次在排队 */
+  queued?: number;
+  /** 服务端是否还有常驻 Activation(有才可能续聊/暂停;重启后为 false) */
+  resident?: boolean;
   startedAt: number;
   endedAt: number | null;
   ms: number | null;
@@ -252,6 +263,8 @@ export interface SubagentMessage {
   role: 'user' | 'assistant' | 'tool';
   step: number;
   at: number;
+  /** user 消息的来源:brief=初始任务,parent=主代理后续消息,human=人类在子会话里发的 */
+  from?: 'brief' | 'parent' | 'human';
   text?: string;
   reasoning?: string;
   callId?: string;
@@ -360,6 +373,11 @@ export interface ChatMessage {
   turnElapsedMs?: number;
   /** 本轮结束原因(completed / aborted / error / max-iters);aborted→「已停止」,error→「处理失败」 */
   turnEndReason?: string;
+  /** 本轮的 token 用量(四桶,单轮口径:该轮所有步 + 重试尝试)。
+   *  服务端在 turn/end 时与 turnElapsedMs 一起回填到本轮各行,并在实时 turn_end 事件下发。
+   *  **缺省表示该轮没有任何可用用量样本**(网关不报用量),此时统计行不渲染用量胶囊,
+   *  而不是显示"0 tok" */
+  turnUsage?: TokenUsageTotals;
   /** 提示行(role=notice)的级别源自服务端 notice 事件:缺省按普通提示渲染 */
   level?: 'info' | 'warn';
   /** 提示行的语义分类(interrupted / truncated / turn-error / compaction / max-tokens …),
@@ -395,12 +413,35 @@ export interface ChatMessage {
   cmdId?: number;
   /** 单轮回复中修改过的文件汇总(write/edit/delete 工具 meta 聚合):渲染回复下方的「N 个文件已更改」卡片 */
   filesChanged?: FileChangeItem[];
+  /** 目标自动续跑轮(服务端 user/message 的 source='goal' 投影):用户气泡渲染成「🎯 目标第 N 轮」 */
+  goalRound?: { round: number; revision?: number };
 }
 
 /** 任务计划项(todo_write 工具维护,状态对齐 deepseek-harness) */
 export interface TodoItem {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
+}
+
+// ---- 会话级长期目标(/目标 命令 + get_goal/create_goal/update_goal 工具)----
+
+/** 目标阶段(与 deepseek-harness 的 GoalPhase 一一对应) */
+export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
+
+/** 当前目标视图(服务端 get_history 的 goal 字段与 goal_changed 事件同构) */
+export interface GoalInfo {
+  id: string;
+  revision: number;
+  objective: string;
+  phase: GoalPhase;
+  blockedReason?: { code: string; message: string };
+  maxGoalRounds: number;
+  /** 已计入日志的自动续跑轮数 */
+  roundsStarted: number;
+  createdAt: number;
+  updatedAt: number;
+  /** 进程内续跑授权:armed=空闲会自动续跑,disarmed=不续跑 */
+  activation: 'armed' | 'disarmed';
 }
 
 // ---- ask_user_question 工具(模型向用户提问) ----
@@ -416,6 +457,8 @@ export interface AskQuestion {
   id: string;
   question: string;
   header?: string;
+  /** 长正文(如计划模式 exit_plan_mode 的完整计划):面板以等宽正文渲染 */
+  detail?: string;
   options?: AskOption[];
   multi_select?: boolean;
 }

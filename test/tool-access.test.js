@@ -20,10 +20,14 @@ process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), 'sshai-access-'));
 
 const { ToolRegistry, DEFAULT_TOOL_ACCESS } = await import('../server/agent/registry.ts');
 const { registerTools } = await import('../server/agent/tools.ts');
+const { registerScheduleTools } = await import('../server/agent/schedule-tools.ts');
 const { toolAccess } = await import('../server/agent/permission.ts');
 
 const registry = new ToolRegistry();
 registerTools(registry);
+// 自动化任务的 4 个模型工具是 agent.ts 在 registerTools 之后补注册的,这里照同样的顺序补上,
+// 免得它们成为"access 声明完备性"检查的盲区
+registerScheduleTools(registry);
 
 const all = [...registry.tools.values()];
 assert.ok(all.length >= 20, `注册工具数异常:${all.length}`);
@@ -53,6 +57,8 @@ const expectAccess = {
   write_local_file: 'write', edit_local_file: 'write', create_local_dir: 'write', delete_local_path: 'write',
   skill_copy_builtin: 'write', generate_image: 'write',
   todo_write: 'meta', skill: 'meta', ask_user_question: 'meta',
+  // 自动化任务:建/改/删都在改持久状态 → 写类(plan 模式拒绝、confirm 模式要审批)
+  schedule_create: 'write', schedule_update: 'write', schedule_delete: 'write', schedule_list: 'write',
   run_command: 'command', run_local_command: 'command'
 };
 for (const [name, want] of Object.entries(expectAccess)) {

@@ -1,18 +1,28 @@
-/* ---- ThemePanel 独有样式:预设/自定义主题卡片 + 编辑器 ---- */
+/* ---- ThemePanel 独有样式:预设/自定义主题卡片 + 6 色编辑器 ---- */
 .theme-preview {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 14px; margin-bottom: 14px; border-radius: var(--r-md);
-  border: 1px solid var(--glass-border); overflow: hidden;
-  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
-}
-.theme-preview.live { margin-top: 4px; margin-bottom: 0; }
-.tp-swatch {
-  flex: none; width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid var(--line-strong);
+  border: 1px solid var(--line); overflow: hidden;
+  box-shadow: var(--glass-shadow);
 }
 .tp-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.tp-name { font-weight: 600; font-size: 13.5px; color: var(--text); }
+.tp-name { font-weight: 600; font-size: 13.5px; }
 .tp-desc { font-size: 11.5px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 预览条里的迷你界面:用该主题的 6 色实时画出「窗口 + 主/次按钮」 */
+.tp-window {
+  flex: none; width: 132px; padding: 7px 8px; border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.tp-bar { display: flex; align-items: center; gap: 4px; height: 12px; padding: 0 5px; border-radius: 3px; }
+.tp-bar i { width: 5px; height: 5px; border-radius: 50%; display: block; }
+.tp-line { height: 5px; border-radius: 3px; display: block; }
+.tp-btns { display: flex; gap: 5px; margin-top: 1px; }
+.tp-btns b {
+  flex: 1; text-align: center; font-size: 9.5px; font-weight: 600;
+  padding: 3px 0; border-radius: 4px; line-height: 1.2;
+}
 
 .theme-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px;
@@ -21,33 +31,33 @@
 .theme-card {
   display: flex; flex-direction: column; gap: 9px; cursor: pointer;
   padding: 12px 13px; border-radius: var(--r-md);
-  background: var(--glass-bg); border: 1px solid var(--glass-border);
-  box-shadow: inset 0 1px 0 var(--glass-hi);
-  transition: all .18s ease;
+  background: var(--glass-bg); border: 1px solid var(--line);
+  transition: background .16s ease, border-color .16s ease;
 }
-.theme-card:hover { background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.theme-card:hover { background: var(--glass-bg-hover); border-color: var(--line-strong); }
 .theme-card.active {
-  border-color: var(--accent); background: linear-gradient(135deg, var(--accent-soft), transparent);
-  box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 16px var(--accent-soft);
+  border-color: var(--accent); background: var(--accent-fill);
 }
 .tc-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .tc-name { font-weight: 600; font-size: 13px; color: var(--text); }
 .tc-swatches { display: flex; gap: 6px; }
 .tc-swatches .sw {
-  width: 18px; height: 18px; border-radius: 6px;
+  width: 18px; height: 18px; border-radius: 5px;
   border: 1px solid var(--line-strong);
 }
 .tc-actions { display: flex; gap: 6px; margin-top: auto; }
 
-.theme-color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin-bottom: 12px; }
-.theme-color-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+.theme-color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-bottom: 14px; }
+.theme-color-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.theme-color-field .tcf-label { font-weight: 600; color: var(--text-2); }
+.theme-color-field .tcf-hint { font-size: 10.5px; color: var(--muted); }
 .theme-color-field .tc-input {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 10px; border-radius: var(--r-sm);
-  background: var(--glass-bg-inset); border: 1px solid var(--glass-border);
-  transition: border-color .18s ease, box-shadow .18s ease;
+  background: var(--glass-bg-inset); border: 1px solid var(--line);
+  transition: border-color .16s ease, box-shadow .16s ease;
 }
-.theme-color-field .tc-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.theme-color-field .tc-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .theme-color-field input[type="color"] {
   flex: none; width: 28px; height: 22px; padding: 0; border: none; border-radius: 4px;
   background: transparent; cursor: pointer;
@@ -55,4 +65,8 @@
 .theme-color-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 .theme-color-field input[type="color"]::-webkit-color-swatch { border: 1px solid var(--line-strong); border-radius: 4px; }
 .theme-color-field code { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.theme-modal { width: 520px; }
+.theme-modal { width: 560px; }
+
+@media (max-width: 767px) {
+  .theme-color-grid { grid-template-columns: 1fr; }
+}

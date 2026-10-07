@@ -190,6 +190,34 @@ export function UsagePill({ usage }: { usage: TokenUsageTotals }) {
   );
 }
 
+/**
+ * 单轮用量胶囊(照搬 dsh 的 TurnUsagePanel):挂在**每条回复**的操作栏末尾,形如
+ *   🗄 用量 31.2M tok
+ * 点击展开「本轮用量」明细(缓存命中 / 输入(未命中) / 缓存读取 / 缓存写入 / 输出)。
+ *
+ * 与会话级 UsagePill 的区别只在口径:这里是**一轮**(该轮所有步 + 重试的多次尝试),
+ * 由服务端在 turn/end 折叠后下发(见 foldLastTurnTokenUsage)。
+ * 一轮没有任何样本时由调用方**不渲染**这个胶囊 —— 不显示 0 tok(没有数据 ≠ 用量为零)。
+ */
+export function TurnUsagePill({ usage }: { usage: TokenUsageTotals }) {
+  const billed = billedInput(usage);
+  const hit = cacheHitText(usage);
+  const total = formatTokens(billed + usage.outputTokens);
+  return (
+    <Pill id="turn-usage" icon="🗄" label={`用量 ${total} tok`} title="本轮用量"
+      ariaLabel={hit === null ? `本轮用量 ${total} tok` : `本轮用量 ${total} tok · 缓存命中 ${hit}%`}>
+      <div className="stat-dialog-total">{formatExactTokens(billed + usage.outputTokens)} tok</div>
+      <dl className="stat-dialog-details" data-turn-usage-details>
+        <Row label="缓存命中" value={hit === null ? null : `${hit}%`} />
+        <Row label="输入(未命中)" value={formatExactTokens(usage.uncachedInputTokens)} />
+        <Row label="缓存读取" value={formatExactTokens(usage.cacheReadTokens)} />
+        <Row label="缓存写入" value={usage.cacheWriteTokens !== 0 ? formatExactTokens(usage.cacheWriteTokens) : null} />
+        <Row label="输出" value={formatExactTokens(usage.outputTokens)} />
+      </dl>
+    </Pill>
+  );
+}
+
 /** 零值兜底:统计/用量还没到手时,两个胶囊也要在(渲染成 `0 轮 0 步` / `0 tok`) */
 const EMPTY_STATS: SessionStatsInfo = {
   turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0

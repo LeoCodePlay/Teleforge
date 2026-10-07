@@ -188,6 +188,9 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
       <div className="ask-body" key={q.id}>
         {q.header && <div className="ask-header">{q.header}</div>}
         <div className="ask-question">{q.question}</div>
+        {/* 长正文(如计划模式 exit_plan_mode 送审的完整计划):等宽正文 + 独立滚动,
+            不让长计划把选项按钮挤到屏幕外(harness 的计划审阅同款呈现) */}
+        {q.detail && <pre className="ask-detail" tabIndex={0}>{q.detail}</pre>}
 
         {q.options && q.options.length > 0 && (
           <div

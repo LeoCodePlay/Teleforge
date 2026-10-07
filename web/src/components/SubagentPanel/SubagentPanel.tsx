@@ -29,9 +29,11 @@ import './SubagentPanel.scss';
 const POLL_MS = 1500; // 运行中记录的兜底刷新(事件为主,轮询只防丢事件)
 
 /** 状态文案与状态点语义(点=真实状态,不是装饰) */
-function statusOf(s: SubagentRunInfo['status']): { text: string; dot: 'ongoing' | 'done' | 'error' | 'warning' } {
+function statusOf(s: SubagentRunInfo['status']): { text: string; dot: 'ongoing' | 'done' | 'error' | 'warning' | 'idle' } {
   switch (s) {
     case 'running': return { text: '运行中', dot: 'ongoing' };
+    // 常驻但当前没在跑:不是"已完成",而是在等后续消息(可继续)
+    case 'idle': return { text: '当前未运行', dot: 'idle' };
     case 'error': return { text: '出错', dot: 'error' };
     case 'stopped': return { text: '已停止', dot: 'warning' };
     default: return { text: '已完成', dot: 'done' };

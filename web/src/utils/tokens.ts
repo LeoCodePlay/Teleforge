@@ -123,3 +123,30 @@ export function formatTokens(n: number): string {
   const v = Math.max(0, Math.round(n));
   return v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v);
 }
+
+/**
+ * 解析「带单位」的数量输入(上下文长度、输出上限等配置项):
+ * 1M / 1m = 1000000,128k = 128000,1.5M = 1500000,纯数字原样返回;空或非法返回 undefined。
+ * 千分位逗号/下划线/空格容错(1,000,000、128_000)。
+ */
+export function parseCountInput(raw: unknown): number | undefined {
+  const s = String(raw ?? '').trim().replace(/[\s,_]/g, '').toLowerCase();
+  if (!s) return undefined;
+  const m = /^(\d+(?:\.\d+)?)([kmg]?)$/.exec(s);
+  if (!m) return undefined;
+  const mult = m[2] === 'k' ? 1e3 : m[2] === 'm' ? 1e6 : m[2] === 'g' ? 1e9 : 1;
+  const n = Math.floor(Number(m[1]) * mult);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * 把已存数值写回输入框:整百万/整千用 M / k 简写(1000000→1M、128000→128k),
+ * 否则原样输出(131072),避免出现 131.072k 这种反而更难读的写法。
+ */
+export function formatCountInput(n?: number | null): string {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return '';
+  if (v % 1000000 === 0) return `${v / 1000000}M`;
+  if (v % 1000 === 0) return `${v / 1000}k`;
+  return String(v);
+}

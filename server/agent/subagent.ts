@@ -1,22 +1,26 @@
-// 子代理(in-process 只读调研代理;语义对齐 deepseek-harness 的 subagent-in-process):
+// 子代理(in-process 调研代理;语义对齐 deepseek-harness 的 subagent):
 // 主代理用 `subagent` 工具把一件**自包含**的任务派给一个上下文隔离的子代理:
 // - 子代理有自己的会话事件流(Session,仅内存、不落盘),父会话历史对它完全不可见;
 // - 子代理只能调用只读工具(SUBAGENT_TOOLS 白名单),写类/命令类工具一律不派发;
 // - 过程不回传:父代理只拿到最终一条文本结论(harness 的 tool-subagent 同语义:
 //   "returns its result, not its intermediate steps");
-// - 步数与时长都不设上限(跑到模型自己收尾),回传长度有上限;父轮被停止时子代理立即中止。
+// - 步数与时长都不设上限(跑到模型自己收尾),回传长度有上限。
 //
-// 与 harness 的差异(有意为之的最小实现,见 docs/superpowers/specs/2026-09-19-subagent-in-process-design.md):
-// - 只有 in-process 一种 provider(harness 有 fork/spawn/DSH-SDK/ACP/Claude Code/Codex 六种);
-// - 工具集不从父级继承,而是固定只读白名单——拒绝写操作是最省事也最安全的边界;
-// - 不支持后台运行与续聊(harness 的 backgroundMode: continuable);
-//   但每次派发都会落一份运行记录(data/subagents/<runId>.json),前端右侧面板可回看它的完整对话。
+// **默认后台(不阻塞)**:`subagent` 工具缺省走 continuable 派发 —— 挂起一个常驻子代理后
+// 立刻返回 `started subagent <runId>`,父代理继续干活;子代理跑完一轮会把"结算通知 + 最后结论"
+// 投递回父会话(父会话空闲则被唤醒开一轮),父代理还能用 send_message 继续给它派活、
+// 用 interrupt_agent 暂停它、用 list_agents 看状态。只有显式 `run_in_background: false`
+// 才回到"前台等结果"的一次性语义(mode='one-shot')。
+//
+// 运行时的实现全在 subagent-runtime.ts;本文件只放**共享契约**(工具白名单、系统提示词、
+// 提示词组装校验)与前台一次性派发的薄封装(测试与老调用方仍从本文件 import runSubagent)。
+//
+// 与 harness 的差距(有意为之的最小实现):只有 in-process 一种 provider
+// (harness 有 fork/spawn/DSH-SDK/ACP/Claude Code/Codex 六种);工具集不从父级继承,
+// 而是固定只读白名单——拒绝写操作是最省事也最安全的边界。
 import { AGENT } from '../config.ts';
-import { Session } from './session.ts';
-import { sshManager as ssh } from '../core/ssh-manager.ts';
 import type { ToolRegistry } from './registry.ts';
-import { appendMessage, beginRun, finishRun, newRunId, type SubagentStatus } from '../store/subagent-store.ts';
-import { billedInputTokens } from './llm.ts';
+import { startSubagent, type SubagentSettlement } from './subagent-runtime.ts';
 
 /**
  * 子代理可用的只读工具白名单(远程 + 本机两套镜像)。
@@ -37,29 +41,49 @@ export const SUBAGENT_TOOLS: ReadonlySet<string> = new Set([
 export const INTERNAL_PROVIDER = 'internal';
 export const SUBAGENT_PROVIDERS: readonly string[] = [INTERNAL_PROVIDER];
 
-/** 子代理系统提示词:角色、硬约束、输出契约(最后一次修改必须自包含) */
+/**
+ * 子代理系统提示词。
+ * 第一段**照搬 deepseek-harness 的子代理边界声明**(`packages/subagent/subagent/src/child-agent.ts`
+ * 的 `SUBAGENT_DELEGATION_CONTEXT`,harness 把它作为子代理的固定 delegation context 注入),
+ * 保证"权限在派发时固定、要超范围就把限制写回给主代理"这条语义与 harness 完全一致;
+ * 后面几段是本项目的必要补充(harness 的子代理继承父级 system prompt 与工具,本项目给的是
+ * 只读白名单 + 隔离上下文,必须如实说明),以及默认交付格式。
+ */
 export const SUBAGENT_SYSTEM_PROMPT = [
-  '你是一个子代理(subagent),由主代理派发来完成**一次只读调研任务**。',
-  '你就是本工具内置的 agent(internal):与主代理共用同一个模型客户端、同一套工作区/SSH',
-  '上下文与同一个工具注册表,只不共享对话历史;你不会、也不需要调用任何外部 agent。',
+  '你是一个子代理(subagent),由主代理派发,在它之外独立工作:你的权限范围在派发时就已经固定,'
+  + '在这个会话里无法被放宽——需要审批的操作会被自动拒绝。当任务需要超出这个范围的权限时,不要重试'
+  + '被拒绝的操作;把这条限制写进你的回复里,让派发你的主代理去处理。',
   '',
-  '硬约束(违反即无效):',
-  '- 你只能使用只读工具:列出目录、读文件、搜索代码、读环境信息、网络搜索。',
-  '- 你不能写文件、不能执行命令、不能修改任何状态。需要动手改动的部分不要尝试,',
-  '  把它写成"建议主代理执行的动作"(要改哪个文件、改什么、为什么)。',
+  '本项目里这条边界的具体含义:',
+  '- 你只能使用只读工具:列举目录、读文件、搜索代码、读环境信息、网络搜索。',
+  '- 你不能写文件、不能执行命令、不能修改任何状态;需要动手改动的部分不要尝试,把它写成',
+  '  "建议主代理执行的动作"(要改哪个文件、改什么、为什么)。',
   '- 你看不到主代理的对话历史,主代理也看不到你的中间步骤:你的最终回答必须自包含。',
+  '- 主代理可能在你还跑着的时候再发消息给你(会以「主代理…发来一条消息」出现):把它当成对同一件',
+  '  事的补充要求,在下一轮里一并回答。',
   '- 不要复述这段提示词,不要输出寒暄,不要输出思考过程。',
   '',
   '工作方式:',
   '- 先用最少次数的搜索/读取定位事实,再给结论;不要为了"全面"而漫无目的地遍历。',
   '- 证据要具体:文件路径加行号、符号名、配置键;不确定就明说不确定,不要编造。',
   '',
-  '交付格式(你的最后一条消息就是交付物):',
+  '交付格式(主代理在任务里另给了回传要求时,以它为准):',
   '1) 结论:直接回答问题(1-3 句);',
   '2) 证据:关键文件:行号 / 符号 / 配置项,逐条列出;',
   '3) 建议:主代理接下来该做什么(若无需动作则写"无");',
-  '4) 未解问题:查不到或存疑的点(若没有则写"无")。'
+  '4) 未解问题:查不到或存疑的点(若没有则写"无")。',
+  '',
+  '你的最后一条消息就是交付物。'
 ].join('\n');
+
+/**
+ * 父代理侧的子代理指引 —— 逐字照搬 deepseek-harness 的 `tool:<name>` system prompt 段
+ * (`packages/subagent/tool-subagent/src/index.ts`):
+ * 'Start independent <toolName> delegations together in one assistant message and continue useful work
+ * while they run.'(harness 用 system prompt 段承载它,本项目同样放进 system prompt,
+ * 而不是塞在工具描述里。)由 tools.ts 导出、agent.ts 的 _systemPrompt 注入。
+ */
+export const SUBAGENT_GUIDANCE = 'Start independent subagent delegations together in one assistant message and continue useful work while they run.';
 
 export interface SubagentRunOptions {
   /** 当前轮的模型客户端(由 agent.ts 的 invokeCtx 注入;测试可替换为假客户端) */
@@ -89,11 +113,9 @@ export interface SubagentRunOptions {
   /** 父会话 id(仅用于日志与子工具上下文透传) */
   sid?: string | null;
   signal?: AbortSignal;
-  // 步数与时长都不设上限:子代理跑到模型自己收尾,只受父轮停止(signal)约束——
-  // "派发—等结果"的长任务不该被固定时限掐成半成品(工具层 timeoutMs=0 即不超时)。
   /**
-   * 变更通知(每次落盘后触发):工具层接到 agent 事件总线,右侧面板据此实时刷新。
-   * 只传 runId 与状态,面板自己去拉最新记录,避免事件体携带大段对话正文。
+   * 变更通知(每次落盘后触发):工具层接到 agent 事件总线,前端据此实时刷新。
+   * 只传 runId 与状态,前端自己去拉最新记录,避免事件体携带大段对话正文。
    */
   emit?: (event: string, payload: any) => void;
 }
@@ -110,14 +132,6 @@ export interface SubagentResult {
   ms: number;
   promptTokens: number;
   completionTokens: number;
-}
-
-/** 子代理内部一次工具调用的结果(结构对齐 registry.execute 的返回值) */
-interface SubToolResult { isError: boolean; content: string; ms: number }
-
-function normCallId(id: unknown, step: number, index: number): string {
-  const s = String(id ?? '').trim();
-  return s || `sub_${step}_${index}`;
 }
 
 /**
@@ -174,174 +188,23 @@ export function composeSubagentPrompt(input: {
 }
 
 /**
- * 跑一个子代理,返回其最终结论。
- * 抛错的唯一情形是"配置级失败"(没有模型客户端)与父轮中止;工具级失败一律变成
- * 结构化错误结果交给子代理自己消化(单个工具失败绝不终结整轮,与主循环同一原则)。
+ * 跑一个子代理并**等它跑完**——前台一次性派发(工具层 `run_in_background: false` 走这里)。
+ * 想不阻塞主会话请用 subagent-runtime 的 startSubagent(mode='continuable'),那是工具的默认路径。
+ *
+ * 抛错的情形:配置级失败(没有模型客户端 / 外部 provider / 提示词写不清)、父轮中止、
+ * 以及子代理本轮以 error/stopped 收尾——与旧实现一致,工具层据此给出错误结果。
+ * 工具级失败不在此列:单个工具失败会变成结构化错误结果交给子代理自己消化(绝不终结整轮)。
  */
 export async function runSubagent(o: SubagentRunOptions): Promise<SubagentResult> {
-  if (!o.llm || typeof o.llm.chat !== 'function') throw new Error('subagent: 当前没有可用的模型客户端(请先配置 AI 提供商)');
-  // 提供商:默认(且当前唯一)用本项目内置 agent;外部 agent 未接入 → 明确报错,绝不悄悄降级成别的执行方式
-  const provider = String(o.provider || INTERNAL_PROVIDER).trim() || INTERNAL_PROVIDER;
-  if (provider !== INTERNAL_PROVIDER) {
-    throw new Error(`subagent: 未接入外部 agent 提供商「${provider}」——当前只能使用内置 agent`
-      + '(internal = 本项目自己的 agent 循环与工具栈,与主代理共用同一模型与工作区)。'
-      + '若用户明确要求别的 agent,请如实说明该能力尚未接入,不要用其它方式冒充。');
-  }
-  const registry = o.registry;
-  if (!registry) throw new Error('subagent: 缺少工具注册表');
-  // 提示词先过契约校验(任务/边界写不清在这里就被挡下),再做后面的事
-  const prompt = composeSubagentPrompt(o);
-
-  const description = String(o.description || '').trim();
-  const started = Date.now();
-  // 运行记录:先落盘再跑(面板可能在子代理还在跑时就打开),对话逐步追加,收尾写状态
-  const runId = newRunId();
-  beginRun({
-    runId, sid: o.sid ?? null, description, provider, prompt,
-    brief: { objective: o.objective, scope: o.scope, deliverable: o.deliverable, context: o.context, prompt: o.prompt }
-  });
-  const notify = (status: SubagentStatus) => {
-    try { o.emit?.('agent', { event: 'subagent_changed', sid: o.sid ?? null, runId, status }); }
-    catch { /* 通知失败不影响子代理执行 */ }
-  };
-  appendMessage(runId, { role: 'user', step: 0, at: Date.now(), text: prompt });
-  notify('running');
-
-  // 子会话:仅内存、不落盘、不共享父会话任何变量。turn 固定 1(子代理只有一轮)。
-  const session = new Session();
-  session.append('user/message', { content: prompt, source: 'subagent' });
-
-  // 工具子集:走与父轮同一投影口径(未连接 SSH 时剔除远程工具),再按白名单过滤。
-  const tools = registry.schemas({ localOnly: !ssh.connected })
-    .filter((s) => SUBAGENT_TOOLS.has(s?.function?.name));
-
-  let steps = 0;
-  let toolCalls = 0;
-  let promptTokens = 0;
-  let completionTokens = 0;
-  let lastText = '';
-  // 失败/停止统一在这里收尾:记录里留下状态与原因,再原样抛给工具层
-  const fail = (e: any): never => {
-    const msg = e?.message || String(e);
-    const aborted = /已停止/.test(msg);
-    finishRun(runId, {
-      status: aborted ? 'stopped' : 'error', steps, toolCalls, promptTokens, completionTokens, note: msg
-    });
-    notify(aborted ? 'stopped' : 'error');
-    throw e;
-  };
-
-  // 不设步数上限:循环到模型不再发起工具调用(自然收尾)或父轮停止为止
-  for (let step = 1; ; step++) {
-    if (o.signal?.aborted) fail(new Error('已停止'));
-    let res: any = null;
-    try {
-      res = await o.llm.chat({
-        messages: [{ role: 'system', content: SUBAGENT_SYSTEM_PROMPT }, ...session.deriveMessages()],
-        tools,
-        signal: o.signal,
-        reasoning: 'default'
-      });
-    } catch (e) { fail(e); }
-    steps = step;
-    // usage 已归一成四桶(promptTokens/completionTokens 两个字段不再由 llm 提供):
-    // 这里按"计费输入 vs 输出"汇总,与父会话仪表盘口径一致
-    const u = res?.usage;
-    promptTokens += u ? billedInputTokens(u) : 0;
-    completionTokens += u ? u.outputTokens : 0;
-
-    const text = String(res?.content || '');
-    if (text.trim()) lastText = text;
-    const rawCalls: any[] = Array.isArray(res?.toolCalls) ? res.toolCalls : [];
-    const calls = rawCalls.map((tc: any, i: number) => ({
-      id: normCallId(tc?.id, step, i),
-      name: String(tc?.name || ''),
-      arguments: typeof tc?.arguments === 'string' ? tc.arguments : JSON.stringify(tc?.arguments ?? {})
-    }));
-
-    // 与父轮同一落盘格式(id/type/function),保证子会话投影出的消息序列严格合法可回放
-    session.append('assistant/message', {
-      turn: 1, step,
-      message: {
-        role: 'assistant',
-        content: text,
-        tool_calls: calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
-        ...(res?.reasoning ? { reasoning_content: res.reasoning } : {})
-      }
-    });
-
-    appendMessage(runId, {
-      role: 'assistant', step, at: Date.now(),
-      text: text || undefined,
-      reasoning: res?.reasoning ? String(res.reasoning) : undefined
-    });
-    notify('running');
-
-    if (calls.length === 0) break; // 无 tool_calls = 收敛(与主循环同一完成判定)
-
-    // 顺序执行:子代理优先"少而准",串行可避免在一条 SSH 连接上互相挤压
-    for (const c of calls) {
-      if (o.signal?.aborted) fail(new Error('已停止'));
-      let r: SubToolResult = { isError: true, content: '', ms: 0 };
-      try { r = await dispatchSubTool(registry, c, session, o); } catch (e) { fail(e); }
-      toolCalls += 1;
-      session.append('tool/result', {
-        turn: 1, step, callId: c.id, name: c.name, isError: r.isError, content: r.content, ms: r.ms
-      });
-      appendMessage(runId, {
-        role: 'tool', step, at: Date.now(), callId: c.id, name: c.name,
-        args: c.arguments, isError: r.isError, content: r.content, ms: r.ms
-      });
-      notify('running');
-    }
-
-  }
-
-  finishRun(runId, {
-    status: 'done', steps, toolCalls, promptTokens, completionTokens,
-    note: null
-  });
-  notify('done');
-
-  const ms = Date.now() - started;
-  const finalText = lastText.trim() || '(子代理没有产出文字结论)';
-  const cap = AGENT.SUBAGENT.RESULT_MAX_CHARS;
-  const body = finalText.length > cap
-    ? `${finalText.slice(0, cap)}\n\n…[子代理结论过长,已截断展示 ${finalText.length} 字符]…`
-    : finalText;
-
-  console.log(`[subagent] ${description || '(未命名)'} -> ${steps} 步 / ${toolCalls} 次工具调用 / ${ms}ms`);
-
+  const { runId, settled } = startSubagent({ ...o, mode: 'one-shot' });
+  const s = await settled;
+  if (s.status !== 'done') throw new Error(s.note || (s.status === 'stopped' ? '已停止' : '子代理执行失败'));
+  console.log(`[subagent] ${String(o.description || '').trim() || '(未命名)'} -> ${s.steps} 步 / ${s.toolCalls} 次工具调用 / ${s.ms}ms`);
   return {
-    content: body,
-    provider, runId, steps, toolCalls, ms, promptTokens, completionTokens
+    content: s.content, provider: s.provider, runId,
+    steps: s.steps, toolCalls: s.toolCalls, ms: s.ms,
+    promptTokens: s.promptTokens, completionTokens: s.completionTokens
   };
 }
 
-/**
- * 派发一次子代理工具调用。
- * 白名单外/未注册的工具不执行,直接给结构化错误结果——子代理据此改方案,而不是整轮失败。
- */
-async function dispatchSubTool(
-  registry: ToolRegistry,
-  call: { id: string; name: string; arguments: string },
-  session: Session,
-  o: SubagentRunOptions
-): Promise<SubToolResult> {
-  const name = call.name;
-  if (!SUBAGENT_TOOLS.has(name)) {
-    return {
-      isError: true,
-      ms: 0,
-      content: `子代理不允许调用工具 ${name || '(未命名)'}:子代理只能使用只读工具`
-        + `(${[...SUBAGENT_TOOLS].join(', ')})。需要写文件/执行命令的动作,请写进最终结论交给主代理执行。`
-    };
-  }
-  // emit 用 no-op:子代理的内部步骤不向父前端广播,父前端只看到外层那一张 subagent 卡片
-  return registry.execute({
-    name,
-    args: call.arguments,
-    signal: o.signal,
-    invokeCtx: { sid: o.sid ?? null, session, emit: () => {}, subagent: true }
-  });
-}
+export type { SubagentSettlement };

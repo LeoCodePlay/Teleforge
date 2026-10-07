@@ -3,7 +3,7 @@
 import React from 'react';
 import './BottomBar.scss';
 
-export type MobileView = 'agent' | 'console' | 'files' | 'browser';
+export type MobileView = 'agent' | 'console' | 'files' | 'browser' | 'schedule';
 
 interface BottomBarProps {
   view: MobileView;
@@ -18,6 +18,7 @@ export default function BottomBar({ view, fileTabCount, browserTabCount, onSelec
   const ITEMS: { v: MobileView; icon: string; label: string }[] = [
     { v: 'agent', icon: '💬', label: 'AI助手' },
     { v: 'console', icon: '⌨️', label: '终端' },
+    { v: 'schedule', icon: '🕘', label: '自动化' },
     { v: 'files', icon: '📁', label: '文件' },
     { v: 'browser', icon: '🌐', label: '预览' },
   ];

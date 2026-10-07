@@ -109,49 +109,75 @@ try {
   const aside = page.locator('.sidebar-right').first();
   await aside.waitFor({ timeout: 15000 });
   check('右侧栏出现', await aside.isVisible());
-  check('恰好一个标签', (await aside.locator('.rsb-tab').count()) === 1);
-  check('标签标题是文件名', (await aside.locator('.rsb-tab-main').first().innerText()).includes('deliverable.md'));
-  // 正文已挂载并真的读到了内容(FileViewer 走本机读取通道)
-  await aside.locator('[data-sidebar-body]').first().waitFor({ timeout: 15000 });
-  await page.waitForTimeout(1500);
-  const bodyText = await aside.locator('[data-sidebar-body]').first().innerText();
+  check('恰好一个标签', (await aside.locator('[data-dockkit-tab]').count()) === 1);
+  check('标签标题是文件名', (await aside.locator('[data-dockkit-tab-title]').first().innerText()).includes('deliverable.md'));
+  // 正文已挂载并真的读到了内容(FileViewer 走本机读取通道)。
+  // 正文容器的类是 dockkit 的 CSS Module(哈希名),所以这里不去猜内部类名,
+  // 直接等整个侧栏的文本里出现文件内容 —— 这也正是"用户看得见"的口径。
+  await page.waitForFunction(
+    () => /交付物|deliverable/.test(document.querySelector('.sidebar-right')?.textContent || ''),
+    null, { timeout: 15000 },
+  );
+  const bodyText = await aside.innerText();
   check('正文读到了文件内容', bodyText.includes('交付物') || bodyText.includes('deliverable'), bodyText.slice(0, 160));
 
   console.log('\n[三] 同一文件再次打开:内容身份幂等');
   // 先收起,再点一次「侧栏」——收起状态下也必须能再次打开
-  await aside.locator('.rsb-act[aria-label="收起右侧栏"]').click();
+  await aside.locator('.rsb-collapse').first().click();
   await page.waitForTimeout(300);
-  check('收起后只剩细条', (await page.locator('.rsb-rail').count()) === 1 && (await page.locator('.sidebar-right').count()) === 0);
+  check('收起后侧栏不再渲染(主区拿回宽度)', (await page.locator('.sidebar-right').count()) === 0);
   await card.locator('[data-deliverable-aside]').first().click();
   await aside.waitFor({ timeout: 10000 });
-  check('再次打开仍只有一个标签(不重复开)', (await aside.locator('.rsb-tab').count()) === 1,
-    String(await aside.locator('.rsb-tab').count()));
+  check('再次打开仍只有一个标签(不重复开)', (await aside.locator('[data-dockkit-tab]').count()) === 1,
+    String(await aside.locator('[data-dockkit-tab]').count()));
 
-  console.log('\n[四] 分栏');
-  await aside.locator('[data-sidebar-split]').first().click();
+  console.log('\n[四] 分栏与空栏');
+  await aside.locator('[data-dockkit-split-button]').first().click();
   await page.waitForTimeout(300);
-  check('分栏后有两个 pane', (await aside.locator('.rsb-pane').count()) === 2);
-  check('出现分栏分隔条', (await aside.locator('[data-sidebar-divider]').count()) === 1);
-  check('两个 pane 都各有一个标签条', (await aside.locator('.rsb-strip').count()) === 2);
-  // 合并回去
-  await aside.locator('[data-sidebar-merge]').first().click();
-  await page.waitForTimeout(300);
-  check('合并后回到一个 pane', (await aside.locator('.rsb-pane').count()) === 1);
-  check('合并后标签没有丢', (await aside.locator('.rsb-tab').count()) === 1);
+  check('分栏后有两个 pane', (await aside.locator('[data-dockkit-pane]').count()) === 2,
+    String(await aside.locator('[data-dockkit-pane]').count()));
+  check('出现分栏分隔条', (await aside.locator('[data-dockkit-divider]').count()) === 1);
+  check('两个 pane 都各有一个标签条', (await aside.locator('[data-dockkit-strip]').count()) === 2);
+  check('新栏被宿主种子化(不是空白,宿主给的是终端标签)', (await aside.locator('[data-dockkit-tab]').count()) === 2,
+    String(await aside.locator('[data-dockkit-tab]').count()));
+  // 关掉第二栏唯一的标签:栏**不消失**(dsh 同行为:空栏留着并给出空栏提示),
+  // 第一栏的内容一点不受影响。真正收回栏位靠把标签拖走或撤销,不是"关标签"。
+  {
+    const second = aside.locator('[data-dockkit-pane]').nth(1);
+    for (let i = await second.locator('[data-dockkit-tab-close]').count(); i > 0; i--) {
+      await second.locator('[data-dockkit-tab-close]').first().click();
+      await page.waitForTimeout(200);
+    }
+    await page.waitForTimeout(200);
+    check('关掉标签后该栏变成空栏(栏还在,dsh 同行为)',
+      (await aside.locator('[data-dockkit-pane]').count()) === 2
+      && (await second.innerText()).includes('空栏'),
+      (await second.innerText()).slice(0, 80));
+  }
+  check('另一栏的标签没有受影响', (await aside.locator('[data-dockkit-tab]').count()) === 1);
+  check('另一栏的正文还在', (await aside.innerText()).includes('deliverable') || (await aside.innerText()).includes('交付物'));
 
   console.log('\n[五] 按会话持久化:刷新后仍在');
-  await aside.locator('[data-sidebar-split]').first().click(); // 分栏成 2 个,便于验证持久化
-  await page.waitForTimeout(400);
+  // 分栏结构(含那条分隔条)必须活过刷新 —— 存的是操作序列,回放它才能逐字还原
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.locator('textarea').first().waitFor({ timeout: 20000 });
   await page.waitForTimeout(2000);
+  // 刷新后 App 回到「侧栏收起」的初始态(开合开关本身不持久化),点开就能看到上次的分栏布局 ——
+  // 这正是 RightSidebar 里 LAYOUT_KEY + restore(操作序列回放)的用途。
+  const opener = page.getByRole('button', { name: /打开右侧栏/ }).first();
+  if ((await opener.count()) > 0) {
+    await opener.click();
+    await page.waitForTimeout(600);
+  }
   const aside2 = page.locator('.sidebar-right').first();
   await aside2.waitFor({ timeout: 15000 });
   check('刷新后右侧栏仍在', await aside2.isVisible());
-  check('刷新后标签仍在', (await aside2.locator('.rsb-tab').count()) >= 1,
-    String(await aside2.locator('.rsb-tab').count()));
-  check('刷新后分栏结构仍在(2 个 pane)', (await aside2.locator('.rsb-pane').count()) === 2,
-    String(await aside2.locator('.rsb-pane').count()));
+  check('刷新后标签仍在', (await aside2.locator('[data-dockkit-tab]').count()) >= 1,
+    String(await aside2.locator('[data-dockkit-tab]').count()));
+  check('刷新后分栏结构仍在(2 个 pane)', (await aside2.locator('[data-dockkit-pane]').count()) === 2,
+    String(await aside2.locator('[data-dockkit-pane]').count()));
+  check('刷新后分隔条仍在', (await aside2.locator('[data-dockkit-divider]').count()) === 1,
+    String(await aside2.locator('[data-dockkit-divider]').count()));
 
   console.log('\n[六] 无 JS 异常');
   check('整段流程没有页面异常', pageErrors.length === 0, pageErrors.join(' | '));

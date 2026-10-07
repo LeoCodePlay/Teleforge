@@ -1,0 +1,58 @@
+/* 目标条(移植自 deepseek-harness ui-goal 的 GoalBar):停靠在输入卡上方的单行指示条。
+   视觉语言沿用权限 chip / 工作区 chip 的玻璃表面:阶段标签按阶段着色
+   (进行中=强调色、已暂停=弱化、受阻=红色警示),动作是行内的小图标按钮。 */
+
+.goal-bar {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; min-width: 0;
+  margin: 0 0 6px; padding: 5px 8px;
+  border-radius: var(--r-sm);
+  background: var(--glass-bg); border: 1px solid var(--line);
+  color: var(--muted); font-size: 12px;
+}
+
+.goal-glyph { display: inline-flex; flex: none; color: var(--accent-2); }
+.goal-glyph svg { width: 14px; height: 14px; }
+
+/* 阶段标签:窄的固定身份标识,不参与收缩 */
+.goal-phase {
+  flex: none; padding: 1px 6px; border-radius: var(--r-pill);
+  font-size: 11px; line-height: 16px; white-space: nowrap;
+  background: var(--accent-fill); color: var(--accent-2);
+}
+.goal-bar[data-phase='paused'] .goal-phase { background: var(--glass-bg-hover); color: var(--muted); }
+.goal-bar[data-phase='blocked'] .goal-phase { background: var(--warn-bg); color: var(--red); border: 1px solid var(--warn-border); }
+.goal-bar[data-phase='blocked'] .goal-glyph { color: var(--red); }
+
+.goal-objective {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text);
+}
+.goal-rounds { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.goal-actions { display: inline-flex; flex: none; align-items: center; gap: 2px; }
+.goal-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  background: transparent; border: none; border-radius: var(--r-sm);
+  color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer;
+  box-shadow: none; transition: background .15s, color .15s;
+}
+.goal-icon-btn:hover:not(:disabled) { background: var(--glass-bg-hover); color: var(--text); }
+.goal-icon-btn.danger:hover:not(:disabled) { color: var(--red); }
+.goal-icon-btn:disabled { opacity: .45; cursor: default; }
+
+/* 行内编辑:整条目标条变成一个小输入框 + 保存/取消 */
+.goal-edit { flex: 1 1 auto; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.goal-edit-input {
+  flex: 1 1 auto; min-width: 0; height: 22px; padding: 0 6px;
+  background: var(--glass-bg-hover); border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm); color: var(--text); font-size: 12px; font-family: inherit;
+}
+.goal-edit-input:focus { outline: none; border-color: var(--accent-2); }
+
+/* 窄屏:目标正文优先,轮次计数让位 */
+@media (max-width: 560px) {
+  .goal-rounds { display: none; }
+}

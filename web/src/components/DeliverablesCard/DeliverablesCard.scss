@@ -21,31 +21,34 @@
 }
 
 .deliverables-list { list-style: none; margin: 0; padding: 0; }
-.deliverables-list li { display: block; }
+/* 行容器负责整行高亮与分隔线:主行与「侧栏」落在同一个底色块里 */
+.deliverables-list li { display: block; border-top: 1px solid var(--line-soft); transition: background .14s ease; }
+.deliverables-list li:hover { background: var(--hover-bg); }
 /* 有「在侧栏打开」次要入口时:主行占满,侧栏按钮贴右 */
-.deliverables-list li.has-aside { display: flex; align-items: center; }
+.deliverables-list li.has-aside { display: flex; align-items: stretch; }
 .deliverables-list li.has-aside .deliverables-row { flex: 1 1 auto; min-width: 0; }
+/* 次要入口:行内文字按钮 —— 无边框、无自己的背景、与行同高;
+   与整行高亮同时出现,悬停自身只换文字色 */
 .deliverables-aside {
-  flex: none; margin-right: 10px; padding: 1px 7px; height: 19px;
-  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
-  background: var(--glass-bg); color: var(--muted);
-  font-size: 10.5px; line-height: 17px; cursor: pointer; white-space: nowrap;
-  opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease;
+  flex: none; align-self: center; margin: 0 8px 0 0; padding: 0 8px;
+  display: inline-flex; align-items: center; height: 20px;
+  background: transparent; border: 0; border-radius: var(--r-sm);
+  color: var(--accent-2); font-size: 11.5px; line-height: 1;
+  cursor: pointer; white-space: nowrap;
+  opacity: 0; transition: opacity .12s ease, color .12s ease;
 }
 .deliverables-list li.has-aside:hover .deliverables-aside,
 .deliverables-aside:focus-visible { opacity: 1; }
-.deliverables-aside:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.deliverables-aside:hover { color: var(--text); }
 
 .deliverables-row {
   display: flex; align-items: center; gap: 7px;
   width: 100%; min-width: 0;
-  padding: 5px 10px;
-  border: 0; border-top: 1px solid var(--line-soft);
+  padding: 5px 10px; min-height: 28px;
+  border: 0;
   background: transparent; color: var(--text);
   font-size: 12.5px; text-align: left; cursor: pointer;
-  transition: background .14s ease;
 }
-.deliverables-row:hover { background: var(--glass-bg-hover); }
 .deliverables-row:focus-visible { outline: 2px solid var(--accent-border); outline-offset: -2px; }
 
 .deliverables-ico { display: inline-flex; flex: none; color: var(--accent); }

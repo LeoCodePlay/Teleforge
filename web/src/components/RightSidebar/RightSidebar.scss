@@ -44,15 +44,18 @@
   user-select: none;
 }
 .sidebar-right .resizer-left:hover,
-.sidebar-right .resizer-left.dragging { background: var(--accent-glow); }
+.sidebar-right .resizer-left.dragging { background: var(--accent); }
 
-/* 标签条末端的收起控件(宿主 chrome,画在 kit 的 chrome 槽里) */
-.rsb-collapse {
+/* 标签条末端的宿主 chrome 控件(新建终端 / 收起) */
+.rsb-collapse,
+.rsb-term {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; padding: 0;
   border: 0; border-radius: var(--r-sm);
   background: transparent; color: var(--muted);
   font-size: 14px; line-height: 1; cursor: pointer;
 }
-.rsb-collapse:hover { color: var(--text); background: var(--hover-bg-hard); }
-.rsb-collapse:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+.rsb-collapse:hover,
+.rsb-term:hover { color: var(--text); background: var(--hover-bg-hard); }
+.rsb-collapse:focus-visible,
+.rsb-term:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }

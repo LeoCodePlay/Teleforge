@@ -8,6 +8,8 @@ web/dist-preview/
 # 日志与调试
 *.log
 server-trace.log*
+# tsc 输出转储(排查类型错误时的临时快照,不入库;磁盘上保留)
+_tsc_*.txt
 
 # 本地工具目录(不入库)
 .superpowers/

@@ -15,7 +15,7 @@
 .att-item.err .att-thumb { border-color: var(--red); }
 .att-thumb {
   width: 64px; height: 64px; padding: 0; overflow: hidden; cursor: zoom-in;
-  border: 1px solid var(--glass-border); border-radius: 16px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-lg);
   background: var(--glass-bg-strong);
   display: flex; align-items: center; justify-content: center;
   transition: border-color .15s, transform .15s;
@@ -36,7 +36,7 @@
   position: absolute; top: 4px; right: 4px; z-index: 1;
   width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
   display: grid; place-items: center;
-  background: rgba(15, 18, 26, .82); color: #fff; cursor: pointer;
+  background: var(--pop-bg-strong); color: var(--text); cursor: pointer;
   opacity: 0; transition: opacity .2s ease-in-out;
 }
 .att-item:hover .att-remove, .att-remove:focus-visible { opacity: 1; }
@@ -45,7 +45,7 @@
 .att-name {
   position: absolute; left: 3px; right: 3px; bottom: 3px; z-index: 1;
   font-size: 9px; line-height: 1.3; text-align: center;
-  color: #fff; background: rgba(15, 18, 26, .72); border-radius: 6px; padding: 1px 3px;
+  color: var(--code-ink); background: var(--code-bg-solid); border-radius: var(--r-sm); padding: 1px 3px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
 }
 /* 上传中转圈 */
@@ -58,11 +58,10 @@
 /* 两端翻页箭头:悬浮圆形玻璃钮 */
 .att-arrow {
   position: absolute; top: 50%; z-index: 2; transform: translateY(-50%);
-  width: 24px; height: 24px; padding: 0; border-radius: 999px;
+  width: 24px; height: 24px; padding: 0;
   display: grid; place-items: center; cursor: pointer;
-  border: 1px solid var(--glass-border-hover);
+  border: 1px solid var(--line);
   background: var(--glass-bg-strong); color: var(--muted);
-  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
   box-shadow: var(--glass-shadow);
 }
 .att-arrow:hover { color: var(--text); background: var(--glass-bg-hover); }
@@ -74,7 +73,7 @@
 .msg-att-gallery { display: flex; flex-wrap: wrap; gap: 10px; max-width: 100%; }
 .msg-att-img {
   display: grid; place-items: center; overflow: hidden; padding: 0; cursor: zoom-in;
-  border: 1px solid var(--glass-border); border-radius: 16px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-lg);
   background: var(--glass-bg-strong); transition: border-color .15s;
 }
 .msg-att-img:hover { border-color: var(--accent-border); }
@@ -107,7 +106,7 @@
 .lightbox {
   position: fixed; inset: 0; z-index: 400;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(4, 6, 12, .78); backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
+  background: var(--mask-bg);
   animation: att-fade .16s ease-out;
   cursor: zoom-out;
 }
@@ -115,7 +114,7 @@
 .lightbox img {
   max-width: min(92vw, 1400px); max-height: 88vh; border-radius: var(--r-md);
   box-shadow: var(--glass-shadow);
-  animation: glass-pop .18s ease-out;
+  animation: pop-in .18s ease-out;
   cursor: zoom-in; /* 未放大:双击放大;放大后换 grab(见 .lb-zoomed) */
   user-select: none; -webkit-user-drag: none; /* 阻止选图/原生拖拽干扰平移 */
   will-change: transform;
@@ -128,21 +127,19 @@
   display: grid; place-items: center;
   border: 1px solid var(--glass-border-hover);
   background: var(--glass-bg-strong); color: var(--text);
-  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
 }
 .lightbox-close:hover { background: var(--glass-bg-hover); }
 /* 底部缩放工具条:− / 百分比(点击=适应) / + / 适应窗口 */
 .lightbox-toolbar {
   position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 2px; padding: 4px;
-  border-radius: 999px; cursor: default;
-  border: 1px solid var(--glass-border-hover);
+  cursor: default;
+  border: 1px solid var(--line);
   background: var(--glass-bg-strong); color: var(--text);
-  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
   box-shadow: var(--glass-shadow);
 }
 .lightbox-toolbar button {
-  height: 28px; min-width: 28px; padding: 0 7px; border: none; border-radius: 999px;
+  height: 28px; min-width: 28px; padding: 0 7px; border: none;
   display: inline-flex; align-items: center; justify-content: center;
   background: transparent; color: var(--text); cursor: pointer;
   transition: background .15s;
@@ -173,12 +170,11 @@
      造成先垂在下方、动画结束瞬移上去的抖动) */
   position: fixed; z-index: 140;
   min-width: 200px; padding: 5px;
-  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
-  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
-  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
+  background: var(--pop-bg);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--glass-shadow);
   display: flex; flex-direction: column; gap: 2px;
-  animation: glass-pop .16s ease-out;
+  animation: pop-in .16s ease-out;
 }
 .add-menu-item {
   display: flex; align-items: center; gap: 9px; width: 100%;

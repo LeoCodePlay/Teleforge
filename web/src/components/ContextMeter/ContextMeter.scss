@@ -21,7 +21,6 @@
 .ctx-ring-fill {
   fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round;
   transform: rotate(-90deg); transform-origin: 50% 50%;
-  filter: drop-shadow(0 0 3px var(--accent-glow));
   transition: stroke-dashoffset .35s ease, stroke .25s ease;
 }
 .ctx-ring-pct {
@@ -40,11 +39,9 @@
 .ctx-pop {
   position: fixed; transform: translateY(-100%); z-index: 130;
   width: 268px; padding: 11px 13px;
-  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
-  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
-  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  background: var(--pop-bg);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--glass-shadow);
   animation: ctx-pop-in .16s ease-out;
   display: flex; flex-direction: column; gap: 7px;
 }
@@ -60,8 +57,7 @@
 }
 .ctx-pop-fill {
   display: block; height: 100%; border-radius: 3px;
-  background: linear-gradient(90deg, var(--btn-b), var(--accent-2));
-  box-shadow: 0 0 8px var(--accent-glow);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
   transition: width .35s ease;
 }
 .ctx-meter.warn .ctx-pop-fill { background: linear-gradient(90deg, var(--amber-bright), var(--amber)); }
@@ -74,8 +70,8 @@
   background: var(--progress-track); overflow: hidden;
 }
 .ctx-seg-fill { display: block; height: 100%; border-radius: 3px; }
-.ctx-seg-fill.sys { background: var(--violet); box-shadow: 0 0 6px var(--violet-glow); }
-.ctx-seg-fill.tool { background: var(--amber-bright); box-shadow: 0 0 6px var(--warn-border); }
-.ctx-seg-fill.conv { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
+.ctx-seg-fill.sys { background: var(--violet); }
+.ctx-seg-fill.tool { background: var(--amber-bright); }
+.ctx-seg-fill.conv { background: var(--accent); }
 .ctx-seg-nums { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* 注:弹窗只放数值与分项,不放说明性文字,故没有 .ctx-pop-hint 之类的提示行样式 */

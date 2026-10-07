@@ -107,17 +107,26 @@ async function main() {
   check('第一轮 history 消息顺序合法(每个 tool 都有前置 assistant tool_calls)', errors1.length === 0, errors1.join('; '));
   check('第一轮 history 以 user 消息开头', agent.history[0]?.role === 'user', `实际首条: ${agent.history[0]?.role}`);
 
-  // 第二轮:假 LLM 能看到历史(直接回答),验证 messages 里有上一轮工具上下文
+  // 第二轮:模拟"用户在这个会话里切到了另一个模型"。
+  // 注意:会话跑过一轮后会**锁定自己的模型客户端**(见 agent._lockLlm:防止别的会话/草稿态
+  // 不带 sid 的下发把后台会话一起换掉),所以这里必须像生产路径(configureLlm(cfg, sid))那样
+  // 换掉这个会话的客户端,只改全局默认是换不动它的。
   agent.llm = makeFakeLlm(2);
+  agent._llmBySid.set(agent.getSessionId(), agent.llm);
   let secondRoundSawTool = false;
+  // 失败时把第二轮实际看到的消息序列打出来(定位是"历史丢了"还是"tool 内容不匹配")
+  let secondRoundRoles = '';
   const origChat = agent.llm.chat.bind(agent.llm);
   agent.llm.chat = async (opts) => {
     const msgs = opts.messages;
     secondRoundSawTool = msgs.some((m) => m.role === 'tool' && String(m.content).includes('/home'));
+    secondRoundRoles = msgs.map((m) => (m.role === 'tool'
+      ? `tool(${String(m.content).slice(0, 30).replace(/\n/g, '⏎')})`
+      : m.role)).join(' , ');
     return origChat(opts);
   };
   await agent.run('继续,基于刚才看过的内容回答');
-  check('第二轮请求的消息里带上了第一轮的工具结果', secondRoundSawTool);
+  check('第二轮请求的消息里带上了第一轮的工具结果', secondRoundSawTool, secondRoundRoles);
   check('第二轮未清空历史(累计)', agent.history.filter((m) => m.role === 'user').length >= 2);
 
   // 校验消息格式合法(validateMessages 兼容)

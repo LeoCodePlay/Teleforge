@@ -4,14 +4,13 @@
   display: inline-flex; align-items: center; gap: 6px; max-width: 240px;
   padding: 4px 11px; font-size: 12px; cursor: pointer;
   background: var(--glass-bg-inset); color: var(--text);
-  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
-  box-shadow: inset 0 1px 0 var(--ins-hl);
-  transition: border-color .18s, background .18s, box-shadow .18s;
+  border: 1px solid var(--line);
+  transition: border-color .16s, background .16s, box-shadow .16s;
 }
-.msm-trigger:hover { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); transform: none; }
+.msm-trigger:hover { border-color: var(--line-strong); background: var(--glass-bg-hover); }
 .msm.open .msm-trigger {
   border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 14px var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .msm-label {
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -20,16 +19,14 @@
 .msm-effort { flex: none; font-size: 10.5px; color: var(--muted); }
 .msm-arrow { flex: none; font-size: 9px; color: var(--muted); transition: transform .18s; }
 .msm.open .msm-arrow { transform: rotate(180deg); }
-/* 二级菜单:右对齐、向上弹出,同款玻璃卡片 */
+/* 二级菜单:右对齐、向上弹出,同款实色卡片 */
 .msm-menu {
   position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 150;
   width: min(240px, 84vw);
-  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
-  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md);
-  padding: 5px; box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
-  animation: glass-pop .16s ease-out;
+  background: var(--pop-bg);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 5px; box-shadow: var(--glass-shadow);
+  animation: pop-in .16s ease-out;
   display: flex; flex-direction: column; gap: 2px;
 }
 /* 根菜单两行:模型 / 推理等级,右侧显示当前值 + 下钻箭头 */
@@ -53,15 +50,13 @@
 }
 .msm-group + .msm-group { margin-top: 4px; }
 /* 提供商名:仅作分组标题(不可选),吸顶以区分相邻提供商。
-   sticky + backdrop-filter 在 Chromium 中存在渲染缺陷(模糊失效/文字不可见),
-   故用半透明深玻璃表面(--code-bg-soft)+ 玻璃边缘高光模拟磨砂,不依赖 blur,
-   吸顶时既能透出滚过的模型行(液态玻璃感),又保证文字可读 */
+   吸顶面用实色内嵌槽(--code-bg-soft)+ 底部发丝线,不依赖 blur 也能保证文字可读 */
 .msm-group-title {
   position: sticky; top: 0; z-index: 1;
   font-size: 10.5px; color: var(--muted); letter-spacing: .5px;
   padding: 5px 9px 3px; user-select: none;
   background: var(--code-bg-soft);
-  box-shadow: inset 0 1px 0 var(--ins-hl), inset 0 -1px 0 var(--line-faint);
+  box-shadow: inset 0 -1px 0 var(--line-faint);
 }
 .msm-option {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -70,7 +65,7 @@
   cursor: pointer; box-shadow: none; transition: background .15s;
 }
 .msm-option:hover { background: var(--glass-bg-hover); color: var(--accent-2); }
-.msm-option.on { background: var(--accent-soft); color: var(--accent-2); }
+.msm-option.on { background: var(--accent-fill); color: var(--accent-2); }
 .msm-option-name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--mono);

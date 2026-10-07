@@ -20,7 +20,9 @@ import { webSearch, renderSearchResult } from './web-search.ts';
 import { browserToolDefs } from './browser-tools.ts';
 import { computerUseToolDefs } from './computer-use-tools.ts';
 import { fsSearchToolDefs, GLOB_MAX_RESULTS, VCS_EXCLUDES } from './fs-search.ts';
-import { runSubagent, SUBAGENT_PROVIDERS } from './subagent.ts';
+import { runSubagent, INTERNAL_PROVIDER, SUBAGENT_PROVIDERS } from './subagent.ts';
+import { startSubagent, sendMessage, interruptChild, listResident, parentNotifier, captureBinding } from './subagent-runtime.ts';
+import * as saStore from '../store/subagent-store.ts';
 import type { ToolAccess, ToolDef, ToolRegistry } from './registry.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1263,31 +1265,36 @@ const interactionToolDefs: ToolDef[] = [
 
 
 // ---------------- 子代理工具定义 ----------------
-// 不依赖 SSH 连接(未连接时子代理只能看到本机工具),也不直接写任何状态:真正的工作在
-// agent/subagent.ts 的 runSubagent() 里——独立会话 + 只读工具白名单 + 无步数上限的嵌套循环。
+// 不依赖 SSH 连接(未连接时子代理只能看到本机工具)。真正的工作在 agent/subagent-runtime.ts 里:
+// 常驻子代理(独立会话 + 只读工具白名单 + 无步数上限的循环),可后台派发、可续聊、可暂停。
+// 本数组同时给出 harness tool-subagent-control 的三个控制工具(send_message / interrupt_agent /
+// list_agents),它们只对本会话派发出去的子代理生效。
 const subagentToolDefs: ToolDef[] = [
   {
     name: 'subagent',
-    description: 'Delegate a self-contained, READ-ONLY research task to a fresh subagent with an isolated '
-      + 'context, and get back only its final conclusion (not its intermediate steps). The subagent cannot '
-      + 'see this conversation and cannot change anything: it may only list directories, read files, search '
-      + 'code, read environment info and search the web. Use it to fan out independent exploration (several '
-      + 'subagents in one assistant message run in parallel) or to keep large, noisy investigations out of '
-      + 'your own context. Give it a complete, standalone brief: what to find, where to look, and exactly '
-      + 'what to report. To modify files or run commands, do it yourself in this conversation. '
-      + 'WRITE THE PROMPT YOURSELF before calling — never paste the user\'s raw words: state the objective, '
-      + 'the boundaries (where to look, what must NOT be done) and exactly what to report back. Either give a '
-      + 'complete self-contained prompt, or fill objective + scope (the tool rejects vague delegations and '
-      + 'tells you how to rewrite them). '
-      + 'It runs IN-PROCESS with this project\'s own agent loop and tool stack (the same model client and '
-      + 'the same SSH/local workspace bindings as you), i.e. the internal provider — the default and '
-      + 'currently the only one. Never an external CLI agent; keep provider=\'internal\' unless the user '
-      + 'explicitly asks for a different agent (those are not wired up yet).',
+    // 描述文案对齐 deepseek-harness 的 tool-subagent(providerWording 的 spawn 分支原文 + continuable
+    // 后台那句原文),后面接着本项目必须如实说明的三点(只读白名单 / 提示词契约 / in-process internal)。
+    // harness 的 "Start independent …" 那句由 system prompt 段承载,见 subagent.ts 的 SUBAGENT_GUIDANCE。
+    description: 'Delegate a self-contained task to a subagent (a separate agent that works in its own context) '
+      + 'to offload focused, independent work — research, a scoped implementation, an analysis — so it does not '
+      + 'consume this conversation\'s context. The subagent returns its result, not its intermediate steps. '
+      + 'It runs in the background by default and returns a subagent id you can continue with `send_message`; '
+      + 'you are notified when the run settles. '
+      + 'This subagent is READ-ONLY: it may only list directories, read files, search code, read environment '
+      + 'info and search the web — it cannot write files or run commands, so ask it for findings and do the '
+      + 'changes yourself. Give it a complete, standalone brief: write the task yourself (never paste the '
+      + 'user\'s raw words) and either supply one self-contained prompt, or fill objective + scope (a vague '
+      + 'delegation is rejected with a template). '
+      + 'It runs in-process with this project\'s own agent loop and tool stack — provider \'internal\', the '
+      + 'default and currently the only one; never an external CLI agent.',
     parameters: {
       type: 'object',
       properties: {
         description: { type: 'string', description: 'A short (3-5 word) description of the delegated task, for display.' },
-        prompt: { type: 'string', description: 'The complete, self-contained task prompt, written by YOU (the subagent does not share this conversation). Either this (>= 60 chars), or objective + scope.' },
+        // prompt 的参数描述取自 deepseek-harness 原文(providerWording('spawn').promptDescription),
+        // 后面一句是本项目的扩展:objective+scope 这条等价路径(harness 没有这两个字段)
+        prompt: { type: 'string', description: 'The complete, self-contained task for the subagent. It does not share this conversation\'s context, so include everything it needs. Alternatively leave this empty and fill objective + scope (both at least '
+          + `${AGENT.SUBAGENT.MIN_FIELD_CHARS} characters).` },
         objective: {
           type: 'string',
           description: '任务目标,由你自己写:这次调研要回答什么、要产出什么(与 scope 一起构成最小必填集;若 prompt 已足够完整可省略)。'
@@ -1310,6 +1317,13 @@ const subagentToolDefs: ToolDef[] = [
           description: 'Agent provider. Default and currently the only supported value: "internal" = this '
             + 'project\'s built-in agent loop and tools (in-process, same model & workspace context). Only '
             + 'set another value if the user explicitly asked for that other agent — none are wired up yet.'
+        },
+        // 参数描述取自 deepseek-harness 原文('Defaults to true. Set false only when your next action
+        // depends on the result.'),并补上一句本项目前台模式的返回语义
+        run_in_background: {
+          type: 'boolean',
+          description: 'Defaults to true. Set false only when your next action depends on the result '
+            + '(then this call waits and returns the child\'s final text instead of a subagent id).'
         }
       },
       required: ['description']
@@ -1320,28 +1334,161 @@ const subagentToolDefs: ToolDef[] = [
     // 会起一轮额外的模型+工具循环(消耗 token):按写类处理——confirm 下审批一次,plan 下拒绝。
     // 并发安全(见 CONCURRENCY_SAFE_TOOLS):同一条 assistant 消息里的多个子代理并行执行,
     // 也能与只读工具并行——主会话不会被它们串行排队堵住(各自独立会话,互不共享状态)。
-    async run(args: any, { sid, signal, llm, registry, emit }: any = {}) {
+    async run(args: any, { sid, signal, llm, registry, emit, agent }: any = {}) {
       const description = String(args?.description || '').trim();
-      const prompt = String(args?.prompt || '').trim();
-      const r = await runSubagent({
-        llm, registry, prompt, description, sid, signal, emit,
+      const brief = {
+        llm, registry, sid, emit,
+        description,
+        // 执行作用域:跟着派发它的父会话走(连接 + 远程/本地工作区)
+        binding: captureBinding(agent, sid),
+        prompt: String(args?.prompt || '').trim(),
         objective: args?.objective, scope: args?.scope,
         deliverable: args?.deliverable, context: args?.context,
         provider: args?.provider
-      });
+      };
+      // 缺省后台(harness 的 continuable 默认):派发即返回,不阻塞父代理这一轮。
+      // 注意这里**不传** signal —— 父轮结束/被停止都不该带走一个已经受理的后台子代理。
+      if (args?.run_in_background !== false) {
+        const r = startSubagent({
+          ...brief, mode: 'continuable',
+          notifyParent: parentNotifier(agent, sid)
+        });
+        return {
+          content: `started subagent ${r.runId}`,
+          meta: {
+            subagent: {
+              description, provider: INTERNAL_PROVIDER, runId: r.runId, mode: 'continuable', background: true,
+              steps: 0, toolCalls: 0, ms: 0
+            }
+          }
+        };
+      }
+      // 显式前台:父轮停止即停止子代理(与旧行为一致),并在这里等它的结论
+      const r = await runSubagent({ ...brief, signal });
       return {
         content: r.content,
         meta: {
           subagent: {
-            description, provider: r.provider, runId: r.runId, steps: r.steps, toolCalls: r.toolCalls, ms: r.ms,
+            description, provider: r.provider, runId: r.runId, mode: 'one-shot', background: false,
+            steps: r.steps, toolCalls: r.toolCalls, ms: r.ms,
             promptTokens: r.promptTokens, completionTokens: r.completionTokens
           }
         }
       };
     }
+  },
+  // ---- 控制工具(对齐 harness 的 tool-subagent-control)----
+  // 只认"本会话派发出去的"子代理:harness 的相邻授权(直接父/直接子)在单父会话模型里
+  // 就是"这条记录必须挂在本会话名下",兄弟/别人的子代理一律拒绝。
+  {
+    name: 'send_message',
+    // 描述取自 deepseek-harness 的 tool-subagent-control(send_message)原文,
+    // 后面一句是本项目的授权边界(harness 的 adjacent-only 授权在单父会话模型里的等价物)
+    description: 'Send a message to an agent. A working agent receives it at its next step; an idle agent '
+      + 'starts a new turn with it. Returns delivery confirmation, not the agent\'s answer. '
+      + 'Only a subagent this conversation started can be addressed; the reply lands in that child\'s own '
+      + 'conversation and its next settlement notice reaches this one.',
+    parameters: {
+      type: 'object',
+      properties: {
+        agent_id: { type: 'string', description: 'The agent id of your direct child (from the subagent tool or list_agents).' },
+        message: { type: 'string', description: 'The message to deliver to the agent.' }
+      },
+      required: ['agent_id', 'message']
+    },
+    async run(args: any, { sid, llm, registry, emit, agent }: any = {}) {
+      const target = String(args?.agent_id || '').trim();
+      if (!target) throw new Error('send_message: 缺少 agent_id(见 subagent 的返回,或用 list_agents 列出来)');
+      assertOwnChild(target, sid);
+      // 子代理可能已经不常驻(服务重启过):带上冷恢复依赖,让它从运行记录里被拉起来继续干
+      sendMessage(target, String(args?.message || ''), {
+        from: 'parent', delivery: 'steer',
+        resume: {
+          llm, registry, emit,
+          notifyParent: parentNotifier(agent, sid),
+          binding: captureBinding(agent, sid)
+        }
+      });
+      return { content: `message delivered to agent ${target}` };
+    }
+  },
+  {
+    name: 'interrupt_agent',
+    // 描述取自 deepseek-harness 的 tool-subagent-control(interrupt_agent)原文;
+    // 末句按本项目改写:子代理不能再派子代理,所以"它派出去的东西继续跑"这句不适用,
+    // 改成"排队消息保留、下一条消息继续"(harness 的 keepInbox 语义)
+    description: 'Ask a subagent to stop its current work. This call returns without waiting for it to stop. '
+      + 'You can continue a direct child\'s conversation later with send_message: queued messages stay parked '
+      + 'and a later message resumes it. Only a subagent this conversation started can be interrupted.',
+    parameters: {
+      type: 'object',
+      properties: {
+        agent_id: { type: 'string', description: 'The id of an agent created under you: your direct child.' }
+      },
+      required: ['agent_id']
+    },
+    async run(args: any, { sid }: any = {}) {
+      const target = String(args?.agent_id || '').trim();
+      if (!target) throw new Error('interrupt_agent: 缺少 agent_id(见 subagent 的返回,或用 list_agents 列出来)');
+      assertOwnChild(target, sid);
+      interruptChild(target, '主代理暂停');
+      return { content: `interrupt requested for agent ${target}` };
+    }
+  },
+  {
+    name: 'list_agents',
+    // 描述取自 deepseek-harness 的 tool-subagent-control(list_agents)原文;
+    // 输出格式那句是本项目的实际形状(一行一条 `<id> [status] — <label>`)
+    description: 'List subagents you started, with their ids, labels, and status. running means it is working; '
+      + 'inactive means it is not currently working. You will be notified when a subagent finishes; there is no '
+      + 'need to keep checking its status. Use send_message to continue the conversation. '
+      + 'Each line is `<id> [<status>] — <label>`; one-shot children are omitted (they cannot accept send_message).',
+    parameters: {
+      type: 'object',
+      properties: {
+        // 参数描述取自 harness 原文(本项目子代理不能再派子代理,所以 children 与 descendants 结果相同)
+        scope: {
+          type: 'string',
+          enum: ['children', 'descendants'],
+          description: 'children (default) lists direct children, which accept send_message in any status. '
+            + 'descendants lists the whole tree below you with each entry\'s parent session id and depth '
+            + '(this project\'s subagents cannot start subagents, so both scopes return the same rows).'
+        }
+      }
+    },
+    async run(args: any, { sid }: any = {}) {
+      const own = sid ? String(sid) : '';
+      // 一次性派发的子代理不能接受 send_message,按 harness 的口径从列表里省掉(它的记录仍可在面板回看)
+      const runs = own
+        ? saStore.list(own).filter((r) => (r.mode ?? 'continuable') === 'continuable')
+        : [];
+      if (!runs.length) return { content: '(no subagents)' };
+      const live = new Map(listResident(own).map((c) => [c.runId, c]));
+      const descendants = args?.scope === 'descendants';
+      const lines = runs.map((r) => {
+        const status = live.get(r.runId)?.running ? 'running' : 'inactive';
+        const label = r.description || '(未命名)';
+        return descendants
+          ? `${r.runId} [${status}] parent=${r.sid ?? '-'} depth=1 — ${label}`
+          : `${r.runId} [${status}] — ${label}`;
+      });
+      return { content: lines.join('\n') };
+    }
   }
 ];
 
+/** 授权:只允许操作"本会话派发出去的"子代理(harness 的相邻授权在本项目的等价物) */
+function assertOwnChild(runId: string, sid: string | null | undefined) {
+  const rec = saStore.get(runId);
+  if (!rec) throw new Error(`找不到子代理 ${runId}:id 写错了,或它的运行记录已被保留策略清掉`);
+  const owner = rec.sid ?? null;
+  if (owner !== (sid ? String(sid) : null)) {
+    throw new Error(`子代理 ${runId} 不属于本会话,不能对它操作(只有派发它的那个对话能发消息/暂停它)`);
+  }
+}
+
+// 结算通知的投递口已统一到 subagent-runtime.ts 的 parentNotifier(工具层与 RPC 层共用,
+// 并且会先 ensureRuntime 把父会话从磁盘载回来 —— 父会话"不在线"也不该丢通知)。
 // ---------------- 内置守卫(pre-execute,只能拒绝不能放行) ----------------
 
 // 高危命令拦截:毁灭性命令直接拒绝(工具自身的越界检查之外的最后防线)
@@ -1385,7 +1532,9 @@ export function registerTools(registry: ToolRegistry) {
     'run_command', 'run_local_command',
     // 子代理:各自独立会话 + 只读工具白名单,彼此不共享可变状态,并行不会互相踩;
     // 串行排队只会让 N 个调研的耗时叠加成 N 倍。它不设工具级超时,长任务靠父轮停止收尾。
-    'subagent'
+    'subagent',
+    // 控制工具只做"入队/中止/读列表":同样不碰文件状态,可与别的调用并行
+    'send_message', 'interrupt_agent', 'list_agents'
   ]);
   const withSafety = (def: ToolDef): ToolDef => ({ ...def, concurrencySafe: CONCURRENCY_SAFE_TOOLS.has(def.name) });
   // 访问类别显式声明(权限守卫判定依据,见 permission.ts):
@@ -1400,6 +1549,7 @@ export function registerTools(registry: ToolRegistry) {
     | 'glob_local' | 'grep_local'
     | 'glob' | 'grep'
     | 'ask_user_question' | 'generate_image' | 'subagent'
+    | 'send_message' | 'interrupt_agent' | 'list_agents'
     | 'list_project_terminals' | 'stop_project_terminal',
     ToolAccess
   > = {
@@ -1423,6 +1573,8 @@ export function registerTools(registry: ToolRegistry) {
     generate_image: 'write',
     // 子代理(subagent):会起一轮额外的模型+工具循环,按写类处理(plan 拒绝 / confirm 审批)
     subagent: 'write',
+    // 子代理控制(与 subagent 同类:会让子代理继续干活/停它;list_agents 只是读)
+    send_message: 'write', interrupt_agent: 'write', list_agents: 'read',
     // 命令执行(auto-edit 下仍需审批)
     run_command: 'command', run_local_command: 'command',
     // 运行终端(AI 拉起的后台项目进程):查看只读,停止属于命令级操作

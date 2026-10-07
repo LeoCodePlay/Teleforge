@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { useLlm } from '../../context/llm-context';
 import { PROVIDERS, getDefaultModelContext } from '../../data/llm-providers';
 import type { LlmProvider, ProviderDraft, ModelContextConfig, KeyState } from '../../types';
+import { parseCountInput, formatCountInput } from '../../utils/tokens';
 import { IconTrashOutline14, IconEye16, IconEyeOff16 } from '../icons/icons';
 import GlassSelect from '../GlassSelect/GlassSelect';
 import './AiConfigPanel.scss';
@@ -177,6 +178,18 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   // Key 是密码级信息,滚动/截屏时不应默认外露;要看时点行尾眼睛显式露出。
   // 增删 Key 后下标会错位,但最坏只是某行延续了相邻行的显隐状态,不影响输入与保存。
   const [revealed, setRevealed] = useState<Set<number>>(() => new Set());
+  // 数字输入框的文本草稿(键 = 模型名 + 字段):值支持 1M / 128k 这类带单位写法。
+  // 若不保留草稿、直接受控于解析后的数字,"1.5M" 在敲到 "1." 时就会被打断改写。
+  const [numDraft, setNumDraft] = useState<Record<string, string>>({});
+  const draftKey = (m: string, field: string) => m + '\u0000' + field;
+  const setDraft = (key: string, text: string) => setNumDraft((d) => ({ ...d, [key]: text }));
+  // 失焦后丢弃草稿:输入框回到规范化显示(输入 1000000 → 显示 1M;非法文本回落到上一次有效值)
+  const dropDraft = (key: string) => setNumDraft((d) => {
+    if (!(key in d)) return d;
+    const next = { ...d };
+    delete next[key];
+    return next;
+  });
 
   // 直接更新某模型的能力配置(上下文窗口/输出上限/多模态/生图);全部为空或关闭时清除该条配置。
   // 布尔开关用 '1'/'' 两个字符串值复用同一签名(与数字字段一致的调用形态)
@@ -186,8 +199,13 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
       const prev: ModelContextConfig = { ...(next[m] || {}) };
       if (field === 'multimodal' || field === 'imageGen') prev[field] = raw === '1' ? true : undefined;
       else {
-        const n = Math.floor(Number(raw));
-        prev[field] = n > 0 ? n : undefined;
+        // 数字字段支持带单位输入(1M=1000000、128k=128000);清空即取消配置,非法文本保留上一次有效值
+        const text = String(raw ?? '').trim();
+        if (!text) prev[field] = undefined;
+        else {
+          const n = parseCountInput(text);
+          if (n !== undefined) prev[field] = n;
+        }
       }
       const merged: ModelContextConfig = {};
       if (prev.contextWindow) merged.contextWindow = prev.contextWindow;
@@ -245,8 +263,13 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
 
   const toggleModel = (m: string) => setModels((cur) => {
     if (cur.includes(m)) {
-      // 移除模型时同步清除其上下文配置
+      // 移除模型时同步清除其上下文配置与输入草稿
       setModelConfig((mc) => { const n = { ...mc }; delete n[m]; return n; });
+      setNumDraft((d) => {
+        const n = { ...d };
+        for (const k of Object.keys(n)) if (k.startsWith(m + '\u0000')) delete n[k];
+        return n;
+      });
       return cur.filter((x) => x !== m);
     }
     return [...cur, m];
@@ -280,11 +303,8 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
     else setSaving(false);
   };
 
-  // portal 到 body:本弹窗内联在设置面板里,而 .settings 自带 backdrop-filter ——
-  // 按 Chromium backdrop-root 机制,内层 .modal 的液态玻璃只能采样到设置面板内部、
-  // 采不到真实页面,玻璃退化成半透明平色(能看清弹窗后面的文字);且该祖先会成为
-  // fixed 遮罩的包含块,遮罩也被困在面板内。portal 出去与设置弹窗同层才生效
-  // (同 SessionPanel 重命名弹窗的处理)
+  // portal 到 body:本弹窗内联在设置面板里。既避免被祖先的 overflow/fixed 包含块困住,
+  // 也保证遮罩覆盖整页而不是只覆盖设置面板内部(同 SessionPanel 重命名弹窗的处理)。
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal provider-modal" onClick={(e) => e.stopPropagation()}>
@@ -373,9 +393,10 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                 {models.map((m) => {
                   const cfg = modelConfig[m] || {};
                   const dflt = getDefaultModelContext(m);
-                  const fmt = (n?: number) => (n ? (n >= 1000000 ? (n / 1000000) + 'M' : n >= 1000 ? (n / 1000) + 'k' : String(n)) : '');
                   const mm = cfg.multimodal === true;
                   const ig = cfg.imageGen === true;
+                  const ctxKey = draftKey(m, 'contextWindow');
+                  const outKey = draftKey(m, 'maxTokens');
                   return (
                     <div key={m} className={`model-config-row${ig ? ' ig-on' : ''}`}>
                       <span className="mc-name" data-tip={m}>{m}</span>
@@ -409,20 +430,23 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                           onClick={() => updateModelCfg(m, 'multimodal', mm ? '' : '1')}
                         ><span className="mc-knob" /></button>
                       </label>
-                      {/* 上下文/最大输出只对文本模型有意义:生图链路不注入历史、不设 max_tokens */}
-                      <label className="mc-field" data-tip={ig ? '生图模型不使用该参数(不走文本请求)' : undefined}>
+                      {/* 上下文/最大输出只对文本模型有意义:生图链路不注入历史、不设 max_tokens。
+                          均为文本输入框,接受 1M / 128k 这类带单位写法(1M=1000000、128k=128000) */}
+                      <label className="mc-field" data-tip={ig ? '生图模型不使用该参数(不走文本请求)' : '可填纯数字,也可带单位:1M = 100 万、128k = 12.8 万'}>
                         <span>上下文</span>
-                        <input type="number" min={0} step={1000} disabled={ig}
-                          value={cfg.contextWindow ? String(cfg.contextWindow) : ''}
-                          placeholder={dflt.contextWindow ? '默认 ' + fmt(dflt.contextWindow) : '默认'}
-                          onChange={(e) => updateModelCfg(m, 'contextWindow', e.target.value)} />
+                        <input type="text" inputMode="numeric" autoComplete="off" disabled={ig}
+                          value={numDraft[ctxKey] ?? formatCountInput(cfg.contextWindow)}
+                          placeholder={dflt.contextWindow ? '默认 ' + formatCountInput(dflt.contextWindow) : '默认'}
+                          onChange={(e) => { setDraft(ctxKey, e.target.value); updateModelCfg(m, 'contextWindow', e.target.value); }}
+                          onBlur={() => dropDraft(ctxKey)} />
                       </label>
-                      <label className="mc-field" data-tip={ig ? '生图模型不使用该参数(不走文本请求)' : undefined}>
+                      <label className="mc-field" data-tip={ig ? '生图模型不使用该参数(不走文本请求)' : '可填纯数字,也可带单位:1M = 100 万、32k = 3.2 万'}>
                         <span>最大输出</span>
-                        <input type="number" min={0} step={256} disabled={ig}
-                          value={cfg.maxTokens ? String(cfg.maxTokens) : ''}
-                          placeholder={dflt.maxTokens ? '默认 ' + fmt(dflt.maxTokens) : '默认'}
-                          onChange={(e) => updateModelCfg(m, 'maxTokens', e.target.value)} />
+                        <input type="text" inputMode="numeric" autoComplete="off" disabled={ig}
+                          value={numDraft[outKey] ?? formatCountInput(cfg.maxTokens)}
+                          placeholder={dflt.maxTokens ? '默认 ' + formatCountInput(dflt.maxTokens) : '默认'}
+                          onChange={(e) => { setDraft(outKey, e.target.value); updateModelCfg(m, 'maxTokens', e.target.value); }}
+                          onBlur={() => dropDraft(outKey)} />
                       </label>
                       <button className="mc-remove action-icon danger" onClick={() => toggleModel(m)}>✕</button>
                       {ig && (

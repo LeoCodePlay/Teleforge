@@ -29,3 +29,10 @@ export * from '../../dsh/ui-primitives/useDismissOnOutsidePointer.ts';
 // ---- 过程分组(工具调用折叠行)用到的原件 ----
 // TextShimmer:harness 行内文字的扫光动画(分组标题运行中就靠它),原件一字不改。
 export * from '../../dsh/ui-primitives/TextShimmer.tsx';
+// ---- 文档预览面板(右栏)用到的原件 ----
+// CodeBlock:dsh 唯一的语法高亮渲染器(同步 shiki 核心 + CSS 变量主题 + 行号槽 + 折行 + 复制),
+// languageForPath:按扩展名给语法提示。补这两个会把 ui-primitives/markdown/highlight.ts 的 shiki 链
+// 拉进编译程序与打包图 —— 这是刻意的:预览面板就是要有高亮。语法表来自搬进来的 dsh-util-code-language。
+export { CodeBlock } from '../../dsh/ui-primitives/markdown/CodeBlock.tsx';
+export type { CodeBlockProps } from '../../dsh/ui-primitives/markdown/CodeBlock.tsx';
+export { CODE_HIGHLIGHT_EXTENSIONS, languageForPath, useCodeHighlighter } from '../../dsh/ui-primitives/code-highlighting.ts';

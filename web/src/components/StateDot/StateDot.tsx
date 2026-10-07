@@ -7,7 +7,7 @@ const MATRIX_CELLS: ReadonlyArray<readonly [number, number]> = [
   [0, 0], [4, 0], [8, 0], [8, 4], [8, 8], [4, 8], [0, 8], [0, 4],
 ];
 
-export type StateDotState = 'done' | 'warning' | 'ongoing' | 'error';
+export type StateDotState = 'done' | 'warning' | 'ongoing' | 'error' | 'idle';
 
 export function StateDot({ state, size = 10, className }: {
   state: StateDotState;

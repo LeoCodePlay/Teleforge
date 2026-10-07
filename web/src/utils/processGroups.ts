@@ -252,8 +252,11 @@ export function doneTitle(summary: ActivitySummary): string {
     const shared = first.startsWith(PREFIX) && second.startsWith(PREFIX);
     return `${first}并${shared ? second.slice(PREFIX.length) : second}`;
   }
-  // 三项及以上:直接用中文逗号连接,不做前缀省略(dsh 三项分支只做英文首字母小写)
-  const title = labels.join('，');
+  // 三项及以上:同样去掉共享的「已」前缀(「已读取文件，搜索代码，写入文件」)——
+  // 每个分类都带着「已」会读成三句并列的完整句,啰嗦;dsh 的 sharedPrefix 就是这个意思
+  const PREFIX = '已';
+  const allShared = labels.every((l) => l.startsWith(PREFIX));
+  const title = (allShared ? labels.map((l, i) => (i === 0 ? l : l.slice(PREFIX.length))) : labels).join('，');
   return summary.counts.length > 3 ? `${title}等` : title;
 }
 

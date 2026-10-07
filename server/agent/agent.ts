@@ -15,11 +15,20 @@ import fsp from 'node:fs/promises';
 import { LlmClient, isContextOverflowError, billedInputTokens, type LlmOptions } from './llm.ts';
 import { lastGeneratedImage, imageCaption, runImageJob } from './image-gen.ts';
 import { COMPACT, compactHistory, summarizeWithLlm, selectManualCompactRange, resolveCharBudget, estimateTokens, measureMessages, measureEnvelope, pruneToolResults } from './compact.ts';
-import { Session, foldTodos, foldTokenUsage, foldSessionStats, hasOutstandingTodos, trimMessagesByBudget, type SessionEvent, type TodoSnapshot } from './session.ts';
+import { Session, foldTodos, foldTokenUsage, foldLastTurnTokenUsage, foldSessionStats, hasOutstandingTodos, trimMessagesByBudget, type SessionEvent, type TodoSnapshot } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, registerPermissionGuard, type PermissionMode } from './permission.ts';
 import { PERMISSION_MODE_META } from './permission.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
+// 子代理的父侧指引:逐字照搬 harness 的 tool:<name> system prompt 段(见 subagent.ts)
+import { SUBAGENT_GUIDANCE } from './subagent.ts';
+import { registerScheduleTools } from './schedule-tools.ts';
+import {
+  GOAL_GUIDANCE, registerGoalTools, runGoalCommand, goalView, disarmGoal,
+  renderGoalRoundPrompt, pauseGoal, blockGoal, type GoalView
+} from './goal.ts';
+import { PLAN_POLICY_TEXT, exitPlanModeTool, isPlanMode as foldPlanActive, modeBeforePlan } from './plan-mode.ts';
+
 import { localFs, runWithLocalWorkspaceBinding } from '../core/local-fs.ts';
 import { renderPromptInjectSection } from './prompt-inject.ts';
 import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.ts';
@@ -33,10 +42,21 @@ import { browserManager, extractPreviewUrls } from '../core/browser-manager.ts';
 // 全局唯一工具注册表:启动时注册全部内置工具与守卫
 const registry = new ToolRegistry();
 registerTools(registry);
+// 自动化任务的 4 个模型工具(create/list/update/delete):让「每天 9 点帮我检查一次部署」
+// 这种话直接变成真任务。工具与 RPC 共用 server/schedule 的服务实例(逐字移植 dsh 的
+// tool-schedule + schedule 包),这里只负责注册。
+registerScheduleTools(registry);
 // 权限守卫:必须在工具注册之后挂载——它执行时从注册表取回该工具**自己声明**的 access
 // (fail-closed,见 permission.ts)。缺了这一行,confirm/plan 档位在真实运行时就完全不生效
 // (工具照常执行、不弹审批),只有 test/permission-mode.test.js 里手挂守卫才看得到拦截。
 registerPermissionGuard(registry);
+// 会话级持久目标(移植自 harness package goals + tool-goal):get_goal / create_goal / update_goal。
+// 与 schedule 工具同样需要宿主上下文(session/sid/emit),因此在这里注册而不是 tools.ts 内。
+registerGoalTools(registry);
+// 计划模式的退出工具(移植自 harness plan/plan-mode):把完成的计划交用户审阅,批准即退出计划模式。
+// 退出动作只依赖调用上下文里的 session/sid/emit(见 plan-mode.ts 的 leavePlanMode),
+// 因此注册期不需要回指 Agent 单例 —— 任何 Agent 实例(含测试)拿到的会话都能正确退出。
+registry.register(exitPlanModeTool());
 // 供 ws 层列出/开关工具插件(设置 → 工具插件)
 export { registry as toolRegistry };
 // 「检测到可预览地址」事件去重:同一会话只对同一个地址提醒一次,避免命令重复打印时刷屏
@@ -224,6 +244,7 @@ function newRuntime(session) {
     lastCallKey: null, // 上一次工具调用的规范化键(工具名+参数),repeat-tool-reminder 追踪用
     lastCallCount: 0,  // 连续相同调用次数
     overflowRecoveries: 0, // 本轮上下文爆窗恢复次数(达到上限后不再重试,防死循环)
+    goalScheduling: false, // 目标续跑调度重入锁:一次只发一轮
     live: null as null | { content: string; reasoning: string } // 当前步已流式收到、尚未落盘的回复半成品(供 getHistory 投影,见 onDelta)
   };
 }
@@ -300,6 +321,8 @@ export function projectEvents(events) {
   // 回填而不是新增行 —— 不占消息面下标,回退/分支的下标口径完全不受影响。
   let curTurn = 0;
   let turnStartAt = 0;
+  // 本轮 turn/start 在 events 里的下标:turn/end 时按 [turnStartIdx, 本轮末) 折叠单轮用量
+  let turnStartIdx = 0;
   const turnRows = new Map<number, number[]>();
   // 记录每个检查点的「保留区首条消息面」在 out 里的下标(模型可见面起点,前端兜底估算用)。
   // 标记行本身不再插到这里 —— 它在 compaction/done 处**原位投影**(见下方分支)。
@@ -310,11 +333,13 @@ export function projectEvents(events) {
       cpRetainedFrom.set(Number(cpEv.data.dropThroughSeq), out.length);
     }
   };
-  for (const ev of events) {
+  for (let ei = 0; ei < events.length; ei++) {
+    const ev = events[ei];
     const d = ev.data || {};
     if (ev.type === 'turn/start') {
       curTurn = Number(d.turn) || 0;
       turnStartAt = ev.time;
+      turnStartIdx = ei;
       continue;
     }
     if (ev.type === 'turn/end') {
@@ -322,10 +347,16 @@ export function projectEvents(events) {
       // dsh 的取值:max(1000, end - start) —— 至少 1 秒,避免亚秒级回合显示成 0 秒
       const elapsed = Math.max(1000, (ev.time || turnStartAt) - turnStartAt);
       const reason = String(d.reason?.kind || 'completed');
+      // 本轮用量(四桶,单轮口径):与 foldTokenUsage 同一去重语义 —— 同一步的流式样本与
+      // 最终样本、以及重试产生的多次尝试都不会重复计费(见 foldTokenUsage 的说明)。
+      // 整轮一条样本都没有(网关不报用量)时**不下发该字段**,前端据此不渲染统计行,
+      // 而不是显示一个"完整但全是 0"的假数字。
+      const usage = foldLastTurnTokenUsage(events.slice(0, ei));
+      const withUsage = usage.samples > 0 ? { turnUsage: usage } : {};
       // 同上的局部 any 别名:out 在本函数里是隐式 any[],直接下标赋值会让它必须确定元素类型
       const rows: any = out;
       for (const i of turnRows.get(turn) || []) {
-        rows[i] = { ...rows[i], turnElapsedMs: elapsed, turnEndReason: reason };
+        rows[i] = { ...rows[i], turnElapsedMs: elapsed, turnEndReason: reason, ...withUsage };
       }
       continue;
     }
@@ -342,6 +373,10 @@ export function projectEvents(events) {
         role: 'user', content: d.display ?? d.content,
         // 事件时间戳随投影下发,前端据此显示"今天/昨天/日期+时间"
         time: ev.time,
+        // 目标续跑轮(移植自 harness GoalMessageSource):前端把这条用户消息渲染成「目标第 N 轮」
+        ...(d.source === 'goal' && Number.isFinite(Number(d.round))
+          ? { goalRound: { round: Number(d.round), revision: Number(d.revision) || undefined } }
+          : {}),
         // 附件元数据随历史回放,前端渲染缩略图/文件 chip
         ...(Array.isArray(d.attachments) && d.attachments.length ? { attachments: d.attachments } : {}),
         // 手动调用技能注入的技能详情随历史回放,前端可恢复"已加载技能"折叠行
@@ -732,6 +767,22 @@ export class Agent {
 
   }
 
+  /**
+   * 取指定会话本轮要用的模型客户端,并在该会话**首次真正使用时**把它固化成会话快照。
+   *
+   * 只读 `_llmFor` 不固化时有个漏洞:通过「新建草稿态」创建的会话,第一次发送只会回落
+   * 到全局默认(this.llm),自身并没有快照;此后只要别的会话/新建草稿态下发一次不带 sid 的
+   * 配置(把全局默认改回去),这个「已经用过」的会话就会被一起带走 —— 表现就是「第二次发送
+   * 显示的模型是 B,实际调用的却是在跑会话的模型 A」。一旦跑过一轮就锁定,后续只有用户在该
+   * 会话里显式切模型(带 sid 下发,见 configureLlm)才会更新。
+   */
+  _lockLlm(sid: string | null | undefined): LlmClient | null {
+    const llm = this._llmFor(sid);
+    const id = sid != null && sid !== '' ? String(sid) : null;
+    if (llm && id && !this._llmBySid.has(id)) this._llmBySid.set(id, llm);
+    return llm;
+  }
+
   /** 指定会话当前是否处于「工具降级纯对话」状态(sid 缺省 = 活跃会话) */
   _chatOnlyFor(sid: string | null | undefined = this.sessionId): boolean {
     const id = sid != null && sid !== '' ? String(sid) : '';
@@ -926,7 +977,7 @@ export class Agent {
     return isPermissionMode(m) ? m : DEFAULT_PERMISSION_MODE;
   }
 
-  setPermissionMode(mode: PermissionMode, id = this.sessionId): PermissionMode {
+  setPermissionMode(mode: PermissionMode, id = this.sessionId, opts: { globalDefault?: boolean } = {}): PermissionMode {
     if (id == null) throw new Error('当前没有可操作的会话');
     const rt = this._runtimes.get(id);
     if (rt) {
@@ -937,10 +988,162 @@ export class Agent {
       events.push({ seq: events.length, time: Date.now(), type: 'permission/mode', data: { mode } });
       sessions.saveEvents(id, events);
     }
-    // 用户设置的档位同时持久化为全局默认:新建会话即继承该模式
-    if (isPermissionMode(mode)) storeSetDefaultMode(mode);
+    // 用户设置的档位同时持久化为全局默认:新建会话即继承该模式。
+    // 例外:计划模式的进入/退出（/计划 与 exit_plan_mode）不写全局默认——
+    // 计划模式是"这个会话此刻的工作方式",不是"以后所有新会话的默认权限"。
+    if (opts.globalDefault !== false && isPermissionMode(mode)) storeSetDefaultMode(mode);
     this.emit('agent', { event: 'permission_changed', mode, sid: id });
     return mode;
+  }
+
+  // ---- 计划模式(移植自 harness plan/plan-mode;状态即权限档位 'plan')----
+
+  /** 该会话此刻是否处于计划模式(折叠日志的最后一个 permission/mode 值) */
+  isPlanMode(id = this.sessionId): boolean {
+    if (id == null) return false;
+    const rt = this._runtimes.get(id);
+    return foldPlanActive(rt ? rt.session.events : sessions.loadEvents(id), this.getDefaultPermissionMode());
+  }
+
+  /** 退出计划模式:回到进入前的档位(日志里最后一次非 plan 档位;没有则全局默认) */
+  exitPlanMode(id = this.sessionId, session = id != null ? this._runtimes.get(id)?.session : null): PermissionMode {
+    if (id == null) throw new Error('当前没有可操作的会话');
+    const events = session ? session.events : sessions.loadEvents(id);
+    const target = modeBeforePlan(events, this.getDefaultPermissionMode());
+    return this.setPermissionMode(target === 'plan' ? DEFAULT_PERMISSION_MODE : target, id, { globalDefault: false });
+  }
+
+  /**
+   * 执行一条 /计划 指令(移植自 harness PlanModeController 的命令处理):
+   *   /计划              → 进入计划模式
+   *   /计划 off          → 退出计划模式(回到进入前的档位)
+   *   /计划 <消息>       → 进入计划模式,并把该消息作为本轮请求提交(附件随消息一起)
+   * 计划模式下写/执行类工具由权限 guard 直接拒绝(见 permission.ts),提示段见 _buildRuntimeContext。
+   */
+  planCommand(rawInput: string, id = this.sessionId, attachments: any[] | null = null): {
+    kind: 'success' | 'error'; text: string; mode: PermissionMode;
+  } {
+    if (id == null) throw new Error('当前没有可操作的会话');
+    const message = String(rawInput ?? '').trim();
+    const atts = resolveAttachments(attachments);
+    // 附件判定按调用方给的原始清单:未知 id 一律按"有附件"处理(fail-closed),
+    // 与 harness "/plan off 不接受附件" 的语义一致(必须在模式变更前拒绝)
+    const hasAtts = Array.isArray(attachments) && attachments.length > 0;
+    if (message === 'off') {
+      if (hasAtts) {
+        return { kind: 'error', text: '附件不能与 /计划 off 一起使用,请先移除附件。', mode: this.getPermissionMode(id) };
+      }
+      if (!this.isPlanMode(id)) {
+        return { kind: 'success', text: '当前不在计划模式。', mode: this.getPermissionMode(id) };
+      }
+      const mode = this.exitPlanMode(id);
+      return { kind: 'success', text: '已退出计划模式。', mode };
+    }
+    const was = this.getPermissionMode(id);
+    if (!this.isPlanMode(id)) this.setPermissionMode('plan', id, { globalDefault: false });
+    if (message !== '' || atts.length > 0) {
+      // 与 harness 的 agent.steer 同义:该消息成为计划指引下的下一次请求(这里直接开轮/排队)
+      try {
+        Promise.resolve(this.submit(id, message, { attachments: atts.length ? atts : null }))
+          .catch((e) => this.emit('agent', { event: 'error', message: (e as Error).message, sid: id }));
+      } catch (e) {
+        return { kind: 'error', text: `已进入计划模式,但消息未能提交:${(e as Error).message}`, mode: 'plan' };
+      }
+    }
+    return {
+      kind: 'success',
+      mode: 'plan',
+      text: was === 'plan'
+        ? '已在计划模式下。用 /计划 off 退出。'
+        : '已进入计划模式。AI 只做调研并给出计划,写/执行类操作会被拒绝;用 /计划 off 退出。'
+    };
+  }
+
+  // ---- 会话级持久目标(移植自 harness packages/goal/*)----
+
+  /** 当前目标视图(无目标返回 undefined);不在内存的会话从磁盘折叠 */
+  getGoal(id = this.sessionId): GoalView | undefined {
+    if (id == null) return undefined;
+    const rt = this._runtimes.get(id);
+    const session = rt ? rt.session : null;
+    if (session) return goalView(session);
+    // 不在内存:临时 Session 只用于折叠(授权按"未记录=disarmed"处理,与重启后一致)
+    return goalView(new Session(sessions.loadEvents(id)));
+  }
+
+  /** 目标变更后:落盘 + 广播目标状态(命令/工具/续跑驱动器都走这里) */
+  _afterGoalChange(id: string | null | undefined, session: Session): void {
+    if (id) { try { sessions.saveEvents(id, session.events); } catch { /* 落盘失败不阻塞 */ } }
+    this.emit('agent', { event: 'goal_changed', sid: id, goal: goalView(session) ?? null });
+  }
+
+  /**
+   * 执行一条 /目标 指令(移植自 harness command-goal):解析、变更、渲染状态文本。
+   * 变更立即落盘并广播;成功创建/编辑且带附件时,把附件作为一条参考消息投给下一次目标轮。
+   */
+  goalCommand(rawInput: string, id = this.sessionId, attachments: any[] | null = null): {
+    kind: 'success' | 'error'; text: string; goal?: GoalView | null;
+  } {
+    if (id == null) throw new Error('当前没有可操作的会话');
+    const rt = this._runtimes.get(id);
+    if (!rt) throw new Error('目标只作用于当前会话:请先切回该会话再操作');
+    const atts = resolveAttachments(attachments);
+    const hasAtts = Array.isArray(attachments) && attachments.length > 0;
+    const result = runGoalCommand(rt.session, String(rawInput ?? ''), hasAtts);
+    this._afterGoalChange(id, rt.session);
+    if (result.kind === 'success' && result.attachmentsAccepted && atts.length > 0) {
+      // harness:附件随目标描述一起提交为一条普通 user 消息,后续目标轮从会话历史里读到它
+      Promise.resolve(this.submit(id, '目标描述附带的参考附件。', { attachments: atts }))
+        .catch((e) => this.emit('agent', { event: 'error', message: (e as Error).message, sid: id }));
+    }
+    return { kind: result.kind, text: result.text, goal: result.goal ?? null };
+  }
+
+  /**
+   * 空闲时的目标续跑调度(移植自 harness goal-round-driver 的 drive):
+   * 只有在"链路就绪 + 会话完全空闲 + 没有人类排队输入 + 目标 active 且已授权 + 还有轮次预算"
+   * 时才排一轮;预算耗尽就地记一条 round-limit 受阻,而不是继续空转。
+   * 轮次的"消耗"只在续跑消息真正进入历史时发生(见 goal.ts 的折叠:必须是当前修订的下一轮)。
+   */
+  _scheduleGoalRound(id: string | null | undefined, rt: any): void {
+    if (!id || !rt || !this.llm) return;
+    if (rt.busy || rt.compacting || rt.goalScheduling) return;
+    if (rt.inbox.length > 0 || rt.pending.length > 0) return; // 人类工作在先:让位,等再次空闲
+    let view: GoalView | undefined;
+    try { view = goalView(rt.session); } catch { disarmGoal(rt.session); return; }
+    if (!view || view.phase !== 'active' || view.activation !== 'armed') return;
+    if (view.roundsStarted >= view.maxGoalRounds) {
+      // 轮次上限:记一条稳定的 round-limit 受阻(harness 同码)
+      try {
+        blockGoal(rt.session, { id: view.id, revision: view.revision }, {
+          code: 'round-limit',
+          message: `目标已达到配置的 ${view.maxGoalRounds} 轮上限。`
+        });
+        this._afterGoalChange(id, rt.session);
+      } catch { disarmGoal(rt.session); }
+      return;
+    }
+    const round = view.roundsStarted + 1;
+    const prompt = renderGoalRoundPrompt(view, round);
+    rt.goalScheduling = true;
+    try {
+      this.submit(id, prompt, {
+        source: 'goal',
+        display: `🎯 目标第 ${round}/${view.maxGoalRounds} 轮`,
+        goalRound: { goalId: view.id, revision: view.revision, round }
+      });
+    } catch (e) {
+      // 排队失败:按 harness 记一条 queue-failed 受阻(此后不再自动续跑)
+      try {
+        blockGoal(rt.session, { id: view.id, revision: view.revision }, {
+          code: 'queue-failed',
+          message: `第 ${round} 轮目标续跑排队失败:${(e as Error)?.message || e}`
+        });
+        this._afterGoalChange(id, rt.session);
+      } catch { disarmGoal(rt.session); }
+    } finally {
+      rt.goalScheduling = false;
+    }
   }
 
   /**
@@ -1061,6 +1264,27 @@ export class Agent {
     }
     this._applySessionBinding(id); // 切回的会话把绑定工作区应用到活动连接(UI 自动跟随)
     this.emit('agent', { event: 'session_switched', id });
+  }
+
+  /**
+   * 确保某会话在内存里有自己的运行时,并返回它。
+   * 供自动化任务投递用(见 server/schedule/runtime.ts):会话空闲时会被 `switchSession` 释放出
+   * 内存(`_runtimes.delete`),而 `submit` 要求运行时存在。
+   * **刻意不切换活跃会话**:定时任务不该把用户正在看的那条会话顶掉,这不是"用户在切会话"。
+   * 绑定值(工作区/作用域)按该会话自己的元数据同步,与 `_applySessionBinding` 同一口径(但不写
+   * 活动连接 —— 那是"用户正在看这个会话"才该发生的事)。
+   */
+  ensureRuntime(id: string): boolean {
+    if (!id) return false;
+    if (this._runtimes.has(id)) return true;
+    const meta = sessions.list().find((s) => s.id === id);
+    if (!meta) return false;
+    const rt = newRuntime(this._loadHealed(id));
+    rt.workspace = meta.workspace ?? null;
+    rt.localWorkspace = meta.localWorkspace ?? null;
+    rt.connKey = meta.connKey ?? null;
+    this._runtimes.set(id, rt);
+    return true;
   }
 
   // 会话是否"已开始对话"(有用户发起的第一条消息)。锁定的依据:
@@ -1293,7 +1517,7 @@ export class Agent {
     // 绝不回落 this.session——那会把用户正在看的另一个会话压缩后写进本 id 的文件。
     const session = rt ? rt.session : this._loadHealed(id);
     // 手动压缩用该会话自己的模型(会话级快照),不是全局配置
-    const llm = this._llmFor(id);
+    const llm = this._lockLlm(id);
     const llmConfigured = this.llmConfigured; // "有没有可用 key"沿用全局判定,与原实现一致
     if (!llm || llm.isMock) throw new Error('尚未配置可用的 LLM,无法生成摘要');
     const trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
@@ -1498,13 +1722,32 @@ export class Agent {
     return [...this._runtimes].filter(([, rt]) => rt.busy).map(([id]) => id);
   }
 
+  /** 该会话此刻是否正在生成压缩摘要(手动 /compact 或自动超水位压缩)。
+   *  compaction_start 只是实时事件、不落盘,前端切走再切回时历史重载会把那行「正在压缩…」
+   *  丢掉;get_history 随历史带上这个标志,前端就能把运行行补回来,直到 done/failed 收尾。 */
+  isCompacting(sid) {
+    if (sid == null) return false;
+    return this._runtimes.get(String(sid))?.compacting === true;
+  }
+
   /**
    * 提交一条用户输入到指定会话(= harness 的 followup + wake):
    * 该会话空闲时开新轮;运行中则进入待执行队列(pending),当前轮结束后按 FIFO
    * 自动逐条执行,不再当作 steer 立即打断当前回复。每个会话独立驱动,互不阻塞。
    * 返回的 promise 在该会话整个排空过程(含后续排队的输入)结束后 resolve。
    */
-  submit(sessionId, userText, { reasoning = 'default', attachments = null, auto = false, display = null } = {}) {
+  submit(sessionId, userText, {
+    reasoning = 'default', attachments = null, auto = false, display = null, source = null, taskId = null,
+    messageId = null, scheduleId = null, goalRound = null
+  }: {
+    reasoning?: string; attachments?: any; auto?: boolean; display?: string | null; source?: string | null;
+    taskId?: string | null;
+    /** 定时任务投递的消息身份(dsh 的 MessageId):盖在 user/message 事件上,回执与 UI 靠它对齐 */
+    messageId?: string | null;
+    /** 定时任务 id:让前端能把这条消息与任务对上(Teleforge 额外信息,dsh 把这层信息写在正文框架里) */
+    scheduleId?: string | null;
+    goalRound?: { goalId: string; revision: number; round: number } | null
+  } = {}) {
     if (!this.llm) throw new Error('尚未配置 LLM(设置 -> 模型配置)');
     // 用户自己发话了 = 不必再替他续跑(手动接管优先于自动接管)
     if (!auto) this._autoResume.delete(sessionId);
@@ -1517,7 +1760,7 @@ export class Agent {
       // 需要打断当前回复立即执行时,由前端"立即执行"操作走 steerQueueItem(inbox 抢先 + 中止当前轮)
       // 手动压缩中(rt.compacting)也走这里:压缩要读整份日志算 drop 区间,此刻开新轮会把
       // 检查点追加进正在流式的轮次;压缩结束由 compactNow 的 finally 统一派发。
-      rt.pending.push({ id: ++rt.queueSeq, text, reasoning, attachments: atts, auto, display });
+      rt.pending.push({ id: ++rt.queueSeq, text, reasoning, attachments: atts, auto, display, source, taskId, messageId, scheduleId, goalRound });
       this._emitQueue(rt, sessionId);
       return rt.driving;
     }
@@ -1526,8 +1769,24 @@ export class Agent {
       while (rt.pending.length > 0) rt.inbox.push(rt.pending.shift());
       this._emitQueue(rt, sessionId);
     }
-    rt.inbox.push({ text, reasoning, attachments: atts, auto, display });
+    rt.inbox.push({ text, reasoning, attachments: atts, auto, display, source, taskId, messageId, scheduleId, goalRound });
     return this._drive(rt, sessionId);
+  }
+
+  /**
+   * 投递一条"**已被接受**"的消息:与 submit 走同一条入队路径(空闲开一轮 / 忙碌进待执行队列),
+   * 但**不等整轮跑完**就返回。
+   *
+   * 定时任务投递用它:对应 dsh 的 `followup(message) + sessions.flush(session)` 那一步 —— 投递成功
+   * 的判定是"消息已被会话接受",不是"这一轮已经答完"。整轮的成败由会话本身的事件流体现
+   * (与用户手打一句话完全一样)。返回值故意是 void,避免调用方误以为这是"跑完了"。
+   */
+  submitAccepted(sessionId, userText, opts = {}) {
+    const driving = this.submit(sessionId, userText, opts);
+    // 不 await:只把 rejection 收掉,不让它变成未处理的 Promise 拒绝(submit 的返回值是整轮排空后的 promise)
+    Promise.resolve(driving).catch((e) => {
+      this.emit('agent', { event: 'error', message: e?.message ?? String(e), sid: sessionId });
+    });
   }
 
   // 待执行队列快照(供 get_history / RPC reply:前端按 {id, text} 渲染,attach=附件数)
@@ -1611,6 +1870,28 @@ export class Agent {
           }
           endReason = { kind: 'error', error: msg };
         }
+        // 目标续跑轮收尾(移植自 harness goal-round-driver 的 agent/status idle 分支):
+        // - 被停止(aborted)→ 暂停目标(该轮已被放弃,不再自动续;暂停用当轮预留的精确修订做栅栏,
+        //   期间发生过 edit/resume 就自动失效,不会误暂停新修订);
+        // - 超长(max-tokens)→ 解除续跑授权(harness:max tokens 结束即 disarm);
+        // - 其他原因不动:空闲时由 _scheduleGoalRound 决定要不要再续一轮。
+        if (input?.goalRound) {
+          try {
+            const view = goalView(rt.session);
+            if (view && view.id === input.goalRound.goalId) {
+              if (endReason?.kind === 'aborted' && view.phase === 'active' && view.activation === 'armed') {
+                pauseGoal(rt.session, { id: view.id, revision: view.revision });
+                this._afterGoalChange(id, rt.session);
+              } else if (endReason?.kind === 'max-tokens') {
+                disarmGoal(rt.session);
+                this._afterGoalChange(id, rt.session);
+              }
+            }
+          } catch { /* 目标收尾失败不阻塞排队消息的继续执行 */ }
+        } else if (endReason?.kind === 'max-tokens') {
+          // 人类轮超长:同样解除续跑授权(harness goal-round-driver 的 turn/end max-tokens 分支)
+          try { disarmGoal(rt.session); } catch { /* 忽略 */ }
+        }
         // 上一轮正常结束后,待执行队列按 FIFO 自动补齐下一条(一次一条,保持 busy 直至排空);
         // 停止(aborted)只停当前轮,排队项保留,等下次对话正常结束后再执行
         if (endReason && endReason.kind !== 'aborted' && rt.pending.length > 0) {
@@ -1625,6 +1906,8 @@ export class Agent {
       rt.driveDone = true; // 同步置位(见 newRuntime.driveDone):不能只靠 promise 回调去清 rt.driving
       this.emit('agent', { event: 'status', status: 'idle', sid: id });
     }
+    // 空闲钩子:目标仍 active 且已授权、还有轮次预算、也没有人类排队输入时,再自动跑一轮
+    this._scheduleGoalRound(id, rt);
   }
 
   /**
@@ -1687,8 +1970,10 @@ export class Agent {
           this._runTurnInner(rt, runSessionId, input, boundConn))));
   }
 
-  async _runTurnInner(rt, runSessionId, { text, reasoning, attachments, auto = false, display = null }: { text: string; reasoning: string; attachments?: AttachmentMeta[] | null; auto?: boolean; display?: string | null }, boundConn) {
+  async _runTurnInner(rt, runSessionId, { text, reasoning, attachments, auto = false, display = null, source = null, taskId = null, messageId = null, scheduleId = null, goalRound = null }: { text: string; reasoning: string; attachments?: AttachmentMeta[] | null; auto?: boolean; display?: string | null; source?: string | null; taskId?: string | null; messageId?: string | null; scheduleId?: string | null; goalRound?: { goalId: string; revision: number; round: number } | null }, boundConn) {
     const session = rt.session; // 锁定本轮操作的运行时与会话,中途切换活跃会话不影响本轮写入
+    // 本轮首个 user 消息的来源(工具侧据此判定"是否人类直接请求",见 goal.ts requireDirectHuman)
+    const turnSource = auto ? 'auto-resume' : (source || 'user');
     const signal = (rt.signal = new AbortController());
     rt.boundConn = boundConn;
     rt.stopCause = null;   // 新一轮:中止原因清零(只由 stop/stopForConn/stopAll 写入)
@@ -1696,7 +1981,7 @@ export class Agent {
     // 本轮锁定的模型:会话级快照(见 _llmFor)。轮内一律用这个局部量,不再读全局 this.llm——
     // 否则在别的会话里切模型(比如切到没余额的)会把正在后台运行的这一轮下一步请求也换过去,
     // 把无关会话一起打成「本轮执行失败」(回归见 test/session-llm-isolation.test.js)。
-    const llm = this._llmFor(runSessionId);
+    const llm = this._lockLlm(runSessionId);
     if (!llm) throw new Error('尚未配置 LLM(设置 -> 模型配置)');
     // 附件元数据(submit 时已按服务端索引解析):正文注入与多模态注入都基于它
     const atts: AttachmentMeta[] = Array.isArray(attachments) ? attachments : [];
@@ -1818,7 +2103,9 @@ export class Agent {
       // 工具调用上下文:todo_write 等需要写会话事件日志的工具从这里拿到所属会话
       // invokeCtx 里带上当前模型客户端与工具注册表:subagent 工具需要它们起独立循环
       // (用注入而不是 import,避免 tools.ts 反向依赖 agent.ts)
-      const invokeCtx = { sid: runSessionId, session, emit: this.emit, llm, registry };
+      // invokeCtx 里带上当前模型客户端、工具注册表与 agent 自身:subagent 需要它们起独立循环,
+      // 并在子代理收尾时把结算通知投回本会话(harness 的 waking delivery,见 tools.ts 的 makeParentNotifier)
+      const invokeCtx = { sid: runSessionId, session, emit: this.emit, llm, registry, turnSource, goalRound, agent: this };
       // 对齐 harness agent-loop:轮内步数没有上限,循环由"模型不再发起工具调用"自然收敛;
       // 上下文水位由压缩治理,失控时用户可随时手动停止。
       for (let step = 1; ; step++) {
@@ -1834,7 +2121,16 @@ export class Agent {
           // display=用户原文(前端渲染用,避免历史回放时把技能指令当作用户消息刷屏,对齐 harness)
           // source='auto-resume' = 这条不是用户打的,而是后端在进程中断后自动接着跑(见 _tryAutoResume):
           // 它不算"用户消息"(不参与首条命名/工作区锁定判定),也在下次自愈时用来防止无限续跑。
-          content: text, display: displayText, source: auto ? 'auto-resume' : 'user',
+          // source='schedule' = 自动化任务到点投递(见 server/schedule/runtime.ts):同样不是用户打的,
+          // 但也不是"续跑"——前端据此把它和自动续跑区分开,并可由 taskId 跳回任务详情。
+          content: text, display: displayText, source: auto ? 'auto-resume' : (source || 'user'),
+          ...(taskId ? { taskId } : {}),
+          // 定时任务投递:消息身份(与投递回执的 messageId 同一个)+ 任务 id
+          ...(messageId ? { messageId } : {}),
+          ...(scheduleId ? { scheduleId } : {}),
+          // 目标续跑轮的归属(移植自 harness 的 GoalMessageSource):折叠时据此推进
+          // roundsStarted,且只有"恰好是当前修订的下一个轮次"才被承认(严格重放)。
+          ...(goalRound ? { goalId: goalRound.goalId, revision: goalRound.revision, round: goalRound.round } : {}),
           // 附件元数据随事件持久化:前端历史回放渲染缩略图,请求期多模态注入 image_url
           ...(atts.length > 0 ? { attachments: atts } : {}),
           // 注入的技能详情随事件持久化,历史回放/分支时前端可恢复"已加载技能"折叠行
@@ -1907,7 +2203,14 @@ export class Agent {
         // 可见面**只能向后追加**,前缀缓存永不中途失效。见 test/request-prefix-stability.test.js
         // 的「长历史压力」场景。
         if (ctxWindow > 0 && historyMsgs.length > 2) {
-          const c = await compactHistory({
+          // 自动压缩同样置 rt.compacting(与手动 compactNow 同一口径):① switchSession 不会回收
+          // 正在压缩的 runtime;② 切回该会话时 get_history 能如实回答「此刻在压缩」,前端据此把
+          // 「正在压缩…」那行补回来 —— 它原本只由实时事件 compaction_start 插入、不落盘,
+          // 切走再切回历史整表重载就会让它凭空消失(直到完成才又冒出「上下文压缩」行)。
+          if (rt) rt.compacting = true;
+          let c;
+          try {
+            c = await compactHistory({
             messages: historyMsgs, system: systemText, llm, signal: signal.signal,
             contextWindow: ctxWindow, maxTokens: llm.maxTokens, reservedTokens,
             // 确认要压缩即广播「压缩中」:摘要要调一次 LLM,可能几十秒,不能让对话流静默干等
@@ -1922,7 +2225,12 @@ export class Agent {
               if (runSessionId) { try { sessions.saveEvents(runSessionId, session.events); } catch { /* 落盘失败不阻塞本轮请求 */ } }
               this.emit('agent', { event: 'compaction_failed', sid: runSessionId, manual: false, reason, persisted: true });
             }
-          });
+            });
+          } finally {
+            // 无论压缩成功/只折叠/失败/被中断,压缩都已结束:必须复位,否则该会话会被
+            // 永久当成「压缩中」(删除、fork、切换都会一直被拦)。
+            if (rt) rt.compacting = false;
+          }
           if (c.compacted) {
             const dropSeqs = trace.slice(0, c.dropCount).map((t) => t.seq);
             // 非破坏压缩:早期消息完整保留在日志里,只追加检查点;模型历史投影自检查点起
@@ -2029,21 +2337,30 @@ export class Agent {
             historyMsgs = pruneToolResults(historyMsgs, {
               minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
             }).messages;
-            const c = await compactHistory({
-              messages: historyMsgs, system: systemText, llm, signal: signal.signal,
-              contextWindow: ctxWindow, maxTokens: llm.maxTokens, reservedTokens,
-              force: true, retainTokensOverride: 0,
-              // 爆窗恢复的摘要压缩一样要调 LLM:先广播「压缩中」,前端不会长时间无反馈
-              onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false }),
-              // 爆窗恢复时摘要仍不可用:同样不裁剪(宁可这一步失败,也不丢历史)。
-              // 失败同样只落一条安静的失败行、不弹提示;随后走到下面 c.compacted 为 false
-              // 的分支,由本轮的错误路径收尾。
-              onFailure: (reason) => {
-                session.append('compaction/failed', { reason, manual: false });
-                if (runSessionId) { try { sessions.saveEvents(runSessionId, session.events); } catch { /* 落盘失败不阻塞本轮请求 */ } }
-                this.emit('agent', { event: 'compaction_failed', sid: runSessionId, manual: false, reason, persisted: true });
-              }
-            });
+            // 爆窗恢复的摘要压缩同样要调 LLM:与常规自动压缩同一口径置 rt.compacting ——
+            // 否则用户切走再切回时 get_history 会答「不在压缩」,那行「正在压缩…」就凭空消失
+            // (只能等完成/失败才又冒出来),看起来像"压缩记录不见了"。
+            if (rt) rt.compacting = true;
+            let c;
+            try {
+              c = await compactHistory({
+                messages: historyMsgs, system: systemText, llm, signal: signal.signal,
+                contextWindow: ctxWindow, maxTokens: llm.maxTokens, reservedTokens,
+                force: true, retainTokensOverride: 0,
+                // 爆窗恢复的摘要压缩一样要调 LLM:先广播「压缩中」,前端不会长时间无反馈
+                onStart: () => this.emit('agent', { event: 'compaction_start', sid: runSessionId, manual: false }),
+                // 爆窗恢复时摘要仍不可用:同样不裁剪(宁可这一步失败,也不丢历史)。
+                // 失败同样只落一条安静的失败行、不弹提示;随后走到下面 c.compacted 为 false
+                // 的分支,由本轮的错误路径收尾。
+                onFailure: (reason) => {
+                  session.append('compaction/failed', { reason, manual: false });
+                  if (runSessionId) { try { sessions.saveEvents(runSessionId, session.events); } catch { /* 落盘失败不阻塞本轮请求 */ } }
+                  this.emit('agent', { event: 'compaction_failed', sid: runSessionId, manual: false, reason, persisted: true });
+                }
+              });
+            } finally {
+              if (rt) rt.compacting = false;
+            }
             if (c.compacted) {
               const dropSeqs = trace.slice(0, c.dropCount).map((t: any) => t.seq);
               // 非破坏压缩(同常规自动压缩):日志完整保留,只追加检查点
@@ -2268,7 +2585,14 @@ export class Agent {
         // 权威分支点对齐:轮末(含上面自愈补的工具结果、生图轮的第二个消息面)把服务端
         // 消息面总长下发给前端。前端那个本地计数器是"猜"的(见 faceCount 注释),失败/中止的轮
         // 会让它漂移;以服务端口径重锚后,下一轮用户消息才带着正确的下标去回退/删除/分支。
-        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId, elapsedMs: turnElapsedMsOf(session.events) });
+        // 单轮用量随轮末一并下发:前端据此在「每条回复」的操作栏末尾渲染用量胶囊
+        // (与它同排显示的本轮用时走同一事件里的 elapsedMs),与刷新后 projectEvents
+        // 回填的字段同一口径。
+        this.emit('agent', {
+          event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId,
+          elapsedMs: turnElapsedMsOf(session.events),
+          usage: foldLastTurnTokenUsage(session.events)
+        });
         this.emit('agent', { event: 'sessions_changed' }); // 后台会话结束也刷新前端会话列表
       }
     }
@@ -2287,7 +2611,7 @@ export class Agent {
    * 不做上下文压缩(没有消息历史可压)。
    */
   async _runImageTurn(rt: any, runSessionId: string | null, { text, attachments }: { text: string; attachments: AttachmentMeta[] }): Promise<{ kind: string; error?: any }> {
-    const llm = this._llmFor(runSessionId);
+    const llm = this._lockLlm(runSessionId);
     if (!llm) throw new Error('尚未配置 LLM(设置 -> 模型配置)');
     const session: Session = rt.session;
     const signal: AbortController = rt.signal;
@@ -2391,7 +2715,14 @@ export class Agent {
       if (runSessionId) {
         sessions.saveEvents(runSessionId, session.events);
         // 同文本轮:把消息面总长下发,前端以服务端口径重锚本地分支点计数(见 faceCount 注释)
-        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId, elapsedMs: turnElapsedMsOf(session.events) });
+        // 单轮用量随轮末一并下发:前端据此在「每条回复」的操作栏末尾渲染用量胶囊
+        // (与它同排显示的本轮用时走同一事件里的 elapsedMs),与刷新后 projectEvents
+        // 回填的字段同一口径。
+        this.emit('agent', {
+          event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId,
+          elapsedMs: turnElapsedMsOf(session.events),
+          usage: foldLastTurnTokenUsage(session.events)
+        });
         this.emit('agent', { event: 'sessions_changed' });
       }
     }
@@ -2579,6 +2910,10 @@ export class Agent {
     // 权限模式说明(用户在输入框左下角切换):计划模式收紧为只读,确认/自动编辑下
     // 部分操作会先请求用户批准(拒绝时收到的工具结果会说明原因)
     sections.push(`权限模式: ${PERMISSION_MODE_META[mode].name} — ${PERMISSION_MODE_META[mode].description}${mode === 'plan' ? '。请把实施计划完整呈现给用户,不要尝试调用会被拒绝的工具。' : mode === 'confirm' ? '请求被拒绝时不要重试同一操作,调整方案或向用户说明影响。' : ''}`);
+    // 计划模式策略段(移植自 harness plan-mode 的 plan:policy 提示段):
+    // harness 把它做成 system prompt 的 section;teleforge 的 system 必须逐字节稳定(前缀缓存),
+    // 因此走"变化才追加"的 runtime_context 快照 —— 进入/退出计划模式各追加一次,语义一致。
+    if (mode === 'plan') sections.push(PLAN_POLICY_TEXT);
     // 工作区说明:本地模式下只讲本机工作区,不提"可操作远程"
     if (localMode) {
       sections.push(`本地平台: ${process.platform}`, `本地工作区: ${lws}`);
@@ -2658,10 +2993,10 @@ export class Agent {
     // 推理等级:off 关闭思考(直答);xhigh/max 深度推理;其余按默认格式输出
     // off 档不再是"直接给结论"而是"直接行动":先调用工具完成任务后再给结论,避免模型只描述不执行
     const thinkingRule = reasoning === 'off'
-      ? '11. 输出格式:直接行动——先调用所需工具完成任务后再给结论,不要只给结论不执行;不要输出 thinking 代码块,不要展示任何推理过程。'
+      ? '12. 输出格式:直接行动——先调用所需工具完成任务后再给结论,不要只给结论不执行;不要输出 thinking 代码块,不要展示任何推理过程。'
       : (reasoning === 'xhigh' || reasoning === 'max')
-        ? '11. 输出格式:先在 ```thinking(...```) 代码块中进行充分、系统的深度推理(允许较长,逐步分析再下结论),再在正文给出结论与操作;复杂任务务必先想清楚再动手。'
-        : '11. 输出格式:任何推理过程请放在 ```thinking(...```) 代码块中(前端会折叠),不要污染正文;正文只给结论与操作。';
+        ? '12. 输出格式:先在 ```thinking(...```) 代码块中进行充分、系统的深度推理(允许较长,逐步分析再下结论),再在正文给出结论与操作;复杂任务务必先想清楚再动手。'
+        : '12. 输出格式:任何推理过程请放在 ```thinking(...```) 代码块中(前端会折叠),不要污染正文;正文只给结论与操作。';
     // 工具选择规则:本地模式下远程工具已剔除,只提示用 *_local 工具
     const toolRule = !ssh.connected
       ? '2. 所有文件读写、命令执行一律用 `*_local` 工具(read_local_file/write_local_file/edit_local_file/run_local_command/list_local_dir/search_local_code/get_local_info/...),只在本机本地工作区操作;远程工具(read_file/write_file/run_command 等)当前不可用,不要调用。'
@@ -2685,10 +3020,19 @@ export class Agent {
       '8. 任务规划(强制):复杂多步任务必须先调用 todo_write 建立完整计划(每项一个具体步骤),每完成一项立即标记 completed,允许且只允许一项 in_progress。任务计划全部 completed 之前,不得以文字回复代替执行——必须继续调用工具直到整张清单完成,或你已用工具验证整个目标确实达成。简单单步任务可跳过计划,但同样必须真正执行而不是只描述。计划是跨轮存活的:用户发新消息时若上一份计划仍有未完成项,该计划会随新指令一并送达,请先接着做完未完成项再处理新要求(目标已变时用 todo_write 重写计划)。',
       '9. 完成判定:宣称完成前,收集证据(读取文件、查看命令输出、检查修改结果)证明整个任务目标已达成,而不是只做了第一步就下结论。若发现遗漏或失败,继续修复直到证据确凿;无法推进时再调用 ask_user_question 或说明原因。',
       '10. 需要用户确认、选择或补充关键信息时,先调用 ask_user_question 向用户提问(可一次多道、带选项/多选/自定义),等用户作答后再继续,不要替用户做应由他决定的取舍;没有歧义时不要滥用。',
+      // 定时任务能力说明(照 dsh:不告诉模型可以"约时间",这个功能就没人用)。
+      // 顺带划清边界:长延时/重复调度走 schedule_create,不要拿 sleep/at/cron 命令硬撑
+      // ——那些依附在正在跑的这一轮里,进程一关就没了。
+      '11. 定时任务:用户说「过一会儿 / 每天 / 每周 / 到某个时间」做什么时,用 schedule_create 建一个自动化任务(任务内容写清楚要做什么),用 schedule_list/update/delete 管理;不要用 sleep/at/cron 命令模拟长延时或重复调度。',
       thinkingRule,
       '',
       '当用户指令不明确、或工作区缺乏必要信息时,主动调用工具检查,而不是猜测。'
     ];
+    // 长期目标能力策略(移植自 harness tool-goal 的 goal:policy 段落,保持英文原文):
+    // 它是常驻的部署策略说明(与 harness 一样对所有请求生效),因此不进"规则 1..12"的编号列表。
+    lines.push('', GOAL_GUIDANCE);
+    // 子代理指引(harness 的 tool:subagent system prompt 段原文):独立派发要一起发、派完继续干自己的活
+    lines.push('', SUBAGENT_GUIDANCE);
     // 全局指令注入(移植自 dsh-purge):用户自定义的 prompt-inject.md 作为强指令注入
     const inject = renderPromptInjectSection();
     if (inject) lines.push(inject);

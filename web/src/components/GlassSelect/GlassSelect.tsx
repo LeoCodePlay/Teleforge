@@ -1,4 +1,4 @@
-// 液态玻璃自定义下拉(GlassSelect):替代原生 <select>,保持整体 UI 风格统一
+// 自定义下拉(GlassSelect):替代原生 <select>,保持整体 UI 风格统一
 // 用法:
 //   <GlassSelect value={v} onChange={fn}
 //     options={[{ value, label, hint?, disabled?, group? }]}
@@ -9,10 +9,8 @@
 //   />
 // 交互:点击外部 / Esc 关闭;↑↓ 移动高亮 + Enter 选择(与原生 select 键盘行为对齐)
 // 菜单层:portal 到 body + fixed 定位(与 PermissionSelect / SlashMenu 同款处理)。
-// 触发器总是嵌在带 backdrop-filter 的祖先里(.settings / .modal / .composer-box),而 Chromium 的
-// backdrop-root 机制会把这类祖先变成后代 backdrop 的采样边界——菜单 blur 只采到祖先那块半透明
-// 平色,磨不出细节,液态玻璃退化成透明(直接看穿底下的正文);祖先的 overflow 还会顺手裁掉菜单。
-// portal 到 body 后菜单与 .ctxmenu/.perm-menu 同层,复用同一条玻璃配方,观感与其它下拉完全一致
+// 触发器总是嵌在带 overflow 的祖先里(.settings / .modal / .composer-box),内联菜单会被祖先裁掉;
+// portal 到 body 后菜单与 .ctxmenu/.perm-menu 同层,复用同一条实色浮层配方,观感与其它下拉完全一致
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './GlassSelect.scss';

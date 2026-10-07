@@ -6,23 +6,21 @@
 .chat-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 18px 16px; min-width: 0; }
 /* 回到底部悬浮按钮:用户上滑离开底部时出现在对话区右下角(流式期间不自动拉回,
-   方便回看上下文,一键返回最新消息)。液态玻璃圆钮,与 composer 玻璃语言一致;
+   方便回看上下文,一键返回最新消息)。实色圆钮,与输入区语言一致;
    挂在 .chat-scroll(定位宿主)内,不随消息滚动 */
 .jump-bottom {
   position: absolute; right: 18px; bottom: 12px; z-index: 6;
   width: 34px; height: 34px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   color: var(--text);
-  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
-  border: 1px solid var(--glass-border);
-  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 18px var(--shadow-1);
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  box-shadow: var(--glass-shadow);
   cursor: pointer;
   animation: msg-in .18s ease-out;
   transition: border-color .15s ease, color .15s ease;
 }
-.jump-bottom:hover { border-color: var(--glass-border-hover); color: var(--accent-2); }
+.jump-bottom:hover { border-color: var(--line-strong); color: var(--accent-2); }
 .jump-bottom:active { transform: translateY(1px); }
 .empty { text-align: center; color: var(--muted); margin-top: 12vh; font-size: 14px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .empty-logo { width: 72px; height: 72px; opacity: .9; margin-bottom: 6px; user-select: none; -webkit-user-drag: none; }
@@ -57,14 +55,19 @@
 .msg.command { justify-content: flex-start; align-items: stretch; }
 .bubble { max-width: 78%; min-width: 0; padding: 10px 14px; border-radius: var(--r-md); line-height: 1.6; font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
 
-/* 用户气泡:深色玻璃 + 主色淡晕,不套磨砂避免每屏气泡数超 backdrop-filter 额度。
-   跟随主题 token(玻璃深底 + 主色渐变),不再用亮色实底;宽度上限占父元素 70% */
+/* 用户气泡:实色淡晕底 + 描边,不再用玻璃材质。
+   跟随主题 token,宽度上限占父元素 70% */
 .user-bubble {
   max-width: 70%;
-  background: linear-gradient(135deg, var(--accent-soft), transparent 78%), var(--glass-bg-strong);
-  color: var(--text); border-top-right-radius: 5px;
-  border: 1px solid var(--glass-border-hover);
-  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 18px var(--shadow-1);
+  background: var(--accent-fill);
+  color: var(--text); border-top-right-radius: var(--r-sm);
+}
+/* 目标自动续跑轮的行头(移植自 harness goal-round-driver 的轮次提示):
+   这条用户消息不是人打的,标清楚是哪一轮,避免被误读成用户自己发的指令 */
+.goal-round-tag {
+  margin-bottom: 6px; padding-bottom: 5px;
+  border-bottom: 1px dashed var(--accent-border);
+  color: var(--accent-2); font-size: 11.5px; font-weight: 600;
 }
 /* @ 文件/文件夹引用:气泡里折叠成 @文件名,用与输入框同款 accent 淡底标记引用关系
    (完整路径挂在 title 上,悬停可见) */
@@ -107,15 +110,41 @@
 .msg-col { display: flex; flex-direction: column; min-width: 0; width: 100%; }
 .msg-actions {
   display: flex; align-items: center; gap: 6px;
-  height: 28px; margin: 2px 4px -6px;
+  height: 28px; margin: 2px 4px;
 }
 .msg-action {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; padding: 6px;
-  border: none; border-radius: var(--r-pill);
+  border: none;
   /* 颜色与 hover/active 反馈由 .action-icon 统一提供 */
 }
 .msg-action[data-unavailable] { cursor: default; opacity: .35; }
+
+/* ---- 操作栏尾部的统计行(照搬 dsh turn-tail 的 endInfo)----
+   排布:复制 / 分支图标之后接「🗄 用量 31.2M tok  2分19秒」。
+   静止色统一走 --muted —— 与 .action-icon、.stat-pill 同一档,
+   统计信息与操作图标看起来才是同一层附属信息,而不是新的视觉层级。
+   颜色不硬编码:用量胶囊的悬停底色复用 .stat-pill 已有的 --glass-bg-hover。 */
+.msg-actions-stats {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-width: 0; margin-left: 2px; color: var(--muted);
+}
+/* 统计行里的胶囊必须和左右图标钮**同高**:.stat-pill 在底部统计栏是 24px 规格,
+   直接拿到这里用,就会和 28px 的 .msg-action 并排出「一高一矮两个按钮」
+   (矮 4px,悬停底色也跟着矮一截)。这里只在消息操作栏范围内抬到 28px,
+   底部统计栏仍保持 24px。 */
+.msg-actions-stats .stat-pill { height: 28px; }
+/* 用时与用量胶囊**等高同排**:两者盒高不同时,即使父级 align-items:center,
+   各自的文字行盒仍会一高一低,看上去就是"一上一下"。这里给用时一个和
+   .stat-pill 完全相同的 28px 盒(inline-flex 居中,不是靠 line-height 撑),
+   字号/字体也对齐胶囊的 11.5px 等宽 —— 两段文字因此落在同一条中线上,
+   且与 28px 的图标钮上下边缘齐平。 */
+.msg-actions-time {
+  display: inline-flex; align-items: center;
+  height: 28px; padding: 0 2px;
+  font-size: 11.5px; font-family: var(--mono); line-height: 1;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 
 /* ---- 用户消息脚注(时间 + 操作栏,位于气泡下方) ----
    整行右对齐;默认整体隐藏,鼠标进入该条用户消息范围内一起淡入显示 */
@@ -300,12 +329,12 @@
 .md th, .md td { border: 1px solid var(--line-soft); padding: 4px 10px; text-align: left; word-break: break-word; }
 .md th { background: var(--code-bg); font-weight: 600; white-space: nowrap; color: var(--code-ink); }
 .md tr:nth-child(even) td { background: var(--fill-1-lo); }
-.md a { color: var(--accent-2); text-shadow: 0 0 10px var(--accent-soft); }
+.md a { color: var(--accent-2); }
 .md hr { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
 .md del { opacity: 0.65; }
 .md input[type="checkbox"] { accent-color: var(--accent); margin-right: 6px; vertical-align: middle; }
 
-.cursor { display: inline-block; width: 2px; height: 1.05em; background: var(--accent-2); vertical-align: text-bottom; border-radius: 1px; animation: blink 1s infinite; box-shadow: 0 0 6px var(--accent-glow); }
+.cursor { display: inline-block; width: 2px; height: 1.05em; background: var(--accent-2); vertical-align: text-bottom; border-radius: 1px; animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
 /* 运行中指示行:agent 工作期间挂在消息列表末尾,StateDot ongoing 像素追光 +
@@ -336,11 +365,10 @@
 .toolrun { margin-top: 8px; min-width: 0; }
 .toolrun-head {
   display: flex; align-items: center; gap: 8px; padding: 6px 11px; font-size: 12.5px;
-  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
-  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
-  box-shadow: inset 0 1px 0 var(--glass-hi);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--fill-1);
   cursor: pointer; user-select: none; min-width: 0;
-  transition: all .18s;
+  transition: background .16s, border-color .16s;
 }
 .toolrun-head:hover:not(:disabled) { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
 .toolrun-head .muted { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -415,46 +443,44 @@
 
 /* 命令台容器:左侧终端主体 + 右侧终端列表 —— 布局在 console.scss,此处仅输入区 */
 
-/* 输入区:不做整体玻璃底垫——输入卡片(.composer-box)自身是玻璃,
+/* 输入区:不做整体底垫——输入卡片(.composer-box)自身是实色表面,
    其余部件(工作区条/任务计划面板等)直接铺在透明背景上 */
 .composer {
   position: relative;
   margin: 12px;
   margin-top: 0;
   border-radius: var(--r-lg);
-  padding: 0; /* 取消外层内边距:不做整体玻璃底垫,内容直接铺开 */
+  padding: 0; /* 取消外层内边距:不做整体底垫,内容直接铺开 */
   display: flex; flex-direction: column; gap: 8px;
 }
-/* 任务计划面板停靠在玻璃面板之外:与面板左右边缘对齐,底部留 8px 缝 */
+/* 任务计划面板停靠在输入卡片之外:与面板左右边缘对齐,底部留 8px 缝 */
 .chatwrap > .todo-panel { margin: 0 12px 8px; }
 .composer textarea { min-height: 44px; }
 .quick { display: flex; flex-wrap: wrap; gap: 6px; }
 
-/* ---- 主聊天输入框:厚玻璃卡片,聚焦时整体发光 ---- */
+/* ---- 主聊天输入框:实色卡片,聚焦时亮描边 + 焦点环 ---- */
 .composer-box {
   position: relative; /* / 命令菜单以其为锚点浮在上方 */
-  background: linear-gradient(135deg, var(--bar-tint-a), var(--bar-tint-b));
-  backdrop-filter: var(--blur-lg);
-  -webkit-backdrop-filter: var(--blur-lg);
-  border: 1px solid var(--glass-border); border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
   padding: 12px; /* 输入卡片内边距上下左右一致 */
-  box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 20px var(--shadow-1);
-  transition: all .22s ease;
+  box-shadow: 0 1px 2px var(--shadow-1);
+  transition: border-color .18s ease, box-shadow .18s ease;
 }
 .composer-box:focus-within {
   border-color: var(--accent-border);
-  box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 0 3px var(--accent-soft), 0 8px 32px var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 /* 拖拽文件悬停输入卡时的落点高亮(松手即收纳为附件) */
 .composer-box.drag-over {
   border-color: var(--accent-border);
-  box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .composer-box.drag-over::after {
   content: '松开以添加附件'; position: absolute; inset: 0; z-index: 2;
   display: flex; align-items: center; justify-content: center;
   border-radius: inherit; pointer-events: none;
-  background: var(--accent-soft); backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
+  background: var(--accent-fill);
   color: var(--accent-2); font-size: 13px; font-weight: 600;
 }
 .composer-box textarea {
@@ -499,83 +525,83 @@
 .send-btn {
   width: 32px; height: 32px; border-radius: 50%; padding: 0; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, var(--btn-a), var(--btn-b));
-  border-color: var(--btn-bor); color: var(--btn-text); font-size: 14px; line-height: 1;
-  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 4px 14px var(--accent-glow);
+  background: var(--accent);
+  border-color: var(--accent); color: var(--btn-text); font-size: 14px; line-height: 1;
 }
 .send-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, var(--btn-hover-a), var(--btn-hover-b));
-  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 6px 20px var(--accent-glow);
+  background: var(--btn-hover-a);
 }
 .send-btn.stop {
-  background: linear-gradient(135deg, var(--btn-danger-a), var(--btn-danger-b));
-  border-color: var(--btn-danger-bor); color: var(--btn-danger-text);
-  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 4px 14px var(--btn-danger-glow);
+  background: var(--red);
+  border-color: var(--red); color: var(--btn-danger-text);
 }
-.send-btn.stop:hover { border-color: var(--red); }
+.send-btn.stop:hover { border-color: var(--red); filter: brightness(1.1); }
 
 /* 工作区(对话输入框下方):远程/本地两个入口并排,点击弹出下拉(切换/浏览选择工作区) */
 .wsbar-row { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
 .wsbar { position: relative; padding-top: 2px; }
 .ws-chip {
   max-width: 100%; display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 12px; border-radius: var(--r-pill); font-size: 12px; cursor: pointer;
-  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  padding: 4px 12px; font-size: 12px; cursor: pointer;
+  background: var(--glass-bg); border: 1px solid var(--line);
   color: var(--accent-2); font-family: var(--mono);
-  box-shadow: inset 0 1px 0 var(--glass-hi);
-  backdrop-filter: var(--blur-sm); -webkit-backdrop-filter: var(--blur-sm);
-  transition: all .18s;
+  transition: border-color .16s, background .16s;
 }
-.ws-chip:hover:not(:disabled) { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
+.ws-chip:hover:not(:disabled) { border-color: var(--line-strong); background: var(--glass-bg-hover); }
 /* 已开始对话的会话:工作区锁定,chip 置灰禁点(服务端同样拒绝变更) */
 .ws-chip.locked:disabled {
   opacity: .62; cursor: not-allowed;
-  color: var(--muted); border-color: var(--glass-border); background: var(--glass-bg);
+  color: var(--muted); border-color: var(--line); background: var(--glass-bg);
   box-shadow: none;
 }
 .ws-chip.none { color: var(--muted); font-family: inherit; }
-/* 本地工作区 chip:绿色系与远程(蓝色)区分 */
-.ws-chip.local { color: var(--green); border-color: var(--ok-border); }
-.ws-chip.local.none { color: var(--muted); border-color: var(--glass-border); }
+/* 本地工作区 chip:用文字色与远程(强调色)区分,描边保持全站同一条中性线 */
+.ws-chip.local { color: var(--green); }
+.ws-chip.local.none { color: var(--muted); border-color: var(--line); }
 .ws-chip-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-chip-arrow { flex: none; font-size: 10px; color: var(--muted); }
 .ws-pick {
   position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 120;
   min-width: 280px; max-width: min(560px, 92vw);
-  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
-  border: 1px solid var(--glass-border-hover); border-radius: var(--r-md); padding: 5px;
-  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  background: var(--pop-bg);
+  border: 1px solid var(--line); border-radius: var(--r-md); padding: 5px;
+  box-shadow: var(--glass-shadow);
   display: flex; flex-direction: column; gap: 2px;
-  animation: glass-pop .16s ease-out;
+  animation: pop-in .16s ease-out;
 }
-.ws-pick-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+/* 历史工作区列表:一行 = 一个可点单元。
+   行容器统一负责「悬停底色 + 圆角」,行内控件(标题区 / 删除)共用同一盒模型
+   (同一行高、同一内边距、无边框、无自己的背景)—— 悬停整行时标题与删除一起被照亮,
+   不会出现「两块背景各自为政 / 两个按钮高度不一致」。 */
+.ws-pick-list { display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto; }
 .ws-pick-item {
-  display: flex; align-items: center; gap: 2px; width: 100%; padding: 0;
+  display: flex; align-items: stretch; width: 100%; padding: 0;
   background: transparent; border: none; border-radius: var(--r-sm);
-  transition: background .15s;
+  transition: background .14s ease;
 }
-.ws-pick-item:hover { background: var(--glass-bg-hover); }
-.ws-pick-item.on { background: var(--accent-soft); }
-/* 行内主按钮 / 整行操作按钮(浏览/家目录等):整行可点 */
-.ws-pick-main, .ws-pick-action {
-  flex: 1; min-width: 0; width: 100%; display: flex; align-items: center; gap: 8px;
-  background: transparent; border: none; text-align: left;
-  padding: 7px 11px; font-size: 12.5px; color: var(--text);
-  box-shadow: none; cursor: pointer; transition: color .15s;
+.ws-pick-item:hover { background: var(--hover-bg); }
+.ws-pick-item.on { background: var(--accent-fill); }
+/* 行内控件统一盒模型 */
+.ws-pick-main, .ws-pick-del, .ws-pick-action {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 30px; padding: 0 11px;
+  background: transparent; border: none; border-radius: var(--r-sm);
+  color: var(--text); font-size: 12.5px; line-height: 18px;
+  box-shadow: none; cursor: pointer; transition: color .14s ease;
 }
-.ws-pick-item:hover > .ws-pick-main, .ws-pick-item.on > .ws-pick-main,
-.ws-pick-action:hover { color: var(--accent-2); }
-/* 历史记录删除按钮:常显灰字,悬停变红;无边框无阴影(去掉全局 button 的玻璃阴影) */
+.ws-pick-main, .ws-pick-action { flex: 1 1 auto; min-width: 0; text-align: left; }
+/* 删除:行内次要操作。静止时低调,整行悬停 / 自身悬停时变红;
+   刻意不给它独立的背景色 —— 反馈只靠颜色,整行仍然只有一块底色 */
 .ws-pick-del {
-  flex: none; background: transparent; border: none; box-shadow: none; cursor: pointer;
-  /* 删除按钮:加宽横向留白与最小宽度,保证足够大的可点击区域(避免过窄难点中);
-     图标垂直水平居中。颜色与 hover/active 反馈由 .action-icon(.danger) 统一提供 */
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 6px 13px; font-size: 13px; line-height: 1;
-  min-width: 36px; border-radius: var(--r-sm);
+  flex: none; padding: 0 10px; font-size: 13px; line-height: 1;
+  color: var(--muted);
 }
+.ws-pick-item:hover .ws-pick-del,
+.ws-pick-del:hover,
+.ws-pick-del:focus-visible { color: var(--red); }
+.ws-pick-item:hover > .ws-pick-main,
+.ws-pick-item.on > .ws-pick-main,
+.ws-pick-action:hover { color: var(--accent-2); }
 .ws-pick-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
 .ws-pick-cur { flex: none; color: var(--green); }
 .ws-pick-empty { padding: 10px; text-align: center; }

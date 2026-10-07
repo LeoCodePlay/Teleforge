@@ -668,6 +668,22 @@ export function foldTokenUsage(events: SessionEvent[]): SessionUsageTotals {
 }
 
 /**
+ * 折叠**最后一次 turn/start 之后**的用量(单轮口径);供「每条回复的统计行」用。
+ *
+ * 与 foldTokenUsage 同一实现,只是切片起点是最后一个 turn/start —— 一轮内的步顺序
+ * 没有被破坏,所以 (turn,step) 去重与重试计费语义完全一致(见 foldTokenUsage 的说明)。
+ * 没有任何 turn/start 的日志(极端)则退化为整份日志口径。
+ */
+export function foldLastTurnTokenUsage(events: SessionEvent[]): SessionUsageTotals {
+  const list = events || [];
+  let start = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i]?.type === 'turn/start') { start = i; break; }
+  }
+  return foldTokenUsage(list.slice(start));
+}
+
+/**
  * 整个会话的对话统计(照搬 harness 的 sessionStats 投影)。
  *
  * 为什么折叠整份日志而不是"只统计当前窗口":窗口是分页的,压缩还会改写它 ——

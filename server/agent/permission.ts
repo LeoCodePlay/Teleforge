@@ -119,6 +119,10 @@ function argSummary(name: string, args: any): string {
       return `复制内置技能到本机技能目录(${s(args?.name)})`;
     case 'subagent':
       return `派发子智能体「${s(args?.description) || '未命名'}」做只读调研`;
+    case 'send_message':
+      return `给子智能体 ${s(args?.agent_id)} 发后续消息(让它继续干活)`;
+    case 'interrupt_agent':
+      return `暂停子智能体 ${s(args?.agent_id)} 当前这一轮`;
     case 'computer_action':
       return `操作本机电脑(${s(args?.action)}${args?.x != null ? ` @(${s(args?.x)},${s(args?.y)})` : ''})`;
     case 'computer_screenshot':

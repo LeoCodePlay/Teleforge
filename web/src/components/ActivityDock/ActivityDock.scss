@@ -7,12 +7,9 @@
   position: absolute; top: 12px; right: 14px; z-index: 30;
   display: inline-flex; align-items: center; gap: 7px;
   padding: 6px 12px 6px 10px;
-  border-radius: var(--r-pill);
   background: var(--glass-bg-strong);
   border: 1px solid var(--glass-border);
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
-  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  box-shadow: var(--glass-shadow);
   color: var(--text-2, var(--muted));
   font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer;
   transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
@@ -43,8 +40,6 @@
   width: min(760px, 78vw);
   display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: linear-gradient(160deg, var(--bar-tint-a), var(--bar-tint-b));
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
   border-left: 1px solid var(--line-soft);
   box-shadow: var(--glass-shadow-lg);
   transform: translateX(103%);
@@ -64,13 +59,13 @@
 .dock-tabs { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; }
 .dock-tab {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 10px; border-radius: var(--r-pill); cursor: pointer;
+  padding: 4px 10px; cursor: pointer;
   background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--muted);
   font-size: 12px; white-space: nowrap;
   transition: color .14s ease, border-color .14s ease, background .14s ease;
 }
 .dock-tab:hover { color: var(--text); background: var(--glass-bg-hover); }
-.dock-tab.on { color: var(--text); border-color: var(--accent-border); background: var(--accent-fill-soft); }
+.dock-tab.on { color: var(--text); border-color: var(--line-strong); background: var(--accent-fill); }
 .dock-tab-count {
   min-width: 16px; padding: 0 5px; border-radius: var(--r-pill);
   font-family: var(--mono); font-size: 11px; text-align: center;

@@ -68,6 +68,16 @@ function startMock() {
   });
 }
 
+/** 换模型:会话跑过一轮后会锁定自己的客户端(见 agent._lockLlm),
+ *  所以必须像生产路径(configureLlm(cfg, sid))那样连该会话的客户端一起换,
+ *  否则下一轮还在用上一份假脚本(calls 计数已过 1 → 不再发起工具调用)。 */
+function swapLlm(agent, llm) {
+  agent.llm = llm;
+  const sid = agent.getSessionId();
+  if (sid) agent._llmBySid.set(sid, llm);
+  return llm;
+}
+
 // 假文本模型:第 1 步发起 generate_image 工具调用,拿到结果后收尾
 function makeTextLlm(toolArgs) {
   let calls = 0;
@@ -130,7 +140,7 @@ async function main() {
     // 一律用"取最后一条匹配事件"的方式断言。
     seen.length = 0;
     const genCountBefore = agent.session.events.filter((e) => e.type === 'image/generated').length;
-    agent.llm = makeTextLlm({ prompt: '一只戴红帽子的柴犬', size: '1536x1024', quality: 'high' });
+    swapLlm(agent, makeTextLlm({ prompt: '一只戴红帽子的柴犬', size: '1536x1024', quality: 'high' }));
     await agent.run('给我画只戴红帽子的柴犬');
     const gen = seen.find((r) => r.url.endsWith('/images/generations'));
     check('走了 generations 端点', !!gen, JSON.stringify(seen.map((s) => s.url)));
@@ -155,7 +165,7 @@ async function main() {
     const ref = await saveAttachment(PNG_1X1, '参考图.png', 'image/png');
     seen.length = 0;
     const userSeq = agent.session.seq;
-    agent.llm = makeTextLlm({ prompt: '按参考图的风格画一只猫', reference_attachment_ids: [ref.id] });
+    swapLlm(agent, makeTextLlm({ prompt: '按参考图的风格画一只猫', reference_attachment_ids: [ref.id] }));
     await agent.run('/图生图 按参考图的风格画一只猫', { attachments: [{ id: ref.id }] });
     const ed = seen.find((r) => r.url.endsWith('/images/edits'));
     check('走了 edits 端点', !!ed, JSON.stringify(seen.map((s) => s.url)));
@@ -171,7 +181,7 @@ async function main() {
 
     // ---- 迭代修改:use_last_image 回灌上一张成图 ----
     seen.length = 0;
-    agent.llm = makeTextLlm({ prompt: '把帽子换成蓝色,其余保持不变', use_last_image: true });
+    swapLlm(agent, makeTextLlm({ prompt: '把帽子换成蓝色,其余保持不变', use_last_image: true }));
     await agent.run('帽子不太好看,换成蓝色');
     const ed2 = seen.find((r) => r.url.endsWith('/images/edits'));
     check('改图走 edits 并携带 1 张参考图(上一张成图)', ed2?.imageParts === 1, JSON.stringify(seen.map((s) => [s.url, s.imageParts])));

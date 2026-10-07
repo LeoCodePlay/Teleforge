@@ -46,5 +46,19 @@ hit('/Compact x', 'compact', 'x');
 check('命令表未含的名字不命中', matchSlashCommand('/deploy', NAMES) === null);
 check('命令表扩项即生效', matchSlashCommand('/deploy prod', ['deploy']).args === 'prod');
 
+// 中文 token:teleforge 是中文产品,harness 的 zh 词条把 /plan 显示为「计划」、/goal 显示为「目标」,
+// 用户按中文输入必须与规范名等价命中(见 harness 的 command-menu-zh 用例)
+const ZH = [...NAMES, '计划', 'plan', '目标', 'goal'];
+check('中文 token /计划 命中(返回 token 由调用方映射回命令)',
+  JSON.stringify(matchSlashCommand('/计划', ZH)) === JSON.stringify({ name: '计划', args: '' }),
+  JSON.stringify(matchSlashCommand('/计划', ZH)));
+check('中文 token 带参数', matchSlashCommand('/目标 把两个命令补齐', ZH)?.args === '把两个命令补齐');
+check('中文 token 带空格', matchSlashCommand('/ 计划 off', ZH)?.name === '计划'
+  && matchSlashCommand('/ 计划 off', ZH)?.args === 'off');
+check('规范名仍然命中 /plan off', matchSlashCommand('/plan off', ZH)?.name === 'plan'
+  && matchSlashCommand('/plan off', ZH)?.args === 'off');
+miss('/计划中', '中文 token 必须完整成词');
+miss('/计划之外的事情', '中文 token 后必须紧跟空白');
+
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
 if (fail) process.exit(1);

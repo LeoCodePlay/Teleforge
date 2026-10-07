@@ -1,40 +1,43 @@
 // ============================================================
-// 主题系统集中管理
-// 所有主题样式(色板)统一在此定义;应用时把 token 写入
-// document.documentElement 的内联 CSS 变量,覆盖 styles.scss 的 :root 默认值。
-// 四套内置预设(三深一浅,不可删除) + 用户自定义主题(localStorage 持久化)。
-// 新增/修改主题只需改这里的 token 定义,无需动组件样式。
+// 主题系统(6 色驱动)
+//
+// 设计语言:实色界面 Solid UI(见 web/DESIGN_SYSTEM.md)
+//   - 无毛玻璃 / 无模糊 / 无内高光 / 无光晕:所有表面都是不透明实色。
+//   - 层次靠「表面明度差 + 1px 发丝描边 + 极淡单一投影」表达,而不是模糊。
+//
+// 唯一事实来源:用户只需要给出 6 个颜色,页面里出现的**每一个**颜色都由这 6 个色
+// 派生而来(见 deriveThemeVars)。组件里不允许再出现任何硬编码色值。
+//
+//   1. bg       背景基色(页面底色,同时决定深色/浅色方向)
+//   2. surface  表面色(顶栏/侧栏/面板/卡片/弹层)
+//   3. text     文字主色(同时派生所有次级文字与描边深浅)
+//   4. accent   强调色(主按钮/选中/链接/焦点)
+//   5. success  成功色(连接正常/通过/diff 新增)
+//   6. danger   危险色(错误/删除/diff 删除;警告色由它旋转色相派生)
+//
+// 唯一例外:终端 ANSI 色板与控制台/代码语法高亮(shiki)是为「内容可读性」服务的
+// 独立调色板,不参与 6 色派生 —— 见 web/DESIGN_SYSTEM.md「例外」一节。
+//
+// 预设 4 套(三深一浅,不可删除)+ 用户自定义主题(localStorage 持久化)。
 // ============================================================
 
-export interface ThemeTokens {
-  name: string;
-  /* 深空底色 */
-  bgDeep: string;
-  /* 极光光斑(背景玻璃的生命线) */
-  aurora1: string;
-  aurora2: string;
-  aurora3: string;
-  /* 玻璃材质 */
-  glassBg: string;
-  glassBgStrong: string;
-  glassBgHover: string;
-  glassBgInset: string;
-  glassBorder: string;
-  glassBorderHover: string;
-  glassHi: string;
-  glassLo: string;
-  glassShadow: string;
-  glassShadowLg: string;
-  /* 文字与语义色 */
+export interface ThemeColors {
+  /* 1. 背景基色 */
+  bg: string;
+  /* 2. 表面色 */
+  surface: string;
+  /* 3. 文字主色 */
   text: string;
-  muted: string;
+  /* 4. 强调色 */
   accent: string;
-  accent2: string;
-  accentGlow: string;
-  accentSoft: string;
-  green: string;
-  red: string;
-  amber: string;
+  /* 5. 成功色 */
+  success: string;
+  /* 6. 危险色 */
+  danger: string;
+}
+
+export interface ThemeTokens extends ThemeColors {
+  name: string;
 }
 
 export interface ThemeDef extends ThemeTokens {
@@ -43,146 +46,362 @@ export interface ThemeDef extends ThemeTokens {
   preset?: boolean;
 }
 
-/** ThemeTokens 字段 → CSS 变量名的映射(必须与 styles.scss :root 一致) */
-const VAR_MAP: Record<Exclude<keyof ThemeTokens, 'name'>, string> = {
-  bgDeep: '--bg-deep',
-  aurora1: '--aurora-1',
-  aurora2: '--aurora-2',
-  aurora3: '--aurora-3',
-  glassBg: '--glass-bg',
-  glassBgStrong: '--glass-bg-strong',
-  glassBgHover: '--glass-bg-hover',
-  glassBgInset: '--glass-bg-inset',
-  glassBorder: '--glass-border',
-  glassBorderHover: '--glass-border-hover',
-  glassHi: '--glass-hi',
-  glassLo: '--glass-lo',
-  glassShadow: '--glass-shadow',
-  glassShadowLg: '--glass-shadow-lg',
+/** 主题 6 色 → CSS 变量名的映射(其余变量全部由 deriveThemeVars 派生) */
+const VAR_MAP: Record<keyof ThemeColors, string> = {
+  bg: '--bg-deep',
+  surface: '--surface',
   text: '--text',
-  muted: '--muted',
   accent: '--accent',
-  accent2: '--accent-2',
-  accentGlow: '--accent-glow',
-  accentSoft: '--accent-soft',
-  green: '--green',
-  red: '--red',
-  amber: '--amber'
+  success: '--green',
+  danger: '--red'
 };
 
-/** 深色背景专用的玻璃材质(白色半透明,浅色前景) */
-const WHITE_GLASS = {
-  glassBg: 'rgba(255,255,255,.055)',
-  glassBgStrong: 'rgba(255,255,255,.09)',
-  glassBgHover: 'rgba(255,255,255,.12)',
-  glassBgInset: 'rgba(6,9,18,.42)',
-  glassBorder: 'rgba(255,255,255,.14)',
-  glassBorderHover: 'rgba(255,255,255,.28)',
-  glassHi: 'rgba(255,255,255,.30)',
-  glassLo: 'rgba(255,255,255,.04)',
-  /* 阴影一律用柔和的深蓝薄雾(非纯黑),配合顶部高光形成"光线感"层次 */
-  glassShadow: '0 2px 6px rgba(4,9,20,.18), 0 10px 28px rgba(4,9,20,.22)',
-  glassShadowLg: '0 4px 12px rgba(4,9,20,.20), 0 24px 64px rgba(4,9,20,.30)'
-};
+/* ---------------- 颜色数学(全部接受 #hex / rgb() / rgba()) ---------------- */
 
-/** 浅色背景专用的玻璃材质(白色磨砂,深色文字,整体通透) */
-const LIGHT_GLASS = {
-  glassBg: 'rgba(255,255,255,.58)',
-  glassBgStrong: 'rgba(255,255,255,.74)',
-  glassBgHover: 'rgba(255,255,255,.85)',
-  glassBgInset: 'rgba(15,23,42,.06)',
-  glassBorder: 'rgba(15,23,42,.12)',
-  glassBorderHover: 'rgba(15,23,42,.26)',
-  glassHi: 'rgba(255,255,255,.80)',
-  glassLo: 'rgba(255,255,255,.04)',
-  /* 浅色主题:极低透明度的蓝灰分层漫射阴影,柔和不发黑 */
-  glassShadow: '0 2px 4px rgba(15,23,42,.03), 0 8px 24px rgba(15,23,42,.05)',
-  glassShadowLg: '0 4px 10px rgba(15,23,42,.04), 0 18px 48px rgba(15,23,42,.07)'
-};
+type RGB = [number, number, number];
+
+function parseColor(input: string): RGB {
+  const s = String(input || '').trim();
+  const rgb = s.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+  if (rgb) return [Math.round(+rgb[1]), Math.round(+rgb[2]), Math.round(+rgb[3])];
+  let h = s.replace(/^#/, '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  if (h.length === 8) h = h.slice(0, 6);
+  const n = parseInt(h, 16);
+  if (Number.isNaN(n)) return [0, 0, 0];
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** 两色线性混合,t∈[0,1]:0 = 全 a,1 = 全 b */
+function mixRgb(a: string, b: string, t: number): RGB {
+  const ca = parseColor(a);
+  const cb = parseColor(b);
+  const k = clamp(t, 0, 1);
+  return [
+    Math.round(ca[0] + (cb[0] - ca[0]) * k),
+    Math.round(ca[1] + (cb[1] - ca[1]) * k),
+    Math.round(ca[2] + (cb[2] - ca[2]) * k)
+  ];
+}
+
+const toRgb = (c: RGB) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+const toRgba = (c: RGB, a: number) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${a})`;
+
+function mix(a: string, b: string, t: number): string {
+  return toRgb(mixRgb(a, b, t));
+}
+
+function withAlpha(color: string, a: number): string {
+  return toRgba(parseColor(color), a);
+}
+
+/** 感知亮度(0-255):用于判断深浅方向与选取反色文字 */
+function luminance(color: string): number {
+  const [r, g, b] = parseColor(color);
+  return (r * 299 + g * 587 + b * 114) / 1000;
+}
+
+function isDarkColor(color: string): boolean {
+  return luminance(color) < 140;
+}
+
+/** sRGB 相对亮度(0-1,WCAG 定义),用于算真实对比度 */
+function relLuminance(color: string): number {
+  const [r, g, b] = parseColor(color).map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }) as RGB;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG 对比度(1–21) */
+function contrastRatio(a: string, b: string): number {
+  const la = relLuminance(a);
+  const lb = relLuminance(b);
+  const hi = Math.max(la, lb);
+  const lo = Math.min(la, lb);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** 取对比度更高的文字色:在主题自身的深浅两端里选对比度更高的那个,不引入调色板外颜色 */
+function readableOn(color: string, lightest: string, darkest: string): string {
+  return contrastRatio(color, lightest) >= contrastRatio(color, darkest) ? lightest : darkest;
+}
+
+/** HSL 色相旋转:把颜色绕色轮转动 deg 度(保持饱和度/明度,用于派生警告色等) */
+function hueShift(color: string, deg: number): string {
+  const [r0, g0, b0] = parseColor(color).map((v) => v / 255) as RGB;
+  const max = Math.max(r0, g0, b0);
+  const min = Math.min(r0, g0, b0);
+  const l = (max + min) / 2;
+  const d = max - min;
+  let h = 0;
+  let s = 0;
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r0) h = ((g0 - b0) / d) % 6;
+    else if (max === g0) h = (b0 - r0) / d + 2;
+    else h = (r0 - g0) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  h = (h + deg + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let rgb: RGB;
+  if (h < 60) rgb = [c, x, 0];
+  else if (h < 120) rgb = [x, c, 0];
+  else if (h < 180) rgb = [0, c, x];
+  else if (h < 240) rgb = [0, x, c];
+  else if (h < 300) rgb = [x, 0, c];
+  else rgb = [c, 0, x];
+  return toRgb(rgb.map((v) => Math.round((v + m) * 255)) as RGB);
+}
+
+/* ---------------- 派生令牌:6 色 → 全站每一个颜色 ---------------- */
+
+/**
+ * 把 6 个主题色展开成页面用到的全部 CSS 变量。
+ * 深色主题向文字色(亮)偏移提亮、向背景色(暗)偏移下沉;浅色主题反向。
+ * 组件只消费这些变量,因此不会出现「某个元素自带一种颜色」的情况。
+ */
+function deriveThemeVars(t: ThemeColors): Record<string, string> {
+  const dark = isDarkColor(t.bg);
+
+  /* 向文字色偏移:k 越大越「亮/深」,正是悬浮、选中、描边所需的提亮方向 */
+  const tint = (k: number) => mix(t.surface, t.text, k);
+  /* 向背景色偏移:k 越大越「下沉」,用于输入框/代码块这类内嵌槽 */
+  const sink = (k: number) => mix(t.surface, t.bg, k);
+
+  /* 主题自身的深浅两端,供反色文字与阴影取用,避免出现调色板外的白/黑 */
+  const lightest = dark ? t.text : t.bg;
+  const darkest = dark ? t.bg : t.text;
+  /* 阴影:深色主题用背景色压暗亮面,浅色主题用文字色压暗浅面;两者都是实色的低透明投影 */
+  const shade = (a: number) => (dark ? withAlpha(t.bg, a) : withAlpha(t.text, a));
+  const sh1 = shade(dark ? 0.45 : 0.06);
+  const sh2 = shade(dark ? 0.55 : 0.10);
+
+  /* 警告色 = 危险色旋转色相(红 → 琥珀),保证只由 6 色派生 */
+  const warn = hueShift(t.danger, 44);
+  /* 上下文分项用的第二强调色 = 强调色旋转色相,与主色同族但不撞色 */
+  const alt = hueShift(t.accent, 58);
+
+  return {
+    /* ---- 文字层级:从主题的 surface 向 text 插值,保证每一级都够读 ---- */
+    '--text-2': tint(0.78),
+    '--text-faint': dark ? tint(0.52) : tint(0.60),
+    '--muted': tint(0.62),
+    '--placeholder': withAlpha(t.text, 0.60),
+    '--code-ink': t.text,
+    '--danger': t.danger,
+    '--ok': t.success,
+    '--warn': warn,
+    '--amber': warn,
+    '--amber-bright': warn,
+
+    /* ---- 表面:三级抬升 + 一级内嵌,全部不透明实色 ---- */
+    '--surface-2': dark ? tint(0.05) : sink(0.34),
+    '--surface-3': dark ? tint(0.10) : t.surface,
+    '--surface-inset': sink(0.45),
+
+    /* 顶栏/侧栏/底栏:与表面同色,靠发丝描边与主区分开 */
+    '--bar-tint-a': t.surface,
+    '--bar-tint-b': t.surface,
+    '--bar-tint-strong-a': dark ? tint(0.05) : t.surface,
+    '--bar-tint-strong-b': dark ? tint(0.03) : t.surface,
+
+    /* 兼容层:老令牌名继续可用,值改为实色。
+       --glass-border 与 --line 取同一个值:按钮/控件无论引用哪一个,描边都完全一致 */
+    '--glass-bg': tint(0.04),
+    '--glass-bg-strong': dark ? tint(0.10) : t.surface,
+    '--glass-bg-hover': withAlpha(t.text, dark ? 0.12 : 0.11),
+    '--glass-bg-inset': sink(0.45),
+    '--glass-border': dark ? tint(0.13) : tint(0.18),
+    '--glass-border-hover': dark ? tint(0.22) : tint(0.26),
+    '--glass-hi': 'transparent',
+    '--glass-lo': 'transparent',
+    '--glass-shadow': `0 1px 2px ${sh1}, 0 6px 18px ${sh2}`,
+    '--glass-shadow-lg': `0 2px 6px ${sh1}, 0 18px 44px ${sh2}`,
+
+    /* 弹层/下拉/右键菜单表面 */
+    '--pop-bg': dark ? tint(0.10) : t.surface,
+    '--pop-bg-lo': dark ? tint(0.10) : t.surface,
+    '--pop-bg-strong': dark ? tint(0.14) : t.surface,
+
+    /* 填充与交互态。
+       注意:悬浮态一律用「以文字色为底的半透明叠加」,而不是固定实色 ——
+       列表行可能盖在 surface / pop-bg / 卡片 等不同层上,固定实色无法保证
+       「比父层更亮」,会出现"行悬浮和父面板几乎同色、悬浮等于没有"的问题;
+       半透明叠加无论盖在哪一层上都能给出稳定可辨的亮(深色)/暗(浅色)变化。 */
+    '--fill-1': dark ? tint(0.03) : sink(0.20),
+    '--fill-1-lo': dark ? tint(0.02) : sink(0.14),
+    '--fill-2': dark ? tint(0.06) : sink(0.28),
+    '--fill-2-lo': dark ? tint(0.04) : sink(0.20),
+    '--row-hover': withAlpha(t.text, dark ? 0.09 : 0.08),
+    '--hover-bg': withAlpha(t.text, dark ? 0.12 : 0.11),
+    '--hover-bg-strong': withAlpha(t.text, dark ? 0.16 : 0.14),
+    '--hover-bg-hard': withAlpha(t.text, dark ? 0.21 : 0.18),
+    '--ins-hl': 'transparent',
+
+    /* 代码/内嵌表面 */
+    '--code-bg': sink(0.42),
+    '--code-bg-soft': sink(0.28),
+    '--code-bg-solid': sink(0.55),
+    '--code-bor': dark ? tint(0.10) : tint(0.12),
+    '--bg-code': sink(0.42),
+    /* 终端:两方向都取主题最深端,保证终端内容对比度 */
+    '--xterm-bg': darkest,
+
+    /* ---- 描边 ---- */
+    '--line-faint': dark ? tint(0.07) : tint(0.10),
+    '--line-soft': dark ? tint(0.10) : tint(0.14),
+    '--line': dark ? tint(0.13) : tint(0.18),
+    '--line-strong': dark ? tint(0.22) : tint(0.26),
+    '--line-dash': dark ? tint(0.20) : tint(0.24),
+    '--border': dark ? tint(0.13) : tint(0.18),
+
+    /* ---- 强调色族 ---- */
+    '--accent-2': mix(t.accent, t.text, 0.35),
+    '--accent-glow': withAlpha(t.accent, 0.20),
+    '--accent-soft': withAlpha(t.accent, dark ? 0.14 : 0.10),
+    '--accent-fill': withAlpha(t.accent, dark ? 0.18 : 0.12),
+    '--accent-fill-soft': withAlpha(t.accent, dark ? 0.10 : 0.07),
+    '--accent-fill-hover': withAlpha(t.accent, dark ? 0.06 : 0.04),
+    '--accent-border': withAlpha(t.accent, dark ? 0.50 : 0.48),
+    '--focus-ring': withAlpha(t.accent, 0.35),
+    '--sel-glow': withAlpha(t.accent, dark ? 0.28 : 0.18),
+
+    /* ---- 语义状态 ---- */
+    '--ok-bg': withAlpha(t.success, 0.10),
+    '--ok-border': withAlpha(t.success, dark ? 0.36 : 0.38),
+    '--err-bg': withAlpha(t.danger, dark ? 0.11 : 0.10),
+    '--err-border': withAlpha(t.danger, dark ? 0.40 : 0.45),
+    '--err-text': mix(t.danger, t.text, 0.10),
+    '--warn-bg': withAlpha(warn, dark ? 0.11 : 0.12),
+    '--warn-border': withAlpha(warn, dark ? 0.38 : 0.42),
+    '--danger-fill': withAlpha(t.danger, 0.12),
+    '--danger-soft': withAlpha(t.danger, dark ? 0.14 : 0.10),
+    '--danger-soft-strong': withAlpha(t.danger, 0.24),
+    '--running': mix(t.accent, t.text, 0.15),
+    '--run-border': withAlpha(t.accent, dark ? 0.42 : 0.34),
+    '--violet': alt,
+    '--violet-glow': withAlpha(alt, 0.45),
+
+    /* ---- 主按钮:强调色实心,反色文字由主题深浅两端选取 ---- */
+    '--btn-a': t.accent,
+    '--btn-b': t.accent,
+    '--btn-hover-a': mix(t.accent, t.text, dark ? 0.14 : 0.10),
+    '--btn-hover-b': mix(t.accent, t.text, dark ? 0.20 : 0.16),
+    '--btn-text': readableOn(t.accent, lightest, darkest),
+    '--btn-sheen': 'transparent',
+    '--btn-bor': withAlpha(t.accent, 0.45),
+
+    /* ---- 危险按钮 ---- */
+    '--btn-danger-a': t.danger,
+    '--btn-danger-b': t.danger,
+    '--btn-danger-text': readableOn(t.danger, lightest, darkest),
+    '--btn-danger-bor': withAlpha(t.danger, 0.45),
+    '--btn-danger-glow': withAlpha(t.danger, 0.18),
+
+    /* ---- 品牌字标:文字色 → 强调色的实色渐变 ---- */
+    '--brand-a': t.text,
+    '--brand-b': t.accent,
+
+    /* ---- 开关 ---- */
+    '--switch-track': tint(dark ? 0.22 : 0.20),
+    '--switch-knob': lightest,
+
+    /* ---- 滚动条 ---- */
+    '--scroll-thumb': withAlpha(t.text, dark ? 0.26 : 0.28),
+    '--scroll-thumb-hover': withAlpha(t.text, dark ? 0.42 : 0.46),
+    '--scroll-thumb-x': withAlpha(t.text, 0.34),
+
+    /* ---- 进度条/遮罩 ---- */
+    '--progress-track': tint(dark ? 0.10 : 0.12),
+    '--mask-bg': withAlpha(t.bg, dark ? 0.72 : 0.55),
+    '--glare': 'transparent',
+
+    /* ---- 变更对比:新增走成功色、删除走危险色,不再单独配色 ---- */
+    '--diff-add-bg': withAlpha(t.success, dark ? 0.15 : 0.14),
+    '--diff-add-gutter': withAlpha(t.success, dark ? 0.22 : 0.20),
+    '--diff-add-marker': t.success,
+    '--diff-del-bg': withAlpha(t.danger, dark ? 0.14 : 0.13),
+    '--diff-del-gutter': withAlpha(t.danger, dark ? 0.22 : 0.20),
+    '--diff-del-marker': t.danger
+  };
+}
+
+/** 把主题 token 写入 document.documentElement 内联 CSS 变量(覆盖 :root 默认值) */
+export function applyTheme(t: ThemeTokens): void {
+  const root = document.documentElement;
+  for (const [field, varName] of Object.entries(VAR_MAP)) {
+    root.style.setProperty(varName, (t as any)[field]);
+  }
+  for (const [varName, value] of Object.entries(deriveThemeVars(t))) {
+    root.style.setProperty(varName, value);
+  }
+  const dark = isDarkColor(t.bg);
+  // 原生控件/滚动条跟随主题深浅(dark 主题用深色原生 UI,浅色主题用浅色)
+  root.style.colorScheme = dark ? 'dark' : 'light';
+  // 亮暗标记:给**不能用 CSS 变量表达**的地方用(shiki 双主题 token 写在行内样式上,
+  // 只能靠属性选择器 + !important 覆盖;见 ChangesReview.scss)
+  root.dataset.dark = dark ? '1' : '0';
+}
 
 /* ---------------- 预设主题(四套,三深一浅,不可删除) ---------------- */
 
-const NEBULA: ThemeDef = {
-  id: 'nebula',
-  name: '深空冰蓝',
+const INK: ThemeDef = {
+  id: 'ink',
+  name: '墨黑',
   preset: true,
-  bgDeep: '#05070f',
-  aurora1: 'rgba(58,118,255,.17)',
-  aurora2: 'rgba(130,84,255,.13)',
-  aurora3: 'rgba(38,196,255,.10)',
-  ...WHITE_GLASS,
-  text: '#e2e8f0',
-  muted: '#8a93a6',
-  accent: '#6aa8ff',
-  accent2: '#8dbdff',
-  accentGlow: 'rgba(106,168,255,.45)',
-  accentSoft: 'rgba(106,168,255,.14)',
-  green: '#4ade80',
-  red: '#fb7185',
-  amber: '#fbbf24'
+  bg: '#0d0f13',
+  surface: '#16191f',
+  text: '#e7eaf0',
+  accent: '#5b8cff',
+  success: '#3fb26f',
+  danger: '#ef5f5f'
 };
 
-const VIOLET: ThemeDef = {
-  id: 'violet',
-  name: '紫夜星云',
+const GRAPHITE: ThemeDef = {
+  id: 'graphite',
+  name: '石墨',
   preset: true,
-  bgDeep: '#0b0616',
-  aurora1: 'rgba(167,80,255,.20)',
-  aurora2: 'rgba(90,60,255,.16)',
-  aurora3: 'rgba(255,80,180,.10)',
-  ...WHITE_GLASS,
-  text: '#f0e9fb',
-  muted: '#a99fbf',
-  accent: '#c084fc',
-  accent2: '#d8b4fe',
-  accentGlow: 'rgba(192,132,252,.45)',
-  accentSoft: 'rgba(192,132,252,.16)',
-  green: '#4ade80',
-  red: '#fb7185',
-  amber: '#fbbf24'
+  bg: '#0d1117',
+  surface: '#171b22',
+  text: '#e6edf3',
+  accent: '#2cc4b8',
+  success: '#3fb950',
+  danger: '#f0564a'
 };
 
-const EMERALD: ThemeDef = {
-  id: 'emerald',
-  name: '翠林幽光',
+const DUSK: ThemeDef = {
+  id: 'dusk',
+  name: '暮色',
   preset: true,
-  bgDeep: '#04120c',
-  aurora1: 'rgba(52,211,153,.16)',
-  aurora2: 'rgba(56,189,248,.10)',
-  aurora3: 'rgba(74,222,128,.10)',
-  ...WHITE_GLASS,
-  text: '#e6f7ef',
-  muted: '#8fb8a8',
-  accent: '#34d399',
-  accent2: '#6ee7b7',
-  accentGlow: 'rgba(52,211,153,.40)',
-  accentSoft: 'rgba(52,211,153,.14)',
-  green: '#4ade80',
-  red: '#fb7185',
-  amber: '#fbbf24'
+  bg: '#141110',
+  surface: '#1e1a17',
+  text: '#f0e9e1',
+  accent: '#e3a343',
+  success: '#5cba7d',
+  danger: '#e5624f'
 };
 
-const DAWN: ThemeDef = {
-  id: 'dawn',
-  name: '晨光云白',
+const PAPER: ThemeDef = {
+  id: 'paper',
+  name: '纸白',
   preset: true,
-  bgDeep: '#eef2fa',
-  aurora1: 'rgba(96,165,250,.26)',
-  aurora2: 'rgba(196,181,253,.22)',
-  aurora3: 'rgba(125,211,252,.20)',
-  ...LIGHT_GLASS,           // 浅色背景用白色磨砂玻璃,保持通透与层次
-  text: '#1e293b',
-  muted: '#5b6b82',
-  accent: '#3b82f6',
-  accent2: '#93c5fd',
-  accentGlow: 'rgba(59,130,246,.32)',
-  accentSoft: 'rgba(59,130,246,.14)',
-  green: '#16a34a',
-  red: '#e11d48',
-  amber: '#d97706'
+  bg: '#eef1f5',
+  surface: '#ffffff',
+  text: '#16191f',
+  accent: '#2563eb',
+  success: '#1a7f4b',
+  danger: '#c93a3a'
 };
 
-export const PRESET_THEMES: ThemeDef[] = [NEBULA, VIOLET, EMERALD, DAWN];
+export const PRESET_THEMES: ThemeDef[] = [INK, GRAPHITE, DUSK, PAPER];
 
 /* ---------------- 自定义主题持久化(localStorage) ---------------- */
 
@@ -224,152 +443,41 @@ export function getTheme(id: string, state: PersistedThemeState): ThemeDef | und
   return getAllThemes(state).find((t) => t.id === id);
 }
 
-/* ---------------- 应用主题 ---------------- */
+/* ---------------- 自定义主题构建 ---------------- */
 
-/** 方向化派生令牌:根据主题深浅方向,把页面所有叠加/表面/线条/按钮/状态色统一派生。
-    深色主题 = 白色叠加系(近黑实体表面),浅色主题 = 深色叠加系(近白实体表面),
-    保证样式表与组件里不再出现与主题无关的硬编码颜色。 */
-function deriveThemeVars(t: ThemeTokens): Record<string, string> {
-  const dark = isDarkColor(t.bgDeep);
-  const ov = (a: number) => dark ? `rgba(255,255,255,${a})` : `rgba(15,23,42,${a})`;
+/** 自定义主题只需要 6 个颜色 + 一个名字 */
+export type CustomThemeDraft = ThemeTokens;
+
+export function newThemeId(): string {
+  return `custom-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** 从 6 个颜色构建一套完整主题(颜色即全部,无需再补任何派生值) */
+export function buildCustomTheme(id: string, d: ThemeTokens): ThemeDef {
   return {
-    /* 文字层级 */
-    '--text-2': dark ? '#c3cbe0' : '#475569',          /* 次级文字(标题/链接/摘要) */
-    '--text-faint': dark ? '#6b7385' : '#64748b',      /* 弱化文字(分隔点/字段键/时钟) */
-    '--code-ink': dark ? '#e4eaf3' : '#1e293b',        /* 代码表面上的文字(随主题翻转) */
-    '--placeholder': dark ? 'rgba(138,147,166,.7)' : 'rgba(100,116,139,.7)',
-    '--running': '#5686fe',                            /* 运行中蓝(StateDot/todo 前导) */
-    '--run-border': dark ? 'rgba(86,134,254,.45)' : 'rgba(86,134,254,.36)',
-
-    /* 页面级玻璃条(顶栏/侧栏/底部工具栏/输入卡) */
-    '--bar-tint-a': dark ? ov(0.08) : 'rgba(255,255,255,.52)',
-    '--bar-tint-b': dark ? ov(0.03) : 'rgba(255,255,255,.30)',
-    '--bar-tint-strong-a': dark ? ov(0.16) : 'rgba(255,255,255,.62)',
-    '--bar-tint-strong-b': dark ? ov(0.07) : 'rgba(255,255,255,.40)',
-
-    /* 面板/卡片叠加填充 */
-    '--fill-1': dark ? ov(0.06) : ov(0.05),
-    '--fill-1-lo': dark ? ov(0.02) : ov(0.02),
-    '--fill-2': dark ? ov(0.10) : ov(0.07),
-    '--fill-2-lo': dark ? ov(0.04) : ov(0.03),
-
-    /* hover/active 填充与内嵌高光 */
-    '--hover-bg': dark ? ov(0.05) : ov(0.05),
-    '--hover-bg-strong': dark ? ov(0.09) : ov(0.08),
-    '--hover-bg-hard': dark ? ov(0.16) : ov(0.12),
-    '--row-hover': dark ? ov(0.04) : ov(0.04),
-    '--ins-hl': dark ? ov(0.05) : ov(0.04),
-
-    /* 线条 */
-    '--line-faint': dark ? ov(0.05) : ov(0.06),
-    '--line-soft': dark ? ov(0.07) : ov(0.08),
-    '--line': dark ? ov(0.09) : ov(0.10),
-    '--line-strong': dark ? ov(0.18) : ov(0.18),
-    '--line-dash': dark ? ov(0.18) : ov(0.24),
-
-    /* 实体表面(弹窗/下拉/右键菜单/Toast):与侧边栏 --bar-tint-* 同款玻璃参数,
-       保证全站悬浮层与侧栏观感完全一致(深色为白色叠加/浅色为白色磨砂) */
-    '--pop-bg': dark ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.52)',
-    '--pop-bg-lo': dark ? 'rgba(255,255,255,.03)' : 'rgba(255,255,255,.30)',
-    '--pop-bg-strong': dark ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.62)',
-
-    /* 代码类表面(代码块/工具卡片/编辑器) */
-    '--code-bg': dark ? 'rgba(5,8,16,.82)' : 'rgba(255,255,255,.74)',
-    '--code-bg-soft': dark ? 'rgba(10,14,24,.55)' : 'rgba(255,255,255,.52)',
-    '--code-bg-solid': dark ? 'rgba(5,8,16,.88)' : 'rgba(255,255,255,.92)',
-    '--code-bor': dark ? ov(0.07) : ov(0.10),
-
-    /* 终端:两方向均保持近黑,保证终端内容对比度 */
-    '--xterm-bg': 'rgba(6,9,16,.92)',
-
-    /* 阴影色(去黑化:非纯黑、低透明度;柔和度由玻璃阴影的分层承担。
-    注意:此令牌常以「0 Xpx Ypx var(--shadow-N)」前缀形式使用,必须保持为单色值) */
-    '--shadow-1': dark ? 'rgba(4,9,20,.22)' : 'rgba(15,23,42,.05)',
-    '--shadow-2': dark ? 'rgba(4,9,20,.30)' : 'rgba(15,23,42,.07)',
-
-    /* accent 系表面 */
-    '--accent-fill': withAlpha(t.accent, dark ? 0.20 : 0.12),
-    '--accent-fill-soft': withAlpha(t.accent, dark ? 0.10 : 0.08),
-    '--accent-fill-hover': withAlpha(t.accent, dark ? 0.06 : 0.05),
-    '--accent-border': withAlpha(t.accent, dark ? 0.45 : 0.50),
-    '--focus-ring': withAlpha(t.accent, dark ? 0.28 : 0.30),
-    '--sel-glow': withAlpha(t.accent, dark ? 0.32 : 0.22),
-
-    /* 语义状态表面 */
-    '--ok-bg': withAlpha(t.green, 0.10),
-    '--ok-border': withAlpha(t.green, dark ? 0.35 : 0.38),
-    '--err-bg': withAlpha(t.red, dark ? 0.11 : 0.10),
-    '--err-border': withAlpha(t.red, dark ? 0.40 : 0.45),
-    '--warn-bg': withAlpha(t.amber, dark ? 0.11 : 0.12),
-    '--warn-border': withAlpha(t.amber, dark ? 0.40 : 0.45),
-    '--err-text': dark ? '#fda4af' : t.red,
-
-    /* 主按钮(由 accent 派生,保证每套主题按钮与强调色一致) */
-    '--btn-a': mix(t.accent, '#ffffff', dark ? 0.28 : 0.30),
-    '--btn-b': mix(t.accent, '#000000', 0.12),
-    '--btn-hover-a': mix(t.accent, '#ffffff', dark ? 0.42 : 0.45),
-    '--btn-hover-b': mix(t.accent, '#ffffff', dark ? 0.08 : 0.08),
-    '--btn-text': '#ffffff',
-    '--btn-sheen': dark ? 'rgba(255,255,255,.42)' : 'rgba(255,255,255,.38)',
-    '--btn-bor': withAlpha(t.accent, 0.55),
-
-    /* 危险按钮(由 red 派生) */
-    '--btn-danger-a': mix(t.red, '#ffffff', 0.30),
-    '--btn-danger-b': mix(t.red, '#000000', 0.18),
-    '--btn-danger-text': dark ? '#ffe4e8' : '#ffffff',
-    '--btn-danger-bor': withAlpha(t.red, 0.5),
-    '--btn-danger-glow': withAlpha(t.red, dark ? 0.35 : 0.28),
-
-    /* 品牌渐变 */
-    '--brand-a': dark ? '#eaf2ff' : '#d6e4f8',
-    '--brand-b': dark ? '#b48cff' : '#a78bfa',
-
-    /* 上下文用量条(系统/警告用独立紫/橙,保持识别度) */
-    '--violet': '#8b5cf6',
-    '--violet-glow': 'rgba(139,92,246,.5)',
-    '--amber-bright': '#f59e0b',
-
-    /* 开关 */
-    '--switch-track': dark ? 'rgba(255,255,255,.75)' : ov(0.18),
-    '--switch-knob': '#ffffff',
-
-    /* 滚动条:常态须在玻璃浅底上清晰可辨(过淡会"看不见");hover 再提一档给拖拽反馈 */
-    '--scroll-thumb': dark ? 'rgba(255,255,255,.30)' : 'rgba(15,23,42,.38)',
-    '--scroll-thumb-hover': dark ? 'rgba(255,255,255,.46)' : 'rgba(15,23,42,.55)',
-    '--scroll-thumb-x': 'rgba(255,255,255,.34)',  /* xterm 视口内固定亮色 */
-
-    /* 进度条轨道 / 遮罩 / 扫光 */
-    '--progress-track': dark ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)',
-    '--mask-bg': dark ? 'rgba(3,5,12,.5)' : 'rgba(241,245,249,.62)',
-    '--glare': dark ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.60)',
-
-    /* 变更对比(右侧栏 changes-review):语义与 dsh 的 --dsw-alias-file-diff-* 一一对应。
-       放在派生 token 里而不是 ThemeTokens 字段里 —— 它由亮暗方向决定,不需要每套主题手填,
-       新增主题时自动获得一套合理的对比配色。 */
-    '--diff-add-bg': dark ? 'rgba(46,160,67,.15)' : '#e6f4e7',
-    '--diff-add-gutter': dark ? 'rgba(46,160,67,.22)' : '#edf7ed',
-    '--diff-add-marker': dark ? '#41c977' : '#1a7f37',
-    '--diff-del-bg': dark ? 'rgba(248,81,73,.14)' : '#fce8e8',
-    '--diff-del-gutter': dark ? 'rgba(248,81,73,.22)' : '#f9dede',
-    '--diff-del-marker': dark ? '#f85149' : '#b42318'
+    id,
+    name: (d.name || '').trim() || '未命名主题',
+    preset: false,
+    bg: d.bg,
+    surface: d.surface,
+    text: d.text,
+    accent: d.accent,
+    success: d.success,
+    danger: d.danger
   };
 }
 
-/** 把主题 token 写入 document.documentElement 内联 CSS 变量(覆盖 :root 默认值) */
-export function applyTheme(t: ThemeTokens): void {
-  const root = document.documentElement;
-  for (const [field, varName] of Object.entries(VAR_MAP)) {
-    root.style.setProperty(varName, (t as any)[field]);
-  }
-  const dark = isDarkColor(t.bgDeep);
-  for (const [varName, value] of Object.entries(deriveThemeVars(t))) {
-    root.style.setProperty(varName, value);
-  }
-  // 原生控件/滚动条跟随主题深浅(dark 主题用深色原生 UI,浅色主题用浅色)
-  root.style.colorScheme = dark ? 'dark' : 'light';
-  // 亮暗标记:给**不能用 CSS 变量表达**的地方用(shiki 双主题 token 写在行内样式上,
-  // 只能靠属性选择器 + !important 覆盖;见 ChangesReview.scss)
-  root.dataset.dark = dark ? '1' : '0';
+/** 从现有主题抽取可编辑草稿(用于「新建/编辑」表单预填) */
+export function toDraft(t: ThemeDef): CustomThemeDraft {
+  return {
+    name: t.name,
+    bg: t.bg,
+    surface: t.surface,
+    text: t.text,
+    accent: t.accent,
+    success: t.success,
+    danger: t.danger
+  };
 }
 
 /** 启动时应用持久化的激活主题(渲染前调用,避免首帧闪回默认色) */
@@ -378,84 +486,4 @@ export function applyActiveTheme(): string {
   const t = getTheme(st.active, st);
   if (t) applyTheme(t);
   return st.active;
-}
-
-/* ---------------- 自定义主题构建(从少量输入派生完整 token) ---------------- */
-
-export interface CustomThemeDraft {
-  name: string;
-  bgDeep: string;
-  accent: string;
-  aurora1: string;
-  aurora2: string;
-  aurora3: string;
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  let h = String(hex || '').trim().replace('#', '');
-  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
-  const n = parseInt(h, 16);
-  if (Number.isNaN(n)) return [0, 0, 0];
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-function withAlpha(hex: string, a: number): string {
-  const [r, g, b] = hexToRgb(hex);
-  return `rgba(${r}, ${g}, ${b}, ${a})`;
-}
-
-/** 两色按 t∈[0,1] 线性混合(hexA + t*(hexB-hexA)) */
-function mix(hexA: string, hexB: string, t: number): string {
-  const a = hexToRgb(hexA);
-  const b = hexToRgb(hexB);
-  const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
-  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-}
-
-/** 根据背景明暗判断是否深色主题(决定文字与玻璃方向) */
-function isDarkColor(hex: string): boolean {
-  const [r, g, b] = hexToRgb(hex);
-  return (r * 299 + g * 587 + b * 114) / 1000 < 140;
-}
-
-export function newThemeId(): string {
-  return `custom-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-}
-
-/** 从用户输入的颜色派生一套完整主题 token */
-export function buildCustomTheme(id: string, d: CustomThemeDraft): ThemeDef {
-  const dark = isDarkColor(d.bgDeep);
-  const glass = dark ? WHITE_GLASS : LIGHT_GLASS;
-  return {
-    id,
-    name: d.name.trim() || '未命名主题',
-    preset: false,
-    bgDeep: d.bgDeep,
-    aurora1: d.aurora1,
-    aurora2: d.aurora2,
-    aurora3: d.aurora3,
-    ...glass,
-    // 深色背景用亮字,浅色背景用暗字
-    text: dark ? '#e2e8f0' : '#1e293b',
-    muted: dark ? '#8a93a6' : '#5b6b82',
-    accent: d.accent,
-    accent2: mix('#ffffff', d.accent, 0.22),
-    accentGlow: withAlpha(d.accent, 0.45),
-    accentSoft: withAlpha(d.accent, 0.16),
-    green: '#4ade80',
-    red: '#fb7185',
-    amber: '#fbbf24'
-  };
-}
-
-/** 从现有主题抽取可编辑草稿(用于「新建/编辑」表单预填) */
-export function toDraft(t: ThemeDef): CustomThemeDraft {
-  return {
-    name: t.name,
-    bgDeep: t.bgDeep,
-    accent: t.accent,
-    aurora1: t.aurora1,
-    aurora2: t.aurora2,
-    aurora3: t.aurora3
-  };
 }

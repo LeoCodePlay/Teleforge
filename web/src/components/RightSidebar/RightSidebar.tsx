@@ -7,8 +7,8 @@
 //
 // 标签条 / 分栏 / 拖拽 / 浮动 / 右键菜单 / 空态全部由 DockSurface(dsh 原件)渲染,
 // 布局与样式一律来自它的 CSS Modules,见 DockSidebar.tsx 顶部说明。
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { TabRecord } from '@deepseek-ai/dsh-client-ui-dockkit';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { LayoutOp, TabRecord } from '@deepseek-ai/dsh-client-ui-dockkit';
 import DockSidebar, { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH } from './DockSidebar';
 import './RightSidebar.scss';
 
@@ -33,6 +33,8 @@ interface Props {
   renderBody: (tab: TabRecord, api: { close: () => void; active: boolean }) => React.ReactNode;
   /** 可见性变化时通知外部(供布局/埋点用,外部不需要回控) */
   onVisibilityChange?: (open: boolean) => void;
+  /** 某条标签被关掉了:外部据此回收这条标签的会话级资源(终端进程等) */
+  onTabClosed?: (tabId: string) => void;
   /** 右上角标签条末端的宿主控件(已有的收起按钮等) */
   chrome?: React.ReactNode;
 }
@@ -40,6 +42,39 @@ interface Props {
 const WIDTH_KEY = 'teleforge.sidebar-right.width.v1';
 /** 主区域最小宽度:右栏再宽也不能把对话区挤到不可用 */
 const MIN_MAIN = 420;
+
+// ---- 布局持久化:按会话保存 dockkit 记下的**操作序列**,下次挂载时重放它 ----
+// 为什么不存整棵布局树:dockkit 的序列是纯数据(`LayoutOp[]`),每条操作自带它创建的 id,
+// 在同样的初始状态上重放能**逐字**还原同一棵树(分屏、浮动窗、标签归属都在里面),
+// 而布局树本身是不可变的内部形状,存它等于把 kit 的数据结构冻进 localStorage。
+// 键里带 sid:不同会话各有一套布局,互不干扰(与 key={sid} 的隔离语义一致)。
+// v2:右栏不再有「文件树」标签(kind='files' 已无解释者),旧布局原样恢复只会得到"不支持的标签类型" ——
+// 换 key 让 v1 的布局一次性作废,比留一堆打不开的标签干净。
+const LAYOUT_KEY = 'teleforge.sidebar-right.layout.v2';
+
+function layoutKey(sid: string | null): string {
+  return `${LAYOUT_KEY}.${sid ?? 'none'}`;
+}
+
+/** 读某个会话上次的布局;读不到/坏数据/不是数组一律当"没有",交给 kit 用空态起步。 */
+function readLayout(sid: string | null): readonly LayoutOp[] | undefined {
+  try {
+    const raw = localStorage.getItem(layoutKey(sid));
+    if (raw === null) return undefined;
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as readonly LayoutOp[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeLayout(sid: string | null, ops: readonly LayoutOp[]): void {
+  try {
+    localStorage.setItem(layoutKey(sid), JSON.stringify(ops));
+  } catch {
+    // 隐私模式 / 配额满:布局持久化失败只影响下次能不能恢复,不该影响这次使用。
+  }
+}
 
 function readWidth(): number {
   try {
@@ -49,7 +84,7 @@ function readWidth(): number {
   return SIDEBAR_DEFAULT_WIDTH;
 }
 
-export default function RightSidebar({ sid, request, collapsed = false, onToggleCollapse, renderBody, onVisibilityChange, chrome }: Props) {
+export default function RightSidebar({ sid, request, collapsed = false, onToggleCollapse, renderBody, onVisibilityChange, onTabClosed, chrome }: Props) {
   const [width, setWidth] = useState(readWidth);
   const dragging = useRef(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -88,8 +123,12 @@ export default function RightSidebar({ sid, request, collapsed = false, onToggle
     window.addEventListener('pointerup', onUp);
   }, [width]);
 
+  // 该会话上次的布局(换会话时 sid 变化 → 重读)。**必须在下面那个提前 return 之前**:
+  // 它是 hook,放在 return 之后会让折叠/展开两次渲染的 hook 数量不一样,React 直接抛错整页崩。
+  const restore = useMemo(() => readLayout(sid), [sid]);
+
   // 收起态:整条侧栏不渲染(主区拿回宽度)。dockkit 的 controller 挂在 DockSidebar 内部,
-  // 这里不渲染它意味着展开时会回到初始布局 —— 与 dsh 的 push 模式一致(收起只是把侧栏推开)。
+  // 这里不渲染它意味着展开时会用**上次落盘的布局**重建 —— 见下面的 restore/onLayoutChange。
   if (collapsed) return null;
 
   return (
@@ -97,14 +136,16 @@ export default function RightSidebar({ sid, request, collapsed = false, onToggle
       <div className="resizer resizer-left" onPointerDown={onEdgeDown}
         role="separator" aria-label="调整右侧栏宽度" aria-orientation="vertical" />
       <div className="rsb-dock" ref={bodyRef}>
-        {/* key=sid:切换会话时**重建** dockkit 的 controller,让每个会话有自己的一套布局。
-            dsh 的 ui-sidebar-right 是「按会话持久化 + 切回来恢复」;这里是第一半(隔离),
-            恢复要靠 dockkit 的 ops 回放(replay + recordedOps),等接持久化时再补。 */}
+        {/* key=sid:切换会话时**重建** dockkit 的 controller,让每个会话有自己的一套布局;
+            restore 把上次那套布局重放回来(存的是操作序列,不是布局树)。 */}
         <DockSidebar
           key={sid ?? 'none'}
           request={request}
           renderBody={renderBody}
           onVisibilityChange={onVisibilityChange}
+          onTabClosed={onTabClosed}
+          restore={restore}
+          onLayoutChange={(ops) => { writeLayout(sid, ops); }}
           chrome={(
             <>
               {chrome}

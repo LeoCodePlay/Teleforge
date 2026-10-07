@@ -6,14 +6,12 @@ import { NO_WORKSPACE } from './types';
 import SshConnectModal from './components/SshConnectModal/SshConnectModal';
 import SessionPanel from './components/SessionPanel/SessionPanel';
 import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel';
-import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';
-import ConsolePanel from './components/ConsolePanel/ConsolePanel';
+import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';import ConsolePanel from './components/ConsolePanel/ConsolePanel';
 import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
 import RightSidebar, { type SidebarOpenRequest } from './components/RightSidebar/RightSidebar';
 import ReviewTab from './components/ChangesReview/ReviewTab';
 import BrowserPanel from './components/BrowserPanel/BrowserPanel';
 import SessionHeader from './components/SessionHeader/SessionHeader';
-import SubagentConversation from './components/SubagentConversation/SubagentConversation';
 import { useRunningTermSessions } from './hooks/useRunningTermSessions';
 import { PREVIEW_EVENT, isHttpLink, normalizePreviewInput, previewLabel,
   BROWSER_TAB_PREFIX, allocBrowserId, browserSessionId, browserTabId,
@@ -21,6 +19,7 @@ import { PREVIEW_EVENT, isHttpLink, normalizePreviewInput, previewLabel,
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
 import TooltipHost from './components/Tooltip/Tooltip';
 import BottomBar, { type MobileView } from './components/BottomBar/BottomBar';
+import SchedulePanel from './components/SchedulePanel/SchedulePanel';
 import WindowControls from './components/WindowControls/WindowControls';
 import { isTauri } from './utils/desktop';
 import { getUpdateInfo, openExternal } from './utils/updater';
@@ -38,7 +37,7 @@ const STATUS_LABEL: Record<string, string> = {
   disconnected: '未连接'
 };
 
-type TabKind = 'agent' | 'console' | 'file' | 'browser';
+type TabKind = 'agent' | 'console' | 'file' | 'browser' | 'schedule';
 interface TabItem {
   id: string;
   kind: TabKind;
@@ -52,8 +51,12 @@ interface TabItem {
 const TAB_PIN_LIMIT = 3;
 const PINNED_TABS: TabItem[] = [
   { id: 'agent', kind: 'agent', name: 'AI 编程助手' },
-  { id: 'console', kind: 'console', name: '终端' }
+  { id: 'console', kind: 'console', name: '终端' },
+  { id: 'schedule', kind: 'schedule', name: '自动化任务' }
 ];
+
+/** 内置固定页:不可关、不可拖、永远排最前(agent / console / schedule) */
+const isFixedTab = (k: TabKind) => k === 'agent' || k === 'console' || k === 'schedule';
 
 // 手机底部标签栏的「伪标签」:文件管理(无文件打开时)与会话列表不是真实标签,
 // 用两个哨兵 id 存进 activeTabId 以复用现有持久化(localStorage 'sshai.activeTab')。
@@ -184,6 +187,8 @@ export default function App() {
   }, []);
   const [leftWidth, setLeftWidth] = useState(320);
   const leftRef = useRef<HTMLElement>(null);
+  /** 自动化任务里"已过触发时间还没跑"的条数(标签页「🕘 自动化任务」据此显示红点) */
+  const [scheduleOverdue, setScheduleOverdue] = useState(0);
 
   // 桌面壳启动时静默检查 GitHub 最新版本;有更新则在顶栏显示角标(失败静默,不打扰)
   useEffect(() => {
@@ -211,11 +216,12 @@ export default function App() {
   const anyDrawerOpen = isPhone ? sessionDrawerOpen : drawerOpen;
   const closeDrawers = () => { setSessionDrawerOpen(false); setDrawerOpen(false); };
 
-  // 手机当前视图:由 activeTabId 推导(files 视图 = 文件管理或正在查看的文件)
+            // 手机当前视图:由 activeTabId 推导(files 视图 = 文件管理或正在查看的文件)
   const mobileView: MobileView =
     activeTabId === FILES_HOME_ID || tabs.some((t) => t.kind === 'file' && t.id === activeTabId) ? 'files'
     : tabs.some((t) => t.kind === 'browser' && t.id === activeTabId) ? 'browser'
-    : activeTabId === 'agent' ? 'agent' : 'console';
+    : activeTabId === 'agent' ? 'agent'
+    : activeTabId === 'schedule' ? 'schedule' : 'console';
   // 桌面/平板不允许停留在哨兵视图(窗口从手机放大到更大尺寸时兜底回 agent)
   const effActiveTabId = (isDesktopQuery || isTablet) && (activeTabId === SESSIONS_ID || activeTabId === FILES_HOME_ID)
     ? 'agent' : activeTabId;
@@ -223,7 +229,7 @@ export default function App() {
   // 手机底部栏回调:选择视图。files 视图「有打开的文件回到上次查看的那个,
   // 否则进文件管理」(浏览器式标签语义);agent/console 直接切到对应视图
   const selectMobileView = (v: MobileView) => {
-    if (v === 'agent' || v === 'console') { setActiveTabId(v); return; }
+    if (v === 'agent' || v === 'console' || v === 'schedule') { setActiveTabId(v); return; }
     if (v === 'browser') {
       const bs = tabsRef.current.filter((t) => t.kind === 'browser');
       const target = bs.find((t) => t.id === activeTabId) || bs[bs.length - 1];
@@ -699,6 +705,26 @@ export default function App() {
   // 否则远程选「整台服务器」(workspace 为空)会把本地侧误判为未锁定,两侧边界失守。
   const localLocked = !!activeMeta && activeHasMsg && !activeMeta.localWorkspace;
 
+  // ---- 右栏:会话 id + 终端入口 ----
+  // 右栏里原来的「文件树」面板已下架(主区已有「远程文件 / 本地文件」两条完整链路,重复了),
+  // 所以这里只剩会话 id 与终端标签的入口。
+  const sidebarSid = activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null;
+
+  /** 自动化任务页里的会话展示名:标题 + 作用域,免得每一行再去拉一次会话信息 */
+  const sessionLabelOf = useCallback((sid: string) => {
+    const s = sessions.find((x) => x.id === sid);
+    if (!s) return `${sid}(会话不存在)`;
+    const scope = s.connKey && s.connKey !== 'local' ? s.connKey : '本地';
+    return `${s.title || '未命名会话'} · ${scope}`;
+  }, [sessions]);
+  /** 终端标签的序号:每条终端有自己的 contentId(dockkit 按 (kind, contentId) 去重,不能复用)。 */
+  const terminalSeq = useRef(0);
+  /** 在右栏开一条终端标签(标签条末端的 ⌨ 与标签条的 ＋ 都走它)。 */
+  const openSidebarTerminal = useCallback(() => {
+    terminalSeq.current += 1;
+    openInSidebar('terminal', `terminal:${terminalSeq.current}`, '终端');
+  }, [openInSidebar]);
+
   // ---- 浏览器式标签页:打开文件 = 在固定页右侧追加标签(已存在则仅激活) ----
   // 文件标签面板常驻挂载,切走仅 CSS 隐藏,未保存修改不丢失
   const openFileTab = (path: string, name: string) => {
@@ -900,7 +926,7 @@ export default function App() {
       if (from < 0 || to < 0) return prev;
       let at = insertBefore ? to : to + 1;
       if (at > from) at -= 1; // 先移除拖动项,再换算成新数组里的插入下标
-      at = Math.max(prev.filter((t) => t.kind === 'agent' || t.kind === 'console').length, at);
+      at = Math.max(prev.filter((t) => isFixedTab(t.kind)).length, at);
       if (at === from) return prev;
       const next = prev.slice();
       const [moved] = next.splice(from, 1);
@@ -972,8 +998,8 @@ export default function App() {
       const bsid = browserSessionId(b.id);
       api.request('browser_close', { id: bsid, sid: ownerOfBrowserId(bsid) || undefined }, 30000).catch(() => {});
     }
-    setTabs((prev) => prev.filter((t) => t.kind === 'agent' || t.kind === 'console'));
-    setActiveTabId((cur) => (cur !== 'agent' && cur !== 'console' ? (isPhone ? FILES_HOME_ID : 'agent') : cur));
+    setTabs((prev) => prev.filter((t) => isFixedTab(t.kind)));
+    setActiveTabId((cur) => (cur !== 'agent' && cur !== 'console' && cur !== 'schedule' ? (isPhone ? FILES_HOME_ID : 'agent') : cur));
     setTabMenu(null);
   };
 
@@ -993,15 +1019,15 @@ export default function App() {
       const bsid = browserSessionId(b.id);
       api.request('browser_close', { id: bsid, sid: ownerOfBrowserId(bsid) || undefined }, 30000).catch(() => {});
     }
-    setTabs((prev) => prev.filter((t) => t.kind === 'agent' || t.kind === 'console' || t.id === keepId));
+    setTabs((prev) => prev.filter((t) => isFixedTab(t.kind) || t.id === keepId));
     // 若当前激活的是被关闭的标签,切到保留的标签;固定页/保留标签保持不变
-    setActiveTabId((cur) => (cur === keepId || cur === 'agent' || cur === 'console' ? cur : keepId));
+    setActiveTabId((cur) => (cur === keepId || isFixedTab(cur as TabKind) ? cur : keepId));
     setTabMenu(null);
   };
 
   // 单个标签渲染(固定页/文件页共用;固定页不可拖、无关闭钮;置顶文件不可拖但有关闭钮)
   const renderTab = (t: TabItem) => {
-    const fixed = t.kind === 'agent' || t.kind === 'console'; // 内置固定页(AI 助手/终端);文件与预览标签可拖可关
+    const fixed = isFixedTab(t.kind); // 内置固定页(AI 助手/终端/自动化任务);文件与预览标签可拖可关
     const pinned = fixed || !!t.pinnedFile;   // 不参与滚动:pinned 区
     return (
       <div
@@ -1018,7 +1044,9 @@ export default function App() {
         onAuxClick={(e) => { if (e.button === 1) closeTab(t.id); }}
         onContextMenu={(e) => { if (t.kind === 'file' || t.kind === 'browser') openTabMenu(e, t); }}
       >
-        <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : t.kind === 'browser' ? '🌐' : tabIcon(t.name)}</span>
+        <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : t.kind === 'schedule' ? '🕘' : t.kind === 'browser' ? '🌐' : tabIcon(t.name)}
+          {t.kind === 'schedule' && scheduleOverdue > 0 && <span className="btab-dot" aria-label={`${scheduleOverdue} 个任务待触发`} />}
+        </span>
         <span className="btab-label">{t.name}</span>
         {!fixed && (
           <button
@@ -1146,6 +1174,33 @@ export default function App() {
       toast.error(`切换到工作区失败: ${(e as Error).message}`);
     }
   };
+
+  /**
+   * 对话面板(父会话与子智能体会话**同一个组件**):只有 sid / childMode / busy 不同。
+   * 子智能体的 sid 就是它的派发记录 id(sa_…),服务端按 sid 前缀把历史/发送/停止/排队
+   * 分流到子代理运行时 —— 所以子会话的呈现与父会话完全一致(同一套回合折叠、工具行、
+   * 操作栏、统计、输入区),只是把父会话专属的控件收起来(childMode)。
+   */
+  const chatPanel = (o: { sid: string | null; busy: boolean; sessionSeq?: number; childMode?: boolean; onFork?: ((at: number) => void) | undefined }) => (
+    <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace}
+      remoteCwd={remoteCwd} localCwd={localCwd} busy={o.busy} sid={o.sid} sessionSeq={o.sessionSeq ?? 0}
+      home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
+      onOpenFileAside={(p) => openInSidebar('file', p, p.split(/[\\/]/).pop() || p)}
+      onOpenLocalFileAside={(p) => {
+        // FileViewer 靠 `local:` 前缀区分本地/远端读取;漏了这个前缀,
+        // 本地文件会被当远端读 → 报「SSH 未连接」(就是刚才这个 bug)
+        return openInSidebar('file', `local:${p}`, p.split(/[\\/]/).pop() || p);
+      }}
+      onOpenChanges={(p) => openInSidebar('changes-review', p, p.split(/[\\/]/).pop() || p)}
+      localHome={status.localHome} savedLocalWs={localWs}
+      noWorkspace={status.noWorkspace} localNoWorkspace={status.localNoWorkspace}
+      remoteLocked={remoteLocked} localLocked={localLocked}
+      onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
+      onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs}
+      onFork={o.onFork} onSessionCreated={handleSessionCreated} onSessionTouched={touchSession} draftSid={draftSid}
+      onOpenFile={handleOpenFile} onOpenLocalFile={handleOpenLocalFile}
+      onOpenSubagent={openSubagentPanel} childMode={o.childMode} />
+  );
 
   return (
     <div className="app" style={isPhone && vkInset > 0 ? { paddingBottom: vkInset } : undefined}>
@@ -1308,7 +1363,7 @@ export default function App() {
           >
             {/* 固定段:AI 编程助手/命令台永远显示;置顶的文件标签同样固定于此,不受文件标签滚动影响 */}
             <div className="tabstrip-pinned">
-              {tabs.filter((t) => t.kind === 'agent' || t.kind === 'console' || (t.kind === 'file' && t.pinnedFile)).map(renderTab)}
+              {tabs.filter((t) => isFixedTab(t.kind) || (t.kind === 'file' && t.pinnedFile)).map(renderTab)}
             </div>
             {/* 滚动段:普通文件标签可横向滚动(滚轮/拖拽到边缘);用项目悬浮滚动条引擎(不占布局,高度不变)。
                手机端 pinned 段被 CSS 隐藏(见 App.scss),置顶文件也放滚动段保证可见 */}
@@ -1412,38 +1467,49 @@ export default function App() {
                   </span>
                 </div>
               )}
-              {/* 子智能体:主对话区**直接替换**(dsh 的 openChild 语义),不再开右栏。
-                  容器必须铺满:SubagentConversation 的根节点 .sconv 依赖父级有确定高度,
-                  裸的 .tab-pane 嵌在 .tab-pane 里会塌成 0 高 → 看起来就是黑屏。 */}
-              {subagentRunId && (
-                <div
-                  className="subagent-pane"
-                  style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
-                >
-                  <SubagentConversation runId={subagentRunId} active />
-                </div>
-              )}
-              <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
-              home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
-              onOpenFileAside={(p) => openInSidebar('file', p, p.split(/[\\/]/).pop() || p)}
-              onOpenLocalFileAside={(p) => {
-                // FileViewer 靠 `local:` 前缀区分本地/远端读取;漏了这个前缀,
-                // 本地文件会被当远端读 → 报「SSH 未连接」(就是刚才这个 bug)
-                return openInSidebar('file', `local:${p}`, p.split(/[\\/]/).pop() || p);
-              }}
-              onOpenChanges={(p) => openInSidebar('changes-review', p, p.split(/[\\/]/).pop() || p)}
-              localHome={status.localHome} savedLocalWs={localWs}
-              noWorkspace={status.noWorkspace} localNoWorkspace={status.localNoWorkspace}
-              remoteLocked={remoteLocked} localLocked={localLocked}
-              onWorkspaceSet={onWorkspaceSet} onLocalWorkspaceSet={onSetLocalWorkspace}
-              onDeleteWs={onDeleteWs} onDeleteLocalWs={onDeleteLocalWs} onFork={forkSession}
-              onSessionCreated={handleSessionCreated} onSessionTouched={touchSession} draftSid={draftSid}
-              onOpenFile={handleOpenFile} onOpenLocalFile={handleOpenLocalFile}
-              onOpenSubagent={openSubagentPanel} />
+              {/* 主对话区里的两个内容槽(与 App.scss 的 .agent-slot 对应):
+                  子智能体会话与父会话**并列常驻挂载**,看子会话时父会话那个槽加 .hide,回来时反过来
+                  —— 两边的草稿与滚动位置都保住。
+                  子会话复用父会话的对话系统:同一个 ChatPanel,sid = 派发记录 id(sa_…),
+                  服务端按 sid 前缀把历史/发送/停止/排队分流到子代理运行时;
+                  childMode 只收起父会话专属控件(工作区选择、权限/模型、附件与 @ / 菜单、删除/回退)。 */}
+              <div className={`agent-slot${subagentRunId ? '' : ' hide'}`}>
+                {subagentRunId && (
+                  <div
+                    className="subagent-pane"
+                    style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+                  >
+                    {chatPanel({ sid: subagentRunId, busy: false, childMode: true, onFork: undefined })}
+                  </div>
+                )}
+              </div>
+              <div className={`agent-slot${subagentRunId ? ' hide' : ''}`}>
+                {chatPanel({
+                  sid: activeSessionId,
+                  busy: activeBusy,
+                  sessionSeq,
+                  onFork: forkSession
+                })}
+              </div>
             </div>
             {/* 终端常驻挂载:切走再切回不销毁会话,用 CSS 隐藏 */}
             <div className={`tab-pane ${effActiveTabId === 'console' ? '' : 'hide'}`}>
               <ConsolePanel connected={connected} visible={effActiveTabId === 'console'} activeConn={status.activeConn ?? null} hostIp={status.host} />
+            </div>
+            {/* 自动化任务(内置固定页):与 agent/console 一样常驻挂载,列表状态/编辑中的表单切走再切回不丢 */}
+            <div className={`tab-pane ${effActiveTabId === 'schedule' ? '' : 'hide'}`}>
+              <SchedulePanel
+                sid={activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null}
+                active={effActiveTabId === 'schedule'}
+                sessionLabel={sessionLabelOf}
+                onOpenSession={(openSid) => {
+                  // 关联会话可能在别的服务器上:先按会话自己的作用域切服务器,再切会话(与任务列表同一条路)
+                  const meta = sessions.find((s) => s.id === openSid);
+                  switchForeignSession(openSid, meta?.connKey || 'local');
+                }}
+                onSummary={(s) => setScheduleOverdue(s.overdue)}
+                onNewTask={() => setActiveTabId('agent')}
+              />
             </div>
             {/* 手机:文件管理(底部栏「📁 文件」且无文件打开时);打开文件后由文件标签页接管 */}
             {isPhone && mobileView === 'files' && effActiveTabId === FILES_HOME_ID && (
@@ -1476,10 +1542,15 @@ export default function App() {
           </div>
         </main>
         <RightSidebar
-          sid={activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null}
+          sid={sidebarSid}
           collapsed={!rightOpen}
           onToggleCollapse={() => setRightOpen((v) => !v)}
           request={sidebarReq}
+          // 标签条末端的宿主控件:⌨ 开一条终端标签(标签条的 ＋ 也开终端)
+          chrome={(
+            <button type="button" className="rsb-term" data-tip="在侧栏打开终端"
+              aria-label="在侧栏打开终端" onClick={openSidebarTerminal}>⌨</button>
+          )}
           renderBody={(tab, tabApi) => {
             if (tab.kind === 'file') return <FileViewer path={tab.contentId} name={tab.title} onClose={tabApi.close} />;
             // 文件变更对比(只读):看的是**改动前后**,与上面的文件查看器(可编辑)分属两条链路。
@@ -1494,8 +1565,20 @@ export default function App() {
                 />
               );
             }
-            // 子智能体会话:同一份对话渲染层(conversation.tsx),所以主对话区与侧栏看起来一致
-            if (tab.kind === 'subagent') return <SubagentConversation runId={tab.contentId} active={tabApi.active} />;
+            // 子智能体会话:与主对话区**同一个 ChatPanel**(同一套对话系统),所以两处看起来完全一致
+            if (tab.kind === 'subagent') {
+              return chatPanel({ sid: tab.contentId, busy: false, childMode: true, onFork: undefined });
+            }
+            // 终端:直接用主区那个 ConsolePanel(远程 + 本地两个终端,各自独立 WS 会话),
+            // 右栏里降级成**窄容器模式**(隐掉右侧那条 200px 列表,改用工具栏的「⌨ 终端 ▾」切换)。
+            // 为什么不用 dsh 版 TerminalBody(见已下架的 TerminalPanelHost):它一条标签只跟一个 shell,
+            // 而这里要的是「远程和本地的终端都能用」—— ConsolePanel 本来就是那个语义。
+            if (tab.kind === 'terminal') {
+              return (
+                <ConsolePanel connected={connected} visible={tabApi.active}
+                  activeConn={status.activeConn ?? null} hostIp={status.host} compact />
+              );
+            }
             return <div className="rsb-empty">不支持的标签类型:{tab.kind}</div>;
           }}
         />

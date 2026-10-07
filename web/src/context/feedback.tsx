@@ -1,5 +1,5 @@
 // 全局 UI 反馈层:页面内确认弹窗 + 消息弹出提示(toast)
-// 统一替换浏览器原生 confirm()/alert(),风格遵循液态玻璃 Liquid Glass 规范(见 web/LIQUID_GLASS.md)
+// 统一替换浏览器原生 confirm()/alert(),风格遵循实色界面规范(见 web/DESIGN_SYSTEM.md)
 // 用法:
 //   const { confirm, toast } = useFeedback();
 //   if (await confirm({ title: '删除', message: '确定删除?', danger: true })) { ... }

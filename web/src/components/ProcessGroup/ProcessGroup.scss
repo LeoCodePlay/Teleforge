@@ -15,8 +15,6 @@
   transition: color 100ms ease;
 }
 .dsh-pg-title:hover { color: var(--dsw-alias-label-secondary); }
-/* 展开时组头与组体之间留一点呼吸(dsh: aria-expanded 时 padding-bottom 8px) */
-.dsh-pg-title[aria-expanded="true"] { padding-bottom: 8px; }
 
 /* 前导槽:活动图标与 chevron 叠在同一个 16px 槽里,靠透明度互换 */
 .dsh-pg-leading {

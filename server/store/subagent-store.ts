@@ -13,14 +13,21 @@ import path from 'node:path';
 import { SUBAGENTS_DIR, AGENT } from '../config.ts';
 import { writeFileAtomic } from './atomic-write.ts';
 
-export type SubagentStatus = 'running' | 'done' | 'error' | 'stopped';
+// running = 正在跑某一轮;idle = 常驻但当前没在跑(等后续消息,可续聊/可暂停后继续);
+// done/error/stopped = 一次性派发的终局(后台常驻子代理不会进这三个,它一直可继续)
+export type SubagentStatus = 'running' | 'idle' | 'done' | 'error' | 'stopped';
 
-/** 子代理内部的一条对话消息(user=下发的提示词,assistant=模型产出,tool=工具结果) */
+/** 派发方式:one-shot = 前台等结果的一次性;continuable = 常驻后台、可续聊(默认) */
+export type SubagentMode = 'one-shot' | 'continuable';
+
+/** 子代理内部的一条对话消息(user=下发的提示词/后续消息,assistant=模型产出,tool=工具结果) */
 export interface SubagentMessage {
   role: 'user' | 'assistant' | 'tool';
   /** 第几步(1-based);user 消息固定 0 */
   step: number;
   at: number;
+  /** user 消息的来源:brief=初始任务,parent=主代理后续消息,human=人类在子会话里发的 */
+  from?: 'brief' | 'parent' | 'human';
   /** user/assistant:正文 */
   text?: string;
   /** assistant:思考内容(模型返回 reasoning 时) */
@@ -41,7 +48,11 @@ export interface SubagentRunInfo {
   sid: string | null;
   description: string;
   provider: string;
+  /** 派发方式(缺省按 continuable 读:老记录没有这个字段) */
+  mode?: SubagentMode;
   status: SubagentStatus;
+  /** 还有多少条消息/轮次在排队(可续聊的子代理才有意义) */
+  queued?: number;
   startedAt: number;
   endedAt: number | null;
   ms: number | null;
@@ -95,14 +106,16 @@ function persist(run: SubagentRun): void {
 /** 开始一次派发:建记录并立即落盘(面板可能在子代理还没跑完时就打开) */
 export function beginRun(input: {
   runId: string; sid?: string | null; description: string; provider: string;
-  brief: SubagentRunInfo['brief']; prompt: string;
+  brief: SubagentRunInfo['brief']; prompt: string; mode?: SubagentMode;
 }): SubagentRun {
   const run: SubagentRun = {
     runId: input.runId,
     sid: input.sid ?? null,
     description: input.description,
     provider: input.provider,
+    mode: input.mode ?? 'continuable',
     status: 'running',
+    queued: 0,
     startedAt: Date.now(),
     endedAt: null,
     ms: null,
@@ -146,6 +159,27 @@ export function finishRun(runId: string, patch: {
   run.note = patch.note ?? null;
   run.endedAt = Date.now();
   run.ms = run.endedAt - run.startedAt;
+  persist(run);
+  return run;
+}
+
+/**
+ * 中途更新(不写 endedAt):常驻子代理每一步落一次进度,跑完一轮停在 idle 也走这里——
+ * 它不是"结束",后面还能被 send_message 唤醒接着跑。
+ */
+export function updateRun(runId: string, patch: {
+  status?: SubagentStatus; steps?: number; toolCalls?: number;
+  promptTokens?: number; completionTokens?: number; note?: string | null; queued?: number;
+}): SubagentRun | null {
+  const run = cache.get(runId);
+  if (!run) return null;
+  if (patch.status !== undefined) run.status = patch.status;
+  if (patch.steps !== undefined) run.steps = patch.steps;
+  if (patch.toolCalls !== undefined) run.toolCalls = patch.toolCalls;
+  if (patch.promptTokens !== undefined) run.promptTokens = patch.promptTokens;
+  if (patch.completionTokens !== undefined) run.completionTokens = patch.completionTokens;
+  if (patch.note !== undefined) run.note = patch.note;
+  if (patch.queued !== undefined) run.queued = patch.queued;
   persist(run);
   return run;
 }

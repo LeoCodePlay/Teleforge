@@ -138,7 +138,7 @@
 
 | 能力域 | B 的包 | 对 A 的价值 |
 |---|---|---|
-| 子代理 / 委派 | `subagent/*`(in-process / fork / spawn / DSH-SDK / ACP / Claude Code / Codex 六种 provider)、`tool-subagent{,-control,-report}` | 高:远程探索类任务可并行化。**A 已落地 in-process 只读版**(`subagent` 工具 + `agent/subagent.ts`;只有一种 provider、只读白名单、无后台/续聊,见 `docs/superpowers/plans/2026-09-19-subagent-in-process.md`) |
+| 子代理 / 委派 | `subagent/*`(in-process / fork / spawn / DSH-SDK / ACP / Claude Code / Codex 六种 provider)、`tool-subagent{,-control,-report}` | 高:远程探索类任务可并行化。**A 已落地 in-process 只读版**(`subagent` 工具 + `agent/subagent.ts` 契约 + `agent/subagent-runtime.ts` 常驻运行时:缺省后台派发不阻塞、结算通知回传父会话、`send_message` 续聊、`interrupt_agent` 暂停、`list_agents` 列状态;仍只有一种 provider、只读白名单,见 `docs/superpowers/plans/2026-09-19-subagent-in-process.md`) |
 | 工作流批量编排 | `workflow/*` + `tool-workflow`(worker-thread 执行 JS 脚本) | 中 |
 | Ralph 循环 | `workflow/tool-ralph` | 低-中 |
 | 后台任务 | `jobs/*` + `tool-jobs`(`job_output`/`job_kill`) | 高:长命令不该阻塞 step |
@@ -147,7 +147,7 @@
 | MCP | `mcp/mcp-client` | 高:接外部工具生态 |
 | Code mode | `core/tools/src/code-mode.ts`(工具在代码里调,而非逐个 tool-call) | 中 |
 | 会话检索 | `session-query/*` + `tool-session-query` | 中 |
-| Goal / 计划 | `goal/*` + `tool-goal`、`plan/plan-mode` + `exit_plan_mode` 工具 | 高:计划模式目前只是 guard 拒绝 |
+| Goal / 计划 | `goal/*` + `tool-goal`、`plan/plan-mode` + `exit_plan_mode` 工具 | 高:**已落地**(`server/agent/goal.ts`、`server/agent/plan-mode.ts`:`/目标` 与 `/计划` 命令、`exit_plan_mode`、`get_goal`/`create_goal`/`update_goal`、空闲自动续跑;差异见第 8 节 #20/#21) |
 | 自省 / 自改 | `extensions/tool-cordis` | 低 |
 | 结构化输出 | `subagent-in-process-driver/src/structured.ts` | 低 |
 
@@ -210,7 +210,7 @@
 | 事件粒度 | 粗粒度业务事件(`text_delta`/`reasoning_delta`/`tool_call`/`tool_result`/`context_usage`/`compaction_*`/`turn_end`) | `session/event` 原样广播 + 客户端各自投影 |
 | 客户端投影 | 前端手写节点模型(`utils/toolRowModel.ts`、`ChatPanel.tsx` 150KB) | 30+ 个 `client/ui-*` 插件,每个能力自带 UI 与投影 |
 | 断线重连 | 靠 `get_history` 整表替换 + `rt.live` 半成品镜像补流 | `session/event` 重放 + 投影缓存增量 |
-| 命令 | 硬编码 `/compact` `/clear` `/fork`(前端 `slashCommand.ts` 匹配 + 服务端 RPC) | `ctx.commands` 注册表,插件可注册命令与装饰器(`ui-commands`) |
+| 命令 | 硬编码 `/compact` `/clear` `/fork` `/计划` `/目标`(前端 `slashCommand.ts` 匹配 + 服务端 RPC:`compact_now` / `plan_command` / `goal_command`) | `ctx.commands` 注册表,插件可注册命令与装饰器(`ui-commands`) |
 
 ---
 
@@ -259,8 +259,8 @@
 | 26 | 无沙箱 seam,边界只在各工具实现内逐个检查 | `tools.ts:37-56` | `sandbox/*`, `docs/architecture.md:100-102` | 中-高 |
 | 27 | 无审批白名单/记住放行,`confirm` 下每次都弹窗 | `permission.ts:99-140` | (待确认) | 中 |
 | 28 | 无工具呈现模式(`native`/`code` Code Mode) | 模型永远看全量 schema | `core/tools/src/index.ts:656`, `:1055` | 中 |
-| 20 | 无 MCP / 后台任务 / 持久终端 / LSP / code-mode / goal(子代理已有 in-process 只读版) | 子代理已有 `subagent` 工具 + `agent/subagent.ts`;其余全缺 | 各对应包 | 高(能力面) |
-| 21 | 无 plan/mode 事件与 `exit_plan_mode` 工具,计划模式只是 guard 拒绝 | `permission.ts:107-111` | `plan/plan-mode/src/index.ts:225`, `:306` | 中-高 |
+| 20 | 无 MCP / 后台任务 / 持久终端 / LSP / code-mode(**goal 已落地**) | 子代理已对齐后台语义:`subagent` + `send_message`/`interrupt_agent`/`list_agents` 工具 + `agent/subagent-runtime.ts`(常驻、结算通知、续聊、暂停);goal 已有 `agent/goal.ts`(`/目标` + `get_goal`/`create_goal`/`update_goal` + 空闲自动续跑);其余全缺 | 各对应包 | 高(能力面) |
+| 21 | ~~无 plan/mode 事件与 `exit_plan_mode` 工具,计划模式只是 guard 拒绝~~ **已对齐**(计划模式复用权限档位 `plan`;`exit_plan_mode` 工具 + 计划策略段 + `/计划` 命令见 `agent/plan-mode.ts`) | `permission.ts:107-111` | `plan/plan-mode/src/index.ts:225`, `:306` | ~~中-高~~ |
 | 22 | 无会话标题 LLM 策略 / 统计 / 遥测 / 检索 | 无 | `session-title*`, `session-stats`, `session-telemetry`, `session-query` | 中 |
 
 ---
@@ -304,7 +304,7 @@
 17. 在驱动循环里引入三个 waterfall 钩子(`agent/pre-step` / `agent/request` / `agent/request-error`)与一个 serial 钩子 `agent/turn-stopping`;把现有"工具不支持降级"和"爆窗恢复"改写为 `agent/request-error` 的默认监听器,证明钩子可用。
 18. 权限拆为 sandbox/approval 两个 seam,审批答案器可替换(为后续无人值守/自动化铺路)。
 19. 按需补能力:优先级建议 **持久终端 → 后台任务(job_*) → 子代理 → MCP → plan/exit_plan_mode 工具**。每一项都应对齐 B 的 seam 三段式(Service Definition / Provider / Consumer),而不是直接塞进 `tools.ts`。
-    - **子代理:✅ 首版已落地**(`agent/subagent.ts` 的自带循环 + `subagent` 工具 + 只读白名单;事件面复用 `tool/call`/`tool/result` 所以前端零改动;测试 `test/subagent.test.js`)。跨 provider / 写能力 / 后台续聊 / 过程 UI 仍待做(见设计文档第 5 节)。
+    - **子代理:✅ 已落地**(`agent/subagent-runtime.ts` 的常驻运行时(后台派发不阻塞 / 结算通知 / 续聊 / 暂停)+ `subagent` 与 `send_message`/`interrupt_agent`/`list_agents` 工具 + 只读白名单;事件面复用 `tool/call`/`tool/result`,前端子会话给正常输入框 + 暂停入口;测试 `test/subagent.test.js`、`test/subagent-background.test.js`)。跨 provider / 写能力 / 进程重启后的冷续聊仍待做(见设计文档第 5 节)。
 
 ### 阶段 5:可选(仅当需要与 B 生态互通)
 
@@ -535,30 +535,60 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
 **验证**:`plan` 档下 `subagent`/`write_file` 被直接拒绝(理由文案来自 permission.ts);
 `confirm` 档下挂起审批;**全量 `npm test` 全绿**(含 e2e / 多服务器绑定 / 浏览器预览 / 压缩系列)。
 
-### 14.2 子代理首版(in-process 只读版)
+### 14.2 子代理(in-process 只读版:后台常驻 + 可续聊 + 可暂停)
 
-- 工具:`subagent`(`description` + `objective`/`scope`/`deliverable`/`context`/`prompt` + 可选 `provider`,声明 `access:'write'`、并发安全(多个子代理并行)、`timeoutMs:0` 不设超时)。
+- 工具:`subagent`(`description` + `objective`/`scope`/`deliverable`/`context`/`prompt` + 可选 `provider` +
+  `run_in_background`(缺省 true),声明 `access:'write'`、并发安全(多个子代理并行)、`timeoutMs:0` 不设超时);
+  以及 harness `tool-subagent-control` 的三个控制工具:`send_message`(续聊,`access:'write'`)、
+  `interrupt_agent`(暂停当前这一轮,`access:'write'`)、`list_agents`(`access:'read'`)——都只对本会话派发出去的子代理生效。
   提示词由**父对话自己生成**:`prompt`(≥60 字符)或 `objective`+`scope`(各 ≥6 字符)二选一,
   `composeSubagentPrompt()` 校验并按 `【任务目标】/【边界(必须遵守)】/【回传要求】/【已知线索】` 标注拼接;
   写不清就返回结构化错误(附模板),而不是把模糊任务丢给子代理。
   `provider` 枚举只有 `internal`(默认):**用本项目自己的 agent 循环与工具栈执行**
   (同一 `LlmClient`、同一 SSH/本地工作区绑定、同一个 `ToolRegistry`),不调用外部 agent;
   传其它值直接报错「未接入外部 agent 提供商」——外部 provider 只在用户明确要求时才应使用,本期尚未接入。
-- 运行时:`server/agent/subagent.ts` 的 `runSubagent()`——独立内存会话 + 只读工具白名单
-  (`SUBAGENT_TOOLS`)+ 有界循环(`AGENT.SUBAGENT.MAX_STEPS/RESULT_MAX_CHARS/TIMEOUT_MS`)。
-- 事件面:复用 `tool/call`/`tool/result`(父会话只多一条),子代理的中间步骤不回传也不落父日志。
-- 前端:工具卡标题「子代理」,摘要取 `description`(不把整段 prompt 当摘要)。
+- 运行时:`server/agent/subagent-runtime.ts` 的 `startSubagent()`——常驻子代理(独立内存会话 + 只读工具白名单
+  `SUBAGENT_TOOLS` + 不设步数/时长上限的循环);`subagent.ts` 只留共享契约与前台封装 `runSubagent()`
+  (`run_in_background: false` 走它,内部就是"派发 + 等第一次结算")。
+  后台派发**不阻塞主会话**:挂成 Activation 后立刻返回;一轮跑完(收件箱空)投递一条**结算通知**到父会话,
+  父会话空闲被唤醒、忙则排队(harness 的 settlement notice / waking delivery);`send_message` 可续聊
+  (空闲直接开新轮、运行中在最近一步被认领),`interrupt_agent` 只停当前轮(排队保留,下一条消息继续)。
+- 事件面:复用 `tool/call`/`tool/result`(父会话只多一条 `started subagent <id>`),子代理的中间步骤不回传也不落父日志;
+  结果以一条 `[子智能体结算] …` 消息进父会话(否则后台派发就没有回路)。
+- 前端:**子会话直接用父会话的对话系统** —— 同一个 `ChatPanel`,只是 `sid` 换成了派发记录 id(`sa_…`)、
+  打开 `childMode`。服务端按 sid 前缀把 `get_history` / `speak` / `stop_agent` / `queue_steer` /
+  `queue_remove` 分流到子代理运行时(harness 的形态:子代理本来就是一个会话),所以子会话的回合折叠行、
+  工具行、流式输出、统计胶囊、输入区与父会话**逐像素同一套**,没有任何子代理专属视图。
+  `childMode` 只收起父会话专属控件:工作区 chip、权限/模型选择、附件与 `/`、`@` 菜单、
+  消息的删除/回退/分支;工作区与模型继承自父会话(如实标注)。
+  子代理的输入位:可继续的 = 父会话同款输入卡(含「停止」= 暂停当前这一轮);
+  一次性派发 = dsh 的 `SubagentReadOnlyComposer` 只读说明框;不常驻(服务重启过)时在输入卡上方提示
+  「再发一条会把它冷恢复过来」,但**不**顶掉输入框。
 - 设计与取舍:`docs/superpowers/specs/2026-09-19-subagent-in-process-design.md`;
-  实施计划:`docs/superpowers/plans/2026-09-19-subagent-in-process.md`;测试:`test/subagent.test.js`。
+  实施计划:`docs/superpowers/plans/2026-09-19-subagent-in-process.md`;
+  测试:`test/subagent.test.js`(前台一次性 + 契约)、`test/subagent-background.test.js`(后台/续聊/暂停/结算通知)。
 - 面板:每次派发落一份运行记录(`data/subagents/<runId>.json`,含完整对话),工具卡行尾「查看会话」
-  打开**统一活动面板**(`ActivityDock`:一个胶囊 + 一个抽屉,内分「运行终端」「子代理」两个分区,
-  各自按有无内容决定是否出现,两边都空则整块不显示,且只挂在 AI 对话标签页);
-  子代理分区为左列派发记录 + 右侧对话(含加载/空/错误态与手机单栏);`subagent_list` / `subagent_get`
-  两个 RPC + `subagent_changed` 事件驱动实时刷新;面板只读,无删除/重跑/续聊入口。
-  面板与两个分区都按 `sid` 过滤(只属于当前对话,草稿会话不显示;`subagent_list` 不带 sid 回空),
-  切对话时收起;会话列表状态点补了蓝色一档(该对话空闲但有后台终端在跑),优先级
+  在主对话区打开该子会话(点会话头部 catalog 的一行同义),行尾按钮进右侧栏对照阅读;
+  `subagent_list` / `subagent_get` / `subagent_prompt`(人类续聊)/ `subagent_interrupt`(人类暂停)
+  四个 RPC + `subagent_changed` 事件驱动实时刷新;记录按 `sid` 过滤(只属于当前对话,草稿会话不显示;
+  `subagent_list` 不带 sid 回空);会话列表状态点补了蓝色一档(该对话空闲但有后台终端在跑),优先级
   `绿(任务进行中)> 黄(等待用户操作)> 蓝(后台终端在跑)`(见 `web/src/utils/sessionDot.ts`)。
-- 明确没做(留给后续):跨 provider / 写能力 / 后台与续聊 / 子代理用量计入仪表盘。
+- 模型可见文案与 harness **逐条对齐**(`test/subagent-background.test.js` 1b 段把这些原文钉成断言):
+  工具描述 = `providerWording(spawn)` 的 description 原文 + continuable 的 "It runs in the background by
+  default and returns a subagent id you can continue with `send_message`; you are notified when the run
+  settles." 原文;`description` / `prompt` / `run_in_background` 参数描述 = 原文;父侧 `tool:<name>` 段
+  (「Start independent subagent delegations together …」)= 原文,走 `_systemPrompt` 注入;
+  子代理系统提示词第一段 = `subagent/src/child-agent.ts` 的 `SUBAGENT_DELEGATION_CONTEXT`
+  (权限派发时固定、不重试被拒操作、把限制写回主代理)的等价声明。
+  本项目特有的三点(只读白名单 / `objective`+`scope` 扩展 / in-process `internal`)以追加句出现,
+  不覆盖原文;`send_message` / `interrupt_agent` / `list_agents` 的描述同样取自 `tool-subagent-control` 原文。
+- 明确没做(留给后续):跨 provider(外部 agent)/ 子代理写能力 / 子代理用量计入仪表盘。
+- 冷恢复(对齐 harness 的 `no Activation → cold-resume a new Activation`):常驻 Activation 消失后
+  (服务重启、或这条记录来自上一次运行),**发一条消息就会用 `data/subagents/<runId>.json` 里的
+  完整对话重建子会话再继续跑**——所以"父会话不在线 / 子代理不常驻"从来不是不能发消息的理由,
+  只有一次性派发才是只读的。重建时把 tool_calls 与 tool/result 严格配对(严格网关按 id 与条数校验)。
+  结算通知同样不丢:投递前先 `agent.ensureRuntime(parentSid)` 把父会话从磁盘载回来再唤醒它。
+  仍要求模型客户端可用(没有 AI 提供商时如实报错,不假装受理)。测试:`test/subagent-background.test.js` 6b 段。
 
 ### 14.3 类型检查基线(如实记录)
 

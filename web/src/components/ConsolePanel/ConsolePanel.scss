@@ -1,7 +1,9 @@
 /* ---- ConsolePanel 独有样式:命令台(xterm.js 真实终端),保持近黑底保证对比度 ---- */
 
-/* 命令台容器:左侧终端主体 + 右侧终端列表 */
-.consolewrap { flex: 1; display: flex; flex-direction: row; min-height: 0; }
+/* 命令台容器:左侧终端主体 + 右侧终端列表。
+   height:100% 是给**非 flex 父级**用的:主区里父级是确定的 flex 项目,右栏里 dockkit 的
+   面板正文是 display:block —— 只写 flex:1 时容器会缩到内容高度(工具栏 71px),终端高度塌成 0。 */
+.consolewrap { flex: 1; height: 100%; display: flex; flex-direction: row; min-height: 0; }
 .console-main { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 
 .xterm-area {
@@ -15,8 +17,6 @@
 .xterm-host {
   flex: 1; min-height: 0;
   background: var(--xterm-bg);
-  backdrop-filter: var(--blur-sm);
-  -webkit-backdrop-filter: var(--blur-sm);
   padding: 8px 6px 8px 12px; cursor: text;
 }
 .xterm-host .xterm { height: 100%; }
@@ -27,17 +27,17 @@
 .term-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   border-top: 1px solid var(--line-soft); padding: 8px 16px;
-  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
+  background: var(--fill-1);
 }
 /* 终端状态点(常驻连线指示:绿=已连接 / 黄=打开中 / 红=已结束 / 灰=等待) */
 .term-dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 5px; vertical-align: -1px;
-  background: var(--muted); box-shadow: 0 0 0 0 transparent;
+  background: var(--muted);
 }
-.term-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.term-dot.busy { background: var(--amber-bright); box-shadow: 0 0 6px var(--amber-bright); animation: term-dot-pulse 1s ease-in-out infinite; }
-.term-dot.err { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.term-dot.ok { background: var(--green); }
+.term-dot.busy { background: var(--amber-bright); animation: term-dot-pulse 1s ease-in-out infinite; }
+.term-dot.err { background: var(--red); }
 @keyframes term-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* 右侧终端列表:可打开新终端、删除当前终端(至少保留一个);可拖拽调宽 / 拖拽排序 */
@@ -49,7 +49,7 @@
 .term-list-resizer {
   position: absolute; top: 0; left: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 10;
 }
-.term-list-resizer:hover { background: var(--accent-glow); box-shadow: 0 0 12px var(--accent-glow); }
+.term-list-resizer:hover { background: var(--accent); }
 .term-list-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 10px 12px; border-bottom: 1px solid var(--line-soft);
@@ -65,15 +65,15 @@
 }
 .term-list-item:hover { background: var(--glass-bg-hover); }
 .term-list-item.active {
-  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
-  border-color: var(--accent-border); box-shadow: inset 0 1px 0 var(--ins-hl);
+  background: var(--accent-fill);
+  border-color: var(--accent-border);
 }
 /* 拖拽排序:被拖项半透明,悬停项显示插入指示线(上/下) */
 .term-list-item.dragging { opacity: .45; }
 .term-list-item.drop-before::before,
 .term-list-item.drop-after::after {
   content: ''; position: absolute; left: 9px; right: 9px; height: 2px; border-radius: 2px;
-  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+  background: var(--accent);
 }
 .term-list-item.drop-before::before { top: -3px; }
 .term-list-item.drop-after::after { bottom: -3px; }
@@ -96,13 +96,12 @@
 .term-list-del:disabled { opacity: .28; cursor: default; }
 .term-list-hint { padding: 8px 12px; font-size: 10.5px; color: var(--muted); border-top: 1px solid var(--line-faint); line-height: 1.5; }
 
-/* 终端右键菜单(液态玻璃) */
+/* 终端右键菜单(实色浮层) */
 .term-menu {
   position: fixed; z-index: 200; min-width: 150px; padding: 6px;
-  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
-  backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
-  border: 1px solid var(--glass-border); border-radius: 12px;
-  box-shadow: 0 12px 36px var(--shadow-2), inset 0 1px 0 var(--glass-hi);
+  background: var(--pop-bg);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--glass-shadow);
 }
 .term-menu-item {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -125,9 +124,8 @@
   .term-mobile-list {
     position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 220;
     min-width: 200px; max-height: 45vh; overflow-y: auto;
-    background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
-    backdrop-filter: var(--blur-md); -webkit-backdrop-filter: var(--blur-md);
-    border: 1px solid var(--glass-border); border-radius: var(--r-md);
+    background: var(--pop-bg);
+    border: 1px solid var(--line); border-radius: var(--r-md);
     box-shadow: var(--glass-shadow-lg);
     padding: 6px;
   }

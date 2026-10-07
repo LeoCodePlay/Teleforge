@@ -185,13 +185,17 @@ schedule runtime.tick()
 
 ### 3.7 UI:入口 + 页面
 
-**入口(按你的要求:左上角专门一个菜单)**
-- `App.tsx` 的 `.topbar-left`(`:1170`,现在只有 `◀` + 品牌)加一个 **🕘 时钟按钮**,`data-tip="自动化任务"`,
-  点击切到内置页;有「即将触发 / 已错过」任务时按钮带一个小圆点(红/黄),点开就知道有事。
-- 主区域按现有 tab 体系加一个**内置固定 tab**:`kind: 'schedule'`,与 `agent` / `console` 同级
-  (`App.tsx` 的 `tabs` / `renderTab` / `tab-pane` 已经支持固定页,`FILES_HOME_ID` 就是同款做法)。
-  这样"左上角点一下 → 中央换成自动化任务大页面",与 dsh 的「左侧栏面板项 → 中央 keyed main 页面」等价,
-  且不牺牲 Teleforge 现有的标签体系。
+**入口(最终形态:主区标签条上的固定标签,在「⌨️ 终端」右边)**
+
+> 这一段的原始设计是"左上角专门一个菜单",落地后按用户要求改掉了:**入口就是标签条上那个固定标签**
+> 「🕘 自动化任务」(顺序 AI 编程助手 → 终端 → 自动化任务),点一下主区换成任务大页面;
+> 左上角 / 品牌右边**不再放任何按钮**。手机端仍在底部栏给一项「🕘 自动化」(不占顶栏空间)。
+> 保留下来的想法:标签上的**小红点**(有"到点却没跑"的任务时亮起,是"点开就知道有事"的原意)。
+
+- ~~`App.tsx` 的 `.topbar-left` 加一个 🕘 时钟按钮~~(已按用户要求去掉);
+- 主区按现有 tab 体系加一个**内置固定标签**:`kind: 'schedule'`,与 `agent` / `console` 同级
+  (`App.tsx` 的 `tabs` / `renderTab` / `tab-pane` 已经支持固定页,`FILES_HOME_ID` 就是同款做法),
+  固定标签排在 `PINNED_TABS` 里 `console` 之后 —— 天然就在终端右边。
 - 手机端(<768):放进顶栏溢出菜单 / 底部栏,不占顶部空间。
 
 **页面(新增 `web/src/components/SchedulePanel/`)** —— 完全按 dsh `TaskManagerPage` + `TaskDetail` 的结构:
@@ -381,6 +385,37 @@ export interface WorkspaceDiffHunk {
 | **S3 任务集成** | 4 个模型工具 + 系统提示 + 会话头时钟胶囊 + 会话行标记 + 对话内卡片 + 右栏任务详情 tab | 对 AI 说「每天 9 点帮我…」能建出来并在会话里看到 |
 
 顺序上 R1→R3 与 S1→S3 相互独立,可以先做 R 再做 S(或反过来);建议先 R(用户当前痛点更直接)。
+
+### 5.1 本轮落地状态(2026-10-07)
+
+> ⚠️ **本节的"自写实现"已整体废弃**:当时是照本文档的转述写的,与 dsh 语义不一致
+> (enabled/completed、success/failure/skipped/missed 运行记录、30s 轮询、一次性任务 5 分钟不补发…)。
+> 现在服务端是**逐字迁移 dsh**(`server/schedule/dsh/`,dsh 自己的 414 项 spec 全绿),
+> 见 **`docs/handoff-schedule-migration.md`**。下表只作历史记录保留。
+
+| 阶段 | 状态 | 落点 |
+|---|---|---|
+| **R1 变更数据源** | ✅ 已完成(更早一轮) | `server/changes/store.ts` + `server/api/rpc/changes.ts`,测试 `test/changes-record.test.js` |
+| **R2 diff 视图** | ✅ 已完成(更早一轮) | `web/src/components/ChangesReview/`(自写 ReviewTab + FileDiff,76 项测试) |
+| **R3 接入口** | ✅ 已完成(更早一轮) | 变更卡 / 工具行的「在侧栏对比」 |
+| **S1 任务核心** | ✅ 本轮完成 | `server/schedule/{types,time,store,runtime,service}.ts`、`server/api/rpc/schedule.ts`,启动挂在 `server/index.ts` |
+| **S2 任务页面** | ✅ 本轮完成 | `web/src/components/SchedulePanel/`、标签条固定标签「🕘 自动化任务」(在「⌨️ 终端」右边;左上角不放按钮)、手机底部栏项;RPC 8 个(含 `schedule_preview`) |
+| **S3 任务集成** | 🟡 模型工具已做,会话内 UI 未做 | 已完成:`server/agent/schedule-tools.ts`(4 个工具)+ 系统提示第 11 条 + `agent.submit` 的 `source='schedule'`/`taskId` + `agent.ensureRuntime`。未做:会话头时钟胶囊、会话行时钟标记、对话内创建卡片(`schedule_create` 结果目前落到 `GenericToolCard`)、右栏任务详情 tab |
+
+**S1/S2 落地的实现要点(与本文档原方案的差异)**
+
+1. **RPC 多了一个 `schedule_preview`**(共 8 个)。原因:DST/cron 的时间算术是服务端的纯函数,
+   浏览器端不重写一份 —— 规则编辑器每改一个字段就发一次 preview,把「下次运行 + 接下来 5 次」交给服务端算。
+   前端自己算一遍迟早会和调度器不一致。
+2. **投递要先把会话装进内存**:空闲会话会被 `switchSession` 从 `_runtimes` 释放,而 `agent.submit` 要求运行时存在
+   —— 新增 `agent.ensureRuntime(sid)`(只装载、**不切换**用户正在看的会话,已用测试钉住)。
+3. **投递消息带 `source='schedule'` + `taskId`**(`agent.submit` 新增两个可选参数),前端据此把它和普通用户消息区分开。
+4. **一次性任务与重复任务的错过口径分开**:一次性任务错过超过 5 分钟**不补发**;重复任务停机后**只补最近一次**。
+5. 运行记录 `result` 只有 success/failure/skipped/missed 四态(与本文档 §3.2 一致),"等待重连"期间**不写记录**
+   (每 30s 写一条"还在等"会污染运行记录),等超 5 分钟才落一条 missed 并写明原因。
+
+**已知未做(留给下一轮)**:§3.8 的三处会话内集成、§3.9 的右栏任务详情 tab、§4.7 的右栏外壳补齐;
+「会话不是完全访问时建任务给提示」这条(§7 风险 5)目前只在页面上给了一行说明,没有做成阻断式提醒。
 
 ---
 

@@ -32,7 +32,7 @@
 }
 .fviewer-body.media video { max-width: 100%; max-height: 100%; border-radius: var(--r-sm); box-shadow: 0 4px 24px var(--shadow-1); }
 .fviewer-body.media audio { width: min(480px, 90%); }
-.fviewer-body.media iframe { width: 100%; height: 100%; border: none; background: #fff; }
+.fviewer-body.media iframe { width: 100%; height: 100%; border: none; background: var(--code-bg-solid); }
 
 /* 下载链接按钮样式 */
 a.btn-link {
@@ -155,15 +155,15 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   height: 28px; margin: 0; padding: 0 10px 0 30px;
   background: var(--glass-bg-inset);
   background-image: linear-gradient(transparent, transparent);
-  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
   color: var(--text); font-size: 12.5px; font-family: var(--mono);
-  outline: none; transition: border-color .18s, box-shadow .18s, background .18s;
+  outline: none; transition: border-color .16s, box-shadow .16s, background .16s;
 }
 .fviewer .cm-panel.cm-search input.cm-textfield[name=search]::placeholder { color: var(--placeholder); }
 .fviewer .cm-panel.cm-search input.cm-textfield[name=search]:focus {
   border-color: var(--accent-border);
   background: var(--code-bg-soft);
-  box-shadow: 0 0 0 3px var(--accent-soft), inset 0 1px 0 var(--glass-hi);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 /* 放大镜:用 SVG 背景画(圆 + 斜柄),避免额外图标依赖 */
@@ -189,14 +189,13 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   order: 9; flex: none;
   height: 26px; margin: 0; padding: 0 11px;
   display: inline-flex; align-items: center;
-  background: linear-gradient(135deg, var(--fill-2), var(--fill-2-lo));
-  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
-  box-shadow: inset 0 1px 0 var(--glass-hi);
+  background: var(--fill-2);
+  border: 1px solid var(--glass-border);
   color: var(--text-2); font-size: 12px; font-family: inherit; line-height: 1;
   cursor: pointer; transition: background .16s, border-color .16s, color .16s;
 }
 .fviewer .cm-panel.cm-search button.cm-button:hover {
-  background: linear-gradient(135deg, var(--bar-tint-strong-a), var(--bar-tint-strong-b));
+  background: var(--fill-1);
   border-color: var(--glass-border-hover); color: var(--text);
 }
 .fviewer .cm-panel.cm-search button.cm-button:active { background: var(--fill-1); }
@@ -222,7 +221,7 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   position: static; inset: auto;
   width: 26px; height: 26px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
-  background: transparent; border: 1px solid transparent; border-radius: var(--r-pill);
+  background: transparent; border: 1px solid transparent;
   box-shadow: none; color: var(--text-faint);
   font-size: 15px; font-family: inherit; line-height: 1; cursor: pointer;
   transition: color .16s, background .16s, border-color .16s;
@@ -272,15 +271,15 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   height: 28px; margin: 0; padding: 0 10px;
   background: var(--glass-bg-inset);
   background-image: linear-gradient(transparent, transparent);
-  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
   color: var(--text); font-size: 12.5px; font-family: var(--mono);
-  outline: none; transition: border-color .18s, box-shadow .18s, background .18s;
+  outline: none; transition: border-color .16s, box-shadow .16s, background .16s;
 }
 .fviewer .cm-panel.cm-search input.cm-textfield[name=replace]::placeholder { color: var(--placeholder); }
 .fviewer .cm-panel.cm-search input.cm-textfield[name=replace]:focus {
   border-color: var(--accent-border);
   background: var(--code-bg-soft);
-  box-shadow: 0 0 0 3px var(--accent-soft), inset 0 1px 0 var(--glass-hi);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .fviewer .cm-panel.cm-search button.cm-button[name=replace] { order: 21; }
 
@@ -300,8 +299,6 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cm-searchMatch .cm-selectionMatch { background: transparent; }
 .fviewer .cm-tooltip {
   background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo)); color: var(--text);
-  backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-hover); border-radius: var(--r-sm);
   box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
 }

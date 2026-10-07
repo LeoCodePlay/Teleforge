@@ -13,6 +13,16 @@ import type { Mint } from './planner.ts'
 export interface IdMinter {
   /** Next id under `prefix`, unique for the life of this minter; the prefix names the id's kind. */
   readonly next: Mint
+  /**
+   * Raise the counter to `value` when it is ahead of the current one.
+   *
+   * An embedder restoring a sequence this surface recorded earlier builds the
+   * starting layout first (it must reproduce the same ids the sequence names) and
+   * only then moves the counter past everything that sequence minted, so the next
+   * genuinely new intent cannot hand out an id the restored tree already uses.
+   * @param value - the highest number already handed out; lower values do nothing.
+   */
+  readonly advanceTo: (value: number) => void
 }
 
 /**
@@ -28,7 +38,10 @@ export function createIdMinter(seed = 0): IdMinter {
     counter += 1
     return `${prefix}${counter}`
   }) as Mint
-  return { next }
+  return {
+    next,
+    advanceTo: (value: number) => { if (value > counter) counter = value },
+  }
 }
 
 /** Builds the tab record a newly seeded pane should hold. */

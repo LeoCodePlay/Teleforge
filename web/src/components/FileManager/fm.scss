@@ -13,8 +13,8 @@
 .fm-crumbs.dx-grab { cursor: grab; }
 .fm-crumbs.dx-scrolling { cursor: grabbing; user-select: none; }
 .crumb-wrap { flex: none; display: inline-flex; align-items: center; gap: 1px; }
-.crumb { flex: none; cursor: pointer; color: var(--accent-2); padding: 2px 6px; border-radius: 6px; white-space: nowrap; transition: all .15s; }
-.crumb:hover { background: var(--glass-bg-hover); text-shadow: 0 0 10px var(--accent-glow); }
+.crumb { flex: none; cursor: pointer; color: var(--accent-2); padding: 2px 6px; border-radius: var(--r-sm); white-space: nowrap; transition: background .15s, color .15s; }
+.crumb:hover { background: var(--glass-bg-hover); }
 .crumb.cur { color: var(--text); font-weight: 600; }
 .crumb-sep { color: var(--muted); user-select: none; }
 /* 路径编辑输入框(点当前级面包屑进入,替代面包屑行):与工具栏同高(border-box 含边框),进出编辑零高度变化 */
@@ -30,10 +30,9 @@
 .fm-upload { position: relative; }
 .ctxmenu.fm-upload-menu { position: fixed; z-index: 220; min-width: 168px; }
 .fmlist {
-  margin-top: 8px; border: 1px solid var(--glass-border); border-radius: var(--r-md);
-  background: var(--row-hover);
+  margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--glass-bg-inset);
   flex: 1; min-height: 72px; overflow-x: hidden; overflow-y: auto;
-  box-shadow: inset 0 1px 0 var(--glass-hi);
 }
 .fmlist:focus { outline: none; }
 .fmph { padding: 14px 12px; }
@@ -81,12 +80,11 @@
 .fmrow.nav-loading { background: var(--accent-soft); }
 @keyframes fm-spin { to { transform: rotate(360deg); } }
 
-/* 上传进度:发光进度条 */
-.progress { height: 5px; background: var(--progress-track); border-radius: 4px; margin: 6px 0; overflow: hidden; box-shadow: inset 0 1px 0 var(--ins-hl); }
+/* 上传进度 */
+.progress { height: 5px; background: var(--progress-track); border-radius: 3px; margin: 6px 0; overflow: hidden; }
 .progress-bar {
-  height: 100%; border-radius: 4px;
-  background: linear-gradient(90deg, var(--btn-b), var(--accent-2));
-  box-shadow: 0 0 10px var(--accent-glow);
+  height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
   transition: width .2s;
 }
 /* 删除/未知总量:不确定进度条(左右流动) */

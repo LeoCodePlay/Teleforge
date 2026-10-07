@@ -13,6 +13,7 @@ import { registerBrowser } from './browser.ts';
 import { registerAiTerm } from './ai-term.ts';
 import { registerComputerUse } from './computer-use.ts';
 import { registerChanges } from './changes.ts';
+import { registerSchedule } from './schedule.ts';
 import { registerSubagent } from './subagent.ts';
 import { registerExtension } from './extension.ts';
 
@@ -53,6 +54,7 @@ export function createRpcRouter(ctx: RpcRouterCtx) {
   registerSubagent(rpc);
   registerExtension(rpc);
   registerChanges(rpc);
+  registerSchedule(rpc);
   return {
     // 多浏览器可同时在线:
     // - reply(带 reqId 的最终应答)与带 reqId 的进度事件(delete_progress/transfer_progress 等)

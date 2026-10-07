@@ -136,6 +136,9 @@ async function main() {
   bad.generateImage = boom;
   bad.editImage = boom;
   agent.llm = bad;
+  // 会话跑过一轮后会锁定自己的模型客户端(见 agent._lockLlm):只改全局默认换不动它,
+  // 必须像生产路径(configureLlm(cfg, sid))那样把该会话的客户端也换掉,否则失败注入根本不生效。
+  agent2._llmBySid.set(agent2.getSessionId(), bad);
   events.length = 0;
   const genBefore = agent2.session.events.filter((e) => e.type === 'image/generated').length;
   await agent2.run('这张会失败');
@@ -149,6 +152,7 @@ async function main() {
 
   // ---------- 附件元数据防伪:未知 id 被丢弃,不得凭空增加参考图 ----------
   agent.llm = makeFakeImageLlm();
+  agent2._llmBySid.set(agent2.getSessionId(), agent.llm);
   const llm2 = agent.llm;
   await agent2.run('参考不存在的图', { attachments: [{ id: 'att_not_exist' }] });
   check('未知附件 id 被丢弃(参考图数不因伪造 id 增加)',

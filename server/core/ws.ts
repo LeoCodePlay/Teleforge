@@ -27,6 +27,7 @@ import { browserManager } from './browser-manager.ts';
 import { browserBridge } from './browser-bridge.ts';
 import { aiTerms } from './ai-term.ts';
 import { computerUse } from './computer-use/index.ts';
+import { scheduleService } from '../schedule/index.ts';
 
 /**
  * 兜底修复 node-pty(Windows/ConPTY)已知崩溃:见 microsoft/node-pty#827。
@@ -124,6 +125,12 @@ export function setupWs(httpServer: Server) {
   // start/output/exit/removed 四种事件;前端按 id 归并,输出直接写进只读 xterm。
   aiTerms.setHub({
     emit: (event: string, payload: any) => send({ type: 'ai_term', event, ...payload })
+  });
+
+  // 自动化任务状态变化 -> 前端(只发"变了":任务正文/投递历史由前端自己拉 catalog,
+  // 免得每次投递都把整张表广播一遍)。服务层在落库成功后才广播,见 schedule/service.ts
+  scheduleService.setHub({
+    emit: (payload: any) => send({ type: 'schedule', ...payload })
   });
 
   // SSH 状态 -> 前端(活动连接字段 + 全部连接列表,前端据此做多连接管理与快速切换;

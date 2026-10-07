@@ -48,6 +48,15 @@ export interface DockControllerOptions {
   readonly makePaneTab?: TabFactory
   /** Starting presentation; defaults to `push`. */
   readonly mode?: DockMode
+  /**
+   * A sequence this surface recorded earlier (the embedder persisted it across
+   * mounts), replayed onto the starting layout. The operations carry their own
+   * ids, so replaying reproduces the exact tree; they also join the history, so
+   * a re-persist after the restore keeps the layout. An operation the starting
+   * state rejects abandons the whole restore — a layout from another version or
+   * another surface must degrade to the fresh start, never throw.
+   */
+  readonly restoreOps?: readonly LayoutOp[]
 }
 
 /** One docking surface: history, interaction limits, and change notification. */
@@ -58,11 +67,12 @@ export class DockController {
   private readonly makePaneTab: TabFactory | undefined
   private snapshot: DockSnapshot
 
-  /** @param options - the tab factories this surface seeds panes with. */
+  /** @param options - the tab factories this surface seeds panes with, and any recorded sequence to restore. */
   constructor(options: DockControllerOptions = {}) {
-    this.minter = createIdMinter()
     this.makePaneTab = options.makePaneTab
-    this.sequencer = new Sequencer(createInitialState(this.minter, options.makeInitialTab, options.mode))
+    const restored = restoreSequence(options.restoreOps ?? [], options)
+    this.minter = restored.minter
+    this.sequencer = restored.sequencer
     this.snapshot = this.buildSnapshot()
   }
 
@@ -312,4 +322,71 @@ export class DockController {
   activeDockPaneId(): PaneId {
     return dockedActivePane(this.state)
   }
+}
+
+/**
+ * Highest numeric id suffix a recorded sequence mentions.
+ *
+ * Every id this kit mints is `<prefix><n>` off ONE counter per surface, so the
+ * largest `n` any operation carries is the counter's value when it was recorded:
+ * advancing the minter there is what keeps a restored tree and freshly minted ids
+ * from colliding. Over-estimating is harmless (ids merely skip numbers), so the
+ * scan is deliberately broad — any `letters+digits` string in an operation, ids
+ * and opaque content ids alike.
+ * @param ops - a recorded sequence.
+ * @returns the highest suffix found, or 0 for a sequence mentioning none.
+ */
+function highestIdSuffix(ops: readonly LayoutOp[]): number {
+  let highest = 0
+  const visit = (value: unknown): void => {
+    if (typeof value === 'string') {
+      const match = /^[A-Za-z]+(\d+)$/.exec(value)
+      if (match !== null) highest = Math.max(highest, Number(match[1]))
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item)
+      return
+    }
+    if (typeof value === 'object' && value !== null) {
+      for (const item of Object.values(value)) visit(item)
+    }
+  }
+  visit(ops)
+  return highest
+}
+
+/**
+ * Build the id source and sequence a controller starts from, restoring a
+ * previously recorded sequence when one is given.
+ *
+ * The order matters twice over. The starting layout must come out of the same
+ * zero-seeded minter that recorded the sequence — those operations name its ids
+ * (`pane1`), so replaying them against a differently seeded start would reject
+ * every one. And the counter only then jumps past what the sequence used, because
+ * the operations carry their ids rather than minting them.
+ * @param recorded - the operations a previous mount recorded, in order.
+ * @param options - the options this controller is being built with.
+ * @returns the minter to keep, and the sequence to dispatch new intents on.
+ */
+function restoreSequence(
+  recorded: readonly LayoutOp[],
+  options: DockControllerOptions,
+): { minter: IdMinter; sequencer: Sequencer } {
+  const minter = createIdMinter()
+  const fresh = (source: IdMinter): Sequencer => new Sequencer(createInitialState(source, options.makeInitialTab, options.mode))
+  if (recorded.length === 0) return { minter, sequencer: fresh(minter) }
+  const sequencer = fresh(minter)
+  try {
+    for (const op of recorded) sequencer.dispatch(op)
+  } catch {
+    // A sequence only means something as a whole: past the first operation the
+    // state rejects, nothing after it can be trusted. Start over from a pristine
+    // minter, so the fallback layout keeps the canonical ids (`pane1`) that the
+    // operations this mount records will themselves be replayed against.
+    const clean = createIdMinter()
+    return { minter: clean, sequencer: fresh(clean) }
+  }
+  minter.advanceTo(highestIdSuffix(recorded))
+  return { minter, sequencer }
 }

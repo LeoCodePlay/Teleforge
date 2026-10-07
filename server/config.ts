@@ -44,6 +44,8 @@ export const SESSIONS_DIR       = path.join(DATA_DIR, 'sessions');
 // 子代理运行记录(每次派发一个文件;面板按会话列出并回看其完整对话)
 export const SUBAGENTS_DIR      = path.join(DATA_DIR, 'subagents');
 export const SETTINGS_FILE      = path.join(DATA_DIR, 'settings.json');
+// 自动化任务(定时把一句话投递进某个会话):任务表 + 运行记录,见 server/schedule/
+export const SCHEDULES_FILE     = process.env.SCHEDULES_FILE     || path.join(DATA_DIR, 'schedules.json');
 // 「上次是用户主动退出」的标记文件(见 store/clean-quit.ts):用来区分"进程崩了该自动接着做"
 // 与"用户自己关了软件,下次打开只是看看,不该擅自继续"。
 export const QUIT_FLAG_FILE     = process.env.QUIT_FLAG_FILE     || path.join(DATA_DIR, 'clean-quit.flag');
@@ -135,7 +137,10 @@ export const AGENT = {
   SUBAGENT: {
     // 不设步数上限、也不设时长上限:子代理跑到模型自己收尾为止(只受父轮停止约束),
     // 长调研不会被硬截断成"达到上限后收敛"的半成品结论。
-    RESULT_MAX_CHARS: 12_000,   // 回传父级的结论上限;超出截断(完整过程只存在于子代理自己的内存会话)
+    RESULT_MAX_CHARS: 12_000,   // 回传父级的结论上限;超出截断(完整过程只存在于子代理自己的会话)
+    // 结算通知上限:常驻子代理一轮跑完(Activation 空闲)时投递给父会话的那条消息
+    // (harness 的 settlement notice 承担"不阻塞也能把结果带回来"),同样要防超长撑爆上下文
+    NOTICE_MAX_CHARS: 6_000,
     // 工具级超时:0 = **不设超时**。子代理是"派发—等结果"的长任务,固定时限只会把长调研
     // 掐成半成品结论;需要提前结束时统一由父轮停止(AbortSignal)中止(见 registry.runWithTimeout)。
     TIMEOUT_MS: 0,

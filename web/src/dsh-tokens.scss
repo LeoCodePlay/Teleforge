@@ -9,7 +9,9 @@
 
      - 语义别名(alias-*)/ 字号字体 / 圆角 / 阴影 / 焦点环 → 指向本项目 token,
        于是**四套预设 + 自定义主题都自动跟随**,暗色亮色各自正确;
-     - `static-*` 是 dsh 明确定义为「不随主题变化」的固定色板,照它的值写死;
+     - `static-*` 原为 dsh 里「不随主题变化」的固定色板:其中当表面/文字用的已改走
+       本项目主题 token;只有「内容标识」(文件类型图标 / ANSI)保留,属于
+       DESIGN_SYSTEM.md 声明的唯一例外。
      - 间距/行高这类不是变量(直接写死在 CSS 里),不需要映射。
 
    改的时候只改这里,不要去改 web/src/dsh 里的原文 —— 那是搬运件,保持可对照上游。
@@ -36,13 +38,13 @@
   --dsw-font-markdown-table: 12.5px/1.5 var(--font-ui);
   --dsw-font-markdown-table-head: 600 12.5px/1.5 var(--font-ui);
 
-  /* ---- 圆角 ---- */
-  --dsw-radius-xs: 6px;
+  /* ---- 圆角:全部收敛到本项目的统一圆角梯度(DESIGN_SYSTEM.md「形状」) ---- */
+  --dsw-radius-xs: var(--r-sm);
   --dsw-radius-sm: var(--r-sm);
   --dsw-radius-md: var(--r-md);
   --dsw-radius-lg: var(--r-lg);
-  --dsw-radius-xl: 24px;
-  --dsw-radius-panel: 16px;
+  --dsw-radius-xl: var(--r-lg);
+  --dsw-radius-panel: var(--r-lg);
 
   /* ---- 动效 ---- */
   --ds-ease-in-out: cubic-bezier(.4, 0, .2, 1);
@@ -102,7 +104,7 @@
   /* ---- 浮层(菜单/提示/悬浮卡/Toast)---- */
   --dsw-specific-menu: var(--pop-bg);
   --dsw-menu-surface-fill: var(--code-bg-solid);
-  --dsw-menu-backdrop-filter: var(--blur-md);
+  --dsw-menu-backdrop-filter: none;
   --dsw-menu-group-header-fill: var(--line-faint);
   --dsw-menu-icon: var(--muted);
   --dsw-alias-tooltip-bg: var(--code-bg-solid);
@@ -119,7 +121,7 @@
   --dsw-elevation-stroke-color: var(--glass-border);
   --dsw-focus-ring-color: var(--accent-border);
   --dsw-focus-ring-width: 2px;
-  --dsw-mask-blur: var(--blur-sm);
+  --dsw-mask-blur: none;
   --dsw-alias-scrollbar-bg-l2: transparent;
   --dsw-alias-scrollbar-hover-l2: var(--scroll-thumb);
   --dsw-shadow-lv3: var(--glass-shadow-lg);
@@ -154,21 +156,34 @@
   --dsw-alias-file-diff-deleted-gutter: var(--diff-del-gutter);
   --dsw-alias-file-diff-deleted-marker: var(--diff-del-marker);
 
-  /* ---- static-*:dsh 里明确「不随主题变化」的固定色板,照原值写死 ---- */
-  --dsw-static-neutral-00: #ffffff;
-  --dsw-static-neutral-50: #f9fafb;
-  --dsw-static-neutral-100: #f3f4f6;
-  --dsw-static-neutral-200: #e5e7eb;
-  --dsw-static-neutral-700: #374151;
-  --dsw-static-neutral-800: #1f2937;
-  --dsw-static-neutral-850: #16181d;
-  --dsw-static-neutral-bluish-00: #ffffff;
-  --dsw-static-neutral-bluish-300: #b6c2d9;
-  --dsw-static-deepseek-400: #6b8afd;
-  --dsw-static-deepseek-450: #4d6bfe;
-  --dsw-static-deepseek-500: #3b5bdb;
-  --dsw-static-green-500: #22c55e;
-  --dsw-static-amber-400: #fbbf24;
-  --dsw-static-amber-500: #f59e0b;
-  --dsw-static-red-600: #dc2626;
+  /* ---- static-*:dsh 原本写死「不随主题变化」。这里按用途分成两类 ——
+     1) 当「表面 / 文字」用的(交付物填充、指南正文)→ 改走主题 token,跟随 6 色;
+     2) 当「内容标识」用的(文件类型图标、ANSI)→ 保留固定色板,
+        与终端 / 语法高亮同属 DESIGN_SYSTEM.md 里声明的唯一例外。 ---- */
+  --dsw-static-neutral-00: #ffffff;                 /* 彩色角标上的图标字形(内容标识) */
+  --dsw-static-neutral-50: var(--glass-bg);
+  --dsw-static-neutral-100: var(--glass-bg-hover);
+  --dsw-static-neutral-200: var(--text);
+  --dsw-static-neutral-700: var(--text-2);
+  --dsw-static-neutral-800: var(--glass-bg-hover);
+  --dsw-static-neutral-850: var(--glass-bg);
+  --dsw-static-neutral-bluish-00: #ffffff;          /* 同 neutral-00,内容标识 */
+  --dsw-static-neutral-bluish-300: #b6c2d9;         /* 文件类型图标色(内容标识) */
+  --dsw-static-deepseek-400: var(--accent);
+  --dsw-static-deepseek-450: var(--accent);
+  --dsw-static-deepseek-500: var(--accent);
+  --dsw-static-green-500: var(--green);
+  --dsw-static-amber-400: var(--amber);
+  --dsw-static-amber-500: var(--amber);
+  --dsw-static-red-600: var(--red);
+  /* ANSI 亮蓝(终端内容标识):原主题包外未定义,这里补上并跟随强调色 */
+  --dsw-static-blue-400: var(--accent-2);
+  --dsw-static-blue-500: var(--accent);
+  --dsw-static-blue-600: var(--btn-hover-a);
+
+  /* ---- 被搬运组件引用、但值只存在于 dsh 原主题包里的几个别名:在此补齐 ---- */
+  --dsw-alias-label-primary-inverted: var(--bg-deep);
+  --dsw-alias-state-success-secondary: var(--ok-bg);
+  --dsw-alias-state-error-secondary: var(--err-bg);
+  --dsw-alias-state-warn-secondary: var(--warn-bg);
 }
