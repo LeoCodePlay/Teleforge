@@ -132,10 +132,11 @@ async function main() {
       }
     };
     const notices = [];
+    let noticeSource = null;
     const r = await toolRegistry.execute({
       name: 'subagent',
       args: JSON.stringify({ ...BRIEF }),
-      invokeCtx: { sid: 's_bg', llm, registry: toolRegistry, emit: () => {}, agent: { submit: (sid, text) => { notices.push(text); } } }
+      invokeCtx: { sid: 's_bg', llm, registry: toolRegistry, emit: () => {}, agent: { submit: (sid, text, opts) => { notices.push(text); noticeSource = opts?.source ?? null; } } }
     });
     check('缺省后台派发:工具立即返回 started subagent <id>(不等结果)',
       !r.isError && /^started subagent sa_[0-9a-z]+$/.test(r.content.trim()), `${r.isError} / ${r.content}`);
@@ -150,9 +151,14 @@ async function main() {
     releaseChild();
     const settled = await waitFor(() => !!notices.length);
     check('子代理跑完后投递结算通知(父会话能拿到结论)', settled, JSON.stringify(notices));
-    check('结算通知带 runId 与最后结论',
-      notices[0]?.includes(runId) && notices[0]?.includes('[子智能体结算]') && notices[0]?.includes('后台调研完成'),
-      String(notices[0]).slice(0, 160));
+    check('结算通知是 dsh 的 settlement notice 文案(一句话账 + 收尾消息)',
+      notices[0]?.includes(runId) && notices[0]?.includes('已完成;除非你再给它发消息')
+      && notices[0]?.includes('它的收尾消息:') && notices[0]?.includes('后台调研完成'),
+      String(notices[0]).slice(0, 200));
+    check('结算通知带 dsh 的 source 归属(kind=subagent-settled / form=notice / summary / senderSessionId)',
+      noticeSource?.kind === 'subagent-settled' && noticeSource?.form === 'notice'
+      && String(noticeSource?.summary || '').includes(runId) && noticeSource?.senderSessionId === runId,
+      JSON.stringify(noticeSource));
     check('结算后记录停在 idle(常驻、可继续),不是终局',
       await waitFor(() => saStore.get(runId)?.status === 'idle'), String(saStore.get(runId)?.status));
     check('结算后常驻 Activation 还在(可续聊)', rt.isResident(runId) === true);
@@ -313,16 +319,24 @@ async function main() {
     check('父代理在自己的一轮里没有等子代理(第二步照常产出)',
       agent.history.some((m) => m.role === 'assistant' && String(m.content).includes('我先干别的活')), '');
     check('子代理确实还没跑完(受 gate 控制)', agent.history.some((m) => m.role === 'tool' && String(m.content).startsWith('started subagent ')));
-    const rpcNote = agent.history.filter((m) => m.role === 'user' && String(m.content).includes('[子智能体结算]'));
-    check('子代理没跑完之前,父会话里还没有结算通知', rpcNote.length === 0, JSON.stringify(rpcNote.map((m) => m.content).slice(0, 2)));
+    const rpcNote = agent.history.filter((m) => m.role === 'user' && String(m.content).includes('子代理'));
+    check('子代理没跑完之前,父会话里还没有结算通知',
+      !rpcNote.some((m) => /已完成;除非你再给它发消息|它的收尾消息:/.test(String(m.content))),
+      JSON.stringify(rpcNote.map((m) => m.content).slice(0, 2)));
 
     releaseChild();
     const got = await waitFor(() => agent.history.some((m) => m.role === 'assistant' && String(m.content).includes('收到结算通知')), 8000);
     const hist = agent.history;
-    const notice = hist.find((m) => m.role === 'user' && String(m.content).includes('[子智能体结算]'));
+    // 事件日志里这条通知的 source 必须是 dsh 形状的对象(form=notice → 前端渲染通知行)
+    const noticeEvent = agent.session.events.find((e) => e.type === 'user/message'
+      && e.data?.source && typeof e.data.source === 'object' && e.data.source.kind === 'subagent-settled');
+    const notice = hist.find((m) => m.role === 'user' && /已完成;除非你再给它发消息|它的收尾消息:/.test(String(m.content)));
     check('子代理跑完后父会话被唤醒(父代理自己开了一轮回应)', got, '');
     check('结算通知作为一条消息进了父会话,带着子代理结论',
       !!notice && String(notice.content).includes('语义对齐已确认'), String(notice?.content || '').slice(0, 200));
+    check('结算通知带 form=notice 的 source(前端据此渲染成通知行,而不是用户气泡)',
+      noticeEvent?.data?.source?.form === 'notice' && noticeEvent?.data?.source?.kind === 'subagent-settled',
+      JSON.stringify(noticeEvent?.data?.source));
     check('子代理上下文隔离:父会话里没有子代理的事件/中间步骤',
       !hist.some((m) => m.role === 'tool' && String(m.content).includes('子代理结论')), '');
     check('子代理第一次请求只看到自己的系统提示词 + 本次任务(与父会话隔离)',

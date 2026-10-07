@@ -153,3 +153,7 @@ export const IconChevronDown = (props: IconProps) => (
 export const IconChevronUp = (props: IconProps) => (
   <IconChevronUpOutlineArtwork {...props} strokeWidth={ICON_REGULAR_STROKE} />
 );
+/** 「子代理」图标:dsh 的 TurnTriggerNodeView 在 subagent-settled 这一类通知行上用同一个原件 */
+export const IconAgentPreset = (props: IconProps) => (
+  <IconAgentPresetOutlineArtwork {...props} strokeWidth={ICON_REGULAR_STROKE} />
+);

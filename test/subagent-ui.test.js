@@ -124,18 +124,31 @@ try {
     (await page.locator('[data-tool="subagent"]').count()) >= 1
     && !(await page.locator('[data-tool="subagent"]').first().isVisible()));
 
+  // 展开:外层是"回合折叠行",内层是"过程组组头"(dsh 的两层结构)。
+  // 点开外层 → 出现组头(「已读取文件…」),工具行还在组头下面收着;
+  // 点开组头 → 工具行可见,组体是 dsh 的滚动区(min(400px,50vh) + 上下渐隐)。
   await fold.click();
   await page.waitForTimeout(500);
-  check('展开后工具行可见', await page.locator('[data-tool="subagent"]').first().isVisible());
   check('展开后折叠行标记为已展开', (await fold.getAttribute('aria-expanded')) === 'true');
-  // 展开必须**完整铺开**:内部不能出现滚动条(用户明确要求)
+  const groupHead = page.locator('[data-process-title]').first();
+  await groupHead.waitFor({ timeout: 10000 });
+  check('展开外层后出现过程组组头(一段工具活动一个组头)', await groupHead.isVisible());
+  check('组头文案是「已…」这类活动账', /^已/.test((await groupHead.innerText()).trim()), (await groupHead.innerText()).trim());
+  check('组头收起时工具行仍不可见(要再点一次组头)',
+    !(await page.locator('[data-tool="subagent"]').first().isVisible()));
+  await groupHead.click();
+  await page.waitForTimeout(400);
+  check('展开组头后工具行可见', await page.locator('[data-tool="subagent"]').first().isVisible());
+  check('组头标记为已展开', (await groupHead.getAttribute('aria-expanded')) === 'true');
+  // 组体是 dsh 的滚动区:限高 min(400px,50vh) + overflow auto(与 dsh 的 .body 一致)。
+  // 注意:这是**内层**组体的规则;外层回合折叠展开后不限高(dsh 的 uncapped)。
   const bodyFit = await page.locator('[data-process-body]').first().evaluate((el) => {
     const s = getComputedStyle(el);
     return { overflowY: s.overflowY, maxH: s.maxHeight, scrollable: el.scrollHeight - el.clientHeight };
   });
-  check('展开后组体不滚动(overflow 非 auto/scroll)', bodyFit.overflowY !== 'auto' && bodyFit.overflowY !== 'scroll', JSON.stringify(bodyFit));
-  check('展开后没有高度上限', bodyFit.maxH === 'none', bodyFit.maxH);
-  check('展开后内容未被截断(scrollHeight ≈ clientHeight)', Math.abs(bodyFit.scrollable) <= 2, String(bodyFit.scrollable));
+  check('组体是滚动区(overflow-y: auto,dsh 的 .body)', bodyFit.overflowY === 'auto', JSON.stringify(bodyFit));
+  check('组体限高是 dsh 的 min(400px,50vh)', bodyFit.maxH !== 'none' && /px$/.test(bodyFit.maxH), bodyFit.maxH);
+  check('内容不满一屏时不被截断(scrollHeight ≈ clientHeight)', bodyFit.scrollable <= 2, String(bodyFit.scrollable));
 
   // 父代理 → subagent 工具卡
   const card = page.locator('[data-tool="subagent"]').first();
@@ -186,9 +199,13 @@ try {
     (await page.locator('[data-subagent-catalog="count"]').count()) === 0);
   check('面包屑里有回父会话的入口', (await page.locator('[data-session-crumb]').count()) === 1);
 
-  // 详情区照搬正常对话:回合默认收起 —— 先展开(与父会话同一交互:点折叠行),
-  // 工具调用才是主对话同款工具行(.dsh-tooltree)
+  // 详情区照搬正常对话(dsh 的**两层**折叠):先点回合折叠行 → 出现过程组组头;
+  // 再点组头 → 工具行(主对话同款 .dsh-tooltree)才可见。子会话与父会话同一套交互。
   await view.locator('[data-turn-process]').first().click();
+  await view.locator('[data-process-title]').first().waitFor({ timeout: 15000 });
+  check('子会话里同样是两层折叠(回合折叠行下还有过程组组头)',
+    (await view.locator('[data-process-title]').count()) >= 1);
+  await view.locator('[data-process-title]').first().click();
   await view.locator('.dsh-tooltree').first().waitFor({ timeout: 15000 });
   // 可能是多次派发:等「这次」的结论真的渲染出来再读文本,避免读到中间态/别的记录
   await view.getByText('结论:目录可读').first().waitFor({ timeout: 25000 });
@@ -197,8 +214,7 @@ try {
   check('对话首条是父对话生成的任务与边界', viewText.includes('任务目标') && viewText.includes('边界(必须遵守)'), viewText.slice(0, 200));
   check('对话里有子代理的真实工具调用(主对话同款工具行)',
     (await view.locator('[data-tool="get_local_info"]').count()) > 0);
-  check('对话里有子代理的结论', viewText.includes('结论:目录可读'), viewText.slice(-120));
-  check('详情区用正常对话样式(用户气泡 + 助手气泡)',
+  check('对话里有子代理的结论', viewText.includes('结论:目录可读'), viewText.slice(-120));  check('详情区用正常对话样式(用户气泡 + 助手气泡)',
     (await view.locator('.msg.user .bubble.user-bubble').count()) > 0
     && (await view.locator('.msg.assistant .bubble.ai-bubble').count()) > 0);
   // 输入位:与父会话同一个输入卡(可继续的子代理保留默认 composer —— dsh 同语义)

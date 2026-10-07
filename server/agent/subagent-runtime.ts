@@ -20,7 +20,7 @@
 //   - 子代理不能派孙代理(白名单不含 subagent/send_message/interrupt_agent/list_agents);
 //   - 进程重启后常驻 Activation 消失:磁盘上仍能回看完整对话,但不能再续聊(如实报错,不假装)。
 import { AGENT } from '../config.ts';
-import { Session, foldSessionStats, foldTokenUsage } from './session.ts';
+import { Session, foldSessionStats, foldTokenUsage, type MessageSource } from './session.ts';
 import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.ts';
 import { runWithLocalWorkspaceBinding } from '../core/local-fs.ts';
 import type { ToolRegistry } from './registry.ts';
@@ -72,7 +72,7 @@ interface Child {
   registry: ToolRegistry;
   emit?: (event: string, payload: any) => void;
   /** 结算通知的投递口(由工具层注入:父会话空闲会被唤醒,忙则排队) */
-  notifyParent?: (text: string) => void;
+  notifyParent?: (text: string, source?: MessageSource) => void;
   /** 待执行轮次(FIFO;interrupt 时原样保留) */
   inbox: QueuedTurn[];
   /** 已写进 session、等下一步认领的 steer 消息条数 */
@@ -127,7 +127,7 @@ export interface StartSubagentOptions {
   /** 只对一次性派发(前台)有意义:父轮停止即停止子代理。后台派发不受父轮停止约束。 */
   signal?: AbortSignal;
   emit?: (event: string, payload: any) => void;
-  notifyParent?: (text: string) => void;
+  notifyParent?: (text: string, source?: MessageSource) => void;
   /** 派发方式,缺省 continuable(后台、不阻塞、可续聊) */
   mode?: ChildMode;
   /** 执行作用域(父会话的连接/工作区):不传就按"当前活动连接"执行 */
@@ -229,21 +229,54 @@ function settlementText(c: Child): string {
 }
 
 /**
+ * 结算通知的**一句话账**(逐条对齐 dsh 的 settlementSummary):
+ * 父代理看到的第一行就该是"这个后台子代理现在什么状态、还会不会自己干活",
+ * 而不是一行内部术语或它的长结论。
+ */
+function settlementSummary(runId: string, status: 'done' | 'error' | 'stopped'): string {
+  const subject = `后台子代理 ${runId}`;
+  switch (status) {
+    case 'done':
+      return `${subject} 已完成;除非你再给它发消息,它不会再做任何事。`;
+    case 'stopped':
+      return `${subject} 在完成前被停止。`;
+    case 'error':
+      return `${subject} 在完成前失败了。`;
+    default:
+      return `${subject} 异常结束(${String(status)})且未完成。`;
+  }
+}
+
+/**
  * 结算通知 —— harness 的 settlement notice:一轮跑完、收件箱空了就投递给父会话。
  * 只投一次(每个"跑→空闲"的转换一次),父会话空闲会被唤醒开一轮,忙就排队;
  * 投递失败绝不反过来打断子代理(与 harness 的 observe-only 事件同一取向)。
+ *
+ * 形态**逐字对齐 dsh 的 createSettlementMessage**(见 packages/subagent/subagent/src/
+ * continuation-messages.ts):
+ *   - 正文 = 一句话账 + 「Its closing message:」+ 子代理的收尾文字(没有则写明"没留收尾消息");
+ *   - source = { kind:'subagent-settled', form:'notice', summary, senderSessionId } ——
+ *     `form:'notice'` 是**渲染契约**:前端把它画成"触发这一轮的通知行"(标题 + 时间 + 展开看正文),
+ *     而不是一条用户气泡;`summary` 是折叠行上的一行账。
+ * dsh 的通知正文里**不带**"还能用 send_message 继续派活"这种补充说明 —— 那句话在子代理的
+ * 初始任务指引里(withContinuableReturnGuidance),通知只陈述"它现在什么状态"。
  */
 function deliverNotice(c: Child, status: 'done' | 'error' | 'stopped', note: string | null) {
   if (!c.notifyParent) return;
   const cap = AGENT.SUBAGENT.NOTICE_MAX_CHARS;
-  const body = status === 'done' && !c.lastText.trim() ? '它没有留下任何收尾消息。' : settlementText(c);
-  const head = `[子智能体结算] ${c.runId}「${c.description || '未命名'}」本轮已结束:${status}`;
-  const tail = c.mode === 'continuable'
-    ? `\n\n它仍然可用:send_message(agent_id="${c.runId}") 可以继续给它派活;list_agents 看它的状态。`
-    : '';
-  let text = `${head}${note ? `(${note})` : ''}\n它的最后结论:\n${body}${tail}`;
+  const summary = settlementSummary(c.runId, status);
+  const closing = status === 'done' && !c.lastText.trim() ? '' : settlementText(c);
+  let text = `${summary}${note ? `(${note})` : ''}\n\n`
+    + (closing ? `它的收尾消息:\n${closing}` : '它没有留下任何收尾消息。');
   if (text.length > cap) text = `${text.slice(0, cap)}\n…[通知过长,已截断]…`;
-  try { c.notifyParent(text); } catch { /* 投递失败不影响子代理 */ }
+  try {
+    c.notifyParent(text, {
+      kind: 'subagent-settled',
+      form: 'notice',
+      summary,
+      senderSessionId: c.runId
+    });
+  } catch { /* 投递失败不影响子代理 */ }
 }
 
 /**
@@ -666,7 +699,7 @@ export interface ResumeDeps {
   llm: any;
   registry: ToolRegistry;
   emit?: (event: string, payload: any) => void;
-  notifyParent?: (text: string) => void;
+  notifyParent?: (text: string, source?: MessageSource) => void;
   binding?: ChildBinding | null;
 }
 
@@ -789,11 +822,11 @@ function coldResume(rec: SubagentRun, deps: ResumeDeps): Child {
 export function parentNotifier(agent: any, sid: string | null | undefined) {
   const parentSid = sid ? String(sid) : '';
   if (!parentSid) return undefined;
-  return (text: string) => {
+  return (text: string, source?: MessageSource) => {
     try {
       if (!agent || typeof agent.submit !== 'function') return;
       try { agent.ensureRuntime?.(parentSid); } catch { /* 载不回来就按下面的 submit 兜底 */ }
-      const p = agent.submit(parentSid, text, { auto: true, source: 'subagent-settled' });
+      const p = agent.submit(parentSid, text, { auto: true, source: source ?? 'subagent-settled' });
       if (p && typeof p.catch === 'function') p.catch(() => { /* 投递失败与子代理无关 */ });
     } catch { /* 父会话不在内存:丢弃通知(子代理自己的记录里仍有完整结论) */ }
   };

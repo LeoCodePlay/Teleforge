@@ -26,6 +26,8 @@ import { ToolCallList } from '../ToolCallList/ToolCallList';
 import { ProcessGroup } from '../ProcessGroup/ProcessGroup';
 import { ProcessFold } from '../ProcessGroup/ProcessFold';
 import { planGroups, isGroupLive, groupedFor, TRANSCRIPT_MODE, formatRunDuration } from '../../utils/processGroups';
+// 非人类消息(子代理结算 / 自动化任务 / 目标续跑)的「触发本轮」通知行:照搬 dsh 的 TurnTriggerNodeView
+import TurnTriggerRow from './TurnTriggerRow';
 import { AssistantSegment, ReasoningSegment } from './assistantText';
 import { CompactionRow } from './CompactionRow';
 import { FilesChangedCard } from './FilesChangedCard';
@@ -384,6 +386,8 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
           ...(Array.isArray(t.skillsInjected) && t.skillsInjected.length ? { skillsInjected: t.skillsInjected } : {}),
           // 目标自动续跑轮:气泡渲染成「🎯 目标第 N 轮」而不是一段像用户说的话
           ...(t.goalRound ? { goalRound: t.goalRound } : {}),
+          // 非人类消息的来源归属(通知行据此渲染:标题/时间/展开正文,而不是用户气泡)
+          ...(t.source ? { source: t.source } : {}),
           ...(t.compaction ? { compaction: t.compaction } : {})
         });
         turnToOut[ti] = idx;
@@ -1147,7 +1151,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             setTodos((prev) => (prev.some((t) => t.status !== 'completed') ? prev : []));
             setSuppressIn(false); // 实时追加的新消息:解除入场动画抑制,保留浮现动效
             setSessionImgJob(activeRef.current, null); // 新一轮开始:上一轮的在途生图标记一律作废
-            push((msgs) => [...msgs, { role: 'user', content: m.text, attachments: Array.isArray(m.attachments) ? m.attachments : undefined, time: Date.now(), forkTail: Math.max(0, forkTurnRef.current - 1) }]);
+            push((msgs) => [...msgs, { role: 'user', content: m.text, attachments: Array.isArray(m.attachments) ? m.attachments : undefined, time: Date.now(), source: m.source, forkTail: Math.max(0, forkTurnRef.current - 1) }]);
             push((msgs) => [...msgs, { role: 'assistant', segments: [], streaming: true, forkTail: Math.max(0, forkTurnRef.current - 1) }]);
             break;
           case 'context_usage':
@@ -2741,7 +2745,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={`msg ${m.role}${m.compaction ? ' compaction-msg' : ''}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
+            <div key={i} className={`msg ${m.source?.form === 'notice' ? 'trigger' : m.role}${m.compaction ? ' compaction-msg' : ''}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
               {m.compaction && (
                 // 上下文压缩标记行(手动/自动):折叠展示摘要,展开看正文(样式参照 harness CompactionItem)
                 <CompactionRow content={m.content || ''} dropCount={m.compaction.dropCount} manual={m.compaction.manual} running={!!m.compaction.running} failed={!!m.compaction.failed} reason={m.compaction.reason} />
@@ -2754,7 +2758,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 // 模型请求失败进入重试:harness 风格单行折叠状态行(倒计时 + 可展开详情),非警示横幅
                 ? <div className="retry-msg-wrap"><RetryRow data={m.retry} /></div>
                 : <div className="bubble notice-bubble">⚠ {m.content}</div>)}
-              {m.role === 'user' && !m.compaction && (
+              {/* 非人类消息(source.form='notice':子代理结算 / 自动化任务 / 目标续跑……):
+                  渲染成 dsh 的「触发这一轮的通知」行 —— 图标 + 标题 + 时间,展开才看模型可见正文。
+                  它**不是**用户气泡:没有删除/回退,也不参与"这句话是用户说的"那套操作栏。 */}
+              {m.role === 'user' && !m.compaction && m.source?.form === 'notice' && (
+                <TurnTriggerRow source={m.source} content={m.content} time={m.time} />
+              )}
+              {m.role === 'user' && !m.compaction && m.source?.form !== 'notice' && (
                 <>
                   <div className="bubble user-bubble">
                     {/* 目标自动续跑轮:不是用户打的字,气泡头标出「🎯 目标第 N 轮」 */}
@@ -2785,8 +2795,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     {/* 回合过程折叠(对齐 dsh 的**两层**结构):
                         外层 TurnProcessNodeView = 一句「已完成,用时 2分19秒」▾,把整轮工具活动收起来,
                           展开后**完整铺开、不限高、不出滚动条**;
-                        内层过程组 = 工具活动分组(已读取文件并修改了文件),这里以 flat 方式渲染
-                          (不渲染组头、不限高)—— 外层已经承担收起职责,再叠一层要二次点击。
+                        内层 ChatGroupSeat = 每个"一段工具活动"一个组头(「已读取文件并修改了文件」)▾,
+                          组体限高 min(400px,50vh) 带上下渐隐 —— 与 dsh 逐条一致;
                         **正文段不参与折叠**:收起时只藏工具活动,回复正文始终可见。 */}
                     {(() => {
                       const segs = m.segments || [];
@@ -2817,12 +2827,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                             return (
                               <div key={`g${ui}`} className="dsh-procslot"
                                 hidden={foldable && !foldOpen ? true : undefined}>
-                                {/* 与 dsh 同构的两层折叠:外层是整轮控件,内层按 **flat** 渲染
-                                    —— 不渲染组头、不限高:外层已经承担了收起职责,
-                                    再叠一层组头就要点两次、再叠一个 400px 限高就会出现滚动条
-                                    (见上方注释与 test/subagent-ui.test.js 的断言)。 */}
+                                {/* 与 dsh 同构的**两层**折叠:外层是整轮控件(「已完成,用时 X」),
+                                    内层是过程组自己的组头(「已读取文件并修改了文件」),它的组体
+                                    限高 min(400px,50vh) 并自带上下渐隐。
+                                    别把内层设成 flat —— 那样"一段工具调用"就没有自己的折叠行了,
+                                    与 dsh 的 ChatGroupSeat 不一致(见 test/subagent-ui.test.js)。 */}
                                 <ProcessGroup summary={u.summary} live={isGroupLive(u.items)}
-                                  collapsed={groupedFor(TRANSCRIPT_MODE, !!m.streaming)} flat>
+                                  collapsed={groupedFor(TRANSCRIPT_MODE, !!m.streaming)}>
                                   {u.memberIndexes.map((si) => {
                                     const seg = segs[si];
                                     if (!seg) return null;

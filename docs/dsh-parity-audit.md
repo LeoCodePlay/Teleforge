@@ -554,7 +554,11 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
   父会话空闲被唤醒、忙则排队(harness 的 settlement notice / waking delivery);`send_message` 可续聊
   (空闲直接开新轮、运行中在最近一步被认领),`interrupt_agent` 只停当前轮(排队保留,下一条消息继续)。
 - 事件面:复用 `tool/call`/`tool/result`(父会话只多一条 `started subagent <id>`),子代理的中间步骤不回传也不落父日志;
-  结果以一条 `[子智能体结算] …` 消息进父会话(否则后台派发就没有回路)。
+  结果以一条 **dsh 形状的结算通知**进父会话(否则后台派发就没有回路):正文 = 一句话账 + 「它的收尾消息:」
+  + 子代理最后的文字(dsh 的 `createSettlementMessage`),`source` 是对象
+  `{kind:'subagent-settled', form:'notice', summary, senderSessionId}` —— 前端据此把它渲染成
+  **「触发这一轮的通知」行**(图标 + 标题「子任务状态更新」+ 时间,展开才是模型可见正文),
+  **不是**用户气泡(见下一条:通知是运行时替子代理说的话,不能替它认领用户身份)。
 - 前端:**子会话直接用父会话的对话系统** —— 同一个 `ChatPanel`,只是 `sid` 换成了派发记录 id(`sa_…`)、
   打开 `childMode`。服务端按 sid 前缀把 `get_history` / `speak` / `stop_agent` / `queue_steer` /
   `queue_remove` 分流到子代理运行时(harness 的形态:子代理本来就是一个会话),所以子会话的回合折叠行、

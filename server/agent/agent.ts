@@ -15,7 +15,7 @@ import fsp from 'node:fs/promises';
 import { LlmClient, isContextOverflowError, billedInputTokens, type LlmOptions } from './llm.ts';
 import { lastGeneratedImage, imageCaption, runImageJob } from './image-gen.ts';
 import { COMPACT, compactHistory, summarizeWithLlm, selectManualCompactRange, resolveCharBudget, estimateTokens, measureMessages, measureEnvelope, pruneToolResults } from './compact.ts';
-import { Session, foldTodos, foldTokenUsage, foldLastTurnTokenUsage, foldSessionStats, hasOutstandingTodos, trimMessagesByBudget, type SessionEvent, type TodoSnapshot } from './session.ts';
+import { Session, foldTodos, foldTokenUsage, foldLastTurnTokenUsage, foldSessionStats, hasOutstandingTodos, trimMessagesByBudget, sourceKind, type MessageSource, type SessionEvent, type TodoSnapshot } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, registerPermissionGuard, type PermissionMode } from './permission.ts';
 import { PERMISSION_MODE_META } from './permission.ts';
@@ -207,7 +207,7 @@ async function materializeImageParts(messages: any[]): Promise<any[]> {
 function lastRuntimeContextText(events) {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev?.type === 'user/message' && ev.data?.source === 'runtime') return String(ev.data.content || '');
+    if (ev?.type === 'user/message' && sourceKind(ev.data?.source) === 'runtime') return String(ev.data.content || '');
   }
   return null;
 }
@@ -367,12 +367,15 @@ export function projectEvents(events) {
       alive = new Set(); // user 之后工具 id 失效
       // 运行时上下文快照(source='runtime')仅供模型历史消费(deriveMessages 读事件日志),
       // 不投影到前端,避免聊天里出现「⚙ 运行时上下文已更新」这类内部占位气泡
-      if (d.source === 'runtime') continue;
+      if (sourceKind(d.source) === 'runtime') continue; // 快照不投影前端
       out.push({
         // 前端显示用户原文;带注入技能时它携纯原文(display),模型历史才用注入后的 content
         role: 'user', content: d.display ?? d.content,
         // 事件时间戳随投影下发,前端据此显示"今天/昨天/日期+时间"
         time: ev.time,
+        // 非人类消息的归属(dsh 的 MessageSource):带 form='notice' 的由前端渲染成"触发本轮的
+        // 通知行"(子代理结算 / 自动化任务 / 目标续跑……),而不是用户气泡
+        ...(d.source && typeof d.source === 'object' ? { source: d.source } : {}),
         // 目标续跑轮(移植自 harness GoalMessageSource):前端把这条用户消息渲染成「目标第 N 轮」
         ...(d.source === 'goal' && Number.isFinite(Number(d.round))
           ? { goalRound: { round: Number(d.round), revision: Number(d.revision) || undefined } }
@@ -521,7 +524,7 @@ export function messageFaceIndexes(events) {
     const d = ev.data || {};
     if (ev.type === 'user/message') {
       alive = new Set();
-      if (d.source === 'runtime') continue; // 快照不投影前端
+      if (sourceKind(d.source) === 'runtime') continue; // 快照不投影前端
       out.push(i);
     } else if (ev.type === 'assistant/message') {
       alive = new Set((Array.isArray(d.message?.tool_calls) ? d.message.tool_calls : []).map((t: any) => t.id));
@@ -566,7 +569,7 @@ export function visibleUserEventIndexes(events: any[]) {
   const out: number[] = [];
   for (const i of messageFaceIndexes(events)) {
     const ev = events[i];
-    if (ev.type === 'user/message' && ev.data?.source !== 'runtime') out.push(i);
+    if (ev.type === 'user/message' && sourceKind(ev.data?.source) !== 'runtime') out.push(i);
   }
   return out;
 }
@@ -1740,7 +1743,9 @@ export class Agent {
     reasoning = 'default', attachments = null, auto = false, display = null, source = null, taskId = null,
     messageId = null, scheduleId = null, goalRound = null
   }: {
-    reasoning?: string; attachments?: any; auto?: boolean; display?: string | null; source?: string | null;
+    reasoning?: string; attachments?: any; auto?: boolean; display?: string | null;
+    /** 来源归属:字符串(内部原因)或 dsh 形状的对象(见 session.ts 的 MessageSource) */
+    source?: MessageSource | null;
     taskId?: string | null;
     /** 定时任务投递的消息身份(dsh 的 MessageId):盖在 user/message 事件上,回执与 UI 靠它对齐 */
     messageId?: string | null;
@@ -1970,10 +1975,14 @@ export class Agent {
           this._runTurnInner(rt, runSessionId, input, boundConn))));
   }
 
-  async _runTurnInner(rt, runSessionId, { text, reasoning, attachments, auto = false, display = null, source = null, taskId = null, messageId = null, scheduleId = null, goalRound = null }: { text: string; reasoning: string; attachments?: AttachmentMeta[] | null; auto?: boolean; display?: string | null; source?: string | null; taskId?: string | null; messageId?: string | null; scheduleId?: string | null; goalRound?: { goalId: string; revision: number; round: number } | null }, boundConn) {
+  async _runTurnInner(rt, runSessionId, { text, reasoning, attachments, auto = false, display = null, source = null, taskId = null, messageId = null, scheduleId = null, goalRound = null }: { text: string; reasoning: string; attachments?: AttachmentMeta[] | null; auto?: boolean; display?: string | null; source?: MessageSource | null; taskId?: string | null; messageId?: string | null; scheduleId?: string | null; goalRound?: { goalId: string; revision: number; round: number } | null }, boundConn) {
     const session = rt.session; // 锁定本轮操作的运行时与会话,中途切换活跃会话不影响本轮写入
-    // 本轮首个 user 消息的来源(工具侧据此判定"是否人类直接请求",见 goal.ts requireDirectHuman)
-    const turnSource = auto ? 'auto-resume' : (source || 'user');
+    // 本轮首个 user 消息的来源(工具侧据此判定"是否人类直接请求",见 goal.ts requireDirectHuman)。
+    // 对象来源(通知类)一律原样落盘:它带着 kind/form/summary,前端据此渲染成通知行而不是用户气泡;
+    // `auto` 只在字符串来源时才改写成 'auto-resume'(那是"后端自己接着跑"的内部标记)。
+    const turnSource: MessageSource = source && typeof source === 'object'
+      ? source
+      : (auto ? 'auto-resume' : (source || 'user'));
     const signal = (rt.signal = new AbortController());
     rt.boundConn = boundConn;
     rt.stopCause = null;   // 新一轮:中止原因清零(只由 stop/stopForConn/stopAll 写入)
@@ -2092,7 +2101,10 @@ export class Agent {
     const displayText = display ?? rawText;
     this.emit('agent', {
       event: 'start', text: displayText, sid: runSessionId,
-      ...(atts.length ? { attachments: atts } : {})
+      ...(atts.length ? { attachments: atts } : {}),
+      // 通知类来源随实时事件下发:前端据此把这条"新一轮的触发"渲染成通知行(而不是用户气泡),
+      // 与刷新后从事件日志投影出来的形态一致(见 dsh 的 MessageSource.form='notice')
+      ...(typeof turnSource === 'object' ? { source: turnSource } : {})
     });
     // 手动调用技能(输入中的 /技能名 命中)会注入正文;单独发一个标记事件,
     // 前端据此展示"已加载技能"折叠行(模型主动调用则走 skill 工具,另行显示 tool_call 卡片)
@@ -2123,7 +2135,7 @@ export class Agent {
           // 它不算"用户消息"(不参与首条命名/工作区锁定判定),也在下次自愈时用来防止无限续跑。
           // source='schedule' = 自动化任务到点投递(见 server/schedule/runtime.ts):同样不是用户打的,
           // 但也不是"续跑"——前端据此把它和自动续跑区分开,并可由 taskId 跳回任务详情。
-          content: text, display: displayText, source: auto ? 'auto-resume' : (source || 'user'),
+          content: text, display: displayText, source: turnSource,
           ...(taskId ? { taskId } : {}),
           // 定时任务投递:消息身份(与投递回执的 messageId 同一个)+ 任务 id
           ...(messageId ? { messageId } : {}),

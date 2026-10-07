@@ -21,6 +21,33 @@
 //   存活(turn/end 从不清空),面板因此一直显示,模型也接着同一份计划继续做(剩余计划随
 //   新一轮指令送达,见 agent.ts 的 planCarryBlock);只有已全部完成的计划才在新一轮作废。
 
+/**
+ * 一条 user/message 的来源归属(对齐 dsh 的 MessageSource)。
+ *
+ * - **字符串**(老口径,保持不动):内部原因,如 'user' / 'steer' / 'runtime' / 'auto-resume'
+ *   / 'goal' / 'schedule' / 'compaction' / 'subagent-settled'。
+ * - **对象**(dsh 的完整归属):`kind` 决定这一行画什么图标与标题;`form` 决定**怎么渲染** ——
+ *   `'notice'` = "刚发生了什么"的通知行(折叠行是标题 + 一行 `summary`,展开才是模型可见正文),
+ *   `**不是**用户气泡;`senderSessionId` 是产出这条消息的会话(子代理 / 另一个 agent)。
+ *
+ * 为什么要有对象形态:通知类消息是**运行时替子代理说的话**,与"用户打的字"必须区分开
+ * (dsh 的原话:把两者合并会替子代理认领它从未说过的话),前端也因此不能把它渲染成用户气泡。
+ */
+export type MessageSource = string | {
+  readonly kind: string;
+  readonly form?: string;
+  /** 折叠行上的一行账(dsh 的 SubagentSettledMessageSource.summary) */
+  readonly summary?: string;
+  /** 产出这条消息的会话(子代理 id / 另一个 agent 的 id) */
+  readonly senderSessionId?: string;
+};
+
+/** 取来源的 kind(字符串来源就是它本身;无来源 = '') */
+export function sourceKind(source: MessageSource | null | undefined): string {
+  if (!source) return '';
+  return typeof source === 'string' ? source : String((source as any).kind || '');
+}
+
 export interface ToolCall {
   id: string;
   function: { name: string; arguments: string };
