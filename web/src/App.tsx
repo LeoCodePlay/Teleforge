@@ -9,8 +9,11 @@ import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel';
 import ChatPanel, { NEW_SESSION_ID } from './components/ChatPanel/ChatPanel';
 import ConsolePanel from './components/ConsolePanel/ConsolePanel';
 import FileViewer, { mediaKindOf } from './components/FileViewer/FileViewer';
+import RightSidebar, { type SidebarOpenRequest } from './components/RightSidebar/RightSidebar';
+import ReviewTab from './components/ChangesReview/ReviewTab';
 import BrowserPanel from './components/BrowserPanel/BrowserPanel';
-import ActivityDock from './components/ActivityDock/ActivityDock';
+import SessionHeader from './components/SessionHeader/SessionHeader';
+import SubagentConversation from './components/SubagentConversation/SubagentConversation';
 import { useRunningTermSessions } from './hooks/useRunningTermSessions';
 import { PREVIEW_EVENT, isHttpLink, normalizePreviewInput, previewLabel,
   BROWSER_TAB_PREFIX, allocBrowserId, browserSessionId, browserTabId,
@@ -169,6 +172,16 @@ export default function App() {
   const [updateChip, setUpdateChip] = useState('');
   const [sshOpen, setSshOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
+  /** 右侧栏:默认**关闭**(右栏是"按需看"的),点对话里的「对比/侧栏」会自动展开 */
+  const [rightOpen, setRightOpen] = useState(false);
+  const [sidebarReq, setSidebarReq] = useState<SidebarOpenRequest | null>(null);
+  const sidebarNonce = useRef(0);
+  /** 把内容放进右栏:同一个 (kind, contentId) 复用标签,每次都递增 nonce 让侧栏重新聚焦 */
+  const openInSidebar = useCallback((kind: string, contentId: string, title: string) => {
+    sidebarNonce.current += 1;
+    setSidebarReq({ kind, contentId, title, nonce: sidebarNonce.current } as SidebarOpenRequest);
+    setRightOpen(true);
+  }, []);
   const [leftWidth, setLeftWidth] = useState(320);
   const leftRef = useRef<HTMLElement>(null);
 
@@ -1309,6 +1322,14 @@ export default function App() {
               aria-label="打开浏览器预览"
               onClick={() => openAnotherBrowserTab()}
             >＋</button>
+            {/* 右侧栏开合:入口在「打开浏览器预览」旁边(标签条末端) */}
+            <button
+              className={`tabstrip-add rsb-toggle${rightOpen ? ' on' : ''}`}
+              data-tip={rightOpen ? '收起右侧栏' : '打开右侧栏'}
+              aria-label={rightOpen ? '收起右侧栏' : '打开右侧栏'}
+              aria-pressed={rightOpen}
+              onClick={() => setRightOpen((v) => !v)}
+            >▤</button>
           </div>
           {tabMenu && createPortal(
             <div
@@ -1367,18 +1388,50 @@ export default function App() {
               );
             })}
             {/* ChatPanel 常驻挂载:切走仅 CSS 隐藏(对齐终端/文件面板),手机端底部栏频繁切换不重载会话历史 */}
-            <div className={`tab-pane ${effActiveTabId === 'agent' ? '' : 'hide'}`}>
+            <div className={`tab-pane ${effActiveTabId === 'agent' ? (subagentRunId ? 'subagent-open' : '') : 'hide'}`}>
               {/* 运行与子代理:一个悬浮胶囊 + 右侧抽屉(两个分区各自按需显示);
                   挂在 agent 这个 pane 里,所以切到终端/文件/预览标签页时整块面板不显示 */}
-              <ActivityDock
-                active={effActiveTabId === 'agent'}
+              {/* 会话头:标题面包屑 + 子智能体 catalog + 后台运行任务列表(DSH 的 session header) */}
+              <SessionHeader
                 sid={activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null}
-                subagentRunId={subagentRunId}
+                sessionTitle={sessions.find((s) => s.id === activeSessionId)?.title || '新会话'}
+                openRunId={subagentRunId}
                 onOpenSubagent={openSubagentPanel}
-                onCloseSubagent={closeSubagentPanel}
+                onOpenSubagentAside={(runId) => openSubagentPanel(runId)}
+                onBackToSession={() => { setSubagentRunId(null); closeSubagentPanel(); }}
               />
+              {/* 后台运行任务:按 dsh 的方式**放在顶部栏**(不再是右上角悬浮胶囊 + 抽屉)。
+                  数据源是同一个 useRunningTermSessions;点一下切到终端视图看它。 */}
+              {termRunningIds.length > 0 && (
+                <div className="session-tasks" aria-label={`后台运行任务 ${termRunningIds.length} 个`}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px', fontSize: 12, color: 'var(--muted)' }}>
+                  <span>后台任务</span>
+                  <span className="st-chip"
+                    style={{ border: '1px solid var(--border)', borderRadius: 999, padding: '0 8px', lineHeight: '18px' }}>
+                    {termRunningIds.length} 个运行中
+                  </span>
+                </div>
+              )}
+              {/* 子智能体:主对话区**直接替换**(dsh 的 openChild 语义),不再开右栏。
+                  容器必须铺满:SubagentConversation 的根节点 .sconv 依赖父级有确定高度,
+                  裸的 .tab-pane 嵌在 .tab-pane 里会塌成 0 高 → 看起来就是黑屏。 */}
+              {subagentRunId && (
+                <div
+                  className="subagent-pane"
+                  style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+                >
+                  <SubagentConversation runId={subagentRunId} active />
+                </div>
+              )}
               <ChatPanel compact={isPhone} connected={connected} workspace={status.workspace} localWorkspace={status.localWorkspace} remoteCwd={remoteCwd} localCwd={localCwd} busy={activeBusy} sid={activeSessionId} sessionSeq={sessionSeq}
               home={status.home} savedWs={wsByHost[status.host ? `${status.host}:${status.port || 22}` : ''] || []}
+              onOpenFileAside={(p) => openInSidebar('file', p, p.split(/[\\/]/).pop() || p)}
+              onOpenLocalFileAside={(p) => {
+                // FileViewer 靠 `local:` 前缀区分本地/远端读取;漏了这个前缀,
+                // 本地文件会被当远端读 → 报「SSH 未连接」(就是刚才这个 bug)
+                return openInSidebar('file', `local:${p}`, p.split(/[\\/]/).pop() || p);
+              }}
+              onOpenChanges={(p) => openInSidebar('changes-review', p, p.split(/[\\/]/).pop() || p)}
               localHome={status.localHome} savedLocalWs={localWs}
               noWorkspace={status.noWorkspace} localNoWorkspace={status.localNoWorkspace}
               remoteLocked={remoteLocked} localLocked={localLocked}
@@ -1422,6 +1475,30 @@ export default function App() {
             ))}
           </div>
         </main>
+        <RightSidebar
+          sid={activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null}
+          collapsed={!rightOpen}
+          onToggleCollapse={() => setRightOpen((v) => !v)}
+          request={sidebarReq}
+          renderBody={(tab, tabApi) => {
+            if (tab.kind === 'file') return <FileViewer path={tab.contentId} name={tab.title} onClose={tabApi.close} />;
+            // 文件变更对比(只读):看的是**改动前后**,与上面的文件查看器(可编辑)分属两条链路。
+            // 侧栏按会话隔离,所以这里的 sid 就是当前会话 —— 变更记录也按它归档。
+            if (tab.kind === 'changes-review') {
+              return (
+                <ReviewTab
+                  sid={activeSessionId && activeSessionId !== NEW_SESSION_ID ? activeSessionId : null}
+                  path={tab.contentId}
+                  active={tabApi.active}
+                  onClose={tabApi.close}
+                />
+              );
+            }
+            // 子智能体会话:同一份对话渲染层(conversation.tsx),所以主对话区与侧栏看起来一致
+            if (tab.kind === 'subagent') return <SubagentConversation runId={tab.contentId} active={tabApi.active} />;
+            return <div className="rsb-empty">不支持的标签类型:{tab.kind}</div>;
+          }}
+        />
       </div>
 
       {/* 手机底部导航栏:仅 <768 渲染,视图切换 */}

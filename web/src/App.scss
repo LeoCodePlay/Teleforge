@@ -197,6 +197,14 @@ body.splitting * { cursor: row-resize !important; }
 /* ---- 命令台(chat/console 切页容器):常驻挂载,隐藏时仅 display:none ---- */
 .tab-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .tab-pane.hide { display: none; }
+/* 子智能体在主对话区"替换"显示:面板本身不能隐藏(子视图是它的子节点,会被一起 display:none),
+   只把对话内容(ChatPanel 的根 .chatwrap)让位 */
+.tab-pane.subagent-open .chatwrap { display: none; }
+
+/* 主对话区里的两个可换内容槽:主会话 ChatPanel 与子智能体会话视图。
+   两者都常驻挂载(看子会话时 ChatPanel 只是隐藏),这样草稿与滚动位置不会因为来回切换丢掉。 */
+.agent-slot { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.agent-slot.hide { display: none; }
 
 /* ============================================================
    响应式三档:桌面 ≥1280(上方桌面样式原样)/ 平板 768-1279(侧栏抽屉化)

@@ -14,9 +14,55 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "useDefineForClassFields": true,
+    /* dsh 源码里的相对 import 带 .ts/.tsx 后缀(dsh 自己的 tsconfig 就是这么开的);
+       搬运过来的源码保持原样,所以这里也要开(只允许在 noEmit 下使用,我们对上了) */
+    "allowImportingTsExtensions": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "node"],
+    /* paths 的值是相对 tsconfig 的路径;TS 要求非相对写法先有 baseUrl,故显式声明 */
+    "baseUrl": ".",
+    /* ---- dsh 右侧栏源码搬运(web/src/dsh/)的模块解析 ----
+       从 deepseek-harness 整包复制了 ui-dockkit / ui-sidebar-right / -files / -terminal /
+       -browser / -documentpreview / ui-deliverables / ui-primitives 的源码。注意复制后
+       **每个包的目录内容就是它原来的 src/**(xcopy 铺平了一层),所以映射到包目录本身。
+       这些源码内部互相用 `@deepseek-ai/dsh-*` 包名引用,映射后**源码一行 import 都不用改**;
+       dsh 专有的外部依赖(cordis / slots / store / api-*)由 web/src/dsh-adapters/ 提供。 */
+    "paths": {
+      "@deepseek-ai/dsh-client-ui-primitives": ["web/src/dsh-adapters/primitives/index.tsx"],
+      "@deepseek-ai/dsh-client-ui-primitives/*": ["web/src/dsh/ui-primitives/*"],
+      "@deepseek-ai/dsh-client-ui-dockkit": ["web/src/dsh/ui-dockkit/index.ts"],
+      "@deepseek-ai/dsh-client-ui-dockkit/*": ["web/src/dsh/ui-dockkit/*"],
+      "@deepseek-ai/dsh-client-ui-sidebar-right": ["web/src/dsh/ui-sidebar-right/index.ts"],
+      "@deepseek-ai/dsh-client-ui-sidebar-right/*": ["web/src/dsh/ui-sidebar-right/*"],
+      "@deepseek-ai/dsh-client-ui-sidebar-files/client": ["web/src/dsh/ui-sidebar-files/client/index.ts"],
+      "@deepseek-ai/dsh-client-ui-sidebar-terminal/client": ["web/src/dsh/ui-sidebar-terminal/client/index.ts"],
+      "@deepseek-ai/dsh-client-ui-sidebar-browser/client": ["web/src/dsh/ui-sidebar-browser/client/index.ts"],
+      "@deepseek-ai/dsh-client-ui-sidebar-documentpreview/client": ["web/src/dsh/ui-sidebar-documentpreview/client/index.ts"],
+      "@deepseek-ai/dsh-client-ui-deliverables/client": ["web/src/dsh/ui-deliverables/client/index.ts"],
+      "@deepseek-ai/dsh-brand": ["web/src/dsh-adapters/brand/index.ts"],
+      "@deepseek-ai/dsh-client-ui-slots": ["web/src/dsh/client-ui-slots/src/index.ts"],
+      "@deepseek-ai/dsh-client-store": ["web/src/dsh/client-store/src/index.ts"],
+      "@deepseek-ai/dsh-client-locale/client": ["web/src/dsh-adapters/locale/index.ts"],
+      "@deepseek-ai/dsh-client-shortcuts/client": ["web/src/dsh-adapters/shortcuts/index.ts"],
+      "@deepseek-ai/dsh-session/types": ["web/src/dsh-adapters/session/index.ts"],
+      "@deepseek-ai/dsh-session": ["web/src/dsh-adapters/session/index.ts"],
+      "@deepseek-ai/dsh-api-session-controller": ["web/src/dsh-adapters/api-session-controller/index.ts"],
+      "@deepseek-ai/dsh-api-session-controller/client": ["web/src/dsh-adapters/api-session-controller/index.ts"],
+      "@deepseek-ai/dsh-client-ui-layout": ["web/src/dsh-adapters/layout/index.ts"],
+      "@deepseek-ai/dsh-client-ui-layout/client": ["web/src/dsh-adapters/layout/index.ts"],
+      "@deepseek-ai/dsh-util-crypto": ["web/src/dsh-adapters/util-crypto/index.ts"],
+      "@deepseek-ai/dsh-api-remotes/client": ["web/src/dsh-adapters/api-remotes/index.ts"],
+      "@deepseek-ai/dsh-api-workspace-files/types": ["web/src/dsh-adapters/api-workspace-files/index.ts"],
+      "@deepseek-ai/dsh-typert-protocol": ["web/src/dsh/typert-protocol/src/index.ts"],
+      "@deepseek-ai/dsh-util-workspace-path": ["web/src/dsh/util-workspace-path/src/index.ts"],
+      "@deepseek-ai/dsh-client-ui-sidebar-right/client": ["web/src/dsh-adapters/sidebar-right-types/index.ts"],
+      "@deepseek-ai/cordis": ["web/src/dsh/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/cosmokit": ["web/src/dsh/cosmokit/lib/types/index.d.ts"]
+    }
   },
-  "include": ["web/src", "web/vite.config.ts"]
+  /* 搬运进来的源码逐个面板解禁:适配一个就从 exclude 里移出去一个,避免缺依赖的噪声
+     淹没真实错误(目前仅 dockkit 在适配中,先整体排除,用 tsconfig.dsh.json 单独校验)。 */
+  "include": ["web/src", "web/vite.config.ts"],
+  "exclude": ["web/src/dsh"]
 }

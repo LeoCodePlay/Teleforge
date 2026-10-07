@@ -1,0 +1,44 @@
+/* ---- 回合过程折叠行:照搬 dsh TurnProcessNodeView 的排版 ----
+   一行文字 + chevron;**不加分隔线**(底部 0.5px border-bottom 已按你的要求去掉)。 */
+
+.pf {
+  box-sizing: border-box;
+  display: flex; align-items: center;
+  width: 100%; min-width: 0;
+  height: calc(33px + var(--dsh-content-font-delta, 0px));
+  padding: 0 0 8px;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit; font-size: var(--dsh-content-font-size, 14px);
+  cursor: pointer;
+  text-align: left;
+  transition: color 100ms ease;
+}
+.pf:disabled { cursor: default; }
+.pf:hover:not(:disabled) { color: var(--dsw-alias-label-secondary); }
+
+.pf-label {
+  min-width: 0; overflow: hidden;
+  font-size: inherit; line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* 数字等宽 + 表格数字:耗时每秒变化时整行不会左右抖(dsh 的 .durationNumber) */
+.pf-num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.pf-chevron {
+  flex: none; width: 14px; height: 14px; margin-left: 4px;
+  color: inherit; transition: transform 100ms ease;
+}
+/* 展开时箭头翻转(dsh 的 .root[data-open] .chevron) */
+.pf[data-open] .pf-chevron { transform: rotate(180deg); }
+
+/* 状态播报只给屏幕阅读器 */
+.pf-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf, .pf-chevron { transition: none; }
+}

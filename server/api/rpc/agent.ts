@@ -54,7 +54,16 @@ export function registerAgent(rpc: RpcModule) {
     // 原 ws.js get_history case(210-212)逐字复制
     // permissionMode:当前会话的访问权限模式,前端输入区左下角选择器据此回显
     const sid = targetSid(msg);
-    reply({ type: 'history', turns: agent.getHistory(sid), todos: agent.currentTodos(sid), queue: agent.queueSnapshot(sid), permissionMode: agent.getPermissionMode(sid) });
+    reply({
+      type: 'history',
+      turns: agent.getHistory(sid),
+      todos: agent.currentTodos(sid),
+      queue: agent.queueSnapshot(sid),
+      permissionMode: agent.getPermissionMode(sid),
+      // 统计栏数据随历史一起下发:刷新/切会话后立即正确,不必等下一步的 session_stats 事件
+      usage: agent.sessionUsage(sid),
+      stats: agent.sessionStats(sid)
+    });
   });
 
   rpc.register('permission_get', async (msg, { reply }) => {

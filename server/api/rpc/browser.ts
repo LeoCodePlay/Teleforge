@@ -5,6 +5,7 @@
 // 归属:前端每个预览标签都对应一个会话(id 形如 s_xxx:1),请求里的 sid = 用户当前所在会话。
 // 内核按 id 里编入的归属 + 请求 sid 双重校验,非归属会话的请求一律拒绝(见 core/browser-manager.ts)。
 import { browserManager } from '../../core/browser-manager.ts';
+import { browserBridge } from '../../core/browser-bridge.ts';
 import { resolvePreviewUrl } from '../../core/port-tunnel.ts';
 import { nativeAvailable, nativeOpsFor } from '../../agent/browser-backends.ts';
 import type { RpcModule } from './router.ts';
@@ -45,8 +46,14 @@ export function registerBrowser(rpc: RpcModule) {
   // 只有真机浏览器能带上用户自己的 cookie。扩展不在线时回 ok:false,由前端回落预览标签。
   rpc.register('browser_open_native', async (msg, { reply }) => {
     const raw = String(msg.url || '');
-    if (!nativeAvailable()) {
-      reply({ type: 'browser_opened_native', ok: false, reason: 'offline', url: raw });
+    // 同时开着多台真机浏览器时,msg.browser 指定用哪台;不填走默认目标。
+    const instance = String(msg.browser || '').trim() || null;
+    if (!nativeAvailable(instance)) {
+      reply({
+        type: 'browser_opened_native', ok: false,
+        reason: instance ? `找不到在线的浏览器「${instance}」。${browserBridge.availableHint()}` : 'offline',
+        url: raw
+      });
       return;
     }
     // 先过隧道解析:远程项目里的 localhost 地址要映射成本机可达的隧道地址,
@@ -59,7 +66,7 @@ export function registerBrowser(rpc: RpcModule) {
       return;
     }
     try {
-      const state = await nativeOpsFor(null).openUrl(target);
+      const state = await nativeOpsFor(null, null, instance).openUrl(target);
       reply({ type: 'browser_opened_native', ok: true, url: state.url, title: state.title });
     } catch (e: any) {
       reply({ type: 'browser_opened_native', ok: false, reason: e?.message || String(e), url: target });

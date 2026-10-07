@@ -3,6 +3,7 @@
 // 与宿主执行细节(run/timeoutMs)分离,由 registry.schemas() 白名单投影进模型请求;
 // 执行统一走 registry.execute() 管线(守卫 -> 超时 -> 结构化结果)。
 import { AGENT } from '../config.ts';
+import { recordFileChange } from '../changes/store.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,6 +33,34 @@ const BUILTIN_SKILLS_DIR = process.env.BUILTIN_SKILLS_DIR || path.join(__dirname
 const LOCAL_PROJECT_SKILLS = process.env.LOCAL_PROJECT_SKILLS || path.join(process.cwd(), '.agents', 'skills');
 const LOCAL_USER_SKILLS = process.env.LOCAL_USER_SKILLS || path.join(os.homedir(), '.agents', 'skills');
 const LOCAL_SKILL_PREFIX = 'local://';
+
+// present 工具单次可交付的成果物上限。参照 deepseek-harness 的取值(推荐 1-2 个,上限 8),
+// 这里取 6:Teleforge 的成果物卡片一行放得下,再多人就不看了。
+const DELIVERABLE_MAX_FILES = 6;
+
+/**
+ * 校验一个路径是否是**已存在的普通文件**,返回命中的那一侧('remote' / 'local'),都不命中返回 null。
+ *
+ * 为什么要两侧都试:present 的路径可能来自远程工作区,也可能是本机工作区,
+ * 而模型只给一个字符串。与其逼模型多填一个 location 参数(它会填错),不如这里探测。
+ * 先本机后远程:本机 statSync 是本地调用,失败代价极低;远程要过一次 SFTP 往返。
+ *
+ * 目录/符号链接会被拒绝(与 dsh 一致):成果物应该是"一个能直接打开给你看的文件",
+ * 给个目录会让用户点开一张什么也没有的卡片。
+ */
+async function probeExistingFile(p: string): Promise<'local' | 'remote' | null> {
+  // 本机
+  try {
+    const abs = resolveInLocalWorkspace(p);
+    if (fs.statSync(abs).isFile()) return 'local';
+  } catch { /* 不在本地工作区或不存在:继续试远程 */ }
+  // 远程
+  try {
+    const st = await ssh.stat(p);
+    if (st && st.isFile()) return 'remote';
+  } catch { /* 未连接 / SFTP 未就绪:当作不存在 */ }
+  return null;
+}
 
 // ---------------- 安全辅助 ----------------
 
@@ -138,18 +167,41 @@ function countLines(s: string): number {
   return s.endsWith('\n') ? n - 1 : n;
 }
 
-// 读取已存在文件的全文(上限 2MB,与 edit 工具一致)统计删除行数;超限/读取失败返回 null(未知)
-async function countExistingFileLines(
+/**
+ * 读一次已存在文件的全文(上限 2MB)。覆盖写与删除都要它:既算删除行数,
+ * 又作为右侧栏「变更对比」的改动前内容 —— 一次读取同时满足两件事。
+ * 读不到/超限返回 null(调用方据此跳过对比,而不是拿空文件当基线)。
+ */
+async function readExistingText(
   readChunk: (abs: string, opts: { maxBytes: number }) => Promise<{ buffer: Buffer; size: number }>,
   abs: string
-): Promise<number | null> {
+): Promise<{ text: string; lines: number } | null> {
   try {
     const { buffer, size } = await readChunk(abs, { maxBytes: 2 * 1024 * 1024 });
-    if (size > buffer.length) return null; // 文件超过 2MB:行数未知
-    return countLines(buffer.toString('utf8'));
+    if (size > buffer.length) return null; // 文件超过 2MB:行数未知、也不做内容对比
+    const text = buffer.toString('utf8');
+    return { text, lines: countLines(text) };
   } catch {
-    return null; // 读取失败(竞态/权限):行数未知
+    return null; // 读取失败(竞态/权限):未知
   }
+}
+
+// ---- 每轮文件变更记录(供右侧栏「变更对比」)----
+// 写盘前后各拿到一次全文,交给 server/changes/store.ts 归档成 (会话, 轮) 的文件清单。
+// ctx 由工具调用现场注入({ sid, turn },见 agent.ts 的 invokeCtx)。三条纪律:
+//   1. 记录失败绝不影响写操作(整体 try/catch);
+//   2. 改动前内容读不到时**宁可不记**,也不要拿"空文件"当基线给用户看一个全增的假 diff;
+//   3. 只在文本文件上做(二进制/超大由 store 侧按同一口径降级)。
+function recordChange(
+  ctx: any, path: string, kind: 'create' | 'write' | 'edit' | 'delete',
+  before: string | null, after: string | null, added: number, deleted: number,
+  local = false
+): void {
+  try {
+    const turn = Number(ctx?.turn);
+    if (!ctx?.sid || !Number.isInteger(turn)) return;
+    recordFileChange(ctx.sid, turn, { path, kind, before, after, added, deleted, local });
+  } catch { /* 观察数据,失败不影响写操作 */ }
 }
 
 // ---- 命令/搜索输出上限(照搬 harness bash-local maxOutputBytes)----
@@ -347,17 +399,22 @@ const toolDefs: ToolDef[] = [
       },
       required: ['path', 'content']
     },
-    async run({ path, content }) {
+    async run({ path, content }, ctx: any = {}) {
       const abs = resolveInWorkspace(path);
       const type = await ssh.atype(abs);
       if (type === 'dir') throw new Error('目标路径已存在且是目录');
       const kind = type === 'file' ? 'write' : 'create';
-      const delLines = kind === 'write' ? await countExistingFileLines((p, o) => ssh.readFileChunk(p, o), abs) : 0;
+      const prev = kind === 'write' ? await readExistingText((p, o) => ssh.readFileChunk(p, o), abs) : null;
+      const delLines = kind === 'write' ? (prev ? prev.lines : null) : 0;
       const bytes = await ssh.writeRemoteFile(abs, content);
+      const addLines = countLines(content);
+      // 变更对比的基线:新建 = 空;覆盖写拿不到旧内容就跳过(见 recordChange 的纪律 2)
+      if (kind === 'create') recordChange(ctx, abs, 'create', '', content, addLines, 0);
+      else if (prev) recordChange(ctx, abs, 'write', prev.text, content, addLines, delLines || 0);
       return {
         content: `已写入 ${abs}(${bytes} 字节)`,
         // meta:文件改动卡(新建/覆盖 + 增删行数),供前端「N 个文件已更改」汇总卡呈现
-        meta: { card: 'diff', kind, path: abs, addLines: countLines(content), delLines }
+        meta: { card: 'diff', kind, path: abs, addLines, delLines }
       };
     }
   },
@@ -376,7 +433,7 @@ const toolDefs: ToolDef[] = [
       },
       required: ['path', 'old_string', 'new_string']
     },
-    async run({ path, old_string, new_string, replace_all }) {
+    async run({ path, old_string, new_string, replace_all }, ctx: any = {}) {
       const abs = resolveInWorkspace(path);
       const { buffer, size } = await ssh.readFileChunk(abs, { maxBytes: 2 * 1024 * 1024 });
       if (size > buffer.length) throw new Error('文件超过 2MB,不适宜逐文本编辑,建议用 write_file 整体重写');
@@ -390,10 +447,14 @@ const toolDefs: ToolDef[] = [
       const next = replace_all ? text.split(oldStr).join(newStr) : text.replace(oldStr, newStr);
       const bytes = await ssh.writeRemoteFile(abs, next);
       const times = replace_all ? count : 1;
+      const addLines = countLines(newStr) * times;
+      const delLines = countLines(oldStr) * times;
+      // 编辑工具本来就把全文读在手里(text/next):改动前后都能免费拿到,直接归档
+      recordChange(ctx, abs, 'edit', text, next, addLines, delLines);
       return {
         content: `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`,
         // meta:文件改动卡(编辑 + 增删行数,按替换次数累乘),供前端「N 个文件已更改」汇总卡呈现
-        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(newStr) * times, delLines: countLines(oldStr) * times }
+        meta: { card: 'diff', kind: 'edit', path: abs, addLines, delLines }
       };
     }
   },
@@ -473,7 +534,7 @@ const toolDefs: ToolDef[] = [
       },
       required: ['path']
     },
-    async run({ path, recursive }) {
+    async run({ path, recursive }, ctx: any = {}) {
       const ws = normalizeRemote(ssh.workspace || '');
       const abs = resolveInWorkspace(path);
       // 全盘模式(不在工作区对话)没有工作区根,改防删除远程文件系统根 '/'
@@ -482,8 +543,10 @@ const toolDefs: ToolDef[] = [
       if (!type) throw new Error(`路径不存在: ${abs}`);
       if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
       // 文件删除:先读旧内容统计行数(上限 2MB)供改动卡展示;目录删除不产生文件级改动卡
-      const delLines = type === 'file' ? await countExistingFileLines((p, o) => ssh.readFileChunk(p, o), abs) : 0;
+      const prev = type === 'file' ? await readExistingText((p, o) => ssh.readFileChunk(p, o), abs) : null;
+      const delLines = type === 'file' ? (prev ? prev.lines : null) : 0;
       await ssh.rmdirRecursive(abs);
+      if (type === 'file' && prev) recordChange(ctx, abs, 'delete', prev.text, null, 0, delLines || 0);
       return type === 'file'
         ? { content: `已删除: ${abs}`, meta: { card: 'diff', kind: 'delete', path: abs, addLines: 0, delLines } }
         : `已删除: ${abs}`;
@@ -549,6 +612,67 @@ const toolDefs: ToolDef[] = [
       return runRemoteContentSearch(pattern, p, include);
     }
   },
+
+  {
+    // 成果物交付声明(参照 deepseek-harness 的 deliverables/tool-present):
+    // 与"文件改动"互补 —— 改动是宿主观察到的**事实**,这里是模型声明的**交付意图**。
+    // 只记路径与说明,不复制内容:内容仍在原路径(复制一份会导致"桌面端改了、工作区没变"这类分裂)。
+    // 访问类别 meta:不写文件、不执行命令,只做存在性校验 + 落一条会话事件(与 todo_write 同类)。
+    name: 'present',
+    description: 'Declare existing files as final deliverables for the user. Use it when the user '
+      + 'needs a separate file — a generated report, a document, a spreadsheet, an image, an '
+      + 'exported artifact — and say briefly what each one is. The user opens the current files; '
+      + 'their contents are not copied. '
+      + 'Do NOT call it just to list source files you edited: those are already shown to the user '
+      + 'as "N files changed". Prefer your final response text when that suffices.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          description: '通常 1-2 个最重要的成果物;单次最多 ' + DELIVERABLE_MAX_FILES + ' 个。',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: '已存在的文件路径(远程为工作区内路径或绝对路径;本机为本地路径)。' },
+              description: { type: 'string', description: '给用户看的一句话说明:这是什么、拿来做什么。' }
+            },
+            required: ['path']
+          }
+        }
+      },
+      required: ['files']
+    },
+    async run({ files: raw }, { session, emit, sid }: any = {}) {
+      if (!session) throw new Error('present 需要所属会话(缺少调用上下文)');
+      if (!Array.isArray(raw) || raw.length === 0) throw new Error('present: files 必须是非空数组');
+      if (raw.length > DELIVERABLE_MAX_FILES) {
+        throw new Error(`present: 单次最多 ${DELIVERABLE_MAX_FILES} 个成果物(收到 ${raw.length} 个),请挑最重要的几个`);
+      }
+      const out: Array<{ path: string; description?: string }> = [];
+      const seen = new Set<string>();
+      for (const it of raw) {
+        const p = String(it?.path || '').trim();
+        if (!p) throw new Error('present: path 必须是非空字符串');
+        if (seen.has(p)) continue; // 同一路径重复声明:去重而不是报错(模型偶尔会重复)
+        const desc = String(it?.description || '').trim();
+        // 存在性校验:先本机、再远程。校验不过就**报错**而不是照收 ——
+        // 让模型当场发现路径写错(而不是给用户一张点开就失败的空卡片)。
+        const where = await probeExistingFile(p);
+        if (!where) {
+          throw new Error(`present: 文件不存在或不是普通文件:${p}`
+            + '(远程请给工作区内的路径或绝对路径;本机请给本地路径)');
+        }
+        seen.add(p);
+        out.push({ path: p, ...(desc ? { description: desc } : {}) });
+      }
+      session.append('deliverable/presented', { files: out });
+      emit?.('agent', { event: 'deliverable', files: out, sid });
+      return `已交付 ${out.length} 个成果物给用户(卡片已展示,不要在正文里重复贴路径):\n`
+        + out.map((f) => `- ${f.path}${f.description ? `(${f.description})` : ''}`).join('\n');
+    }
+  },
+
 
   {
     // 任务计划工具:整表替换语义。
@@ -784,17 +908,21 @@ const localToolDefs: ToolDef[] = [
     description: '在本机本地工作区内创建或覆盖文本文件(自动建父目录)',
     mutating: true, // 并行池独占执行:防止与读/写并发产生 read-modify-write 竞态
     parameters: { type: 'object', properties: { path: { type: 'string', description: '本机路径(本地工作区内,支持相对路径)' }, content: { type: 'string' } }, required: ['path', 'content'] },
-    async run({ path: p, content }) {
+    async run({ path: p, content }, ctx: any = {}) {
       const abs = resolveInLocalWorkspace(p);
       const type = await localFs.atype(abs);
       if (type === 'dir') throw new Error('目标路径已存在且是目录');
       const kind = type === 'file' ? 'write' : 'create';
-      const delLines = kind === 'write' ? await countExistingFileLines((p, o) => localFs.readFileChunk(p, o), abs) : 0;
+      const prev = kind === 'write' ? await readExistingText((x, o) => localFs.readFileChunk(x, o), abs) : null;
+      const delLines = kind === 'write' ? (prev ? prev.lines : null) : 0;
       const bytes = await localFs.writeFile(abs, content);
+      const addLines = countLines(content);
+      if (kind === 'create') recordChange(ctx, abs, 'create', '', content, addLines, 0, true);
+      else if (prev) recordChange(ctx, abs, 'write', prev.text, content, addLines, delLines || 0, true);
       return {
         content: `已写入 ${abs}(${bytes} 字节)`,
         // meta:文件改动卡(新建/覆盖 + 增删行数),供前端「N 个文件已更改」汇总卡呈现
-        meta: { card: 'diff', kind, path: abs, addLines: countLines(content), delLines }
+        meta: { card: 'diff', kind, path: abs, addLines, delLines }
       };
     }
   },
@@ -803,7 +931,7 @@ const localToolDefs: ToolDef[] = [
     description: '在本机文件里做精确文本替换(old_string -> new_string);默认只替换首次,多次需 replace_all=true',
     mutating: true, // read-modify-write:并行同文件会丢更新,必须独占
     parameters: { type: 'object', properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' } }, required: ['path', 'old_string', 'new_string'] },
-    async run({ path: p, old_string, new_string, replace_all }) {
+    async run({ path: p, old_string, new_string, replace_all }, ctx: any = {}) {
       const abs = resolveInLocalWorkspace(p);
       const { buffer, size } = await localFs.readFileChunk(abs, { maxBytes: 2 * 1024 * 1024 });
       if (size > buffer.length) throw new Error('文件超过 2MB,建议用 write_local_file 整体重写');
@@ -814,10 +942,13 @@ const localToolDefs: ToolDef[] = [
       const next = replace_all ? text.split(oldStr).join(newStr) : text.replace(oldStr, newStr);
       const bytes = await localFs.writeFile(abs, next);
       const times = replace_all ? count : 1;
+      const addLines = countLines(newStr) * times;
+      const delLines = countLines(oldStr) * times;
+      recordChange(ctx, abs, 'edit', text, next, addLines, delLines, true);
       return {
         content: `已在 ${abs} 完成编辑:${replace_all ? `替换全部 ${count} 处` : '替换 1 处'}(${bytes} 字节)`,
         // meta:文件改动卡(编辑 + 增删行数,按替换次数累乘),供前端「N 个文件已更改」汇总卡呈现
-        meta: { card: 'diff', kind: 'edit', path: abs, addLines: countLines(newStr) * times, delLines: countLines(oldStr) * times }
+        meta: { card: 'diff', kind: 'edit', path: abs, addLines, delLines }
       };
     }
   },
@@ -833,7 +964,7 @@ const localToolDefs: ToolDef[] = [
     description: '删除本机本地工作区内的文件或目录(递归)。危险!绝不能删除本地工作区根目录',
     mutating: true,
     parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } }, required: ['path'] },
-    async run({ path: p, recursive }) {
+    async run({ path: p, recursive }, ctx: any = {}) {
       const abs = resolveInLocalWorkspace(p);
       const ws = localFs.workspace;
       // 全盘模式(不在工作区对话)没有本地工作区根,改防删除盘符根/系统根/UNC 共享根
@@ -844,8 +975,10 @@ const localToolDefs: ToolDef[] = [
       if (!type) throw new Error(`路径不存在: ${abs}`);
       if (type === 'dir' && !recursive) throw new Error('是目录,如需删除请加 recursive=true');
       // 文件删除:先读旧内容统计行数(上限 2MB)供改动卡展示;目录删除不产生文件级改动卡
-      const delLines = type === 'file' ? await countExistingFileLines((p, o) => localFs.readFileChunk(p, o), abs) : 0;
+      const prev = type === 'file' ? await readExistingText((x, o) => localFs.readFileChunk(x, o), abs) : null;
+      const delLines = type === 'file' ? (prev ? prev.lines : null) : 0;
       await localFs.rmdirRecursive(abs);
+      if (type === 'file' && prev) recordChange(ctx, abs, 'delete', prev.text, null, 0, delLines || 0, true);
       return type === 'file'
         ? { content: `已删除: ${abs}`, meta: { card: 'diff', kind: 'delete', path: abs, addLines: 0, delLines } }
         : `已删除: ${abs}`;
@@ -1260,7 +1393,7 @@ export function registerTools(registry: ToolRegistry) {
   // 从而杜绝"新增写类工具忘记登记 → 静默免审批"的 fail-open 事故。
   const TOOL_ACCESS: Record<
     'list_directory' | 'read_file' | 'write_file' | 'edit_file' | 'run_command'
-    | 'create_directory' | 'delete_path' | 'search_code' | 'todo_write' | 'skill'
+    | 'create_directory' | 'delete_path' | 'search_code' | 'todo_write' | 'skill' | 'present'
     | 'skill_copy_builtin' | 'get_workspace_info' | 'web_search' | 'list_local_dir'
     | 'read_local_file' | 'write_local_file' | 'edit_local_file' | 'create_local_dir'
     | 'delete_local_path' | 'search_local_code' | 'run_local_command' | 'get_local_info'
@@ -1280,6 +1413,8 @@ export function registerTools(registry: ToolRegistry) {
     glob: 'read', grep: 'read',
     // 宿主协调(任何模式都不拦)
     todo_write: 'meta', skill: 'meta', ask_user_question: 'meta',
+    // 成果物交付声明:不写文件、不执行命令,只校验存在性并落一条会话事件 —— 与 todo_write 同类
+    present: 'meta',
     // 改变外部状态
     write_file: 'write', edit_file: 'write', create_directory: 'write', delete_path: 'write',
     skill_copy_builtin: 'write', write_local_file: 'write', edit_local_file: 'write',

@@ -16,6 +16,7 @@ import { Session } from './session.ts';
 import { sshManager as ssh } from '../core/ssh-manager.ts';
 import type { ToolRegistry } from './registry.ts';
 import { appendMessage, beginRun, finishRun, newRunId, type SubagentStatus } from '../store/subagent-store.ts';
+import { billedInputTokens } from './llm.ts';
 
 /**
  * 子代理可用的只读工具白名单(远程 + 本机两套镜像)。
@@ -243,8 +244,11 @@ export async function runSubagent(o: SubagentRunOptions): Promise<SubagentResult
       });
     } catch (e) { fail(e); }
     steps = step;
-    promptTokens += Number(res?.usage?.promptTokens) || 0;
-    completionTokens += Number(res?.usage?.completionTokens) || 0;
+    // usage 已归一成四桶(promptTokens/completionTokens 两个字段不再由 llm 提供):
+    // 这里按"计费输入 vs 输出"汇总,与父会话仪表盘口径一致
+    const u = res?.usage;
+    promptTokens += u ? billedInputTokens(u) : 0;
+    completionTokens += u ? u.outputTokens : 0;
 
     const text = String(res?.content || '');
     if (text.trim()) lastText = text;

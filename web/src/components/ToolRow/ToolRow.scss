@@ -1,7 +1,8 @@
 /* ---- ToolRow 独有样式:工具行扫描光带 + 链接/摘要 + IN/OUT 卡 ---- */
 .dsh-tool { display: flex; flex-direction: column; min-width: 0; }
 .dsh-tool .dsh-row-inner { position: relative; overflow: hidden; }
-.dsh-errorSummary { color: var(--red); }
+/* 失败/中断的颜色现在挂在 .dsh-summary 的 data 属性上(styles.scss),
+   因为状态要按 dsh 的做法用文字颜色表达,而不是换前导图标 */
 .dsh-bodyWrap { display: flex; flex-direction: column; }
 .dsh-inspectButton { display: inline-flex; align-self: flex-start; align-items: center; gap: 4px; margin: 4px 0 2px 4px; padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; color: var(--text-2); font-size: 11px; line-height: 16px; cursor: pointer; opacity: 0; transition: opacity 100ms ease; }
 .dsh-tool:hover .dsh-inspectButton, .dsh-inspectButton:focus-visible { opacity: 1; }
@@ -23,3 +24,21 @@
 .dsh-rowAction:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
 .dsh-rowAction:active { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) { .dsh-rowAction { transition: none; } }
+
+/* ---- present 专属行的交付清单(展开体)---- */
+.dsh-presentList {
+  list-style: none; margin: 4px 0 4px 4px; padding: 6px 12px;
+  border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.dsh-presentItem { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; }
+.dsh-presentIcon { display: inline-flex; flex: none; color: var(--accent); }
+.dsh-presentName { flex: none; font-weight: 600; color: var(--text); white-space: nowrap; }
+/* 说明可压缩省略:它是附加信息,不能把路径挤没 */
+.dsh-presentDesc { flex: 0 1 auto; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dsh-presentPath { flex: 1 1 auto; min-width: 0; text-align: right; color: var(--text-faint); font-family: var(--mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
+.dsh-presentRunning { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0 6px 4px; color: var(--muted); font-size: 12px; }
+
+@media (max-width: 767px) {
+  .dsh-presentDesc, .dsh-presentPath { display: none; }
+}

@@ -51,8 +51,7 @@ export function measureMessages(msgs: any[]): number {
  * 一次请求"固定信封"的拆分用量(system 提示词 / 工具 schema / 历史消息)。
  * 三处口径必须同源,否则仪表盘与压缩触发点会打架:
  *  - 压缩水位判定(compactHistory 的 reservedTokens + measureMessages)
- *  - 绝对地板折叠判定(agent 的 ABS_FLOOR_TOKENS)
- *  - 前端仪表盘显示的 estimated
+ *  - 前端仪表盘显示的 estimated(context_usage 事件)
  * 历史教训:仪表盘曾只算 [system, ...history](不含工具 schema),而压缩阈值含
  * 工具 schema,同一个会话两个数字能差数千 token,用户看到的百分比与实际触发点不符。
  */
@@ -281,10 +280,10 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
   }
 
   // 第一遍:无模型免费裁剪(照搬 harness compaction-tool-result-pruner 默认值:
-  // 8192/4096/1024,对 surface 上所有超限结果生效,不保留最近几条)
+  // 8192/4096/1024,对 surface 上所有超限结果生效;判定只看内容 → 投影只追加)
   const P = AGENT.TOOL_RESULT_PRUNE;
   const prunedRes = pruneToolResults(messages, {
-    keepRecent: 0, minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
+    minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
   });
   let msgs = prunedRes.messages;
   if (!force && measureMessages(msgs) + reserved <= thresholdTokens) {
@@ -304,7 +303,7 @@ export async function compactHistory({ messages, system, llm, signal, contextWin
     try {
       // 摘要请求防超窗:drop 区间可能比当前请求还大,先把其中大体积工具结果折叠成头尾,
       // 再交给 LLM 汇总——否则摘要请求自己就会 400/被上游截断(摘要并不需要完整文件原文)
-      const prunedDrop = pruneToolResults(range.drop, { keepRecent: 0, minChars: 1200, headChars: 900, tailChars: 300 }).messages;
+      const prunedDrop = pruneToolResults(range.drop, { minChars: 1200, headChars: 900, tailChars: 300 }).messages;
       summary = await summarizeWithLlm({ llm, system, dropMsgs: prunedDrop, signal, maxTokens: COMPACT.SUMMARY_MAX_TOKENS });
       // 提交前校验:摘要必须比被压缩区间更小(参照 harness 的 shrink 校验),否则压缩无收益。
       // 无收益 = 压缩失败,同样不裁剪(见下方"绝不截断"说明)。
@@ -367,98 +366,73 @@ export async function summarizeWithLlm({ llm, system, dropMsgs, signal, maxToken
   return text.trim().slice(0, AGENT.HISTORY_BUDGET_CHARS);
 }
 
-// ---- 历史中旧工具结果的投影期折叠(参照 harness compaction-tool-result-pruner) ----
+// ---- 历史中旧工具结果的投影期折叠(照搬 harness compaction-tool-result-pruner) ----
 // 与 squash 摘要压缩互补:摘要压缩按"对话组"选区间,单轮深工具任务只有一组,永远够不着;
-// 这里在请求构造时把"早期的大体积工具结果"替换为头尾摘要 + 回读指引,补上这道防线。
+// 这里在压缩(水位/爆窗)合格后把"超限的大体积工具结果"替换为头尾摘要 + 回读指引。
 // 纯函数、不动事件日志:日志保持完整(可回放/分支),只裁模型当轮可见面。
+//
+// ⚠ 缓存不变量(决定这条函数只能是这个形状):折叠判定**只能取决于消息内容本身**,
+// 不能取决于位置(例如"保留最近 N 条大结果")。带保留窗口的版本里,窗口会随新结果前进,
+// 于是同一个会话里同一条历史消息会"先不折、后折",模型可见面被中途改写;提供方前缀缓存
+// 从第一个变化的 token 起失效,折叠点之后整段缓存作废(实测单次 20k~300k token)。
+// 只看内容的判定让每个结果的头尾折叠结果**恒定**,所以历史只会向后追加:
+// 早期请求的消息数组永远是后续请求的前缀(见 test/request-prefix-stability.test.js)。
 
 export interface ToolResultPruneSpec {
   /**
-   * 保留窗口的条数上限:最近至多这么多条超限工具结果保持原样(0 = 全部折叠,压缩水位
-   * 路径用)。与 keepRecentChars 先到者为准。
+   * 只折叠内容超过该长度的结果(对应 harness 的 `thresholdChars`)。
+   * ⚠ 这里**故意没有**"保留最近 N 条 / N 字符"的窗口:窗口会让判定依赖位置,
+   * 从而使同一条历史消息在不同请求里得到不同结果 —— 那就是前缀缓存失效。
    */
-  keepRecent: number;
-  minChars: number;    // 只折叠超过该长度的结果
+  minChars: number;
   headChars: number;
   tailChars: number;
-  /**
-   * 保留窗口的字符预算:最近保留的原始工具输出总量达到该值即停止扩张保留区
-   * (省略 / 0 = 不设预算,只看 keepRecent)。
-   * 折叠点因此被钉在距请求末尾约「一个结果 / 该预算」的位置:提供方前缀缓存从第一个
-   * 变化的 token 起失效,单次折叠作废的尾部 ≈ 保留窗口 + 本步新增,而不是「最近 N 条
-   * 大结果 + 其后全部消息」(后者随会话增长可达成百上千 KB)。
-   */
-  keepRecentChars?: number;
-  /**
-   * 攒批门槛:本轮所有候选合计可省不足该字符数时整轮不折(省略 / 0 = 不设门槛)。
-   * 折叠会作废折叠点之后的全部前缀缓存,为省几百字符去改写中段是净亏;攒到值得一次
-   * 改写再折,把一次缓存作废摊销到多条结果上。
-   */
-  minSaveChars?: number;
 }
 
-/** 折叠结果:统计 + 折叠点(供调用方估算作废的缓存尾部) */
+/** 折叠结果:统计 + 折叠点(折叠点之后的整段前缀缓存会失效,故只用于日志/诊断) */
 export interface ToolResultPruneResult {
   messages: any[];
   pruned: number;
   charsSaved: number;
-  /** 返回数组中第一条被折叠消息的下标(-1 = 本轮没有折叠);折叠点之后的整段前缀缓存会失效 */
+  /** 返回数组中第一条被折叠消息的下标(-1 = 本论没有折叠);折叠点之后的整段前缀缓存会失效 */
   firstPrunedIndex: number;
 }
 
+/**
+ * 折叠标记的起头(既用于生成提示,也用于**幂等判定**):已经被折叠过一遍的内容不再折叠,
+ * 否则提示本身会被当成"中段"再删一次,折叠结果随折叠次数漂移 —— 那等于说了不算:
+ * 同一条历史消息在不同请求里得到不同文本,前缀缓存照样失效。
+ */
+const PRUNE_HINT_MARK = '…[早期工具结果已折叠:省略中段';
+
 function pruneHint(omitted: number): string {
-  return `\n…[早期工具结果已折叠:省略中段 ${omitted} 字符。头尾已保留;需要完整内容可按原参数重新调用该工具,或用 read_file/read_local_file 的 offset 分段读取]…\n`;
+  return `\n${PRUNE_HINT_MARK} ${omitted} 字符。头尾已保留;需要完整内容可按原参数重新调用该工具,或用 read_file/read_local_file 的 offset 分段读取]…\n`;
 }
 
 /**
- * 折叠消息历史中早期的大体积工具结果(纯函数,输入不被修改):
- * - 只处理 role='tool' 的消息;最近保留窗口(条数上限 + 字符预算,先到者为准)不动;
- * - 其余超过 minChars 的替换为 head + 提示 + tail,消息结构(role/tool_call_id)原样保留,
+ * 折叠消息历史中超限的大体积工具结果(纯函数,输入不被修改):
+ * - 只处理 role='tool' 的消息;内容不超过 minChars 的结果原样保留;
+ * - 超限的替换为 head + 提示 + tail,消息结构(role/tool_call_id)原样保留,
  *   序列合法性不受影响(只改 content 字符串);
- * - 合计收益低于 minSaveChars 时整轮不折(攒批);返回统计与折叠点下标。
+ * - 已含折叠标记的结果跳过 → **幂等**;
+ * - **判定只看内容**:同一个结果在任何后续请求里都会折成同一段文本,因此模型可见面
+ *   只会向后追加(前缀稳定,提供方前缀缓存不会被中途打断)。调用方(compactHistory)
+ *   只在窗口水位/爆窗合格后调用,不在每次请求里独立触发。
  */
 export function pruneToolResults(msgs: any[], spec: ToolResultPruneSpec): ToolResultPruneResult {
   const list = msgs || [];
-  const toolIdx: number[] = [];
-  list.forEach((m, i) => {
-    if (m && m.role === 'tool' && typeof m.content === 'string' && m.content.length > spec.minChars) toolIdx.push(i);
-  });
-  if (!toolIdx.length) return { messages: msgs, pruned: 0, charsSaved: 0, firstPrunedIndex: -1 };
-
-  // 保留窗口:从最新往旧扩张,直到条数到顶或字符预算用满(先到者为准)。
-  // 条数上限 0 时不保留(压缩水位路径:全部折叠);预算缺省/0 时不设预算。
-  const keepMax = Math.max(0, Math.floor(spec.keepRecent || 0));
-  const keepChars = spec.keepRecentChars && spec.keepRecentChars > 0 ? Math.floor(spec.keepRecentChars) : Infinity;
-  let keepFrom = toolIdx.length;
-  let keptChars = 0;
-  while (keepFrom > 0 && toolIdx.length - keepFrom < keepMax && keptChars < keepChars) {
-    keepFrom--;
-    keptChars += list[toolIdx[keepFrom]].content.length;
-  }
-  const candidates = toolIdx.slice(0, keepFrom);
-  if (!candidates.length) return { messages: msgs, pruned: 0, charsSaved: 0, firstPrunedIndex: -1 };
-
-  // 先算总收益:太小就整轮不折——宁可让上下文多长一点,也不为小收益作废整段前缀缓存
-  let omittable = 0;
-  for (const i of candidates) {
-    const omitted = list[i].content.length - spec.headChars - spec.tailChars;
-    if (omitted > 0) omittable += omitted;
-  }
-  const minSave = Math.max(0, Math.floor(spec.minSaveChars || 0));
-  if (minSave > 0 && omittable < minSave) return { messages: msgs, pruned: 0, charsSaved: 0, firstPrunedIndex: -1 };
-
   const out = list.slice();
-  let pruned = 0;
-  let charsSaved = 0;
-  let firstPrunedIndex = -1;
-  for (const i of candidates) {
-    const content = out[i].content;
-    const omitted = content.length - spec.headChars - spec.tailChars;
-    if (omitted <= 0) continue;
-    out[i] = { ...out[i], content: content.slice(0, spec.headChars) + pruneHint(omitted) + content.slice(content.length - spec.tailChars) };
+  let pruned = 0, charsSaved = 0, firstPrunedIndex = -1;
+  list.forEach((m, i) => {
+    if (!m || m.role !== 'tool' || typeof m.content !== 'string' || m.content.length <= spec.minChars) return;
+    if (m.content.includes(PRUNE_HINT_MARK)) return; // 已折叠过 → 不再折(幂等)
+    const omitted = m.content.length - spec.headChars - spec.tailChars;
+    if (omitted <= 0) return;
+    out[i] = { ...m, content: m.content.slice(0, spec.headChars) + pruneHint(omitted) + m.content.slice(m.content.length - spec.tailChars) };
     pruned++;
     charsSaved += omitted;
     if (firstPrunedIndex < 0) firstPrunedIndex = i;
-  }
+  });
+  if (!pruned) return { messages: msgs, pruned: 0, charsSaved: 0, firstPrunedIndex: -1 };
   return { messages: out, pruned, charsSaved, firstPrunedIndex };
 }

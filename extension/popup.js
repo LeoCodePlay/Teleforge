@@ -73,7 +73,8 @@ function render(status) {
   $('state').textContent = online
     ? `已连接 ${online} 个`
     : (servers.length ? (connecting ? '连接中…' : '未连接') : '未配对');
-  $('ver').textContent = status.browser ? `${status.browser} · v${status.version}` : `v${status.version}`;
+  const inst = String(status.instance || '').slice(0, 6);
+  $('ver').textContent = (status.browser ? `${status.browser} · v${status.version}` : `v${status.version}`) + (inst ? ` · ${inst}` : '');
   $('paused').checked = status.paused === true;
 
   const list = $('list');

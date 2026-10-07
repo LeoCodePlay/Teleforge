@@ -27,6 +27,35 @@ const conns = new Map();
 /** 全局暂停开关(所有服务端共用一个):popup 里勾上后任何服务端都调不动浏览器 */
 let paused = false;
 
+/**
+ * 本浏览器实例的稳定 id:首次运行生成一次写进 chrome.storage.local,之后每次重连都带上。
+ * 服务端靠它区分「同一台浏览器重连(该替换旧连接)」和「另一台浏览器(该各占一条连接)」——
+ * 没有它,Chrome 与 Edge 会被当成同一条连接的争夺者,互相顶掉。
+ */
+let instanceId = '';
+let instanceOnce = null;
+function loadInstanceId() {
+  if (instanceId) return Promise.resolve(instanceId);
+  if (!instanceOnce) {
+    instanceOnce = (async () => {
+      try {
+        const st = await chrome.storage.local.get(['instanceId']);
+        let id = String(st.instanceId || '').trim();
+        if (!/^[0-9a-f]{8,32}$/i.test(id)) {
+          const rnd = (globalThis.crypto && crypto.randomUUID)
+            ? crypto.randomUUID().replace(/-/g, '')
+            : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+          id = rnd.slice(0, 12);
+          try { await chrome.storage.local.set({ instanceId: id }); } catch { /* 存不下也先用本次的 */ }
+        }
+        instanceId = id;
+      } catch { /* 读存储失败:按旧协议上报,由服务端给临时 id */ }
+      return instanceId;
+    })();
+  }
+  return instanceOnce;
+}
+
 // ---------------- 地址与持久化 ----------------
 
 function normBase(s) {
@@ -163,12 +192,17 @@ function connectConn(conn) {
   }
   conn.ws = sock;
 
-  sock.onopen = () => {
+  sock.onopen = async () => {
     conn.reconnectDelay = RECONNECT_MIN;
     conn.lastError = '';
+    let iid = '';
+    try { iid = await loadInstanceId(); } catch { /* 拿不到就按旧协议上报 */ }
+    // 等实例 id 期间用户可能已经断开 / 被新连接顶掉:那就别再把 hello 发出去
+    if (conn.ws !== sock || sock.readyState !== 1) return;
     sendTo(conn, {
       type: 'ext_hello',
       token: conn.token,
+      instanceId: iid,
       version: chrome.runtime.getManifest().version,
       browser: detectBrowser(),
       capabilities: ['tabs', 'cdp', 'screenshot', 'evaluate']
@@ -286,6 +320,8 @@ function buildStatus() {
     online: servers.filter((s) => s.connected).length,
     version: chrome.runtime.getManifest().version,
     browser: detectBrowser(),
+    /** 浏览器实例 id(同一台浏览器里固定):服务端靠它把多台浏览器区分成多条连接 */
+    instance: instanceId,
     attachedTabs: attachedTabs()
   };
 }
@@ -492,5 +528,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 void (async () => {
   const st = await chrome.storage.local.get(['paused']);
   paused = st.paused === true;
+  await loadInstanceId();
   await ensureConnected();
 })();

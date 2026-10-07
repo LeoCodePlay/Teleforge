@@ -1,0 +1,82 @@
+/* ---- 成果物卡片(assistant 气泡下方,与「文件已更改」卡并列但语义不同)----
+   观感沿用 FilesChangedCard 的胶囊/行语言:圆角 --r-md、主题 token、行整体可点。
+
+   与「文件已更改」的视觉区分:那张卡是"被动了什么"(中性、灰),这张是"交给你的东西"
+   (强调色标题 + 眼睛图标),让用户一眼看出哪个是产物。 */
+.deliverables {
+  margin: 6px 0 2px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--glass-bg);
+  overflow: hidden;
+}
+.deliverables-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px 5px;
+}
+.deliverables-title {
+  font-size: 12px; font-weight: 600;
+  color: var(--accent);
+  letter-spacing: .2px;
+}
+
+.deliverables-list { list-style: none; margin: 0; padding: 0; }
+.deliverables-list li { display: block; }
+/* 有「在侧栏打开」次要入口时:主行占满,侧栏按钮贴右 */
+.deliverables-list li.has-aside { display: flex; align-items: center; }
+.deliverables-list li.has-aside .deliverables-row { flex: 1 1 auto; min-width: 0; }
+.deliverables-aside {
+  flex: none; margin-right: 10px; padding: 1px 7px; height: 19px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  background: var(--glass-bg); color: var(--muted);
+  font-size: 10.5px; line-height: 17px; cursor: pointer; white-space: nowrap;
+  opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease;
+}
+.deliverables-list li.has-aside:hover .deliverables-aside,
+.deliverables-aside:focus-visible { opacity: 1; }
+.deliverables-aside:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+
+.deliverables-row {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; min-width: 0;
+  padding: 5px 10px;
+  border: 0; border-top: 1px solid var(--line-soft);
+  background: transparent; color: var(--text);
+  font-size: 12.5px; text-align: left; cursor: pointer;
+  transition: background .14s ease;
+}
+.deliverables-row:hover { background: var(--glass-bg-hover); }
+.deliverables-row:focus-visible { outline: 2px solid var(--accent-border); outline-offset: -2px; }
+
+.deliverables-ico { display: inline-flex; flex: none; color: var(--accent); }
+.deliverables-name {
+  flex: none; font-weight: 600; white-space: nowrap;
+  max-width: 40%; overflow: hidden; text-overflow: ellipsis;
+}
+/* 说明可压缩并可省略:它是附加信息,不能把文件名与路径挤没 */
+.deliverables-desc {
+  flex: 0 1 auto; min-width: 0; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.deliverables-gap { flex: 1 1 auto; min-width: 8px; }
+.deliverables-kind {
+  flex: none; padding: 0 6px; height: 17px; line-height: 17px;
+  border-radius: var(--r-pill); font-size: 10.5px;
+  background: var(--glass-bg-inset); border: 1px solid var(--line-soft); color: var(--muted);
+}
+.deliverables-path {
+  flex: 0 1 auto; min-width: 0; max-width: 34%;
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  direction: rtl; text-align: left; /* 路径过长时省略**开头**,保住文件名那段 */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 窄屏:说明与路径让位,只留文件名 + 类型标签(行内挤不下会互相截断) */
+@media (max-width: 767px) {
+  .deliverables-desc, .deliverables-path { display: none; }
+  .deliverables-name { max-width: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deliverables-row { transition: none; }
+}

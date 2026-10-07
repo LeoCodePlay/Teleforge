@@ -1,12 +1,11 @@
 // 共享单行工具摘要行(照搬 deepseek-harness ui-tool/components/ToolRow):
-// 16px 前导槽(状态点/工具图标,悬停/展开变 chevron)+ 标题 + 2x2 分隔点 +
+// 16px 前导槽(工具图标,悬停/展开变 chevron)+ 标题 + 2x2 分隔点 +
 // FILL 截断摘要;展开体为 IN/OUT 卡或专属卡片(Terminal/Read/Search/Diff)。
-// 进行中:300px 扫光带循环;错误:红色 StateDot + 失败首行红字摘要。
+// 进行中:300px 扫光带循环;错误:失败首行红字摘要(前导仍是工具图标)。
 
 import React from 'react';
 import type { ReactNode } from 'react';
 import { DisclosureRow, useDisclosure } from '../DisclosureRow/DisclosureRow';
-import { StateDot } from '../StateDot/StateDot';
 import type { ToolRowState, ToolRowVariant } from '../../utils/toolRowModel';
 import { IconInspectOutline12 } from '../icons/icons';
 import './ToolRow.scss';
@@ -36,13 +35,14 @@ export interface ToolRowProps {
   children?: ReactNode;
 }
 
-/** 前导槽状态替换:error=红点、stopped=琥珀点;running 保留图标(扫光承载在行上) */
+/** 前导槽**永远显示业务图标**。
+ *
+ * 对齐 dsh:工具行不把图标换成状态点 —— 状态是靠**摘要文字的颜色**表达的
+ * (失败=红、已中断=琥珀,见 styles.scss 的 .dsh-summary[data-error]/[data-stopped])。
+ * 换图标会让"这是什么工具"这一眼可得的信息在出错时消失,恰恰是出错时最需要它。
+ * 真正的状态点属于 TerminalBlock 与 StateDot 的其它消费者,不属于工具行。 */
 function leadingFor(state: ToolRowState, icon: ReactNode): ReactNode {
-  switch (state) {
-    case 'error': return <StateDot state="error" />;
-    case 'stopped': return <StateDot state="warning" />;
-    default: return icon;
-  }
+  return icon;
 }
 
 function stateStatus(state: ToolRowState): string | null {
@@ -78,10 +78,13 @@ export function ToolRow({
   const expandable = hasBody || hasOutput || !!card || !!children;
   const openState = open && expandable;
   const status = stateStatus(state);
+  // 失败:摘要位换成失败首行(红字);已中断:保留原摘要但染琥珀
+  // (dsh: state==='error' 才替换文案,stopped 只改颜色)
   const failureLine = state === 'error' ? (errorSummary ?? null) : null;
   const summaryText = failureLine ?? summary;
   const suffix = failureLine === null ? (summarySuffix ?? null) : null;
   const fileLink = filePath !== undefined && onOpenFile !== undefined && failureLine === null;
+  const summaryState = failureLine !== null ? 'error' : (state === 'stopped' ? 'stopped' : undefined);
 
   return (
     <div className="dsh-tool" data-variant={variant} data-tool={toolName} data-state={state}>
@@ -106,7 +109,8 @@ export function ToolRow({
                 {summaryText}
               </button>
             ) : (
-              <span className={`dsh-summary ${failureLine !== null ? 'dsh-errorSummary' : ''}`}>
+              <span className="dsh-summary" data-error={summaryState === 'error' || undefined}
+                data-stopped={summaryState === 'stopped' || undefined}>
                 {summaryText}
               </span>
             )}

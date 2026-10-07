@@ -1,0 +1,58 @@
+/* ---- 右侧栏**宿主外壳**样式 ----
+   只负责两件 kit 不管的事:最外层 aside 的宽度/边框,以及那条可拖拽的宽度分隔条。
+   标签条、分栏、拖拽落点、浮动窗、空态、右键菜单等**全部**由搬来的 dsh dockkit 原件
+   (dockkit.module.css)渲染 —— 不要再在这里写任何标签/面板内部样式,那会和原件打架。
+
+   颜色一律走主题 token;dsh 组件需要的 --dsw-* 变量见 web/src/dsh-tokens.scss。 */
+
+.sidebar-right {
+  position: relative;
+  flex: none;
+  height: 100%;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--bar-tint-a), var(--bar-tint-b));
+  border-left: 1px solid var(--line);
+  box-shadow: inset 1px 0 0 var(--glass-hi);
+}
+
+/* 停靠面板的宿主:占满剩余高度(dockkit 自己处理内部滚动) */
+.rsb-dock {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 不支持的类型等宿主的兜底文案 */
+.rsb-empty {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 拖拽调宽:命中区必须贴**左边缘**。
+   通用 .resizer(App.scss)是给左侧栏写的,钉在 right:0 —— 右栏若不做覆盖,
+   拖拽条会跑到窗口最右侧,几乎抓不到(这是"侧边栏不能拖宽"的真正原因)。 */
+.sidebar-right .resizer-left {
+  left: 0; right: auto;
+  width: 8px;
+  margin-left: -4px;   /* 一半探进主区:视觉上正好是两栏的接缝 */
+  touch-action: none;  /* 触控板/触摸拖拽时不被滚动抢走手势 */
+  user-select: none;
+}
+.sidebar-right .resizer-left:hover,
+.sidebar-right .resizer-left.dragging { background: var(--accent-glow); }
+
+/* 标签条末端的收起控件(宿主 chrome,画在 kit 的 chrome 槽里) */
+.rsb-collapse {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted);
+  font-size: 14px; line-height: 1; cursor: pointer;
+}
+.rsb-collapse:hover { color: var(--text); background: var(--hover-bg-hard); }
+.rsb-collapse:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }

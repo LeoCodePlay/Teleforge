@@ -321,6 +321,8 @@ export const computerUseToolDefs: ToolDef[] = [
           + '请改用 computer_ui(元素结构)或 computer_ocr(屏幕文字)来"看"界面,这两条路不依赖视觉。' : '');
       return {
         content,
+        // 截图在对话里直接展示(前端复用 MessageAttachments);工具卡的 meta.screenshot 保持不变
+        attachments: [att],
         meta: {
           screenshot: { id: att.id, url: attachmentUrl(att.id), name: att.name },
           // 供请求期把图片注入多模态模型(见 session.ts 的 visionAttachments 处理)

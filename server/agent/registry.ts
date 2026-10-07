@@ -83,6 +83,15 @@ export interface ToolResult {
   ms: number;
   concludesTurn?: boolean;
   meta?: any;
+  /**
+   * 该工具产出的图片等附件(服务端权威元数据,字节在附件库、日志只存 id)。
+   * 与 assistant/message 的 attachments 同构,供前端在对话里直接展示:
+   * 截图类工具不再只能"埋"在折叠的工具卡里(参照 harness 的 content 块:
+   * 工具结果可以携带 image 块,只是我们把它放在内容块数组之外,避免牵动
+   * 测量/压缩/spill 一整条链)。
+   * 可选:不产出附件的工具不传,旧工具零改动。
+   */
+  attachments?: Array<Record<string, any>>;
 }
 
 export class ToolRegistry {
@@ -219,10 +228,14 @@ export class ToolRegistry {
         : String(rawResult ?? '');
       const concludesTurn = !!(rawResult && typeof rawResult === 'object' && rawResult.concludesTurn === true);
       const meta = rawResult && typeof rawResult === 'object' ? rawResult.meta : undefined;
+      // 附件引用透传(只做形状校验:必须是数组;元素形状由产出方负责,前端渲染时再防御)
+      const attachments = rawResult && typeof rawResult === 'object' && Array.isArray(rawResult.attachments) && rawResult.attachments.length
+        ? rawResult.attachments : undefined;
       return {
         isError: false, content: spillResult(content, canonical), ms: Date.now() - started,
         ...(concludesTurn ? { concludesTurn: true } : {}),
-        ...(meta !== undefined ? { meta } : {})
+        ...(meta !== undefined ? { meta } : {}),
+        ...(attachments !== undefined ? { attachments } : {})
       };
     } catch (e: any) {
       return fail(`工具执行错误: ${e.message}`);

@@ -8,10 +8,11 @@
 //     step/start       {turn, step}                    开启一步(一次模型请求 + 它发起的工具调用)
 //     step/end         {turn, step}                    关闭一步
 //     user/message     {content, source}               用户输入(source='user')或运行中注入(source='steer')
-//     assistant/message {turn, step, message}          模型回复(含 tool_calls / reasoning_content)
+//     assistant/message {turn, step, message, usage?}  模型回复(含 tool_calls / reasoning_content;usage 为四桶用量)
 //     tool/call        {turn, step, callId, name, arguments}   模型请求的工具调用(arguments 保持原始 JSON 字符串)
-//     tool/result      {turn, step, callId, name, isError, content, ms} 工具执行结果
+//     tool/result      {turn, step, callId, name, isError, content, ms, meta?, attachments?} 工具执行结果
 //     todo/write       {todos:[{content,status}]}              任务计划整表快照(todo_write 工具写入)
+//     deliverable/presented {files:[{path,description}]}        成果物交付声明(present 工具写入;并入前一条 assistant,不占消息面)
 //     image/generated  {turn,step,mode,prompt,attachments,…}   生图模型一轮成图(仅前端投影,非消息面)
 // - turn/*、step/* 是结构边界,不投影为消息;user/message、assistant/message、
 //   tool/result 三类是"消息面",deriveMessages() 只看它们。
@@ -51,10 +52,50 @@ export interface SessionEventDataMap {
   'step/start': { turn: number; step: number };
   'step/end': { turn: number; step: number };
   'user/message': { content: string; source: string };
-  'assistant/message': { turn: number; step: number; message: LlmMessage };
+  'assistant/message': {
+    turn: number; step: number; message: LlmMessage;
+    /**
+     * 本步的提供方用量(四桶:未命中输入/输出/缓存读/缓存写),由 llm.ts 归一。
+     * 与 assistant 消息同条落盘,因为"模型输出"与"它的记账"必须一起走 ——
+     * 日志里没有第二条 usage 记录,foldTokenUsage 才能原样重建整个会话的用量与缓存命中率。
+     * 提供方不报用量时**缺席**(不是零值),因此旧数据/不报用量的网关都不会被算成 0 命中。
+     */
+    usage?: { uncachedInputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+    /**
+     * 本步首个 token 到达的绝对时刻(ms)。落盘理由:统计栏的「首 token 延迟」与
+     * 「解码速度」必须能从日志重算 —— 只在内存里记"什么时候收到第一个 delta",
+     * 刷新/切会话后就永久丢失了这两项(对齐 harness 把首 token 时间放进事件数据的做法)。
+     * 一个 token 都没出时缺席,统计时按"该步不计入 TTFT"处理,而不是记 0。
+     */
+    firstTokenTime?: number;
+  };
   'tool/call': { turn: number; step: number; callId: string; name: string; arguments: string };
-  'tool/result': { turn: number; step: number; callId: string; name: string; isError: boolean; content: string; ms: number };
-  'todo/write': { todos: Array<{ content: string; status: string }> };
+  'tool/result': {
+    turn: number; step: number; callId: string; name: string; isError: boolean; content: string; ms: number;
+    /** 结构化 UI 数据(终端卡 exitCode/cwd、浏览器卡 state、截图卡 screenshot 等);不进模型上下文 */
+    meta?: Record<string, any>;
+    /**
+     * 该工具产出的图片等附件(服务端元数据,字节在附件库、这里只有 id)。
+     * 与 image/generated 的 attachments 同字段名同形状,前端用同一套
+     * MessageAttachments 渲染,使截图类工具的产物在对话里直接可见。
+     */
+    attachments?: Array<Record<string, any>>;
+  };  'todo/write': { todos: Array<{ content: string; status: string }> };
+  /**
+   * 已交付的成果物(模型通过 present 工具显式声明)。
+   *
+   * 与"文件改动"是**两件不同的事**,这也是本工具存在的理由:
+   *   - 文件改动(tool/result 的 card='diff')是**观察事实** —— 工作区里哪些文件被改了,
+   *     由宿主自动汇总,可能包含模型从未提及的文件;
+   *   - 成果物是**交付意图** —— 模型明确说"这些是给你用的最终产物",还带一句人类可读的说明。
+   * 二者互补:前者回答"改了什么",后者回答"交给你什么"。
+   *
+   * 只记路径与说明,**不复制内容**(内容仍在原路径;复制会产生"桌面端改的和工作区不一致"这类问题)。
+   * 投影时并入前一条 assistant 消息,因此**不占消息面下标**,不影响回退/分支/删除。
+   */
+  'deliverable/presented': {
+    files: Array<{ path: string; description?: string }>;
+  };
   'compaction/done': { summary: string; dropCount?: number; manual?: boolean };
   /**
    * 压缩未完成(摘要生成失败 / 被停止 / 无收益)。压缩是"上下文治理事件",失败同样要留在
@@ -544,8 +585,208 @@ export function foldTodos(events: SessionEvent[]): TodoSnapshot | null {
   return todos;
 }
 
-// 按"对话组"裁剪的通用核心:超预算时从头部整组丢弃(一组 = 一条 user 到下一条 user 之前),
-// 保证剩余历史仍以 user 开头、assistant/tool_calls 配对完整。
+/** 整个会话的累计用量(四桶)与派生指标 */
+export interface SessionUsageTotals {
+  /** 未命中缓存的输入 token */
+  uncachedInputTokens: number;
+  /** 输出 token(已含推理) */
+  outputTokens: number;
+  /** 命中缓存读取的输入 token */
+  cacheReadTokens: number;
+  /** 写入缓存的输入 token */
+  cacheWriteTokens: number;
+  /** 有上报用量的步数(便于判断"命中率"是否有样本,而不是 0/0) */
+  samples: number;
+}
+
+/** 只用四个桶(不含 samples):foldTokenUsage 内部记录"上一条样本贡献"用 */
+type UsageBuckets = Omit<SessionUsageTotals, 'samples'>;
+
+/**
+ * 折叠事件日志得到**整个会话**的累计用量(参照 harness 的 tokenUsage 投影)。
+ *
+ * 为什么 fold 而不是内存累加:会话切换/进程重启/刷新后从磁盘重放,必须得到同一个数;
+ * 也只有 fold 才能让"缓存命中率"在任意时刻可重算。
+ *
+ * 去重语义(照搬 harness usage-projection):
+ *  - **同一个 (turn, step) 只用最后一次样本**:流式中间样本会被本条消息的最终样本替换。
+ *    实现上是"先减掉该 (turn,step) 上一次贡献的桶,再加上新的",而不是简单累加 ——
+ *    否则同一步的流式样本与最终样本会被重复计费。
+ *  - **重试计费**:同一步里若换了 Key/重试,该步会**产生多条 assistant/message**
+ *    (每条都是上游真实计费的一次尝试)。上一条已经把桶压平,所以减掉它再加新的,
+ *    净效果就是"每次尝试各计一次" —— 与 harness 的 llm/retry-started 语义一致。
+ *  - 没有 usage 的事件(提供方不报、旧数据)不参与累计,**不会被当成 0 命中样本**。
+ *
+ * @param events 会话事件日志
+ * @returns 四桶累计 + 有样本的步数
+ */
+export function foldTokenUsage(events: SessionEvent[]): SessionUsageTotals {
+  const zero = (): SessionUsageTotals => ({
+    uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, samples: 0
+  });
+  const totals = zero();
+  // 上一条带用量的 (turn,step) 及其贡献 —— 同键再来时先减掉它
+  let lastKey = '';
+  let last: UsageBuckets | null = null;
+
+  for (const ev of events || []) {
+    if (ev?.type !== 'assistant/message') continue;
+    const u = ev.data?.usage;
+    // 形状校验:缺失或字段非法都按"这条没有用量"处理,而不是补 0(补 0 会污染命中率分母口径)
+    if (!u || typeof u !== 'object') continue;
+    const buckets: UsageBuckets = {
+      uncachedInputTokens: Number(u.uncachedInputTokens) || 0,
+      outputTokens: Number(u.outputTokens) || 0,
+      cacheReadTokens: Number(u.cacheReadTokens) || 0,
+      cacheWriteTokens: Number(u.cacheWriteTokens) || 0
+    };
+    const key = `${ev.data?.turn ?? ''}:${ev.data?.step ?? ''}`;
+    // 同一个 (turn,step) 的重复样本:先减掉上一次的贡献(替换而非累加)
+    if (last && key === lastKey) {
+      totals.uncachedInputTokens -= last.uncachedInputTokens;
+      totals.outputTokens -= last.outputTokens;
+      totals.cacheReadTokens -= last.cacheReadTokens;
+      totals.cacheWriteTokens -= last.cacheWriteTokens;
+      totals.samples -= 1;
+    }
+    totals.uncachedInputTokens += buckets.uncachedInputTokens;
+    totals.outputTokens += buckets.outputTokens;
+    totals.cacheReadTokens += buckets.cacheReadTokens;
+    totals.cacheWriteTokens += buckets.cacheWriteTokens;
+    totals.samples += 1;
+    lastKey = key;
+    last = buckets;
+  }
+
+  // 防御:任何路径都不该产生负数,但上游脏数据(负数桶)可能击穿;夹住保证 UI 不会显示负值
+  totals.uncachedInputTokens = Math.max(0, totals.uncachedInputTokens);
+  totals.outputTokens = Math.max(0, totals.outputTokens);
+  totals.cacheReadTokens = Math.max(0, totals.cacheReadTokens);
+  totals.cacheWriteTokens = Math.max(0, totals.cacheWriteTokens);
+  totals.samples = Math.max(0, totals.samples);
+  return totals;
+}
+
+/**
+ * 整个会话的对话统计(照搬 harness 的 sessionStats 投影)。
+ *
+ * 为什么折叠整份日志而不是"只统计当前窗口":窗口是分页的,压缩还会改写它 ——
+ * 只有对完整持久日志做 fold,数字才不会随翻页/压缩而变。
+ */
+export interface SessionStats {
+  /** 有已闭合步的会话轮数(step/end 时轮号变化才 +1) */
+  turns: number;
+  /** 已闭合的步数(每个 step/end +1;**不是** assistant/message 条数:一步可能不产出消息) */
+  steps: number;
+  /** 模型墙钟时间之和:step/start → assistant/message,只算真assembled出消息的步 */
+  llmMs: number;
+  /** 工具墙钟时间之和:tool/call → 匹配的 tool/result(按 callId 配对) */
+  toolMs: number;
+  /** 首 token 延迟之和(step/start → 首 token) */
+  ttftMs: number;
+  /** 承载了首 token 的步数(TTFT 的平均值分母) */
+  ttftSteps: number;
+  /** 解码墙钟之和(首 token → assistant/message),只算同时报了输出 token 的步 */
+  decodeMs: number;
+  /** 与 decodeMs 同一批步的输出 token 之和(速度的分子;分母分子必须同源) */
+  decodeTokens: number;
+}
+
+/**
+ * 折叠事件日志得到整个会话的对话统计。
+ *
+ * 口径要点(每条都有理由,改动前请先读):
+ *  - `steps` 用 `step/end` 计数,不用 `assistant/message`:一步可能没有产出消息
+ *    (被中止、空响应),按消息数会漏;而 step/end 是步生命周期的唯一权威。
+ *  - `llmMs` 只累加"真的组出了消息"的步:被中止的步没有 assistant/message,
+ *    它的部分流时长不该混进模型耗时。
+ *  - `toolMs` 按 `callId` 配对,**必须用 Object.hasOwn 判断**:callId 来自模型产出的
+ *    JSON,可能是 `constructor`/`toString` 这类原型上的名字,直接索引会取到继承的函数,
+ *    `time - 函数` = NaN,把整个 toolMs 污染成 NaN。
+ *  - `decodeMs`/`decodeTokens` **必须同源**:只有既有首 token 又有输出 token 的步才同时累加,
+ *    否则会把"等待工具的时间"算进解码速度,得出人为偏低的 tok/s。
+ *  - 缺 `firstTokenTime` 的旧数据不参与 TTFT/速度(显示时那两行不出现),**不记 0**。
+ *
+ * 已知口径:toolMs 是各次调用耗时之**和**,不是墙钟等待时间 —— 工具池是并行的
+ * (MAX_PARALLEL_TOOL_CALLS),同批并行工具会让它大于实际等待。UI 上应表述为
+ * 「工具耗时(合计)」而不是「工具等待」。
+ *
+ * @param events 会话事件日志
+ * @returns 统计结果(任何字段都从第一次贡献开始累加,无贡献为 0)
+ */
+export function foldSessionStats(events: SessionEvent[]): SessionStats {
+  const stats: SessionStats = {
+    turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0
+  };
+  let lastTurn: number | null = null;
+  // 本步的边界事实;null = 不在步内或该步已结算
+  let openStep: { turn: number; step: number; startTime: number; firstTokenTime: number | null } | null = null;
+  // 已派发但结果还没到的工具调用(callId -> 派发时刻);用 Object.create(null) 避免原型链干扰
+  let pendingCalls: Record<string, number> = Object.create(null);
+
+  for (const ev of events || []) {
+    const d = ev?.data || {};
+    switch (ev?.type) {
+      case 'step/start':
+        openStep = { turn: d.turn, step: d.step, startTime: ev.time, firstTokenTime: null };
+        break;
+
+      case 'assistant/message': {
+        const open = openStep;
+        if (!open || open.turn !== d.turn || open.step !== d.step) break;
+        // 该步只结算一次:闭合边界后重复消息不会再累加
+        const firstToken = typeof d.firstTokenTime === 'number' && Number.isFinite(d.firstTokenTime)
+          ? d.firstTokenTime : null;
+        stats.llmMs += Math.max(0, ev.time - open.startTime);
+        openStep = null;
+        if (firstToken !== null) {
+          stats.ttftMs += Math.max(0, firstToken - open.startTime);
+          stats.ttftSteps += 1;
+          const out = d.usage && typeof d.usage.outputTokens === 'number' && Number.isFinite(d.usage.outputTokens)
+            ? d.usage.outputTokens : null;
+          // 同源判定:有首 token 且有输出 token 才计入解码时长
+          if (out !== null) {
+            stats.decodeMs += Math.max(0, ev.time - firstToken);
+            stats.decodeTokens += out;
+          }
+        }
+        break;
+      }
+
+      case 'tool/call':
+        pendingCalls[String(d.callId)] = ev.time;
+        break;
+
+      case 'tool/result': {
+        const callId = String(d.callId);
+        // 必须 Own 判定:见上面 callId 原型污染说明
+        if (!Object.hasOwn(pendingCalls, callId)) break;
+        const dispatched = pendingCalls[callId];
+        delete pendingCalls[callId];
+        if (typeof dispatched === 'number') stats.toolMs += Math.max(0, ev.time - dispatched);
+        break;
+      }
+
+      case 'step/end':
+        // 轮号与上一条不同才算新的一轮(轮号由宿主单调分配)
+        if (lastTurn !== d.turn) { stats.turns += 1; lastTurn = d.turn; }
+        stats.steps += 1;
+        openStep = null;
+        break;
+
+      case 'turn/end':
+        // 结果永远落在它自己的轮里;未落地的调用属于被中止的轮,丢弃而不是让状态无限增长
+        if (Object.keys(pendingCalls).length) pendingCalls = Object.create(null);
+        break;
+    }
+  }
+
+  // 防御:上游脏时间戳不得产生负数
+  for (const k of Object.keys(stats) as Array<keyof SessionStats>) stats[k] = Math.max(0, stats[k]);
+  return stats;
+}
+
+// 按"对话组"裁剪的通用核心:超预算时从头部整组丢弃(一组 = 一条 user 到下一条 user 之前),// 保证剩余历史仍以 user 开头、assistant/tool_calls 配对完整。
 // 关键:第一条 user 消息(原始任务锚点)永不丢弃——它是用户最初的需求,丢了模型会"失忆",
 // 退化成"我已就绪,没有任务"。裁剪只作用于第二组及之后的早期历史。
 function trimByBudgetCore<T>(items: T[], budget: number, getMsg: (t: T) => any): T[] {

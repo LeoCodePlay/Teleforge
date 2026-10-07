@@ -1,0 +1,129 @@
+/* ---- 右侧栏「文件变更对比」标签页 ----
+   规格逐条对齐 dsh 的 ui-deliverables:表头 38px / 底边 0.5px、选择器按钮 28px、
+   工具按钮 28×28(图标 15px)、行高 22px、行号槽 3.5em、hunk 块间距 8px、正文左右 padding 16px。
+   颜色全部走主题 token(见 theme/themes.ts 的 --diff-*),保证四套预设 + 自定义主题都跟随。 */
+
+.cr-root { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--text); }
+
+/* ---- 表头 ---- */
+.cr-head {
+  display: flex; flex: 0 0 auto; align-items: center; gap: 6px; box-sizing: border-box;
+  height: 38px; padding: 0 6px 0 8px; border-bottom: .5px solid var(--line);
+}
+.cr-selector { position: relative; flex: 0 1 auto; min-width: 0; }
+.cr-selector-btn {
+  display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; max-width: 100%;
+  height: 28px; padding: 0 6px 0 8px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text); font: inherit; font-size: 12px; line-height: 20px;
+  cursor: pointer;
+}
+.cr-selector-btn:hover, .cr-selector-btn[aria-expanded='true'] { background: var(--hover-bg-hard); }
+.cr-selector-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.cr-caret { flex: none; font-size: 10px; opacity: .7; }
+.cr-counts { display: inline-flex; flex: none; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; line-height: 20px; color: var(--text-faint); }
+.cr-added { color: var(--green); }
+.cr-deleted { color: var(--red); }
+.cr-kind { color: var(--text-faint); }
+
+/* 文件选择器下拉:近实底(玻璃在浮层里会串色),最多 320px 高 */
+.cr-pick {
+  position: absolute; top: 32px; left: 0; z-index: 20; min-width: 260px;
+  max-width: min(560px, 72vw); max-height: 320px; overflow: auto;
+  margin: 0; padding: 4px; list-style: none;
+  background: var(--code-bg-solid); border: 1px solid var(--glass-border-hover);
+  border-radius: var(--r-md); box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+}
+.cr-pick-item {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  width: 100%; min-width: 0; padding: 5px 8px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.cr-pick-item:hover { background: var(--hover-bg-hard); }
+.cr-pick-item.on { background: var(--accent-soft); }
+.cr-pick-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
+
+.cr-tools { display: inline-flex; flex: none; gap: 2px; align-items: center; margin-left: auto; }
+.cr-tool {
+  display: inline-flex; flex: none; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 6px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.cr-tool:hover { color: var(--text); background: var(--hover-bg-hard); }
+.cr-tool[aria-pressed='true'] { color: var(--accent-2); }
+/* 并排态:对比图标转 90°(dsh 同款反馈),一眼看出当前是哪种视图 */
+.cr-tool[aria-pressed='true'] .cr-ico-compare { transform: rotate(90deg); }
+.cr-tool:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+
+/* ---- 正文与状态 ---- */
+.cr-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.cr-status { margin: 0; padding: 16px; font-size: 13px; color: var(--muted); }
+.cr-status-error { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.cr-retry {
+  padding: 4px 12px; border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  background: var(--glass-bg); color: var(--text); font-size: 12px; cursor: pointer;
+}
+.cr-retry:hover { border-color: var(--glass-border-hover); background: var(--glass-bg-hover); }
+
+/* ---- 对比本体 ---- */
+.cr-diff {
+  --cr-empty-fill: color-mix(in srgb, var(--hover-bg-hard) 50%, transparent);
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+}
+.cr-note { margin: 0; padding: 4px 16px 8px; font-size: 12px; color: var(--text-faint); }
+.cr-body {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 0 16px;
+  font-family: var(--mono); font-size: 12px;
+}
+.cr-hunk { margin-bottom: 8px; }
+.cr-hunk-head { padding: 4px 16px; color: var(--text-faint); white-space: pre; }
+
+/* 统一视图的一行:旧行号 / 新行号 / 符号 / 正文 */
+.cr-line {
+  display: grid; grid-template-columns: 3.5em 3.5em 1.2em minmax(0, 1fr);
+  box-sizing: border-box; min-height: 22px; line-height: 22px; white-space: pre;
+}
+.cr-no { padding-right: 8px; color: var(--text-faint); text-align: right; user-select: none; }
+.cr-sign { text-align: center; user-select: none; }
+.cr-text { padding-right: 16px; }
+
+.cr-add { background: var(--diff-add-bg); }
+.cr-del { background: var(--diff-del-bg); }
+.cr-add .cr-no { background: var(--diff-add-gutter); color: var(--diff-add-marker); }
+.cr-del .cr-no { background: var(--diff-del-gutter); color: var(--diff-del-marker); }
+/* 第一列行号槽左侧 3px 标记色(dsh 的 inset 3px 0 0) */
+.cr-add .cr-no:first-child { box-shadow: inset 3px 0 0 var(--diff-add-marker); }
+.cr-del .cr-no:first-child { box-shadow: inset 3px 0 0 var(--diff-del-marker); }
+.cr-add .cr-sign { color: var(--diff-add-marker); }
+.cr-del .cr-sign { color: var(--diff-del-marker); }
+.cr-context .cr-text { color: var(--text-2); }
+
+/* 并排:每行独立两等分,因此左右永远对齐;两侧各自横向滚动并在 JS 里同步 */
+.cr-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.cr-split-line {
+  grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 22px; line-height: 22px; white-space: pre;
+}
+.cr-cell {
+  display: grid; grid-template-columns: 3.5em minmax(0, 1fr); box-sizing: border-box;
+  min-width: 0; overflow-x: auto; overscroll-behavior: none;
+}
+.cr-cell + .cr-cell { border-left: .5px solid var(--line); }
+.cr-cell .cr-no { background: var(--line-faint); }
+.cr-cell.cr-add .cr-no { background: var(--diff-add-gutter); }
+.cr-cell.cr-del .cr-no { background: var(--diff-del-gutter); }
+.cr-empty { background: var(--cr-empty-fill); }
+
+/* 自动换行:关掉 pre,长行折行而不是横向滚动 */
+.cr-diff[data-wrap='1'] .cr-line,
+.cr-diff[data-wrap='1'] .cr-split-line { white-space: pre-wrap; }
+.cr-diff[data-wrap='1'] .cr-text { overflow-wrap: anywhere; }
+
+/* 暗色主题:用 shiki 写在 token 上的 --shiki-dark 覆盖内联 color。
+   内联样式优先级最高,所以这里必须 !important(dsh 用同一手法)。 */
+[data-dark='1'] .cr-text span { color: var(--shiki-dark, currentcolor) !important; }
+
+/* 仅给读屏软件的文本 */
+.cr-visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

@@ -113,29 +113,17 @@ export const AGENT = {
   // 纯文本超过该字节数即替换为头尾对半预览 + 完整内容落盘提示;read 工具豁免
   SPILL_MAX_BYTES: 50_000,
   // 历史工具结果折叠(照搬 harness compaction-tool-result-pruner 默认值):
-  // 压缩水位触发时,把 surface 上所有超过 THRESHOLD_CHARS 的工具结果替换为头尾摘要。
-  // ABS_FLOOR_TOKENS:绝对地板——声明窗口虚高(前端兜底 1M)或未配置时,80% 水位永不
-  // 触发,长会话会无治理增长(实测一次分析任务冲到 100k token);地板保证预估请求
-  // (历史 + system + 工具 schema)超过该值就先做一轮"保最近"的折叠。设 0 关闭。
-  // 地板路径独立阈值:水位路径按 harness 8192 保守折叠;地板路径目的是主动压体积,
-  // 用更低阈值(2k)把旧的中等结果(一次 read 30k 默认即 30k 字符)也折叠掉。
-  // 折叠的缓存代价(与 agent.ts 折叠处注释同源):折叠改的是历史中段的一条消息,
-  // 提供方前缀缓存从第一个变化的 token 起失效 —— 折叠点越靠历史深处,作废的尾部越长。
-  // 保留窗口因此必须双限,才把折叠点钉在距请求末尾不远的位置:
-  //   ABS_FLOOR_KEEP_RESULTS 条数上限 + ABS_FLOOR_KEEP_CHARS 字符预算(先到者为准)。
-  // 旧配置只有最近 6 条这一个条件,而 6 条大结果加上其后的全部消息可以退到几百 KB 之前,
-  // 每折一条就把这整段按未命中重算(实测单次作废 20k-60k token,只省下 ~1k 字符)。
-  // ABS_FLOOR_MIN_SAVE_CHARS 是攒批门槛:本轮合计可省不足该值就先不折 —— 为省几百字符
-  // 去改写中段是净亏,攒到值得一次改写再折,把一次缓存作废摊销到多条结果上(设 0 关闭)。
+  // 把超过 THRESHOLD_CHARS 的工具结果替换为头尾摘要,由 compactHistory 在窗口水位/爆窗
+  // 合格后执行(不在每次请求里独立触发)。
+  // 判定**只取决于消息内容**(pruneToolResults 是纯函数、没有"保留最近 N 条"的滑动窗口),
+  // 所以模型可见面只能向后追加:提供方前缀缓存不会因为每请求重算折叠而中途失效。
+  // 历史教训:曾有一遍"绝对地板"(预估请求 > 60k token 就按 保留 4 条 / 16k 字符 折叠一次),
+  // 其折叠点是滑动窗口的函数,窗口每前进一格就改写一条历史中段消息,把该点之后的整段前缀
+  // 缓存作废(实测单次 20k~300k token,长会话命中率被拖到 96~98%)。已删除。
   TOOL_RESULT_PRUNE: {
     THRESHOLD_CHARS: 8_192,
     HEAD_CHARS: 4_096,
-    TAIL_CHARS: 1_024,
-    ABS_FLOOR_TOKENS: 60_000,
-    ABS_FLOOR_THRESHOLD_CHARS: 2_000,
-    ABS_FLOOR_KEEP_RESULTS: 4,
-    ABS_FLOOR_KEEP_CHARS: 16_000,
-    ABS_FLOOR_MIN_SAVE_CHARS: 8_000
+    TAIL_CHARS: 1_024
   },
   CONCURRENT_TOOL_CALLS: true,  // 并行执行工具调用(agent-loop 的有界滚动池,设 false 回退串行)
   MAX_PARALLEL_TOOL_CALLS: 10,  // 并行工具调用并发上限(照搬 harness DEFAULT_MAX_PARALLEL_TOOL_CALLS)

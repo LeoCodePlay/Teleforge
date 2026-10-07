@@ -37,13 +37,19 @@ function LineDelta({ item }: { item: FileChangeItem }) {
 
 // memo:items 数组引用未变时跳过重渲染(展开/收起为组件内部状态,不受影响),
 // 历史消息的「N 个文件已更改」卡不在每次流式/输入重渲染中重复构建
-export const FilesChangedCard = memo(function FilesChangedCard({ items, workspace, onOpenFile, onOpenLocalFile }: {
+export const FilesChangedCard = memo(function FilesChangedCard({ items, workspace, onOpenFile, onOpenLocalFile, onOpenFileAside, onOpenLocalFileAside, onOpenChanges }: {
   items: FileChangeItem[];
   workspace?: string;
   /** 打开远程文件(由 App 传入:文件标签页 + 远程读取通道) */
   onOpenFile?: (path: string) => void;
   /** 打开本机文件(由 App 传入:文件标签页 + local: 本机读取通道) */
   onOpenLocalFile?: (path: string) => void;
+  /** 在**右侧栏**打开远程文件(对照阅读用;未提供则该入口不出现) */
+  onOpenFileAside?: (path: string) => void;
+  /** 在**右侧栏**打开本机文件 */
+  onOpenLocalFileAside?: (path: string) => void;
+  /** 查看该文件的**改动对比**(右侧栏 changes-review;与上面「打开文件」是两条链路) */
+  onOpenChanges?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   if (!items || items.length === 0) return null;
@@ -68,6 +74,13 @@ export const FilesChangedCard = memo(function FilesChangedCard({ items, workspac
             // 删除后的文件点开只会读到「文件不存在」,灰显为不可点击;
             // 调用方未提供打开通道时(独立复用组件)同样退化为纯展示行
             const canOpen = it.kind !== 'delete' && handler !== undefined;
+            // 「在侧栏打开」是**次要**入口:主点击仍是打开到主区域(保持既有习惯不变),
+            // 侧栏用于对照阅读(边看对话边看这个文件)。删除后的文件两个入口都不可用。
+            const asideHandler = it.local ? onOpenLocalFileAside : onOpenFileAside;
+            const canAside = it.kind !== 'delete' && asideHandler !== undefined;
+            // 「对比」是新增的主入口之一:看的是**改动前后**(只读 diff),而不是文件当前内容。
+            // 删除的文件也允许对比(整段删除同样是有效信息)。
+            const canCompare = onOpenChanges !== undefined;
             const cells = (
               <>
                 <span className="fcc-name">{baseName(it.path)}</span>
@@ -79,7 +92,7 @@ export const FilesChangedCard = memo(function FilesChangedCard({ items, workspac
             return (
               <li
                 key={`${it.local ? 'local' : 'remote'}:${it.path}`}
-                className={`fcc-item${canOpen ? ' openable' : ''}${it.kind === 'delete' ? ' deleted' : ''}`}
+                className={`fcc-item${canOpen ? ' openable' : ''}${it.kind === 'delete' ? ' deleted' : ''}${canAside ? ' has-aside' : ''}${canCompare ? ' has-compare' : ''}`}
                 title={canOpen ? `点击打开 ${it.path}` : it.kind === 'delete' ? `${it.path}(已删除)` : it.path}
               >
                 {canOpen ? (
@@ -88,6 +101,18 @@ export const FilesChangedCard = memo(function FilesChangedCard({ items, workspac
                   </button>
                 ) : (
                   <div className="fcc-row">{cells}</div>
+                )}
+                {canCompare && (
+                  <button type="button" className="fcc-aside fcc-compare" data-open-diff={it.path}
+                    title={`查看 ${it.path} 的改动对比`}
+                    aria-label={`查看 ${it.path} 的改动对比`}
+                    onClick={() => { if (onOpenChanges) onOpenChanges(it.path); }}>对比</button>
+                )}
+                {canAside && (
+                  <button type="button" className="fcc-aside" data-open-aside={it.path}
+                    title={`在右侧栏打开 ${it.path}(对照阅读)`}
+                    aria-label={`在右侧栏打开 ${it.path}`}
+                    onClick={() => { if (asideHandler) asideHandler(it.path); }}>侧栏</button>
                 )}
               </li>
             );

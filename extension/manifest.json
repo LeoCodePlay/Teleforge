@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Teleforge Auto",
-  "version": "1.0.2",
-  "description": "把本机真实浏览器接入 Teleforge:让 AI 打开/关闭标签、点击、输入、截图。支持同时连接多个本机 Teleforge(网页端 + 桌面端)。",
+  "version": "1.0.3",
+  "description": "把本机真实浏览器接入 Teleforge:让 AI 打开/关闭标签、点击、输入、截图。支持同时连接多个本机 Teleforge(网页端 + 桌面端),多台浏览器(Chrome/Edge)可同时在线。",
   "minimum_chrome_version": "116",
   "permissions": [
     "tabs",

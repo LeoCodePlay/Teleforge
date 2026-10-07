@@ -9,4 +9,7 @@ button.dsh-leading { cursor: pointer; }
 .dsh-row-inner:hover .dsh-iconIdle { opacity: 0; }
 .dsh-row-inner:hover .dsh-chevronHover { opacity: 1; }
 .dsh-chevron { color: var(--text-2); }
-.dsh-title { flex: none; font-size: 14px; line-height: 24px; color: var(--text-2); font-weight: 400; }
+/* 标题用 dsh 的 secondary 尺寸 13/24(工具行、思考行都属于"过程",比助手正文小一号)。
+   过程组的组头是另一个类(.dsh-pg-label),它用正文尺寸 14px —— 两者刻意不同:
+   组头是"这一整段在干什么"的概览,与正文同级;组内的工具行是细节,降一级。 */
+.dsh-title { flex: none; font-size: 13px; line-height: 24px; color: var(--text-2); font-weight: 400; }

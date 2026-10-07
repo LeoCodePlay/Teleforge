@@ -1,0 +1,17 @@
+{
+  // 搬运源码(web/src/dsh/)的**单独**类型检查:主 tsconfig 把它排除掉了(缺适配的包会淹错误),
+  // 这里只放行「正在适配中」的包 + 适配层,这样能拿到一份干净的、关于搬运本身的错误清单。
+  // 用法:npx tsc --noEmit -p tsconfig.dsh.json
+  //
+  // 注意 include 里**不要**写整个 ui-primitives:那会把它的每个文件都当根文件检查,连
+  // markdown(katex/micromark)、ansi(anser)、office(fortune-sheet/xlsx)这些侧栏用不到的
+  // 依赖链一起拖进来。TS 会沿着 `dsh-adapters/primitives` 桶的 import 自动跟进它真正用到的
+  // 那些原件,所以按需引入就够。
+  "extends": "./tsconfig.json",
+  "include": [
+    "web/src/dsh/ui-dockkit",
+    "web/src/dsh/ui-sidebar-right",
+    "web/src/dsh-adapters"
+  ],
+  "exclude": []
+}

@@ -1,0 +1,49 @@
+/* ---- 统计胶囊(面板最底一行,ContextMeter 左侧)----
+   刻意不画边框:静态时只有一行灰色数字,悬停才浮出一层背景色作为唯一的可点提示 */
+.stats-pills { display: flex; align-items: center; gap: 6px; flex: none; }
+
+.stat-pill-anchor { display: inline-flex; }
+
+.stat-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 8px;
+  border: none; border-radius: 999px;
+  background: transparent; color: var(--muted);
+  font-size: 11.5px; font-family: var(--mono); line-height: 1;
+  white-space: nowrap; cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.stat-pill:hover { color: var(--text); background: var(--glass-bg-hover); }
+.stat-pill:active { background: var(--hover-bg-hard); }
+.stat-pill:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+/* 无可展开明细时退化为纯文本:不可点、不显示手型、也没有悬停底色 */
+.stat-pill.static { cursor: default; }
+.stat-pill.static:hover, .stat-pill.static:active { color: var(--muted); background: transparent; }
+.stat-pill-icon { font-size: 11px; line-height: 1; opacity: .85; }
+.stat-pill-label { display: inline-flex; align-items: center; gap: 5px; }
+.stat-sep { opacity: .5; }
+
+/* ---- 明细弹层(portal 到 body:定位坐标按锚点实测,fixed 到视口)---- */
+.stat-dialog {
+  position: fixed; z-index: 60;
+  min-width: 208px; max-width: 320px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--glass-bg, var(--panel));
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .28);
+  color: var(--text); font-size: 12px;
+}
+.stat-dialog-title { font-size: 11.5px; color: var(--muted); margin-bottom: 7px; }
+.stat-dialog-total {
+  font-family: var(--mono); font-size: 13px; margin-bottom: 7px;
+  padding-bottom: 7px; border-bottom: 1px solid var(--line);
+}
+.stat-dialog-details {
+  display: grid; grid-template-columns: auto auto; gap: 4px 14px;
+  margin: 0; justify-content: space-between;
+}
+.stat-dialog-details dt { color: var(--muted); }
+.stat-dialog-details dd { margin: 0; font-family: var(--mono); text-align: right; }
+.stat-dialog-note { margin-top: 7px; color: var(--muted); font-size: 11px; }

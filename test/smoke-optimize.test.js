@@ -47,17 +47,18 @@ const hist = [
   mk('assistant', '最新分析')
 ];
 const before = measureMessages(hist);
-const { messages, pruned, charsSaved } = pruneToolResults(hist, { keepRecent: 6, minChars: 1200, headChars: 900, tailChars: 300 });
-check('裁剪数量正确(10 条超长里保最近 6,折 4 条)', pruned === 4, `got ${pruned}`);
+const PRUNE_SPEC = { minChars: 1200, headChars: 900, tailChars: 300 };
+const { messages, pruned, charsSaved } = pruneToolResults(hist, PRUNE_SPEC);
+check('折叠所有超限结果(判定只看内容,不看位置:10 条超限全折)', pruned === 10, `got ${pruned}`);
 check('原数组不被修改(日志完整性)', hist[2].content.length === 5000);
 check('tool 消息结构保留(role/tool_call_id)', messages[2].role === 'tool' && messages[2].tool_call_id === 'c1');
 check('折叠加了回读指引', messages[2].content.includes('早期工具结果已折叠'));
 check('折叠保留头尾', messages[2].content.startsWith('x'.repeat(900)) && messages[2].content.endsWith('x'.repeat(300)));
-check('最近 6 条结果原样', messages[messages.length - 2].content === 'T10 '.repeat(500));
+check('最新一条结果同样折叠(没有"保留最近 N 条"的位置判断)', messages[messages.length - 2].content.includes('早期工具结果已折叠'));
 const after = measureMessages(messages);
 check(`估算 token 下降(${Math.round(after)} < ${Math.round(before)},省 ${charsSaved} 字符)`, after < before);
 check('assistant/user 消息不受影响', messages[0].content === 'q0' && messages[5].content === '中期结论');
-check('空/短结果不折叠', pruneToolResults([mk('tool', 'short', { tool_call_id: 'z' })], { keepRecent: 0, minChars: 1200, headChars: 900, tailChars: 300 }).pruned === 0);
+check('空/短结果不折叠', pruneToolResults([mk('tool', 'short', { tool_call_id: 'z' })], PRUNE_SPEC).pruned === 0);
 
 // ---- 3. estimateTokens 校准 ----
 check('ASCII 估算按 3 字符/token', estimateTokens('aaaaaaaaaa') === Math.ceil(10 / 3) + 1, `got ${estimateTokens('aaaaaaaaaa')}`);
@@ -78,21 +79,29 @@ check('isConcurrencySafe fail-closed', toolRegistry.isConcurrencySafe('smoke_pro
 unregister();
 check('注销后重建投影内容一致', JSON.stringify(toolRegistry.schemas({ localOnly: true })) === JSON.stringify(s1));
 
-// ---- 2b. pruneToolResults 的缓存友好窗口(条数上限 + 字符预算 + 攒批) ----
+// ---- 2b. pruneToolResults 的缓存不变量:判定只取决于消息内容(与位置无关) ----
+// 这是长会话命中率的**结构性**保证:历史再长,同一条工具结果的折叠文本都恒定不变,
+// 因此模型可见面只会向后追加 —— 提供方前缀缓存不会因为每请求重算而被中途打断。
 const wide = [mk('user', 'q0')];
 for (let i = 1; i <= 8; i++) {
   wide.push(mk('assistant', '', { tool_calls: [{ id: `k${i}`, function: { name: 'read_file', arguments: '{}' } }] }));
   wide.push(mk('tool', `R${i} `.repeat(1500), { tool_call_id: `k${i}` })); // 每条 4500 字符,索引 = 2i
 }
-const win = pruneToolResults(wide, { keepRecent: 4, keepRecentChars: 5000, minChars: 1200, headChars: 900, tailChars: 300 });
-check('字符预算先于条数上限生效(8 条里只保最近 2 条)', win.pruned === 6, `got ${win.pruned}`);
-check('折叠点=最老的那条结果(index 2)', win.firstPrunedIndex === 2, `got ${win.firstPrunedIndex}`);
-check('窗口内结果原样(R7/R8 未折叠)', win.messages[14].content === 'R7 '.repeat(1500) && win.messages[16].content === 'R8 '.repeat(1500));
-check('折叠点之后的结果已被折叠', win.messages[12].content.includes('早期工具结果已折叠'));
+const win = pruneToolResults(wide, PRUNE_SPEC);
+check('8 条超限结果全折(无保留窗口)', win.pruned === 8, `got ${win.pruned}`);
+check('每一条超限结果都被折叠(含最新一条)', wide.every((m, i) => m.role !== 'tool'
+  || win.messages[i].content.includes('早期工具结果已折叠')));
+check('折叠幂等:对同一历史折两次,结果逐字节相同', JSON.stringify(pruneToolResults(win.messages, PRUNE_SPEC).messages) === JSON.stringify(win.messages));
 check('不改原数组(事件日志完整)', wide[2].content === 'R1 '.repeat(1500));
-const batched = pruneToolResults(wide, { keepRecent: 4, keepRecentChars: 5000, minChars: 1200, headChars: 900, tailChars: 300, minSaveChars: 100000 });
-check('收益不足攒批门槛时整轮不折', batched.pruned === 0 && batched.firstPrunedIndex === -1 && batched.messages === wide);
-const noBudget = pruneToolResults(wide, { keepRecent: 4, minChars: 1200, headChars: 900, tailChars: 300 });
-check('只给条数上限时退回旧语义(保最近 4 条)', noBudget.pruned === 4, `got ${noBudget.pruned}`);
+
+// 关键:只追加一条新结果时,先前所有消息的折叠文本必须逐字节不变(=后一次请求以前一次为前缀)
+const grown = wide.concat([
+  mk('assistant', '', { tool_calls: [{ id: 'k9', function: { name: 'read_file', arguments: '{}' } }] }),
+  mk('tool', 'R9 '.repeat(1500), { tool_call_id: 'k9' })
+]);
+const grownFolded = pruneToolResults(grown, PRUNE_SPEC);
+check('历史增长后,早先消息的折叠文本逐字节不变(模型可见面只追加 → 前缀缓存不失效)',
+  JSON.stringify(grownFolded.messages.slice(0, wide.length)) === JSON.stringify(win.messages));
+check('新增结果的头尾折叠点正确', grownFolded.firstPrunedIndex === 2, `got ${grownFolded.firstPrunedIndex}`);
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
 process.exit(fail ? 1 : 0);

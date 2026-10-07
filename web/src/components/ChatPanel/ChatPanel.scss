@@ -86,7 +86,20 @@
   box-shadow: none;
   white-space: normal;
   padding: 2px 4px;
+  /* 正文尺寸与行高对齐 dsh(14px / 24px),而不是沿用 .bubble 的 13.5/1.6(21.6px)。
+     助手正文是"文档",不是气泡里的短句,行距更疏、字号回到基准。 */
+  font-size: 14px; line-height: 24px;
 }
+/* 过程流间距照搬 dsh ChatView.module.css 的 --dsh-chat-flow-gap:
+   过程行之间 6px;助手回复段与相邻项 12px;整轮过程控件(.pf)前后 16px。
+   dsh 的实现方式就是「给元素设变量、由统一的相邻选择器消费」,这里保持同一机制 */
+.ai-bubble > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty) {
+  margin-top: var(--dsh-chat-flow-gap, 6px);
+}
+.ai-bubble > .dsh-ai-text { --dsh-chat-flow-gap: 12px; }
+.ai-bubble > .dsh-ai-text + :not([hidden]):not(:empty) { --dsh-chat-flow-gap: 12px; }
+.ai-bubble > .pf { --dsh-chat-flow-gap: 16px; }
+.ai-bubble > .pf + :not([hidden]):not(:empty) { --dsh-chat-flow-gap: 16px; }
 
 /* ---- 消息操作栏 ----
    每条完成的 AI 回复下方:28px 圆形图标钮;分支仅最新回复可用。
@@ -116,59 +129,115 @@
 .msg.user:hover .user-msg-foot,
 .msg.user:focus-within .user-msg-foot { opacity: 1; }
 
-/* ---- 用户消息跳转点:absolute 贴对话主区域最左侧 ----
+/* ---- 用户消息轮次导轨:absolute 贴对话主区域最左侧 ----
    相对 .tab-body 对齐(main 内、sidebar 右侧),不随限宽聊天内容移动,
    也不钉在浏览器窗口最左;垂直居中于对话区。
-   注意:chat-dots 渲染在 chatwrap 之外(兄弟节点),与限宽列布局解耦 */
+   注意:chat-dots 渲染在 chatwrap 之外(兄弟节点),与限宽列布局解耦。
+
+   **一轮用户消息 = 一条细长横线**,刻度与悬停手感照搬 harness 的轮次导轨
+   (deepseek-harness/packages/client/ui-chat 的 TurnNavigator.module.css,左侧镜像):
+   每格 10px 固定间距且铺满不留缝(指针在导轨上任何位置都命中某条),
+   刻度线用 scaleX 生长而非改宽度,指针移到刻度上时预览卡跟着刻度中心平滑迁移。 */
 .chat-dots {
-  position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
-  z-index: 3;
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  max-height: 74%; overflow-y: auto;
-  padding: 3px 2px;
-  scrollbar-width: none;
+  /* 预览卡(harness --turn-preview-height):固定高度上限,定位靠 --dot-preview-center */
+  --dot-preview-height: 100px;
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  /* 压过对话区里的浮层(回到底部按钮 z-index 6),与 harness 的 7 对齐 */
+  z-index: 7;
+  width: 28px;
+  /* 梯子比可视带还高时在框内滚动,不把刻度推到输入区/视口外(harness 同款上限) */
+  max-height: min(max(0px, calc(74% - 64px)), 420px);
+  contain: layout;
+  cursor: pointer;
 }
-.chat-dots::-webkit-scrollbar { display: none; }
+/* 内部滚动容器:滚动条不可见、滚链不外溢;两端还能滚时用 24px 渐变遮罩渐隐 */
+.chat-dots-scroller { position: relative; max-height: inherit; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.chat-dots-scroller::-webkit-scrollbar { display: none; }
+.chat-dots-scroller.fade-top { mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 100%); }
+.chat-dots-scroller.fade-bottom { mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 24px), transparent 100%); }
+.chat-dots-scroller.fade-top.fade-bottom {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+}
+/* 上下各留 1px:首尾刻度中心落在 harness 的 6px 内缩上 */
+.chat-dots-marks { position: relative; padding: 1px 0; }
 .chat-dot {
-  width: 7px; height: 7px; padding: 0; border: none; border-radius: 50%;
-  flex: none; cursor: pointer;
-  background: var(--line-strong);
-  transition: background .18s ease, transform .18s ease, box-shadow .18s ease;
+  position: relative;
+  display: block; width: 100%; height: 10px; padding: 0;
+  border: 0; border-radius: 8px; background: transparent; cursor: pointer;
 }
-.chat-dot:hover { background: var(--hover-bg-hard); }
-.chat-dot.on {
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent-glow);
-  transform: scale(1.3);
+/* 刻度是「隐形按钮」:全局 button 的玻璃底、描边、投影和过渡都不作用在它身上,
+   ::before 那条细线是该元素唯一的可见内容 —— 静止/悬停/按下**一律没有任何阴影**。
+   (全局 button:hover 的特异性高于单个类,这里加 .chat-dots 前缀把它压过去) */
+.chat-dots .chat-dot,
+.chat-dots .chat-dot:hover:not(:disabled),
+.chat-dots .chat-dot:active:not(:disabled),
+.chat-dots .chat-dot:focus,
+.chat-dots .chat-dot:focus-visible {
+  padding: 0; border: 0; border-radius: 8px;
+  background: transparent; box-shadow: none; transform: none;
+  transition: none; /* 过渡只保留在 ::before 的刻度上 */
+}
+/* 刻度线本体(harness .mark::before):默认 60% 长的低对比短线,悬停 90%,当前轮 100% 主色 */
+.chat-dot::before {
+  position: absolute; top: 50%; left: 0;
+  width: 20px; height: 2px; border-radius: 2px;
+  background: var(--dsw-alias-border-l4);
+  content: '';
+  transform: translateY(-50%) scaleX(.6);
+  transform-origin: left center;
+  transition: transform 140ms ease, background-color 140ms ease;
+}
+.chat-dot:hover::before,
+.chat-dot.preview::before { transform: translateY(-50%) scaleX(.9); background: var(--dsw-alias-label-tertiary); }
+.chat-dot.on::before { transform: translateY(-50%) scaleX(1); background: var(--dsw-alias-label-primary); }
+/* 键盘聚焦优先于悬停/激活:刻度取品牌色,再补一圈细描边,保证在繁忙正文上也看得见 */
+.chat-dot:focus-visible { outline: none; }
+.chat-dot:focus-visible::before {
+  transform: translateY(-50%) scaleX(1);
+  background: var(--dsw-focus-ring-color, var(--accent));
+}
+.chat-dot:focus-visible::after {
+  position: absolute; inset: 0 auto 0 0; width: 20px;
+  border-radius: inherit; outline: 1px solid var(--dsw-focus-ring-color, var(--accent));
+  outline-offset: -1px; content: '';
 }
 
-/* ---- 跳转点悬停提示:固定定位防裁剪,最多两行、限宽省略 ----
-   纯深玻璃背景不透明,无需 backdrop-filter,不占用性能额度 */
-.dot-tip {
-  position: fixed;
-  transform: translateY(-50%);
-  top: 0; left: 0;
-  z-index: 40;
-  max-width: min(280px, calc(100vw - 60px));
-  padding: 6px 10px;
-  border-radius: var(--r-sm);
-  font-size: 11.5px; line-height: 1.5;
-  color: var(--text);
-  background: var(--code-bg-solid);
-  border: 1px solid var(--glass-border-hover);
-  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), 0 4px 14px var(--shadow-1);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+/* ---- 轮次悬停/聚焦预览卡(harness .preview 的左侧镜像:弹在导轨右侧)----
+   top 由 --dot-preview-center(刻度中心相对导轨的 y)算出,并在刻度之间平滑迁移:
+   指针沿导轨滑动时卡片跟着走,而不是逐条闪现 */
+.chat-dots-preview {
+  position: absolute;
+  top: clamp(0px, calc(var(--dot-preview-center) - var(--dot-preview-height) / 2), calc(100% - var(--dot-preview-height)));
+  left: calc(100% + 10px);
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 120px));
+  max-height: var(--dot-preview-height);
   overflow: hidden;
-  white-space: normal;
-  word-break: break-word;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--dsw-radius-lg);
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-panel);
   pointer-events: none;
-  animation: dot-tip-in .16s ease-out;
+  animation: dot-preview-in 120ms ease-out;
+  transition: top 140ms cubic-bezier(.2, .8, .2, 1);
 }
-@keyframes dot-tip-in {
-  from { opacity: 0; transform: translateY(-50%) translateX(-5px); }
-  to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+.chat-dots-preview-prompt {
+  display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical;
+  font-size: 13px; font-weight: 500; line-height: 20px;
+  -webkit-line-clamp: 1;
+}
+.chat-dots-preview-response {
+  display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical;
+  margin-top: 4px;
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px; line-height: 18px;
+  -webkit-line-clamp: 3;
+}
+@keyframes dot-preview-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 
 /* 任务相关提示气泡 */
@@ -312,7 +381,6 @@
 .chatwrap.ask-focus .chat-scroll { pointer-events: none; }
 /* 跳转点在 chatwrap 之外(兄弟节点),用兄弟选择器隐藏 */
 .chatwrap.ask-focus ~ .chat-dots,
-.chatwrap.ask-focus .dot-tip,
 .chatwrap.ask-focus .todo-panel,
 .chatwrap.ask-focus .queue-panel,
 .chatwrap.ask-focus .composer-box,
@@ -401,6 +469,11 @@
 /* 左下角分组:"+"附件菜单 + 权限模式 + 发送提示,作为一体与右侧(仪表/发送)两端分布 */
 .composer-foot-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .composer-tip { font-size: 11px; }
+/* 对话统计行(面板最底一行,工作区/模型行之下):整行只有统计胶囊,水平居中显示。
+   无边框、无底板 —— 悬停反馈交给胶囊自身的背景色,点击胶囊在其上方弹出明细。
+   min-height 取胶囊高度:这一行与两个胶囊始终渲染(无数据时是 `0 轮 0 步`/`0 tok` 占位),
+   预留高度恒定,首批统计到齐时面板高度不变,不会顶起输入区/对话区(否则会看到页面抖动) */
+.composer-stats { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; min-height: 24px; }
 
 /* ---- 输入区:可编辑 textarea + 高亮叠加层(单一文本源,无冻结段/tag) ---- */
 .composer-input { position: relative; }
@@ -527,6 +600,16 @@
 @media (hover: none) and (pointer: coarse) {
   .user-msg-foot { opacity: 1; }
   .chat-dots { display: none; }                 /* 跳转点依赖 hover,触屏隐藏,腾出横向空间 */
+}
+/* ---- 窄窗口:对话列不再限宽,导轨会压住正文(等价 harness 导轨的容器宽度断点)→ 整条隐藏 ---- */
+@media (max-width: 860px) {
+  .chat-dots { display: none; }
+}
+/* ---- 降低动态效果:刻度缩放、预览迁移、进入动画一律停用(照搬 harness 的 reduced-motion) ---- */
+@media (prefers-reduced-motion: reduce) {
+  .chat-dots-scroller,
+  .chat-dot::before,
+  .chat-dots-preview { transition: none; animation: none; }
 }
 @media (max-width: 767px) {
   .composer { margin: 0 0 calc(8px + env(safe-area-inset-bottom)); }

@@ -10,7 +10,7 @@
 // 设计取舍:AI 拿到的不是截图而是「结构化文本快照」(+ 可选的截图附件)。
 // 纯文本模型无法内联看图,而带 ref 的快照能精确点击/输入,比像素坐标稳得多。
 import { browserManager, defaultBrowserIdFor, normalizePreviewUrl, ownerFromBrowserId } from '../core/browser-manager.ts';
-import { nativeAvailable, nativeInventory, nativeOpsFor, previewOps, sessionNativeTab } from './browser-backends.ts';
+import { nativeAvailable, nativeInventory, nativeOpsFor, previewOps, sessionNativeTarget } from './browser-backends.ts';
 import type { BrowserOps } from './browser-backends.ts';
 import { resolvePreviewUrl } from '../core/port-tunnel.ts';
 import { saveAttachment, attachmentUrl } from '../store/attachments-store.ts';
@@ -90,7 +90,12 @@ function resolveBrowserId(args: any, invokeCtx: any, opts: { preferOwn?: boolean
 /** 真机浏览器相关的工具参数说明(所有 browser_* 工具共用) */
 const TARGET_DESC = '作用在哪个浏览器上:auto(默认)= 有扩展连接就用本机真机浏览器,否则用内置预览;'
   + 'native = 强制真机浏览器(未连接会直接报错);preview = 强制内置预览浏览器';
-const TAB_ID_DESC = '真机浏览器的标签 id(来自 browser_open 的返回或 ext_status 的标签清单)。'
+/** 同时开着多台真机浏览器(Chrome + Edge)时,用这个参数指定操作哪一台 */
+const BROWSER_DESC = '真机浏览器实例:填内核名 chrome / edge,或填连接 id(结果里 browsers[].id;'
+  + '两台都是同款浏览器时用它区分)。省略 = 本对话已绑定的那台,其次默认目标那台。'
+  + '当前有哪些可选、默认是哪台,见 browser_* 工具返回里的 browsers / browserLabel';
+const TAB_ID_DESC = '真机浏览器的标签 id(来自 browser_open 的返回或 ext_status 的标签清单;'
+  + 'id 只在同一台浏览器内唯一,跨浏览器用 browser 参数区分)。'
   + '省略 = 本对话正在操作的那个标签(browser_open 打开后自动绑定,用户切标签也不会改变它);'
   + '本对话还没绑定过标签时才回落到浏览器当前活动标签。仅 target=native 时有意义';
 
@@ -102,23 +107,41 @@ const TAB_ID_DESC = '真机浏览器的标签 id(来自 browser_open 的返回�
 function resolveOps(args: any, ctx: any, opts: { preferOwn?: boolean } = {}): BrowserOps {
   const want = String(args?.target || '').trim().toLowerCase();
   const rawBrowserId = String(args?.browser_id || '').trim();
-  const forceNative = want === 'native' || rawBrowserId.startsWith('native:');
+  const browserHint = String(args?.browser || '').trim();
+  const forceNative = want === 'native' || rawBrowserId.startsWith('native:') || !!browserHint;
   const forcePreview = want === 'preview';
-  if (forceNative || (!forcePreview && nativeAvailable())) {
+  if (!forcePreview && (forceNative || nativeAvailable())) {
     const sid = callerSid(ctx);
     const rawTab = args?.tab_id ?? args?.tabId;
+    /** 要操作哪台真机浏览器:显式 browser 参数 > 会话绑定 > 桥接层默认目标 */
+    let instance: string | null = browserHint || null;
     let tabId: number | null = null;
     if (rawTab !== undefined && rawTab !== null && rawTab !== '') {
       tabId = Number(rawTab);
       if (!Number.isFinite(tabId)) throw new Error(`tab_id 必须是数字(收到 ${rawTab})`);
-    } else if (rawBrowserId.startsWith('native:tab:')) {
-      tabId = Number(rawBrowserId.slice('native:tab:'.length));
+    } else if (rawBrowserId.startsWith('native:')) {
+      // native:<实例>:tab:<tabId>(多浏览器) | native:tab:<tabId>(旧格式) | native:active
+      const m = /^native:([^:]+):tab:(\d+)$/.exec(rawBrowserId);
+      if (m) {
+        tabId = Number(m[2]);
+        if (!instance && m[1] !== 'active') instance = m[1];
+      } else if (rawBrowserId.startsWith('native:tab:')) {
+        tabId = Number(rawBrowserId.slice('native:tab:'.length));
+      }
+      if (tabId !== null && !Number.isFinite(tabId)) tabId = null;
     } else {
       // 没显式指定:用本对话绑定的标签。**不能**回落到"当前活动标签" ——
       // 那是用户正在看的标签,用户随手一切就会把 AI 的目标带跑偏。
-      tabId = sessionNativeTab(sid);
+      // 绑定只在"没指定浏览器,或指定的就是绑定的那台"时才沿用:tabId 在不同浏览器之间会重复。
+      const bound = sessionNativeTarget(sid);
+      const sameInstance = !!bound && !!bound.instance && !!instance
+        && (bound.instance === instance || bound.instance.startsWith(instance));
+      if (bound && (!instance || sameInstance)) {
+        tabId = bound.tabId;
+        if (!instance) instance = bound.instance;
+      }
     }
-    return nativeOpsFor(tabId, sid);
+    return nativeOpsFor(tabId, sid, instance);
   }
   return previewOps(resolveBrowserId(args, ctx, opts), callerSid(ctx));
 }
@@ -193,6 +216,7 @@ export const browserToolDefs: ToolDef[] = [
           + '同一会话可多开预览:传一个新的 id(如 "<会话id>:2")即可新开一个' },
         tunnel: { type: 'boolean', description: '是否强制走 SSH 隧道映射远程端口;省略=回环地址且已连 SSH 时自动隧道' },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
         width: { type: 'integer', description: '视口宽度,默认 1280' },
         height: { type: 'integer', description: '视口高度,默认 800' }
@@ -238,6 +262,7 @@ export const browserToolDefs: ToolDef[] = [
       type: 'object',
       properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC }, }
     },
     access: 'read',
@@ -264,6 +289,7 @@ export const browserToolDefs: ToolDef[] = [
         url: { type: 'string', description: '目标地址' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
         tunnel: { type: 'boolean', description: '是否强制走 SSH 隧道;省略=自动' }
       },
@@ -315,6 +341,7 @@ export const browserToolDefs: ToolDef[] = [
         text: { type: 'string', description: '可见文本,匹配第一个包含它的元素' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
@@ -350,6 +377,7 @@ export const browserToolDefs: ToolDef[] = [
         submit: { type: 'boolean', description: '输入后是否回车提交,默认 false' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
       required: ['text']
@@ -384,6 +412,7 @@ export const browserToolDefs: ToolDef[] = [
         key: { type: 'string', description: '按键名,如 Enter / Tab / Escape / ArrowDown / Control+A' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
       required: ['key']
@@ -412,6 +441,7 @@ export const browserToolDefs: ToolDef[] = [
         amount: { type: 'integer', description: '滚动像素,默认 600' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
@@ -442,6 +472,7 @@ export const browserToolDefs: ToolDef[] = [
         timeout_ms: { type: 'integer', description: '超时毫秒,默认 8000,最大 60000' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
@@ -470,6 +501,7 @@ export const browserToolDefs: ToolDef[] = [
         full_page: { type: 'boolean', description: '是否整页截图(含滚动区域),默认 false 只截视口' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
     },
@@ -485,6 +517,9 @@ export const browserToolDefs: ToolDef[] = [
       const att = await saveAttachment(buf, `浏览器截图-${ts}.png`, 'image/png');
       return {
         content: `已截图(附件 id:${att.id},${Math.round(buf.length / 1024)}KB)。截图已内联展示给用户,不要把图片嵌入你的回复正文。`,
+        // attachments:与 image/generated 同形,前端在对话里直接渲染这张截图
+        // (不再只藏在折叠的工具卡里);meta.screenshot 保留给工具卡内部使用
+        attachments: [att],
         meta: browserMeta({
           browserId: id, url: st?.url || '', title: st?.title || '',
           screenshot: { id: att.id, url: attachmentUrl(att.id), name: att.name },
@@ -505,6 +540,7 @@ export const browserToolDefs: ToolDef[] = [
         expression: { type: 'string', description: '要执行的 JS 表达式,如 document.querySelectorAll("li").length' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
       required: ['expression']
@@ -530,6 +566,7 @@ export const browserToolDefs: ToolDef[] = [
       type: 'object',
       properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC },
         target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC }, }
     },
     access: 'write',

@@ -12,10 +12,10 @@
 //   各会话独立驱动互不阻塞;所有发给前端的事件都带 sid,前端按会话路由显示。
 import { AGENT, NO_WORKSPACE } from '../config.ts';
 import fsp from 'node:fs/promises';
-import { LlmClient, isContextOverflowError, type LlmOptions } from './llm.ts';
+import { LlmClient, isContextOverflowError, billedInputTokens, type LlmOptions } from './llm.ts';
 import { lastGeneratedImage, imageCaption, runImageJob } from './image-gen.ts';
 import { COMPACT, compactHistory, summarizeWithLlm, selectManualCompactRange, resolveCharBudget, estimateTokens, measureMessages, measureEnvelope, pruneToolResults } from './compact.ts';
-import { Session, foldTodos, hasOutstandingTodos, trimMessagesByBudget, type SessionEvent, type TodoSnapshot } from './session.ts';
+import { Session, foldTodos, foldTokenUsage, foldSessionStats, hasOutstandingTodos, trimMessagesByBudget, type SessionEvent, type TodoSnapshot } from './session.ts';
 import { ToolRegistry, type ToolResult } from './registry.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, registerPermissionGuard, type PermissionMode } from './permission.ts';
 import { PERMISSION_MODE_META } from './permission.ts';
@@ -271,6 +271,18 @@ function effectiveRemoteBinding(rt: { connKey?: string | null; workspace?: strin
 // 压缩失败(compaction/failed)同样投影成一行安静的「未完成」标记行,不弹提示。
 // 旧版破坏式压缩遗留(compaction/done 无 dropThroughSeq,早期消息已被物理删除)
 // 则原位投影标记行,已删的消息无法回看。
+/**
+ * 本轮耗时(毫秒):最后一个 turn/start 到此刻,下限 1000ms。
+ * 与 projectEvents 里 turn/end 的回填**同一口径**(下限 1 秒),这样实时与刷新后显示一致,
+ * 不会出现"刚开始显示 1秒、刷新后变成 0秒"这种前后不一致。
+ */
+function turnElapsedMsOf(events: any[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i]?.type === 'turn/start') return Math.max(1000, Date.now() - (events[i].time || Date.now()));
+  }
+  return 1000;
+}
+
 export function projectEvents(events) {
   const out = [];
   const calls = new Map();
@@ -283,6 +295,12 @@ export function projectEvents(events) {
     if (ev.type === 'compaction/done' && typeof ev.data?.dropThroughSeq === 'number') cps.push(ev);
   }
   let nextCp = 0;
+  // 回合计时(用于"完成对话后收起过程"那一行的「已完成,用时 X」):
+  //   turn/start 记开始时间;turn/end 算出耗时与结束原因,再回填到本轮所有 assistant 行。
+  // 回填而不是新增行 —— 不占消息面下标,回退/分支的下标口径完全不受影响。
+  let curTurn = 0;
+  let turnStartAt = 0;
+  const turnRows = new Map<number, number[]>();
   // 记录每个检查点的「保留区首条消息面」在 out 里的下标(模型可见面起点,前端兜底估算用)。
   // 标记行本身不再插到这里 —— 它在 compaction/done 处**原位投影**(见下方分支)。
   const cpRetainedFrom = new Map<number, number>();
@@ -294,6 +312,23 @@ export function projectEvents(events) {
   };
   for (const ev of events) {
     const d = ev.data || {};
+    if (ev.type === 'turn/start') {
+      curTurn = Number(d.turn) || 0;
+      turnStartAt = ev.time;
+      continue;
+    }
+    if (ev.type === 'turn/end') {
+      const turn = Number(d.turn) || 0;
+      // dsh 的取值:max(1000, end - start) —— 至少 1 秒,避免亚秒级回合显示成 0 秒
+      const elapsed = Math.max(1000, (ev.time || turnStartAt) - turnStartAt);
+      const reason = String(d.reason?.kind || 'completed');
+      // 同上的局部 any 别名:out 在本函数里是隐式 any[],直接下标赋值会让它必须确定元素类型
+      const rows: any = out;
+      for (const i of turnRows.get(turn) || []) {
+        rows[i] = { ...rows[i], turnElapsedMs: elapsed, turnEndReason: reason };
+      }
+      continue;
+    }
     if (ev.type === 'tool/call') {
       calls.set(d.callId, d);
     } else if (ev.type === 'user/message') {
@@ -367,6 +402,31 @@ export function projectEvents(events) {
         ...(Array.isArray(m.tool_calls) && m.tool_calls.length ? { tool_calls: m.tool_calls } : {}),
         ...(m.reasoning_content ? { reasoning_content: m.reasoning_content } : {})
       });
+      // 记下本行属于哪一轮:turn/end 到达时回填耗时与结束原因(见循环开头的说明)
+      const rowIdx = out.length - 1;
+      const rows = turnRows.get(curTurn);
+      if (rows) rows.push(rowIdx); else turnRows.set(curTurn, [rowIdx]);
+    } else if (ev.type === 'deliverable/presented') {
+      // 成果物交付声明(present 工具写入):并入**前一条 assistant 消息**,与生图同理 ——
+      // 刷新后卡片与正文显示在同一个气泡里。
+      //
+      // 故意**不新推一行**:不占消息面下标,所以 forkTail / 回退 / 删除的下标口径完全不变。
+      // 也故意**不进 messageFaceIndexes / deriveMessages**:它是纯展示信息(dsh 把这类事件
+      // 归为 "log-only"),进模型上下文既白烧 token,又会让每步前缀多出内容、打断缓存命中。
+      const files = Array.isArray(d.files) ? d.files : [];
+      if (files.length) {
+        // 注意 out 在本函数里是隐式 any[](历史遗留,直接给 it 加类型会牵动整个函数的推断),
+        // 所以这里用局部 any 别名访问,避免把"必须确定元素类型"的要求传播给 out 本身。
+        const rows: any = out;
+        let ai = -1;
+        for (let i = rows.length - 1; i >= 0; i--) { if (rows[i].role === 'assistant') { ai = i; break; } }
+        if (ai >= 0) rows[ai] = { ...rows[ai], deliverables: files };
+        else {
+          // 尚无 assistant 行(极端情况:present 在一轮的最前面被调用):补一行空正文承载卡片
+          placeCpsBefore(ev.seq);
+          rows.push({ role: 'assistant', content: '', time: ev.time, deliverables: files });
+        }
+      }
     } else if (ev.type === 'image/generated') {
       // 生图模型的一轮成图:投影为 assistant 气泡(正文=摘要文本,附件=成图元数据)。
       // 前端 turnsToMessages 会把它并入紧邻的 assistant 消息(同一条 run 的多轮合并),
@@ -388,7 +448,9 @@ export function projectEvents(events) {
       out.push({
         role: 'tool', tool_call_id: d.callId, content: d.content,
         tool_name: d.name || c.name, tool_args: c.arguments, ok: !d.isError, ms: d.ms,
-        ...(d.meta !== undefined ? { meta: d.meta } : {})
+        ...(d.meta !== undefined ? { meta: d.meta } : {}),
+        // 工具产物附件随投影下发,刷新/切回会话后截图等图片仍在原位置可见
+        ...(Array.isArray(d.attachments) && d.attachments.length ? { attachments: d.attachments } : {})
       });
     }
   }
@@ -830,6 +892,21 @@ export class Agent {
     const rt = id != null ? this._runtimes.get(id) : null;
     const events = rt ? rt.session.events : (id != null ? sessions.loadEvents(id) : []);
     return foldTodos(events) || [];
+  }
+
+  // ---- 会话级统计(统计栏用;与 currentTodos 同款取值口径:在内存用内存、不在则读磁盘)----
+  /** 整个会话的累计用量(四桶)。切走释放内存的会话从磁盘重放,保证与服务端实时值一致 */
+  sessionUsage(id = this.sessionId) {
+    const rt = id != null ? this._runtimes.get(id) : null;
+    const events = rt ? rt.session.events : (id != null ? sessions.loadEvents(id) : []);
+    return foldTokenUsage(events);
+  }
+
+  /** 整个会话的对话统计(轮/步/模型耗时/工具耗时/TTFT/解码) */
+  sessionStats(id = this.sessionId) {
+    const rt = id != null ? this._runtimes.get(id) : null;
+    const events = rt ? rt.session.events : (id != null ? sessions.loadEvents(id) : []);
+    return foldSessionStats(events);
   }
 
   // ---- 访问权限模式(变更前确认/自动编辑/计划模式/完全访问,见 permission.ts) ----
@@ -1821,34 +1898,14 @@ export class Agent {
         // trace 与消息一一对应,供压缩落盘时把消息下标映射回事件 seq。
         let trace = session.deriveMessagesWithTrace({ budgetChars: Infinity });
         let historyMsgs = trace.map((t) => t.msg);
-        // 绝对地板(补回):声明窗口虚高(前端兜底 1M)或未配置时,compactHistory 的 80%
-        // 水位永不触发,单轮深工具会话会无治理增长(实测冲到 100k+ token)。这里在每次
-        // 请求前按「预估请求 token(历史 + system + 工具 schema)」查地板,超过就先做一轮
-        // 保最近的投影折叠(日志不动,只裁模型当轮可见面),与水位裁剪互补。
-        // 缓存口径:折叠改的是历史中段的一条消息,提供方前缀缓存从第一个变化的 token 起
-        // 失效 —— 折叠点越靠历史深处,作废的尾部越长。保留窗口因此按「条数上限 + 字符预算」
-        // 双限(config 的 ABS_FLOOR_KEEP_*),并用攒批门槛避免为几百字符去改写中段。
-        const P = AGENT.TOOL_RESULT_PRUNE;
-        if (P.ABS_FLOOR_TOKENS > 0 && measureEnvelope(systemText, toolSchemas, historyMsgs).total > P.ABS_FLOOR_TOKENS) {
-          const r = pruneToolResults(historyMsgs, {
-            keepRecent: P.ABS_FLOOR_KEEP_RESULTS,
-            keepRecentChars: P.ABS_FLOOR_KEEP_CHARS,
-            minChars: P.ABS_FLOOR_THRESHOLD_CHARS,
-            headChars: P.HEAD_CHARS,
-            tailChars: P.TAIL_CHARS,
-            minSaveChars: P.ABS_FLOOR_MIN_SAVE_CHARS
-          });
-          if (r.pruned > 0) {
-            historyMsgs = r.messages;
-            // 折叠点之后(含该条自己)的整段缓存会从第一个变化的 token 起失效:打印代价与收益,
-            // 长期代价远大于收益就调小 ABS_FLOOR_KEEP_CHARS 或调大 ABS_FLOOR_MIN_SAVE_CHARS;
-            // 想多省 token 则调大 KEEP_CHARS。同一会话里别来回改参数:参数一变整个投影都变,
-            // 等于把历史全部重折一次(一次全量缓存失效)。
-            const cacheTail = r.firstPrunedIndex >= 0 ? measureMessages(historyMsgs.slice(r.firstPrunedIndex)) : 0;
-            const savedTokens = Math.ceil(r.charsSaved / COMPACT.CHARS_PER_ASCII_TOKEN);
-            console.log(`[agent] 历史工具结果折叠:${r.pruned} 条(预估请求 ${measureEnvelope(systemText, toolSchemas, historyMsgs).total} token 超绝对地板 ${P.ABS_FLOOR_TOKENS}),省约 ${r.charsSaved} 字符(≈${savedTokens} token),作废缓存尾部 ~${cacheTail} token`);
-          }
-        }
+        // 这里**不再**按「保留最近 N 条 / N 字符」折叠历史工具结果(曾用名:绝对地板)。
+        // 原因(照搬 harness 后修正):那种折叠点是**滑动窗口的函数**——窗口每前进一格,
+        // 就有一条历史中段的旧结果被改写,而提供方前缀缓存从第一个变化的 token 起失效,
+        // 于是每滑一次就把该点之后的整段缓存作废(实测单次 20k~300k token,长会话因此从
+        // ~99.4% 掉到 96~98%)。harness 侧没有这个每请求触发的折叠点:裁剪只在水位/爆窗
+        // 合格后随压缩一起发生,且判定只看消息内容(pruneToolResults 是纯函数),所以模型
+        // 可见面**只能向后追加**,前缀缓存永不中途失效。见 test/request-prefix-stability.test.js
+        // 的「长历史压力」场景。
         if (ctxWindow > 0 && historyMsgs.length > 2) {
           const c = await compactHistory({
             messages: historyMsgs, system: systemText, llm, signal: signal.signal,
@@ -1970,7 +2027,7 @@ export class Agent {
               { level: 'warn', kind: 'context-overflow' });
             const P = AGENT.TOOL_RESULT_PRUNE;
             historyMsgs = pruneToolResults(historyMsgs, {
-              keepRecent: 0, minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
+              minChars: P.THRESHOLD_CHARS, headChars: P.HEAD_CHARS, tailChars: P.TAIL_CHARS
             }).messages;
             const c = await compactHistory({
               messages: historyMsgs, system: systemText, llm, signal: signal.signal,
@@ -2043,17 +2100,27 @@ export class Agent {
         // 同一会话两个数字能差数千 token,仪表盘百分比与实际触发点不符。
         const env = measureEnvelope(systemText, toolSchemas, historyMsgs);
         const usage = res.usage || null;
+        // actual/output 保留原语义(仪表盘在用),由四桶推导,避免两处口径分叉:
+        // actual = 计费输入 = 三输入桶之和;output = 输出桶。
+        // 同时下发四个分桶,供「缓存命中率」与后续统计栏使用。
+        const actualInput = usage ? billedInputTokens(usage) : null;
         this.emit('agent', {
           event: 'context_usage', sid: runSessionId,
           estimated: env.total,
           systemTokens: env.systemTokens,
           toolsTokens: env.toolsTokens,
           messageTokens: env.messageTokens,
-          actual: usage && typeof usage.promptTokens === 'number' ? usage.promptTokens : null,
-          output: usage && typeof usage.completionTokens === 'number' ? usage.completionTokens : null,
+          actual: actualInput,
+          output: usage ? usage.outputTokens : null,
+          // 缓存分桶(旧版前端不认识这些字段,纯新增,不影响既有渲染)
+          ...(usage ? {
+            uncachedInputTokens: usage.uncachedInputTokens,
+            cacheReadTokens: usage.cacheReadTokens,
+            cacheWriteTokens: usage.cacheWriteTokens
+          } : {}),
           window: ctxWindow || 0
         });
-        console.log(`[agent] 请求 ${(llm && llm.model) || ''}:预估输入 ${env.total}(system ${env.systemTokens} + 工具 ${env.toolsTokens} + 历史 ${env.messageTokens})${usage && typeof usage.promptTokens === 'number' ? ` / 实际 ${usage.promptTokens}` : ''}${usage && typeof usage.completionTokens === 'number' ? ` / 输出 ${usage.completionTokens}` : ''} token(窗口 ${ctxWindow || '未配置'})`);
+        console.log(`[agent] 请求 ${(llm && llm.model) || ''}:预估输入 ${env.total}(system ${env.systemTokens} + 工具 ${env.toolsTokens} + 历史 ${env.messageTokens})${actualInput !== null ? ` / 实际 ${actualInput}` : ''}${usage ? ` / 输出 ${usage.outputTokens}` : ''} token(窗口 ${ctxWindow || '未配置'})${usage && billedInputTokens(usage) > 0 ? ` 缓存命中 ${Math.round(usage.cacheReadTokens / billedInputTokens(usage) * 100)}%(${usage.cacheReadTokens}/${billedInputTokens(usage)})` : ''}`);
 
         // 记录本步 assistant 消息(工具调用参数需以 JSON 字符串回传;
         // DeepSeek v4 思考模式下,reasoning_content 必须随历史原样回传,否则 400)
@@ -2066,7 +2133,16 @@ export class Agent {
           })),
           ...(res.reasoning ? { reasoning_content: res.reasoning } : {})
         };
-        session.append('assistant/message', { turn, step, message: assistantMsg });
+        session.append('assistant/message', {
+          turn, step, message: assistantMsg,
+          // 本步的提供方用量(四桶,含缓存字段)。与消息同条落盘,因为"模型输出"与
+          // "它的记账"必须一起走 —— 日志里没有第二条 usage 记录,重放时才能原样算出
+          // 整个会话的用量与缓存命中率。网关不报用量时该字段缺席(不是零值)。
+          ...(usage ? { usage } : {}),
+          // 首个 token 的绝对时刻:统计栏的 TTFT / 解码速度靠它,而且必须落盘 ——
+          // 只在内存记的话,刷新或切回会话就再也算不出这两项了(见 foldSessionStats)。
+          ...(typeof res.firstTokenTime === 'number' ? { firstTokenTime: res.firstTokenTime } : {})
+        });
         // 该步完整落盘,部分内容缓冲区清空:之后一旦中止(如工具执行期间),不会重复抢救
         stepPartial = '';
         stepPartialReasoning = '';
@@ -2090,6 +2166,7 @@ export class Agent {
         if (res.truncated === true) {
           finalText = res.content || '';
           session.append('step/end', stepMeta);
+          this._emitSessionStats(session, runSessionId);
           endReason = { kind: 'truncated' };
           this._notice(session, runSessionId,
             '模型响应流被中途中断,本次回复可能不完整(已自动重试,仍未收到正常结束标记)。发送「继续」可让我接着往下写。',
@@ -2103,6 +2180,7 @@ export class Agent {
         if (!res.toolCalls || res.toolCalls.length === 0) {
           finalText = res.content || '';
           session.append('step/end', stepMeta);
+          this._emitSessionStats(session, runSessionId);
           if (String(res.finishReason || '').toLowerCase() === 'length') {
             endReason = { kind: 'max-tokens' };
             this._notice(session, runSessionId, '上一条回复因达到输出上限被截断,本轮已结束;发送"继续"可让模型接着输出。', { level: 'warn', kind: 'max-tokens' });
@@ -2115,6 +2193,7 @@ export class Agent {
         const { turnConcluded } = await this._runToolCalls(rt, session, runSessionId, signal, turn, step, res.toolCalls, invokeCtx);
 
         session.append('step/end', stepMeta);
+        this._emitSessionStats(session, runSessionId);
         if (turnConcluded) break; // 工具显式收尾:本轮到此为止,不再请求模型
       }
 
@@ -2189,7 +2268,7 @@ export class Agent {
         // 权威分支点对齐:轮末(含上面自愈补的工具结果、生图轮的第二个消息面)把服务端
         // 消息面总长下发给前端。前端那个本地计数器是"猜"的(见 faceCount 注释),失败/中止的轮
         // 会让它漂移;以服务端口径重锚后,下一轮用户消息才带着正确的下标去回退/删除/分支。
-        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId });
+        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId, elapsedMs: turnElapsedMsOf(session.events) });
         this.emit('agent', { event: 'sessions_changed' }); // 后台会话结束也刷新前端会话列表
       }
     }
@@ -2312,7 +2391,7 @@ export class Agent {
       if (runSessionId) {
         sessions.saveEvents(runSessionId, session.events);
         // 同文本轮:把消息面总长下发,前端以服务端口径重锚本地分支点计数(见 faceCount 注释)
-        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId });
+        this.emit('agent', { event: 'turn_end', faceCount: faceCount(session.events), sid: runSessionId, elapsedMs: turnElapsedMsOf(session.events) });
         this.emit('agent', { event: 'sessions_changed' });
       }
     }
@@ -2374,7 +2453,7 @@ export class Agent {
       this.emit('agent', { event: 'tool_call', tool: tc.name, args: pretty, callId: tc.id, sid: runSessionId });
       session.append('tool/call', { turn, step, callId: tc.id, name: tc.name, arguments: rawArgs });
       this._toolRepeatReminder(rt, tc.name, rawArgs);
-      slots[index] = await registry.execute({ name: tc.name, args: rawArgs, signal: signal.signal, invokeCtx });
+      slots[index] = await registry.execute({ name: tc.name, args: rawArgs, signal: signal.signal, invokeCtx: { ...invokeCtx, turn } });
     };
 
     const fillPool = async () => {
@@ -2417,6 +2496,27 @@ export class Agent {
     this.emit('agent', { event: 'preview_available', sid: runSessionId, url });
   }
 
+  /**
+   * 广播整个会话的累计用量(四桶)与对话统计(统计栏用)。
+   *
+   * 从**事件日志 fold** 而不是内存累加:刷新/切会话/重连后与服务端实时值必然一致,
+   * 不需要另建一份会漂移的计数器。fold 成本 = O(事件数),每步末调用一次,
+   * 相对一次模型请求可以忽略。
+   *
+   * 统计只用于展示,**任何异常都不允许影响对话**:整体 try/catch 包住。
+   */
+  _emitSessionStats(session: Session, runSessionId: string | null) {
+    try {
+      this.emit('agent', {
+        event: 'session_stats', sid: runSessionId,
+        usage: foldTokenUsage(session.events),
+        stats: foldSessionStats(session.events)
+      });
+    } catch (e: any) {
+      console.error('[agent] 统计折叠失败(不影响对话):', e?.message || e);
+    }
+  }
+
   /** 提交单个工具结果:落盘 tool/result + 向前端发 tool_result(与工具执行解耦,供并行按序调用) */
   _emitToolResult(session: Session, runSessionId: string | null, turn: number, step: number, tc: any, r: ToolResult) {
     // 结果全量入日志(体量上限由工具层输出 cap 与注册表 spill 策略保证);
@@ -2424,7 +2524,10 @@ export class Agent {
     session.append('tool/result', {
       turn, step, callId: tc.id, name: tc.name,
       isError: r.isError, content: r.content, ms: r.ms,
-      ...(r.meta !== undefined ? { meta: r.meta } : {}) // 结构化 UI 数据(终端卡 exitCode/cwd 等)
+      ...(r.meta !== undefined ? { meta: r.meta } : {}), // 结构化 UI 数据(终端卡 exitCode/cwd 等)
+      // 附件只存元数据(id/name/mime/size/kind),字节在附件库——与 image/generated 同规则,
+      // 保证日志轻量可回放;前端据此在对话里直接渲染截图等产物
+      ...(r.attachments !== undefined ? { attachments: r.attachments } : {})
     });
     const short = r.content.length > 4000 ? r.content.slice(0, 4000) + `\n…[结果较多,已折叠展示 ${r.content.length} 字符]…` : r.content;
     // 命令输出里出现可预览地址(如 vite 打印的 http://localhost:5173)时主动通知前端,
@@ -2434,7 +2537,8 @@ export class Agent {
     }
     this.emit('agent', {
       event: 'tool_result', tool: tc.name, ok: !r.isError, ms: r.ms, result: short, callId: tc.id, sid: runSessionId,
-      ...(r.meta !== undefined ? { meta: r.meta } : {})
+      ...(r.meta !== undefined ? { meta: r.meta } : {}),
+      ...(r.attachments !== undefined ? { attachments: r.attachments } : {})
     });
   }
 

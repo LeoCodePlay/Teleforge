@@ -11,13 +11,103 @@ export interface ToolCallSpec {
   arguments: string;
 }
 
+/**
+ * 一次模型调用的 token 记账(四桶,**互斥**)。
+ *
+ * 语义照搬 deepseek-harness 的 `TokenUsage`(packages/llm/llm/src/types.ts):
+ * `uncachedInputTokens` 只算**未命中缓存**的输入;命中/写入缓存的输入分别落在
+ * `cacheReadTokens` / `cacheWriteTokens`。**计费输入 = 三桶之和**。
+ * 推理 token 已经包含在 `outputTokens` 里,**不再单独累加**(否则会重复计数)。
+ */
+export interface TokenUsage {
+  uncachedInputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** 计费输入 = 三个输入桶之和(缓存命中率的分母) */
+export function billedInputTokens(u: TokenUsage): number {
+  return u.uncachedInputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+}
+
+function isCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+/**
+ * 把提供方上报的原始 usage 归一成四桶。
+ *
+ * 提供方方言不同(shapes 见下),这里做**唯一一处**归一,上层只见四桶:
+ *  - OpenAI 兼容(含 DeepSeek-OpenAI / 多数网关):
+ *      cacheRead  = prompt_tokens_details.cached_tokens ?? prompt_cache_hit_tokens ?? 0
+ *      cacheWrite = prompt_tokens_details.cache_write_tokens || 0
+ *      uncached   = max(0, prompt_tokens − cacheRead − cacheWrite)   ← 减法推导
+ *      output     = completion_tokens(已含 reasoning_tokens)
+ *    ⚠ `cached_tokens` 用 `??` 而不是 `||`:显式的 0 应当**胜过** prompt_cache_hit_tokens。
+ *    ⚠ dsh 的适配器**从不读** `prompt_cache_miss_tokens`(未命中数是减出来的),
+ *      所以这里也不读——少一个可能与上游不自洽的字段。
+ *  - Anthropic Messages:`cache_read_input_tokens` / `cache_creation_input_tokens`
+ *      + `input_tokens`(本身即未命中输入)。
+ *
+ * 兜底(顺序即优先级,每条都防止"算出负数或 >100% 的假命中"):
+ *  1. 没有 `prompt_tokens` 也没有 `input_tokens` → 返回 null(调用方视为"无用量");
+ *  2. 单个缓存字段非法(非安全整数/负数)→ **忽略该字段**,不是丢弃整条用量;
+ *  3. `cacheRead + cacheWrite > prompt` → 上游脏数据,整个用量判为**不可信**,
+ *     丢弃缓存分项并退化为 uncached = prompt(宁可"无缓存信息",也不报 >100%);
+ *  4. 减法结果用 max(0, …) 夹住,永不为负。
+ */
+export function normalizeTokenUsage(raw: any): TokenUsage | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  // Anthropic 方言:input_tokens / output_tokens / cache_read_input_tokens / cache_creation_input_tokens
+  const anthropicPrompt = raw.input_tokens;
+  if (isCount(anthropicPrompt)) {
+    const cacheRead = isCount(raw.cache_read_input_tokens) ? raw.cache_read_input_tokens : 0;
+    const cacheWrite = isCount(raw.cache_creation_input_tokens) ? raw.cache_creation_input_tokens : 0;
+    const output = isCount(raw.output_tokens) ? raw.output_tokens : 0;
+    // input_tokens 在 Anthropic 语义下**本身就是未命中输入**(三桶互斥),无需减法
+    return { uncachedInputTokens: anthropicPrompt, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite, outputTokens: output };
+  }
+
+  // OpenAI 兼容方言
+  const promptTokens = raw.prompt_tokens;
+  if (!isCount(promptTokens)) return null;
+  const outputTokens = isCount(raw.completion_tokens) ? raw.completion_tokens : 0;
+  const details = raw.prompt_tokens_details;
+
+  // 优先级:cached_tokens(显式 0 也算数) → prompt_cache_hit_tokens → 0
+  let cacheRead = 0;
+  if (details && isCount(details.cached_tokens)) cacheRead = details.cached_tokens;
+  else if (isCount(raw.prompt_cache_hit_tokens)) cacheRead = raw.prompt_cache_hit_tokens;
+
+  // 写入缓存:OpenAI 本身不报,只有 OpenRouter 兼容提供方会带
+  let cacheWrite = 0;
+  if (details && isCount(details.cache_write_tokens)) cacheWrite = details.cache_write_tokens;
+
+  // 兜底 3:缓存量超过 prompt —— 上游脏数据,丢掉缓存分项
+  if (cacheRead + cacheWrite > promptTokens) {
+    return { uncachedInputTokens: promptTokens, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens };
+  }
+
+  // 兜底 4:减法推导未命中输入,并夹住非负
+  const uncached = Math.max(0, promptTokens - cacheRead - cacheWrite);
+  return { uncachedInputTokens: uncached, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite, outputTokens };
+}
+
 export interface ChatResult {
   content: string;
   toolCalls: ToolCallSpec[];
   reasoning?: string;
   finishReason?: string;
-  /** 提供方在上游流中上报的用量(有则取最后一次非空);网关不报则为 null */
-  usage?: { promptTokens?: number; completionTokens?: number } | null;
+  /** 提供方在上游流中上报的用量(有则取最后一次非空,已归一为四桶);网关不报则为 null */
+  usage?: TokenUsage | null;
+  /**
+   * 本步首个 token 到达的绝对时刻(ms;epoch)。用于统计栏的 TTFT 与解码速度:
+   * 落盘后即便刷新/切会话也能从日志重算出同样的统计,而不是只在内存里存在。
+   * 流里一个 token 都没出(如纯工具调用开头的空响应)时缺席。
+   */
+  firstTokenTime?: number;
   /** 上游流没有正常结束标记(finish_reason / [DONE])就断了,且已重试到不再重试:
    *  正文可能只写了一半,调用方不能把它当作正常完成,必须向用户披露(见 chat 的截断处理) */
   truncated?: boolean;
@@ -934,12 +1024,21 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, t
   let content = '';
   let reasoning = ''; // 思考通道输出(DeepSeek/GLM/Qwen 等推理模型);回传规则见 chat() 的 passback
   let finishReason = ''; // 最后一个非空 finish_reason(stop/length/tool_calls 等)
-  let lastUsage: { prompt_tokens?: number; completion_tokens?: number } | null = null; // 提供方上报用量(通常在流末尾)
+  let lastUsage: any = null; // 提供方上报的**原始** usage(通常在流末尾),finish() 时归一成四桶
   const toolAcc = new Map(); // index -> {id,name,args}
   let toolSeq: any[] = [];
+  /**
+   * 首个 token 到达的绝对时刻(ms)。用于统计栏的「首 token 延迟(TTFT)」与「解码速度」。
+   * 语义照搬 harness 的 assistantStreamFirstTokenTime:第一个**非空**的正文/思考增量,
+   * 或第一个带名字的工具调用增量 —— 空增量与心跳不算"开始出字"。
+   * 只在本次尝试内取第一次;重试会重新解析,拿到的是最终成功那次的值。
+   */
+  let firstTokenTime: number | null = null;
+  const markFirstToken = () => { if (firstTokenTime === null) firstTokenTime = Date.now(); };
 
   const feedDelta = (delta: any) => {
     if (delta.content) {
+      markFirstToken();
       content += delta.content;
       onDelta?.({ kind: 'text', text: delta.content });
     }
@@ -949,6 +1048,7 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, t
     const r = typeof delta.reasoning_content === 'string' ? delta.reasoning_content
       : typeof delta.reasoning === 'string' ? delta.reasoning : '';
     if (r) {
+      markFirstToken();
       reasoning += r;
       onDelta?.({ kind: 'reasoning', text: r });
     }
@@ -957,7 +1057,8 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, t
         const idx = tc.index ?? 0;
         const acc = toolAcc.get(idx) || { id: null, name: '', args: '' };
         if (tc.id) acc.id = tc.id;
-        if (tc.function?.name) acc.name += tc.function.name;
+        // 工具名先于参数到达:名字到达即算"开始出字"(与 harness 的 name-bearing run 一致)
+        if (tc.function?.name) { markFirstToken(); acc.name += tc.function.name; }
         if (tc.function?.arguments) acc.args += tc.function.arguments;
         toolAcc.set(idx, acc);
         onDelta?.({ kind: 'tool_args', index: idx, text: tc.function?.arguments || '' });
@@ -1017,9 +1118,12 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, t
             finishReason = choice.finish_reason;
           }
           // 用量上报:部分网关在流末尾带 usage(顶层或 choice 内),取最后一次非空;
-          // 不强制 stream_options(部分聚合网关不支持该参数)
-          const u = j.usage && typeof j.usage.prompt_tokens === 'number' ? j.usage : (choice?.usage && typeof choice.usage.prompt_tokens === 'number' ? choice.usage : null);
-          if (u) lastUsage = u;
+          // 不强制 stream_options(部分聚合网关不支持该参数)。
+          // 这里只存**原始**对象,归一成四桶留到 finish()——不同网关可能在中途报
+          // 只有 prompt_tokens 的中间态,提前归一会被后一条更完整的覆盖掉。
+          const u = j.usage && typeof j.usage === 'object' ? j.usage
+            : (choice?.usage && typeof choice.usage === 'object' ? choice.usage : null);
+          if (u && (typeof u.prompt_tokens === 'number' || typeof u.input_tokens === 'number')) lastUsage = u;
         } catch { /* 忽略无法解析的行 */ }
       }
     }
@@ -1036,10 +1140,13 @@ async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, t
         name: v.name,
         arguments: v.args
       }));
-    const usage = lastUsage
-      ? { promptTokens: lastUsage.prompt_tokens, completionTokens: lastUsage.completion_tokens }
-      : null;
-    return { content, toolCalls, reasoning, finishReason, usage, ...(truncated ? { truncated: true } : {}) };
+    // 归一成四桶(含缓存字段);上游没报或不可信时为 null
+    const usage = normalizeTokenUsage(lastUsage);
+    return {
+      content, toolCalls, reasoning, finishReason, usage,
+      ...(firstTokenTime !== null ? { firstTokenTime } : {}),
+      ...(truncated ? { truncated: true } : {})
+    };
   }
   return finish();
 }
@@ -1097,6 +1204,36 @@ async function mockChat({ messages, tools, signal, onDelta }: { messages: any[];
     return { content: '子代理已给出结论,本轮结束。', toolCalls: [] };
   }
 
+  // 父代理:用户说"交付/成果物"时走 本地写文件 → present 两步(联调用)。
+  // 用来端到端验证成果物卡片(以及从卡片进右侧栏)这条链路,默认脚本不受影响。
+  const wantsDeliver = /成果物|交付/.test(String(lastUser?.content || ''));
+  if (wantsDeliver) {
+    // 取**本地**工作区路径:不能用 extractWorkspace —— 它匹配的是第一个"工作区: ",
+    // 在同时有远程和本地时会拿到远程路径,而 write_local_file 只认本地工作区。
+    let localWs = '';
+    for (const m of messages) {
+      const mm = m.content?.match?.(/本地工作区: ([^\n]+)/);
+      if (mm) { localWs = mm[1].trim(); break; }
+    }
+    const dir = localWs || ws || '.';
+    const p = `${dir}/deliverable.md`;
+    if (toolMsgs.length === 0) {
+      onDelta?.({ kind: 'text', text: '好,我写一个文件,然后交付给你。' });
+      return {
+        content: '好,我写一个文件,然后交付给你。',
+        toolCalls: [mk('write_local_file', {
+          path: p,
+          content: '# 交付物\n\n由 mock 生成,用于验证成果物卡片与右侧栏。\n'
+        })]
+      };
+    }
+    if (toolMsgs.length === 1) {
+      return { content: '', toolCalls: [mk('present', { files: [{ path: p, description: 'mock 生成的交付物' }] })] };
+    }
+    onDelta?.({ kind: 'text', text: '已经交付给你了,可以点卡片打开。' });
+    return { content: '已经交付给你了,可以点卡片打开。', toolCalls: [] };
+  }
+
   let result: any;
   switch (toolMsgs.length) {
     case 0:
@@ -1122,7 +1259,8 @@ async function mockChat({ messages, tools, signal, onDelta }: { messages: any[];
       };
   }
   await sleep(80, signal);
-  return result;
+  // mock 也给出首个 token 时刻:统计栏(TTFT/速度)在 mock 与 e2e 里同样可被验证
+  return { ...result, firstTokenTime: Date.now() };
 }
 
 function extractWorkspace(messages: any[]): string {

@@ -1,0 +1,99 @@
+/* 会话头部(「会话的多功能顶部」)的骨架 —— 类名与声明逐条照搬 deepseek-harness
+   packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css
+   的 `.header` / `.titleRow` / `.titleCluster` / `.crumbs` / `.crumb*` / `.headerActions`
+   (去掉 dsh 的 grid 首列 headerLeading 与窗口 chrome 留白 —— 那是它 AppFrame 布局的职责,
+   本项目没有那层)。
+
+   这里**只**管头部这一行的排版;子智能体 catalog / 后台任务弹层自己的样式在它们各自的
+   module.css 原件里(SubagentHeaderLineage.module.css / JobListAction.module.css)。 */
+
+/* 头部容器:dsh 的 `.header`。本项目没有 dsh 的「会话 / 轨迹」视图 tab 条,
+   所以走它 `.header:where(:not(:has(.tabs)))` 那一支:min-height 归零、底部补 10px 内边距
+   (代进去就是 10 + 30 + 10 = 50px 的一条带,底下一条 0.5px 分隔线)。 */
+.header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  flex: none;
+  box-sizing: border-box;
+  padding: 10px 28px 10px 20px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.titleRow {
+  grid-column: 2;
+  /* 匿名 inline-size 容器:让 occupants 能按行宽做 container query(dsh 的原注释),
+     这里为将来可能搬来的 header 控件保留同一条形态 */
+  container-type: inline-size;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-height: 30px;
+}
+
+.titleCluster {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.crumbSeg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.crumbSep {
+  color: var(--dsw-alias-label-caption);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.crumb {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.crumbSubagent {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+button.crumb:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.crumbCurrent {
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+  cursor: default;
+}
+
+.headerActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}

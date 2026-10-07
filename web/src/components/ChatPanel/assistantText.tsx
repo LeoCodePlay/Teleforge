@@ -56,7 +56,8 @@ export const AssistantText = memo(function AssistantText({ text }: { text: strin
 // 输入与面板重渲染不再拖着全部消息重跑 thinking 提取与 markdown 解析;
 // 正在流式更新的段(text 每次增量都是新字符串)依旧正常渲染。
 export const AssistantSegment = memo(function AssistantSegment({ text }: { text: string }) {
-  return <div>{renderAssistantContent(text) || <AssistantText text={text} />}</div>;
+  // dsh-ai-text:助手回复段(过程流里按 dsh 的 --dsh-chat-flow-gap 与相邻项隔 12px)
+  return <div className="dsh-ai-text">{renderAssistantContent(text) || <AssistantText text={text} />}</div>;
 });
 
 export const ReasoningSegment = memo(function ReasoningSegment({ text, running }: { text: string; running?: boolean }) {

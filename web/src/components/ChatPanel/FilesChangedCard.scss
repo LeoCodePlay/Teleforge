@@ -13,6 +13,24 @@
 .fcc-chevron.flip { transform: rotate(180deg); }
 .fcc-list { list-style: none; margin: 0; padding: 4px 0 8px; border-top: 1px solid var(--line-soft); }
 .fcc-item { display: block; }
+/* 有次要入口(对比 / 在侧栏打开)时改成一行 flex:主行占满,按钮贴右 */
+.fcc-item.has-aside, .fcc-item.has-compare { display: flex; align-items: center; }
+.fcc-item.has-aside .fcc-row, .fcc-item.has-compare .fcc-row { flex: 1 1 auto; min-width: 0; }
+/* 次要入口默认隐藏(悬停或键盘聚焦时出现),避免每行都多一个按钮的噪声 */
+.fcc-aside {
+  flex: none; margin-right: 10px; padding: 1px 7px; height: 19px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-pill);
+  background: var(--glass-bg); color: var(--muted);
+  font-size: 10.5px; line-height: 17px; cursor: pointer; white-space: nowrap;
+  opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease;
+}
+.fcc-item.has-aside:hover .fcc-aside,
+.fcc-item.has-compare:hover .fcc-compare,
+.fcc-aside:focus-visible { opacity: 1; }
+.fcc-aside:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+/* 「对比」是看改动前后(只读 diff),用强调色与「打开文件」区分开 */
+.fcc-compare { color: var(--accent-2); border-color: var(--accent-border); }
+.fcc-compare:hover { color: var(--text); background: var(--accent-soft); border-color: var(--accent-border); }
 /* 行布局:按钮与纯展示行共用(fcc-row),两者视觉一致 */
 .fcc-row { display: flex; align-items: baseline; gap: 8px; width: 100%; box-sizing: border-box; padding: 4px 12px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12.5px; line-height: 18px; text-align: left; white-space: nowrap; }
 .fcc-item.openable .fcc-row { cursor: pointer; }

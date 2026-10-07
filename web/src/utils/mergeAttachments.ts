@@ -7,7 +7,7 @@
 //
 // 规则:按到达顺序累加(先到的在前),并按 id 去重——断线补偿会重放同一批附件,不能出现重复图。
 // 无 DOM/React 依赖,可单测。
-import type { AttachmentInfo } from '../types';
+import type { AttachmentInfo, PresentedFile } from '../types';
 
 /**
  * 合并两批消息附件。
@@ -20,4 +20,20 @@ export function mergeAttachments<T extends AttachmentInfo>(prev?: T[] | null, ne
   if (!prev?.length) return next;
   const seen = new Set(prev.map((a) => a.id));
   return [...prev, ...next.filter((a) => !seen.has(a.id))];
+}
+
+/**
+ * 合并两批成果物(present 工具的交付声明)。
+ *
+ * 规则与附件一致(按到达顺序累加、按路径去重),但**去重键是路径**:
+ * 同一轮里模型可能先声明一次、补充说明后再声明一次;同一路径应保留**最后一次**的说明
+ * (后一次通常是更准确的描述),而不是像附件那样保留首次。因此这里用 map 覆盖。
+ */
+export function mergeDeliverables(prev?: PresentedFile[] | null, next?: PresentedFile[] | null): PresentedFile[] | undefined {
+  if (!next?.length) return prev?.length ? prev : undefined;
+  if (!prev?.length) return next;
+  const byPath = new Map<string, PresentedFile>();
+  for (const f of prev) byPath.set(f.path, f);
+  for (const f of next) byPath.set(f.path, { ...byPath.get(f.path), ...f }); // 合并:保留旧的 description(若新的没给)
+  return [...byPath.values()];
 }

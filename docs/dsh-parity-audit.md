@@ -114,10 +114,10 @@
 
 | 项 | A | B |
 |---|---|---|
-| 工具结果裁剪 | `pruneToolResults`,三处调用:绝对地板(每步,keepRecent 6 / minChars 2000)、水位内(keepRecent 0 / 8192)、爆窗(同前) | `ToolResultPruner.pruneSession`,仅在水位/爆窗合格后、区间选择前运行并重新计量 |
-| 裁剪持久性 | **仅投影层**,日志不动 | 追加 replacement + `compaction/prune` shadow-price 事件,**持久** |
+| 工具结果裁剪 | `pruneToolResults`,两处调用(水位内 keepRecent 0 / 8192、爆窗同前);判定**只看消息内容** | `ToolResultPruner.pruneSession`,仅在水位/爆窗合格后、区间选择前运行并重新计量 |
+| 裁剪持久性 | **仅投影层**,日志不动;但判定是内容的纯函数 → 模型可见面只追加 | 追加 replacement + `compaction/prune` shadow-price 事件,**持久** |
 | 消息级裁剪 | 有:`trimMessagesByBudget` 按字符预算从对话组头部整组丢弃,首条 user 锚点常驻(`agent.ts:1455`, `session.ts:369-393`) | **无**此机制(刻意不做,宁可压缩) |
-| 绝对地板 | `ABS_FLOOR_TOKENS=60_000`(A 自加,B 无对应) | — |
+| 绝对地板 | **已删除**(曾是 `ABS_FLOOR_TOKENS=60_000` 每请求"保最近 N 条"折叠:A 自加、B 无对应。滑动窗口每隔几步改写历史中段,单次作废 2 万~30 万 token 缓存,见 [prefix-cache-hit-rate.md](prefix-cache-hit-rate.md)) | — |
 | 阈值 | 0.8 / 保留 0.16 / 摘要 8192(`compact.ts:14-26`) | `DEFAULT_THRESHOLD_RATIO 0.8` / `DEFAULT_RETAIN_RATIO 0.16` / `maxTokens 8192` / `compactionRetries 1` / `maxOverflowRetries 1`,**支持 `modelPolicies` 按 provider/model 逐条覆写**(`config.ts:20-23`, `:105-125`) |
 | 区间选择 | 尾部按 token 累积到 `retainTokens`,切点回退对齐工具配对;不要求 ≥2 个 user 组(`compact.ts:84-114`) | 同算法,改为按 priced surface node 累积,带 meter/surface 一致性断言(`region.ts:98-134`) |
 | 摘要调用 | `[system, ...dropMsgs, instruction]`,**`tools: []`**,无 `max_tokens`、无 `purpose`(`compact.ts:292-305`) | 重放 `header.system` **+ `header.tools`** + region messages,带 `maxTokens`/`sessionId`/`purpose:'compaction'`(`region.ts:498-514`) |

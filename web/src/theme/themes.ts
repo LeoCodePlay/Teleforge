@@ -341,7 +341,17 @@ function deriveThemeVars(t: ThemeTokens): Record<string, string> {
     /* 进度条轨道 / 遮罩 / 扫光 */
     '--progress-track': dark ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)',
     '--mask-bg': dark ? 'rgba(3,5,12,.5)' : 'rgba(241,245,249,.62)',
-    '--glare': dark ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.60)'
+    '--glare': dark ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.60)',
+
+    /* 变更对比(右侧栏 changes-review):语义与 dsh 的 --dsw-alias-file-diff-* 一一对应。
+       放在派生 token 里而不是 ThemeTokens 字段里 —— 它由亮暗方向决定,不需要每套主题手填,
+       新增主题时自动获得一套合理的对比配色。 */
+    '--diff-add-bg': dark ? 'rgba(46,160,67,.15)' : '#e6f4e7',
+    '--diff-add-gutter': dark ? 'rgba(46,160,67,.22)' : '#edf7ed',
+    '--diff-add-marker': dark ? '#41c977' : '#1a7f37',
+    '--diff-del-bg': dark ? 'rgba(248,81,73,.14)' : '#fce8e8',
+    '--diff-del-gutter': dark ? 'rgba(248,81,73,.22)' : '#f9dede',
+    '--diff-del-marker': dark ? '#f85149' : '#b42318'
   };
 }
 
@@ -351,11 +361,15 @@ export function applyTheme(t: ThemeTokens): void {
   for (const [field, varName] of Object.entries(VAR_MAP)) {
     root.style.setProperty(varName, (t as any)[field]);
   }
+  const dark = isDarkColor(t.bgDeep);
   for (const [varName, value] of Object.entries(deriveThemeVars(t))) {
     root.style.setProperty(varName, value);
   }
   // 原生控件/滚动条跟随主题深浅(dark 主题用深色原生 UI,浅色主题用浅色)
-  root.style.colorScheme = isDarkColor(t.bgDeep) ? 'dark' : 'light';
+  root.style.colorScheme = dark ? 'dark' : 'light';
+  // 亮暗标记:给**不能用 CSS 变量表达**的地方用(shiki 双主题 token 写在行内样式上,
+  // 只能靠属性选择器 + !important 覆盖;见 ChangesReview.scss)
+  root.dataset.dark = dark ? '1' : '0';
 }
 
 /** 启动时应用持久化的激活主题(渲染前调用,避免首帧闪回默认色) */

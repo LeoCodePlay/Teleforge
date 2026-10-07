@@ -2,13 +2,14 @@ import React, { memo, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import { api } from '../../api';
 import { useLlm } from '../../context/llm-context';
-import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, FileChangeItem } from '../../types';
+import type { ChatMessage, MsgSegment, ToolCallInfo, TodoItem, FileChangeItem, TokenUsageTotals, SessionStatsInfo } from '../../types';
 import { rollbackPartialSegments } from '../../utils/rollbackPartial';
 import { NO_WORKSPACE, WHOLE_LABEL } from '../../types';
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import ModelMenu from '../ModelMenu/ModelMenu';
 import ContextMeter, { type ContextUsage } from '../ContextMeter/ContextMeter';
+import StatsPills from '../StatsPills/StatsPills';
 import TodoPanel from '../TodoPanel/TodoPanel';
 import SlashMenu, { rankSlashItems, rankByName, SLASH_MENU_MAX } from '../SlashMenu/SlashMenu';
 import type { SlashItem } from '../SlashMenu/SlashMenu';
@@ -20,16 +21,20 @@ import QueuePanel, { QueueItem } from '../QueuePanel/QueuePanel';
 import PermissionSelect, { isPermissionMode } from '../PermissionSelect/PermissionSelect';
 import type { PermissionMode } from '../PermissionSelect/PermissionSelect';
 import { ToolCallList } from '../ToolCallList/ToolCallList';
+import { ProcessGroup } from '../ProcessGroup/ProcessGroup';
+import { ProcessFold } from '../ProcessGroup/ProcessFold';
+import { planGroups, isGroupLive, groupedFor, TRANSCRIPT_MODE } from '../../utils/processGroups';
 import { AssistantSegment, ReasoningSegment } from './assistantText';
 import { CompactionRow } from './CompactionRow';
 import { FilesChangedCard } from './FilesChangedCard';
+import DeliverablesCard from '../DeliverablesCard/DeliverablesCard';
 import { CommandCard } from './CommandCard';
 import { LoadedSkillsRow } from './LoadedSkillsRow';
 import { matchSlashCommand } from '../../utils/slashCommand';
 import { atTokenAt, displayMentionText, restoreMentionInput, serializeMention, splitMentions } from '../../utils/mentionRefs';
 import { mergeTrailingCommandCards } from '../../utils/commandCard';
 import { tailAssistantIndex, applyRetryNotice, isRealUserRow } from '../../utils/compactionOrder';
-import { mergeAttachments } from '../../utils/mergeAttachments';
+import { mergeAttachments, mergeDeliverables } from '../../utils/mergeAttachments';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
 import { IconChevronDownOutline14 } from '../icons/icons';
@@ -318,7 +323,7 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
   for (const t of turns) {
     if (t && t.role === 'tool' && t.tool_call_id) {
       const id = String(t.tool_call_id);
-      toolById.set(id, { tool: t.tool_name, args: t.tool_args, ok: t.ok ?? true, ms: t.ms, result: t.content || '', meta: t.meta });
+      toolById.set(id, { tool: t.tool_name, args: t.tool_args, ok: t.ok ?? true, ms: t.ms, result: t.content || '', meta: t.meta, attachments: t.attachments });
     }
   }
   for (let ti = 0; ti < turns.length; ti++) {
@@ -384,6 +389,13 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         // 生图成图(image/generated 投影)并入上一条摘要消息:摘要文本 + 成图同处一个气泡;
         // 同一次 run 里多次生图会分多条投影到达,这里必须逐批累加(mergeAttachments)而不是覆盖
         if (Array.isArray(t.attachments) && t.attachments.length) prev.attachments = mergeAttachments(prev.attachments, t.attachments);
+        // 回合耗时/结束原因:折叠行「已完成,用时 X」用(服务端在 turn/end 时回填到本轮各行)
+        if (t.turnElapsedMs !== undefined) prev.turnElapsedMs = t.turnElapsedMs;
+        if (t.turnEndReason !== undefined) prev.turnEndReason = t.turnEndReason;
+        // 成果物交付声明:同一轮里可能多次 present,逐批累加而不是覆盖
+        if (Array.isArray(t.deliverables) && t.deliverables.length) {
+          prev.deliverables = mergeDeliverables(prev.deliverables, t.deliverables);
+        }
         if (t.imageJob) prev.imageJob = t.imageJob;
         prev.forkTail = ti;
         turnToOut[ti] = out.length - 1;
@@ -393,6 +405,9 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
         appendText(nm, t.content);
         appendTools(nm, tools);
         if (Array.isArray(t.attachments) && t.attachments.length) nm.attachments = t.attachments;
+        if (t.turnElapsedMs !== undefined) nm.turnElapsedMs = t.turnElapsedMs;
+        if (t.turnEndReason !== undefined) nm.turnEndReason = t.turnEndReason;
+        if (Array.isArray(t.deliverables) && t.deliverables.length) nm.deliverables = t.deliverables;
         if (t.imageJob) nm.imageJob = t.imageJob;
         const idx = out.length;
         out.push(nm);
@@ -538,10 +553,16 @@ interface ChatPanelProps {
   compact?: boolean;
   /** 打开远程文件(复用 App 的文件标签页);「N 个文件已更改」卡片条目点击时调用 */
   onOpenFile?: (path: string) => void;
-  /** 打开右侧子代理面板(runId 来自子代理 tool/result 的 meta) */
+  /** 打开子智能体会话(runId 来自子智能体 tool/result 的 meta):主对话区只读回看 */
   onOpenSubagent?: (runId: string) => void;
   /** 打开本机文件(内部自动加 local: 前缀,走本机读取通道) */
   onOpenLocalFile?: (path: string) => void;
+  /** 在右侧栏打开远程文件(对照阅读;未提供则卡片上的「侧栏」入口不出现) */
+  onOpenFileAside?: (path: string) => void;
+  /** 在右侧栏打开本机文件 */
+  onOpenLocalFileAside?: (path: string) => void;
+  /** 查看某文件的改动对比(右侧栏 changes-review 标签;与「打开文件」是两条链路) */
+  onOpenChanges?: (path: string) => void;
 }
 
 // 模型请求失败进入重试的状态行(照搬 deepseek-harness 的 ModelRetryItem):
@@ -607,7 +628,45 @@ function markRetryStarted(msgs: ChatMessage[]): ChatMessage[] {
   return msgs;
 }
 
-export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, onOpenSubagent, compact = false }: ChatPanelProps) {
+// 轮次导轨预览用的纯文本投影(照搬 harness 预览只给纯文本摘要的口径):
+// 截断后再剥掉代码围栏/markdown 标记并压缩空白,长回复在流式期间也不至于反复跑整段正则。
+function railPreviewText(raw: string): string {
+  const s = raw.length > 600 ? raw.slice(0, 600) : raw;
+  return s
+    .replace(/```[\s\S]*?```/g, ' ')          // 代码块(含 ```thinking 推理块)
+    .replace(/`([^`]*)`/g, '$1')              // 行内代码
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')     // 图片
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')  // 链接取标签
+    .replace(/^[ \t]{0,3}(#{1,6}|>)[ \t]*/gm, '') // 标题/引用前缀
+    .replace(/[*_~]/g, '')                    // 强调标记
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 导轨预览的字符预算(照搬 harness turn-navigation.ts:一行提问 50、最多三行回复 120) */
+const RAIL_PROMPT_LIMIT = 50;
+const RAIL_RESPONSE_LIMIT = 120;
+
+/**
+ * 照搬 harness turn-navigation.ts 的 preview():拼接文本块 → 压缩空白 → 超预算截断并补省略号;
+ * 单块本身超预算时同样补省略号。dsh 在 host 侧对渲染后的文本块做这件事,这里输入是已剥标记的纯文本。
+ */
+function railPreview(parts: string[], limit: number): string {
+  let text = '';
+  let unread = false;
+  for (const part of parts) {
+    if (text.length >= limit * 2) { unread = true; break; }
+    const clipped = part.length > limit * 2;
+    const chunk = clipped ? part.slice(0, limit * 2) : part;
+    text += text === '' ? chunk : ` ${chunk}`;
+    if (clipped) { unread = true; break; }
+  }
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length > limit - 1) return `${normalized.slice(0, limit - 1).trimEnd()}…`;
+  return unread ? `${normalized}…` : normalized;
+}
+
+export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, onOpenFileAside, onOpenLocalFileAside, onOpenChanges, onOpenSubagent, compact = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
@@ -692,6 +751,23 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 服务端 context_usage 事件:实际请求 token(provider 上报)/ 折叠后预估 / 窗口。
   // 仪表盘优先显示该口径;切换会话后清空,回退到前端估算直到下一个事件到达。
   const [ctxUsage, setCtxUsage] = useState<ContextUsage | null>(null);
+  // 回合过程折叠行的展开状态,按消息下标记。默认收起(与 dsh 一致:完成对话后过程是收起来的)。
+  // 纯 UI 瞬时状态,不持久化;切换会话/重载历史时按新下标自然复位。
+  const [procFoldOpen, setProcFoldOpen] = useState<Record<number, boolean>>({});
+  // 本轮开始时刻(毫秒)。与结束事件一起算出「已完成,用时 X」的折叠行文案。
+  // 实时路径自己打戳、历史路径用服务端 turn/start→turn/end 的耗时 —— 两者口径一致:
+  // 都取"至少 1 秒"(服务端 max(1000, …)),所以刷新前后不会显示成不同的时长。
+  const turnStartRef = useRef(0);
+  /** 给末条 assistant 打上本轮的耗时与结束原因(与 attachTurnFileChanges 同一处收尾) */
+  const stampTurnEnd = (msg: any, reason: string) => {
+    const t0 = turnStartRef.current || Date.now();
+    msg.turnElapsedMs = Math.max(1000, Date.now() - t0);
+    msg.turnEndReason = reason;
+  };
+  // 统计栏数据:服务端 fold 整个会话事件日志得出(get_history 回填 + session_stats 事件增量更新)。
+  // 与 ctxUsage 分开:ctxUsage 是"本步请求"的口径,这里是"整个会话累计"的口径。
+  const [sessionUsage, setSessionUsage] = useState<TokenUsageTotals | null>(null);
+  const [sessionStats, setSessionStats] = useState<SessionStatsInfo | null>(null);
   const [reasoning, setReasoning] = useState(() => {
     // 迁移旧设置:以前独立存的 thinkingMode=off 等价于现在的推理等级 off;其余回落到 high/默认
     const tm = localStorage.getItem('sshai.thinkingMode');
@@ -730,8 +806,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const composerBoxRef = useRef<HTMLDivElement>(null); // 输入卡锚点:供 Slash/At 菜单 portal 到 body 后做 fixed 定位
   const userMsgRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [activeDot, setActiveDot] = useState(-1);
-  // 悬停跳转点时的自定义内容提示(不用原生 title,支持两行截断省略)
-  const [dotTip, setDotTip] = useState<{ top: number; left: number; text: string } | null>(null);
+  // 轮次导轨(照搬 harness TurnNavigator 的手感):previewDot = 指针/键盘焦点所在刻度的下标,
+  // dotPreviewCenter = 该刻度中心相对导轨顶部的 y(预览卡据此定位,在刻度间平滑迁移);
+  // dotScrollTop/dotFade 驱动导轨自身的端点渐隐遮罩。
+  const [previewDot, setPreviewDot] = useState<number | null>(null);
+  const [dotPreviewCenter, setDotPreviewCenter] = useState(0);
+  const [dotScrollTop, setDotScrollTop] = useState(0);
+  const [dotFade, setDotFade] = useState({ top: false, bottom: false });
+  const dotScrollerRef = useRef<HTMLDivElement | null>(null); // 导轨内部滚动容器
+  const dotRefs = useRef<(HTMLButtonElement | null)[]>([]);   // 每条刻度:预览定位读它的 offsetTop
+  const dotPointerInsideRef = useRef(false);                  // 指针在导轨内时不做自动跟随(harness 同款)
+  const dotPreviewId = React.useId();                         // 预览卡 id:刻度用 aria-describedby 关联(harness 同款)
   const hasLive = useRef(false); // 用户已发起新对话时置 true,避免历史覆盖新消息
   const justSwitchedRef = useRef(false); // 会话切换后标记一次:绘制完成后再强制滚底+重绘拇指
   const switchSeqRef = useRef(0); // 会话切换序号:兜底 effect 用它识别"本会话"的兜底;快速切换时旧兜底立即作废且不吞标志
@@ -984,6 +1069,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'start':
             hasLive.current = true;
+            turnStartRef.current = Date.now(); // 回合计时起点(折叠行「已完成,用时 X」用)
             turnClosedRef.current = false; // 新一轮开始:重新进入「未收尾」状态
             // 本轮首条 user/message 计入分支点计数
             forkTurnRef.current += 1; lastIterRef.current = 0;
@@ -1010,6 +1096,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               toolsTokens: typeof m.toolsTokens === 'number' ? m.toolsTokens : undefined,
               messageTokens: typeof m.messageTokens === 'number' ? m.messageTokens : undefined
             });
+            break;
+          case 'session_stats':
+            // 服务端每步末 fold 整个会话日志后广播(用量四桶 + 对话统计)。
+            // 只用于展示,缺字段时保持上一次的值而不是清零。
+            if (m.usage && typeof m.usage === 'object') setSessionUsage(m.usage as TokenUsageTotals);
+            if (m.stats && typeof m.stats === 'object') setSessionStats(m.stats as SessionStatsInfo);
             break;
           case 'skill_loaded':
             // 用户 `/技能名` 直接调用技能:正文由服务端注入本轮消息,这里把技能记录挂到刚推入的
@@ -1098,7 +1190,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               const last = li >= 0 ? copy[li] : undefined;
               if (last && Array.isArray(last.segments)) {
                 // 不可变更新:替换目标工具对象与所在组数组,使工具列表 memo 正确感知变化
-                const patch = { ok: m.ok, ms: m.ms, result: m.result, meta: m.meta };
+                const patch = { ok: m.ok, ms: m.ms, result: m.result, meta: m.meta, attachments: m.attachments };
                 let segIndex = -1;
                 for (let i = last.segments.length - 1; i >= 0; i--) {
                   if (last.segments[i].kind === 'tools') { segIndex = i; break; }
@@ -1150,6 +1242,19 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             scrollToBottomNow();
             break;
+          case 'deliverable':
+            // 成果物交付声明(present 工具):挂到当前 assistant 气泡,逐批累加。
+            // 为什么实时也要处理:刷新能补上(走投影),但模型刚交付完的那一刻用户正盯着屏幕,
+            // 等下一次刷新才出现卡片会显得"没反应"。
+            push((msgs) => {
+              const c = [...msgs];
+              const li = tailAssistantIndex(c);
+              if (li >= 0 && Array.isArray(m.files) && m.files.length) {
+                c[li] = { ...c[li], deliverables: mergeDeliverables(c[li].deliverables, m.files) };
+              }
+              return c;
+            });
+            break;
           case 'done':
             setAgentState('done');
             turnClosedRef.current = true; // 本轮真正结束:此后重试事件不再把气泡点亮成流式
@@ -1160,6 +1265,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               if (li >= 0) {
                 const last = copy[li];
                 last.streaming = false;
+                stampTurnEnd(last, 'completed'); // 折叠行:已完成,用时 X
                 // 文件变更汇总:所有 tool_result 已落定,聚合「N 个文件已更改」卡片数据
                 // (本轮被重试拆成多段时汇总整轮,避免只统计重试之后的部分)
                 attachTurnFileChanges(copy, li);
@@ -1181,7 +1287,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             push((msgs) => {
               const c = dropEmptyRetryBubble([...msgs]);
               const li = tailAssistantIndex(c);
-              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachTurnFileChanges(c, li); }
+              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachTurnFileChanges(c, li); stampTurnEnd(l, 'aborted'); }
               // 用户停下 Agent 时,尚在倒计时中的重试随之取消(对齐 harness llm/retry-started 的 cancelled 态)
               for (let i = c.length - 1; i >= 0; i--) {
                 const rt = c[i]?.retry;
@@ -1195,7 +1301,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             push((msgs) => {
               const c = dropEmptyRetryBubble([...msgs]);
               const li = tailAssistantIndex(c);
-              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachTurnFileChanges(c, li); }
+              if (li >= 0) { const l = c[li]; if (l.streaming) l.streaming = false; attachTurnFileChanges(c, li); stampTurnEnd(l, 'error'); }
               // 重试耗尽/不可重试的直接失败:倒计时中的重试随本轮中止取消(对齐 harness cancelled 态)
               for (let i = c.length - 1; i >= 0; i--) {
                 const rt = c[i]?.retry;
@@ -1216,7 +1322,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               push((msgs) => {
                 const c = [...msgs];
                 for (let i = c.length - 1; i >= 0; i--) {
-                  if (c[i].role === 'assistant') { c[i] = { ...c[i], forkTail: Math.max(0, m.faceCount - 1) }; break; }
+                  if (c[i].role === 'assistant') {
+                    // 权威耗时由服务端下发(与刷新后投影同一口径),覆盖 done/stopped/error
+                    // 那几处按本地时刻打的近似值 —— 避免"刚跑完显示 1 秒、刷新后显示 2 分"的漂移
+                    const el = typeof m.elapsedMs === 'number' ? m.elapsedMs : undefined;
+                    c[i] = { ...c[i], forkTail: Math.max(0, m.faceCount - 1), ...(el !== undefined ? { turnElapsedMs: el } : {}) };
+                    break;
+                  }
                 }
                 return c;
               });
@@ -1413,6 +1525,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     skipHistoryOnceRef.current = false;
     // 切换会话:清空上一会话的 context_usage,仪表盘回退到前端估算,直到本会话的下一步请求上报
     setCtxUsage(null);
+    // 统计栏同理:先清空,等本会话的 get_history 回填或 session_stats 事件到达,避免串上一会话的数
+    setSessionUsage(null);
+    setSessionStats(null);
 
     // ---- 输入草稿:离开旧会话前保存输入,进入新会话后恢复其草稿 ----
     // 草稿键 = 目标会话的真实 sid(草稿态为 __new__);target=null(App 初次加载未定向)不算切换,不读写草稿
@@ -1499,6 +1614,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         setQueue(Array.isArray(r.queue) ? r.queue : []); // 该会话的待执行队列快照
         // 该会话的权限模式快照(服务端权威):非法值/旧服务端缺省回落默认
         setPermMode(isPermissionMode(r.permissionMode) ? r.permissionMode : 'confirm');
+        // 统计栏快照(旧版服务端不返回这两项 → 置空,胶囊自动不显示)
+        setSessionUsage(r.usage && typeof r.usage === 'object' ? r.usage as TokenUsageTotals : null);
+        setSessionStats(r.stats && typeof r.stats === 'object' ? r.stats as SessionStatsInfo : null);
         setSwitching(false);
       })
       .catch((e) => {
@@ -1659,6 +1777,76 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     el.scrollTo({ top, behavior: 'smooth' });
   };
 
+  // ---- 轮次导轨(harness TurnNavigator):刻度滚动 / 预览跟随 / 当前轮进场 ----
+  // 导轨自身滚动:刷新端点渐隐遮罩(预览位置由下面的 layout effect 跟着 scrollTop 重算)
+  const syncDotRail = () => {
+    const scroller = dotScrollerRef.current;
+    if (!scroller) return;
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    const top = scroller.scrollTop > 1;
+    const bottom = max > 1 && scroller.scrollTop < max - 1;
+    setDotScrollTop(scroller.scrollTop);
+    // 状态未变时返回同一引用,避免滚动帧里白白重渲染整个对话面板
+    setDotFade((cur) => (cur.top === top && cur.bottom === bottom ? cur : { top, bottom }));
+  };
+
+  // 刻度数量变化(新建/切换会话)后重算一次渐隐:此时 DOM 已就绪,用 layout effect 免得闪一下
+  useLayoutEffect(() => { syncDotRail(); }, [userMsgIndices.length]);
+
+  // 预览卡定位:刻度中心相对导轨顶部(harness 用虚拟项 start + size/2 - scrollTop)
+  useLayoutEffect(() => {
+    if (previewDot === null) return;
+    const scroller = dotScrollerRef.current;
+    const mark = dotRefs.current[previewDot];
+    if (!scroller || !mark) return;
+    setDotPreviewCenter(mark.offsetTop + mark.offsetHeight / 2 - scroller.scrollTop);
+  }, [previewDot, dotScrollTop]);
+
+  // 当前轮自动进场(harness 的 follow effect):指针不在导轨上时把激活刻度滚进可视带;
+  // 已在两端 24px 渐隐区之内就不动,免得滚动对话时导轨频繁自滚
+  useEffect(() => {
+    if (activeDot < 0 || dotPointerInsideRef.current) return;
+    const scroller = dotScrollerRef.current;
+    const d = userMsgIndices.indexOf(activeDot);
+    const mark = d < 0 ? null : dotRefs.current[d];
+    if (!scroller || !mark) return;
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    if (max <= 0) return;
+    const center = mark.offsetTop + mark.offsetHeight / 2;
+    const view = scroller.clientHeight;
+    if (center >= scroller.scrollTop + 24 && center <= scroller.scrollTop + view - 24) return;
+    scroller.scrollTo({
+      top: Math.max(0, Math.min(max, center - view / 2)),
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  }, [activeDot, userMsgIndices.length]);
+
+  // 切换会话后刻度整体换义:收起预览,免得残留指着另一轮的刻度
+  useEffect(() => { setPreviewDot(null); }, [sid]);
+
+  // 悬停/聚焦预览的内容(照搬 harness TurnNavigator 的 preview):
+  // 一行提问(50 字预算) + 该轮最近一条助手正文(120 字预算),各自超限补省略号
+  const dotPreview = React.useMemo(() => {
+    if (previewDot === null) return null;
+    const idx = userMsgIndices[previewDot];
+    if (idx === undefined) return null;
+    // 该轮的助手正文:取本轮**最后一条有文本的 assistant**(harness 的 findLast 口径)。
+    // 文本取自 text 段(harness 也只看 assistant-step 的 text block,不含推理)。
+    let latest = '';
+    for (let i = idx + 1; i < messages.length; i++) {
+      const m = messages[i];
+      if (isRealUserRow(m)) break; // 本轮结束,不再往后找回复
+      if (m.role !== 'assistant') continue;
+      const text = segText(m) || m.content || '';
+      if (text) latest = text;
+    }
+    return {
+      turn: previewDot + 1,
+      prompt: railPreview([railPreviewText(messages[idx]?.content || '')], RAIL_PROMPT_LIMIT),
+      response: latest === '' ? '' : railPreview([railPreviewText(latest)], RAIL_RESPONSE_LIMIT),
+    };
+  }, [previewDot, messages, userMsgIndices.length]);
+
   // 距底部多少像素内仍视为"在底部":容掉惯性滚动的残余位移与亚像素取整,
   // 避免流式增长时因 1px 误差误判为"用户上滑"而暂停吸附
   const STICK_EPS = 48;
@@ -1695,7 +1883,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     const el = scrollRef.current;
     if (!el) return;
     updateActiveDot();
-    hideDotTip();
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_EPS;
     if (atBottom) {
       progRef.current = false; // 已在底部:残留的程序化标志一并清掉
@@ -1912,13 +2099,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     for (let i = 0; i < el.children.length; i++) ro.observe(el.children[i]);
     return () => { mo.disconnect(); ro.disconnect(); };
   }, []);
-
-  // 跳转点悬停提示:取不被裁剪的 fixed 定位,按当前点视口坐标弹出到右侧
-  const showDotTip = (e: React.MouseEvent<HTMLButtonElement>, text: string) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    setDotTip({ top: r.top + r.height / 2, left: r.right + 8, text });
-  };
-  const hideDotTip = () => setDotTip(null);
 
   // 发送时的 @ 引用替换:把输入中记录的 @名称 替换为 @source:完整路径
   // (文本区只显示名称,AI 收到的是带来源标记的绝对路径)。
@@ -2422,19 +2602,72 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               {m.role === 'assistant' && (
                 <div className="msg-col">
                   <div className="bubble ai-bubble">
-                    {(m.segments || []).map((seg, si) => {
-                      if (seg.kind === 'tools') return (
-                        <ToolCallList key={si} tools={seg.tools || []} workspace={(connected ? workspace : localWorkspace) ?? undefined} onOpenSubagent={onOpenSubagent} />
+                    {/* 回合过程折叠(对齐 dsh 的**两层**结构):
+                        外层 TurnProcessNodeView = 一句「已完成,用时 2分19秒」▾,把整轮工具活动收起来,
+                          展开后**完整铺开、不限高、不出滚动条**;
+                        内层过程组 = 工具活动分组(已读取文件并修改了文件),这里以 flat 方式渲染
+                          (不渲染组头、不限高)—— 外层已经承担收起职责,再叠一层要二次点击。
+                        **正文段不参与折叠**:收起时只藏工具活动,回复正文始终可见。 */}
+                    {(() => {
+                      const segs = m.segments || [];
+                      const units = planGroups(segs);
+                      const hasProcess = units.some((u) => u.kind === 'group');
+                      // 只有"已结束 且 有工具过程"的消息才有折叠行(进行中要能看着它干活)
+                      const foldable = !m.streaming && hasProcess;
+                      const foldOpen = foldable ? !!procFoldOpen[i] : true;
+                      return (
+                        <>
+                          {foldable && (
+                            <ProcessFold
+                              reason={m.turnEndReason}
+                              elapsedMs={m.turnElapsedMs}
+                              open={foldOpen}
+                              hasContent={hasProcess}
+                              onToggle={() => setProcFoldOpen((s) => ({ ...s, [i]: !s[i] }))}
+                            />
+                          )}
+                          {units.map((u, ui) => {
+                            if (u.kind === 'text') {
+                              // 正文段:AssistantSegment 按 text 引用 memo,历史段不变时跳过重渲染
+                              return <AssistantSegment key={`t${u.index}`} text={segs[u.index]?.text || ''} />;
+                            }
+                            // 折叠时**隐藏而不是卸载**:内容留在 DOM 里(与 dsh 的
+                            // hidden="until-found" 同效,浏览器页内查找仍能命中),
+                            // 展开也不必重建终端/差异卡这些较重的小组件
+                            return (
+                              <div key={`g${ui}`} className="dsh-procslot"
+                                hidden={foldable && !foldOpen ? true : undefined}>
+                                {/* 与 dsh 同构的两层折叠:外层是整轮控件,内层**每个过程组自己也有组头**
+                                    (standard=总是折叠、detailed=回合结束后折叠、verbose=不折叠)。
+                                    组头就是「已读取文件并搜索代码」那一行,带活动图标与展开箭头。 */}
+                                <ProcessGroup summary={u.summary} live={isGroupLive(u.items)}
+                                  collapsed={groupedFor(TRANSCRIPT_MODE, !!m.streaming)}>
+                                  {u.memberIndexes.map((si) => {
+                                    const seg = segs[si];
+                                    if (!seg) return null;
+                                    if (seg.kind === 'tools') {
+                                      return (
+                                        <ToolCallList key={si} tools={seg.tools || []}
+                                          workspace={(connected ? workspace : localWorkspace) ?? undefined}
+                                          onOpenSubagent={onOpenSubagent} onOpenImage={setLightbox} />
+                                      );
+                                    }
+                                    // 思考段:折叠展示(照搬 dsh 的 ReasoningRow);
+                                    // 流式时仅最后一段标记 running 获得扫光
+                                    return <ReasoningSegment key={si} text={seg.text || ''}
+                                      running={m.streaming && si === segs.length - 1} />;
+                                  })}
+                                </ProcessGroup>
+                              </div>
+                            );
+                          })}
+                        </>
                       );
-                      // 思考段:穿插在文本/工具组之间,折叠展示(照搬 dsh 的 ReasoningRow;
-                      // 流式时仅最后一段标记 running 获得扫光);ReasoningSegment 按 text 引用 memo
-                      if (seg.kind === 'reasoning') {
-                        return <ReasoningSegment key={si} text={seg.text || ''} running={m.streaming && si === (m.segments || []).length - 1} />;
-                      }
-                      // 正文段:AssistantSegment 按 text 引用 memo,历史段不变时跳过重渲染
-                      return <AssistantSegment key={si} text={seg.text || ''} />;
-                    })}
-                    {m.streaming && (m.segments || []).length === 0 && <span className="cursor" aria-hidden="true" />}
+                    })()}
+                    {/* 这里刻意**不放光标/闪烁 caret**:dsh 全库没有任何光标,
+                        流式进行中的信号由(1)正文文字本身在增长、(2)过程组头的扫光标题、
+                        (3)输入框上方的「正在运行」状态行共同承担。加一个 caret 反而会
+                        与扫光重复,并且让人误以为该位置可以输入。 */}
                     {/* 生图成图放在正文下方:先看完 AI 说了什么,再看它画出来的图。
                         与用户气泡同一套附件视图(单图大图、多图平铺),点击进灯箱 */}
                     {!!m.attachments?.length && (
@@ -2450,6 +2683,26 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       </div>
                     )}
                   </div>
+                  {/* 成果物卡片(present 工具交付的文件):语义与「文件已更改」不同 ——
+                      那张答"改了什么",这张答"交给你什么"。先于改动卡显示,因为它是用户最关心的结论。
+                      点击走与文件改动相同的打开路径(远程/本机各自分流) */}
+                  {!m.streaming && !fragmentIdx.has(i) && !!m.deliverables?.length && (
+                    <DeliverablesCard
+                      files={m.deliverables}
+                      cwd={connected ? workspace : localWorkspace}
+                      onOpen={(p) => {
+                        // 路径落在本地工作区就走本机打开,否则走远程;两侧都拿不到 cwd 时默认远程
+                        const base = connected ? workspace : localWorkspace;
+                        const isLocal = !!localWorkspace && (!connected || !!base && p.startsWith(localWorkspace));
+                        (isLocal ? onOpenLocalFile : onOpenFile)?.(p);
+                      }}
+                      onOpenAside={(p) => {
+                        const base = connected ? workspace : localWorkspace;
+                        const isLocal = !!localWorkspace && (!connected || !!base && p.startsWith(localWorkspace));
+                        (isLocal ? onOpenLocalFileAside : onOpenFileAside)?.(p);
+                      }}
+                    />
+                  )}
                   {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表);
                       被重试拆出的中间片段不显示,卡片只挂在收尾那段(汇总整轮改动) */}
                   {!m.streaming && !fragmentIdx.has(i) && !!m.filesChanged?.length && (
@@ -2458,6 +2711,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                       workspace={(connected ? workspace : localWorkspace) ?? undefined}
                       onOpenFile={onOpenFile}
                       onOpenLocalFile={onOpenLocalFile}
+                      onOpenFileAside={onOpenFileAside}
+                      onOpenLocalFileAside={onOpenLocalFileAside}
+                      onOpenChanges={onOpenChanges}
                     />
                   )}
                   {!m.streaming && !fragmentIdx.has(i) && (
@@ -2496,10 +2752,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           </button>
         )}
       </div>
-      {/* 跳转点悬停内容提示:fixed 定位防裁剪,两行截断 + 省略号 */}
-      {dotTip && (
-        <div className="dot-tip" style={{ top: dotTip.top, left: dotTip.left }}>{dotTip.text}</div>
-      )}
       {errorMsg && <div className="error">{errorMsg}</div>}
       {/* 任务计划面板:输入区玻璃面板之外,独立玻璃卡片悬浮(默认折叠;清单还有未完成项就一直显示,含跨轮,全部完成或无计划则隐藏) */}
       <TodoPanel todos={todos} />
@@ -2836,6 +3088,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               title="输入模型名" />
           )}
         </div>
+        {/* 对话统计(轮/步 · 解码速度、token 总量/缓存命中率):服务端 fold 整个会话日志得出。
+            独立成行铺在面板最底部 —— 不再嵌进输入卡玻璃盒(那里是操作按钮的地盘)。
+            这一行与里面的两个胶囊**始终占位**(统计未到手时显示 `0 轮 0 步` / `0 tok`):
+            高度恒定,首批统计到齐时不会把输入区与对话区顶上去,避免页面抖动。
+            点击胶囊在其上方弹出明细 */}
+        <div className="composer-stats">
+          <StatsPills usage={sessionUsage} stats={sessionStats} />
+        </div>
       </div>
       {wsBrowserOpen && (
         <DirBrowser initial={workspace || home || '/'} home={home} onClose={() => setWsBrowserOpen(false)} onPick={setWorkspace} />
@@ -2846,25 +3106,53 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     </div>
     {/* 附件灯箱:草稿轨道与消息里的图片点击放大(Esc/点击遮罩关闭) */}
     <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
-    {/* 用户消息跳转点:absolute 贴对话区(main 内、sidebar 右侧)最左侧,
+    {/* 用户消息轮次导轨(一轮用户消息一条细刻度):absolute 贴对话区(main 内、sidebar 右侧)最左侧,
         不随限宽的聊天内容移动,也不钉在浏览器窗口最左。渲染在 chatwrap 之外:
-        chatwrap 是滚动条拇指宿主、会被设为定位元素,放里面会被重新锚定到限宽列 */}
+        chatwrap 是滚动条拇指宿主、会被设为定位元素,放里面会被重新锚定到限宽列。
+        刻度与悬停手感照搬 harness TurnNavigator:指针沿导轨滑动时,预览卡跟着刻度中心迁移 */}
     {userMsgIndices.length > 1 && (
-      <nav className="chat-dots" aria-label="用户消息跳转">
-        {userMsgIndices.map((idx, d) => {
-          const t = displayMentionText(messages[idx]?.content || '').trim();
-          return (
-            <button
-              key={idx}
-              type="button"
-              className={`chat-dot${idx === activeDot ? ' on' : ''}`}
-              aria-label={`跳转到第 ${d + 1} 条用户消息`}
-              onClick={() => jumpToMsg(idx)}
-              onMouseEnter={(e) => showDotTip(e, t)}
-              onMouseLeave={hideDotTip}
-            />
-          );
-        })}
+      <nav
+        className="chat-dots"
+        aria-label="用户消息跳转"
+        onPointerEnter={() => { dotPointerInsideRef.current = true; }}
+        onPointerLeave={() => { dotPointerInsideRef.current = false; setPreviewDot(null); }}
+      >
+        <div
+          ref={dotScrollerRef}
+          className={`chat-dots-scroller${dotFade.top ? ' fade-top' : ''}${dotFade.bottom ? ' fade-bottom' : ''}`}
+          onScroll={syncDotRail}
+        >
+          <div className="chat-dots-marks">
+            {userMsgIndices.map((idx, d) => (
+              <button
+                key={idx}
+                ref={(el) => { dotRefs.current[d] = el; }}
+                type="button"
+                className={`chat-dot${idx === activeDot ? ' on' : ''}${d === previewDot ? ' preview' : ''}`}
+                aria-label={`跳转到第 ${d + 1} 条用户消息`}
+                aria-current={idx === activeDot ? 'true' : undefined}
+                aria-describedby={d === previewDot ? dotPreviewId : undefined}
+                onPointerMove={() => { setPreviewDot(d); }}
+                onFocus={() => { setPreviewDot(d); }}
+                onBlur={() => { setPreviewDot(null); }}
+                onClick={() => jumpToMsg(idx)}
+              />
+            ))}
+          </div>
+        </div>
+        {/* 悬停/聚焦预览(harness preview):一行提问 + 至多三行回复,位置随刻度中心平滑迁移 */}
+        {dotPreview && (
+          <div
+            className="chat-dots-preview"
+            id={dotPreviewId}
+            style={{ '--dot-preview-center': `${dotPreviewCenter}px` } as React.CSSProperties}
+          >
+            <div className="chat-dots-preview-prompt">{dotPreview.prompt || `第 ${dotPreview.turn} 轮`}</div>
+            {dotPreview.response !== '' && (
+              <div className="chat-dots-preview-response">{dotPreview.response}</div>
+            )}
+          </div>
+        )}
       </nav>
     )}
     </>

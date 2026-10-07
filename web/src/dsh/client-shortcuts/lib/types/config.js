@@ -1,0 +1,7 @@
+/** Window-local timing accepted by the Host and browser keyboard service. */
+import z from '@deepseek-ai/schemastery';
+/** Validated deployment settings for fixed keyboard sequences. */
+export const Config = z.object({
+    stopSequenceMs: z.natural().min(1).max(2_147_483_646).default(500),
+});
+//# sourceMappingURL=config.js.map

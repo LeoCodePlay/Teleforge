@@ -1,0 +1,174 @@
+/* ============================================================
+   dsh(deepseek-harness)设计 token 的映射桥
+
+   为什么需要这一层:**从 dsh 搬过来的 CSS Modules 一行都没改**,它们内部的颜色/间距/字体
+   全部引用 `--dsw-*` / `--ds-*` 变量。这些变量原本由 dsh 的 ui-theme 包在运行时写进
+   documentElement(我们没搬它,也不该搬 —— 它是一整套主题系统)。这里把**被搬过来代码实际
+   用到的那 125 个名字**(用脚本从 web/src/dsh 的 68 个 CSS 文件里扫出来的)逐个映射到
+   Teleforge 已有的主题变量上:
+
+     - 语义别名(alias-*)/ 字号字体 / 圆角 / 阴影 / 焦点环 → 指向本项目 token,
+       于是**四套预设 + 自定义主题都自动跟随**,暗色亮色各自正确;
+     - `static-*` 是 dsh 明确定义为「不随主题变化」的固定色板,照它的值写死;
+     - 间距/行高这类不是变量(直接写死在 CSS 里),不需要映射。
+
+   改的时候只改这里,不要去改 web/src/dsh 里的原文 —— 那是搬运件,保持可对照上游。
+   ============================================================ */
+
+:root {
+  /* ---- 字号 / 字体(dsh 的 markdown 与 UI 字号梯度)---- */
+  --dsw-font: 14px;
+  --dsw-font-family: var(--font-ui);
+  --dsw-font-mono: var(--mono);
+  --dsw-font-markdown-code-font-family: var(--mono);
+  --dsw-font-xxxs-11: 11px;
+  --dsw-font-xxs-12: 12px;
+  --dsw-font-xs-13: 13px;
+  --dsw-font-markdown-small: 12.5px;
+  --dsw-font-markdown-base: 13.5px;
+  --dsw-font-markdown-base-strong: 600 13.5px/1.6 var(--font-ui);
+  --dsw-font-markdown-code: 12.5px/1.5 var(--mono);
+  --dsw-font-markdown-code-block: 12.5px/1.55 var(--mono);
+  --dsw-font-markdown-h1: 600 20px/1.4 var(--font-ui);
+  --dsw-font-markdown-h2: 600 17px/1.4 var(--font-ui);
+  --dsw-font-markdown-h3: 600 15px/1.45 var(--font-ui);
+  --dsw-font-markdown-h4: 600 14px/1.45 var(--font-ui);
+  --dsw-font-markdown-table: 12.5px/1.5 var(--font-ui);
+  --dsw-font-markdown-table-head: 600 12.5px/1.5 var(--font-ui);
+
+  /* ---- 圆角 ---- */
+  --dsw-radius-xs: 6px;
+  --dsw-radius-sm: var(--r-sm);
+  --dsw-radius-md: var(--r-md);
+  --dsw-radius-lg: var(--r-lg);
+  --dsw-radius-xl: 24px;
+  --dsw-radius-panel: 16px;
+
+  /* ---- 动效 ---- */
+  --ds-ease-in-out: cubic-bezier(.4, 0, .2, 1);
+  --ds-transition-duration: .15s;
+  --ds-transition-duration-slow: .28s;
+
+  /* ---- 文字层级 ---- */
+  --dsw-alias-label-primary: var(--text);
+  --dsw-alias-label-primary-foreground: var(--bg-deep);
+  --dsw-alias-label-secondary: var(--text-2);
+  --dsw-alias-label-tertiary: var(--text-faint);
+  --dsw-alias-label-quaternary: var(--placeholder);
+  --dsw-alias-label-caption: var(--muted);
+  --dsw-alias-label-dimmed: var(--placeholder);
+  --dsw-alias-label-document-preview: var(--text-2);
+  --dsw-alias-label-error: var(--red);
+  --dsw-alias-label-shimmer: var(--muted);
+  --dsw-alias-link: var(--accent-2);
+
+  /* ---- 表面 / 层级 ---- */
+  --dsw-alias-bg-base: var(--bg-deep);
+  --dsw-alias-bg-l1: var(--bar-tint-a);
+  --dsw-alias-bg-l2: var(--glass-bg);
+  --dsw-alias-bg-layer-1: var(--bar-tint-a);
+  --dsw-alias-bg-layer-2: var(--glass-bg);
+  --dsw-alias-bg-layer-3: var(--glass-bg-strong);
+  --dsw-alias-bg-layer-4: var(--glass-bg-hover);
+  --dsw-alias-bg-skeleton: var(--hover-bg);
+  --dsw-alias-bg-mask-1: var(--mask-bg);
+  --dsw-alias-bg-module-platform: var(--code-bg-solid);
+  --dsw-alias-bg-document-preview: var(--code-bg);
+  --dsw-alias-bg-document-selection: var(--accent-fill);
+
+  /* ---- 描边 ---- */
+  --dsw-alias-border-l1: var(--line-faint);
+  --dsw-alias-border-l2: var(--line);
+  --dsw-alias-border-l2-darkmode-thin: var(--line-soft);
+  --dsw-alias-border-l3: var(--line);
+  --dsw-alias-border-l4: var(--line-strong);
+
+  /* ---- 交互态 ---- */
+  --dsw-alias-interactive-bg-hover: var(--hover-bg-hard);
+  --dsw-alias-interactive-bg-active: var(--hover-bg-strong);
+  --dsw-alias-interactive-bg-hover-danger: var(--danger-soft);
+  /* 填充层(搬来的 JobListAction 用它把「进行中」行染成实心卡) */
+  --dsw-alias-fill-l1: var(--hover-bg);
+  --dsw-alias-fill-l2: var(--hover-bg-hard);
+
+  /* ---- 按钮 ---- */
+  --dsw-alias-button-primary-fill: var(--btn-b);
+  --dsw-alias-button-primary-hover: var(--btn-a);
+  --dsw-alias-button-ghost-active-fill: var(--hover-bg-hard);
+  --dsw-alias-button-ghost-active-border: var(--glass-border-hover);
+  --dsw-alias-button-tool-bar-fill: transparent;
+  --dsw-alias-button-tool-bar-hover: var(--hover-bg-hard);
+
+  /* ---- 浮层(菜单/提示/悬浮卡/Toast)---- */
+  --dsw-specific-menu: var(--pop-bg);
+  --dsw-menu-surface-fill: var(--code-bg-solid);
+  --dsw-menu-backdrop-filter: var(--blur-md);
+  --dsw-menu-group-header-fill: var(--line-faint);
+  --dsw-menu-icon: var(--muted);
+  --dsw-alias-tooltip-bg: var(--code-bg-solid);
+  --dsw-alias-tooltip-key-bg: var(--hover-bg-hard);
+  --dsw-hovercard-bg: var(--code-bg-solid);
+  --dsw-alias-toast-bg: var(--code-bg-solid);
+  --dsw-alias-toast-label: var(--text);
+  --dsw-specific-input-major: var(--glass-bg-inset);
+
+  /* ---- 阴影 / 焦点环 / 模糊 / 滚动条 ---- */
+  --dsw-elevation-soft: var(--shadow-1);
+  --dsw-elevation-panel: var(--glass-shadow);
+  --dsw-elevation-prominent: var(--glass-shadow-lg);
+  --dsw-elevation-stroke-color: var(--glass-border);
+  --dsw-focus-ring-color: var(--accent-border);
+  --dsw-focus-ring-width: 2px;
+  --dsw-mask-blur: var(--blur-sm);
+  --dsw-alias-scrollbar-bg-l2: transparent;
+  --dsw-alias-scrollbar-hover-l2: var(--scroll-thumb);
+  --dsw-shadow-lv3: var(--glass-shadow-lg);
+
+  /* ---- 语义状态 ---- */
+  --dsw-alias-state-success-primary: var(--green);
+  --dsw-alias-state-success-tertiary: var(--ok-bg);
+  --dsw-alias-state-error-primary: var(--red);
+  --dsw-alias-state-warn-primary: var(--amber);
+  --dsw-alias-state-warn-tertiary: var(--warn-bg);
+  --dsw-alias-state-warn-label: var(--amber);
+  --dsw-alias-state-idle-primary: var(--running);
+  --dsw-alias-state-business-primary: var(--accent);
+  --dsw-alias-brand-primary: var(--accent);
+  --dsw-alias-brand-primary-new-colorprimary-new-color: var(--accent);
+  --dsw-alias-switch-track: var(--switch-track);
+  --dsw-alias-switch-thumb: var(--switch-knob);
+
+  /* ---- markdown / 代码 ---- */
+  --dsw-alias-markdown-code-block: var(--code-bg);
+  --dsw-alias-markdown-code-block-banner: var(--code-bg-soft);
+  --dsw-alias-markdown-inline-code: var(--code-bg-soft);
+  --dsw-alias-markdown-tag: var(--accent-fill);
+  --dsw-alias-code-diff-added: var(--green);
+  --dsw-alias-code-diff-deleted: var(--red);
+
+  /* ---- 变更对比(与本项目 --diff-* 一一对应)---- */
+  --dsw-alias-file-diff-added-bg: var(--diff-add-bg);
+  --dsw-alias-file-diff-added-gutter: var(--diff-add-gutter);
+  --dsw-alias-file-diff-added-marker: var(--diff-add-marker);
+  --dsw-alias-file-diff-deleted-bg: var(--diff-del-bg);
+  --dsw-alias-file-diff-deleted-gutter: var(--diff-del-gutter);
+  --dsw-alias-file-diff-deleted-marker: var(--diff-del-marker);
+
+  /* ---- static-*:dsh 里明确「不随主题变化」的固定色板,照原值写死 ---- */
+  --dsw-static-neutral-00: #ffffff;
+  --dsw-static-neutral-50: #f9fafb;
+  --dsw-static-neutral-100: #f3f4f6;
+  --dsw-static-neutral-200: #e5e7eb;
+  --dsw-static-neutral-700: #374151;
+  --dsw-static-neutral-800: #1f2937;
+  --dsw-static-neutral-850: #16181d;
+  --dsw-static-neutral-bluish-00: #ffffff;
+  --dsw-static-neutral-bluish-300: #b6c2d9;
+  --dsw-static-deepseek-400: #6b8afd;
+  --dsw-static-deepseek-450: #4d6bfe;
+  --dsw-static-deepseek-500: #3b5bdb;
+  --dsw-static-green-500: #22c55e;
+  --dsw-static-amber-400: #fbbf24;
+  --dsw-static-amber-500: #f59e0b;
+  --dsw-static-red-600: #dc2626;
+}

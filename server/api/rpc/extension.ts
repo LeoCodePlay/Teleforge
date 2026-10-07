@@ -7,32 +7,34 @@ import { browserBridge } from '../../core/browser-bridge.ts';
 import type { RpcModule } from './router.ts';
 
 export function registerExtension(rpc: RpcModule) {
-  // 当前状态:是否在线、扩展版本、标签清单(含每个标签是否允许 AI 操作)
+  // 当前状态:是否在线、扩展版本、标签清单(含每个标签是否允许 AI 操作)。
+  // 同时开着多台浏览器时,这里给的是"默认目标"那台的标签,connections 里列出全部可选浏览器。
   rpc.register('ext_status', async (_msg, { reply }) => {
     reply({ type: 'ext_status', ...browserBridge.status() });
   });
 
   // 标签清单(前端面板轮询用;状态变化也会由 /ws 主动广播 ext_status)
-  rpc.register('ext_tabs', async (_msg, { reply }) => {
-    const st = browserBridge.status();
-    reply({ type: 'ext_tabs', online: st.online, tabs: st.tabs });
+  rpc.register('ext_tabs', async (msg, { reply }) => {
+    const st = browserBridge.status(msg?.browser);
+    reply({ type: 'ext_tabs', online: st.online, tabs: st.tabs, id: st.id, connections: st.connections });
   });
 
-  // 用户把某个标签「交给 AI」
+  // 用户把某个标签「交给 AI」(多浏览器时用 browser 指定是哪台)
   rpc.register('ext_grant', async (msg, { reply }) => {
-    browserBridge.grant(Number(msg.tabId));
-    reply({ type: 'ext_status', ...browserBridge.status() });
+    browserBridge.grant(Number(msg.tabId), msg?.browser);
+    reply({ type: 'ext_status', ...browserBridge.status(msg?.browser) });
   });
 
   // 收回授权(同时清掉「AI 自建」标记,避免撤销后又被算作可操作)
   rpc.register('ext_revoke', async (msg, { reply }) => {
-    browserBridge.revoke(Number(msg.tabId));
-    reply({ type: 'ext_status', ...browserBridge.status() });
+    browserBridge.revoke(Number(msg.tabId), msg?.browser);
+    reply({ type: 'ext_status', ...browserBridge.status(msg?.browser) });
   });
 
-  // 操作模式:'ai-tabs'(默认,只碰 AI 自建 + 用户授权的标签)| 'all'(放开全部)
+  // 操作模式:'ai-tabs'(默认,只碰 AI 自建 + 用户授权的标签)| 'all'(放开全部)。
+  // 不指定 browser 时对全部在线浏览器生效(它是用户级策略,不是单台浏览器的偏好)。
   rpc.register('ext_set_mode', async (msg, { reply }) => {
-    browserBridge.setMode(msg.mode === 'all' ? 'all' : 'ai-tabs');
-    reply({ type: 'ext_status', ...browserBridge.status() });
+    browserBridge.setMode(msg.mode === 'all' ? 'all' : 'ai-tabs', msg?.browser);
+    reply({ type: 'ext_status', ...browserBridge.status(msg?.browser) });
   });
 }

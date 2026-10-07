@@ -15,6 +15,7 @@ import { registerAiTerm } from '../server/api/rpc/ai-term.ts';
 import { registerSubagent } from '../server/api/rpc/subagent.ts';
 import { registerComputerUse } from '../server/api/rpc/computer-use.ts';
 import { registerExtension } from '../server/api/rpc/extension.ts';
+import { registerChanges } from '../server/api/rpc/changes.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -48,7 +49,8 @@ const GOLDEN = {
   'ai-term': ['ai_term_list', 'ai_term_log', 'ai_term_resize', 'ai_term_delete'],
   'subagent': ['subagent_list', 'subagent_get'],
   'computer-use': ['computer_use_status', 'computer_use_set'],
-  extension: ['ext_status', 'ext_tabs', 'ext_grant', 'ext_revoke', 'ext_set_mode']
+  extension: ['ext_status', 'ext_tabs', 'ext_grant', 'ext_revoke', 'ext_set_mode'],
+  changes:  ['changes_find', 'changes_summary', 'changes_diff']
 };
 
 // 各模块 golden:逐个注册到 scratch,类型清单一致
@@ -67,7 +69,8 @@ for (const [name, fn, types] of [
   ['ai-term', registerAiTerm, GOLDEN['ai-term']],
   ['subagent', registerSubagent, GOLDEN.subagent],
   ['computer-use', registerComputerUse, GOLDEN['computer-use']],
-  ['extension', registerExtension, GOLDEN.extension]
+  ['extension', registerExtension, GOLDEN.extension],
+  ['changes', registerChanges, GOLDEN.changes]
 ]) {
   const rpc = scratchRpc();
   fn(rpc);

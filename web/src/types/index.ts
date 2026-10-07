@@ -171,6 +171,12 @@ export interface ToolCallInfo {
   result?: string | null;
   /** 结构化 UI 数据(移植自 deepseek-harness 的 card 意图):终端卡 exitCode/cwd 等 */
   meta?: ToolCallMeta | null;
+  /**
+   * 该工具产出的图片等附件(服务端元数据,字节经 /api/attachments/:id 取)。
+   * 截图类工具(browser_screenshot / computer_screenshot)会带上,
+   * 前端在工具卡下方直接渲染成图片,不必展开卡片才看得到。
+   */
+  attachments?: AttachmentInfo[];
 }
 
 /**
@@ -293,6 +299,21 @@ export interface AttachmentInfo {
   url?: string;
 }
 
+/**
+ * 一个「成果物」声明(模型通过 present 工具显式交付给用户的文件)。
+ *
+ * 与「文件改动」不是一回事,两者互补,别合并:
+ *   - 文件改动:宿主观察到的**事实** —— 本轮工作区里哪些文件被改了(自动汇总,可能含模型没提过的文件);
+ *   - 成果物:模型声明的**交付意图** —— "这些是给你用的最终产物",并附一句人类可读的说明。
+ * 只带路径与说明,**不复制内容**:内容仍在原路径,用户打开的是当前文件。
+ */
+export interface PresentedFile {
+  /** 文件路径(相对工作区或绝对路径) */
+  path: string;
+  /** 给用户看的一句话说明:这是什么、拿来做什么 */
+  description?: string;
+}
+
 /** 聊天消息内的分段:文本 / 思考 / 连续工具组,按实际发生顺序排列(思考可穿插在工具组之间) */
 export interface MsgSegment {
   kind: 'text' | 'reasoning' | 'tools';
@@ -319,6 +340,10 @@ export interface ChatMessage {
   /** 消息携带的附件(图片/文件/视频,服务端元数据;图片经 /api/attachments/:id 取字节)。
    *  user 消息 = 用户上传;assistant 消息 = 生图模型本轮生成的成图 */
   attachments?: AttachmentInfo[];
+  /** 本轮交付给用户的成果物(模型经 present 工具显式声明):渲染为该气泡下方的成果物卡片。
+   *  与 attachments 的区别:附件是**字节**(服务端存了副本、走 /api/attachments 取),
+   *  成果物是**路径引用**(内容仍在原路径,卡片点击打开当前文件) */
+  deliverables?: PresentedFile[];
   /** 用户本轮用 `/技能名` 手动调用的技能(服务端把技能正文注入用户消息时,随事件与历史下发的记录)。
    *  渲染为用户气泡下方的「已加载技能」折叠行——模型主动调用 skill 工具走 ToolCallList 卡片,
    *  这条补的是手动调用路径的可见反馈;两条路径都必须看得见 */
@@ -330,6 +355,11 @@ export interface ChatMessage {
   forkTail?: number;
   /** 消息时间戳(毫秒,来自服务端事件 time;实时消息用前端 Date.now()) */
   time?: number;
+  /** 本轮的耗时(毫秒,turn/start → turn/end),用于「已完成,用时 2分19秒」折叠行。
+   *  服务端在 turn/end 时**回填**到本轮所有 assistant 行(不新增行,所以不影响下标口径) */
+  turnElapsedMs?: number;
+  /** 本轮结束原因(completed / aborted / error / max-iters);aborted→「已停止」,error→「处理失败」 */
+  turnEndReason?: string;
   /** 提示行(role=notice)的级别源自服务端 notice 事件:缺省按普通提示渲染 */
   level?: 'info' | 'warn';
   /** 提示行的语义分类(interrupted / truncated / turn-error / compaction / max-tokens …),
@@ -423,4 +453,36 @@ export interface AskAnswerItem {
   id: string;
   selected: string[];
   custom?: string;
+}
+
+/** 整个会话的累计用量(四桶,服务端 foldTokenUsage 的结果);统计栏「用量」胶囊用 */
+export interface TokenUsageTotals {
+  /** 未命中缓存的输入 token */
+  uncachedInputTokens: number;
+  /** 输出 token(已含推理 token) */
+  outputTokens: number;
+  /** 命中缓存读取的输入 token */
+  cacheReadTokens: number;
+  /** 写入缓存的输入 token(多数网关为 0) */
+  cacheWriteTokens: number;
+  /** 有上报用量的步数;为 0 表示这个会话没有可用的缓存信息 */
+  samples: number;
+}
+
+/** 整个会话的对话统计(服务端 foldSessionStats 的结果);统计栏「活动」胶囊用 */
+export interface SessionStatsInfo {
+  turns: number;
+  steps: number;
+  /** 模型墙钟时间之和(step/start → assistant/message) */
+  llmMs: number;
+  /** 工具墙钟时间之和(各次工具调用耗时相加,不是墙钟等待时间) */
+  toolMs: number;
+  /** 首 token 延迟之和 */
+  ttftMs: number;
+  /** 承载首 token 的步数(TTFT 平均值分母) */
+  ttftSteps: number;
+  /** 解码墙钟之和 */
+  decodeMs: number;
+  /** 与 decodeMs 同一批步的输出 token(速度分子) */
+  decodeTokens: number;
 }
