@@ -145,6 +145,18 @@ export function residentCount(): number { return children.size; }
 /** 该 id 是否还有常驻 Activation(能续聊/暂停) */
 export function isResident(runId: string): boolean { return children.has(String(runId || '')); }
 
+/**
+ * 正在跑的子代理 id 列表(与 agent.busyIds() 同一口径)。
+ *
+ * 为什么要给前端:**切走再切回子会话时,"它还在跑吗"必须能重新算出来** ——
+ * 前端 status 快照里的 `busySessions` 是唯一权威来源(带 sid 的普通事件只在
+ * 当时那个视图挂着的时候才是最新的),所以子代理的运行态要一起进这个快照,
+ * 否则切回来会没有「运行中」行、也没有可以按的暂停按钮,内容却在默默往外流。
+ */
+export function runningChildIds(): string[] {
+  return [...children.values()].filter((c) => c.busy).map((c) => c.runId);
+}
+
 /** 常驻子代理快照(父会话面板/工具列表按 sid 过滤用) */
 export function listResident(parentSid?: string | null): Array<{
   runId: string; parentSid: string | null; description: string; mode: ChildMode; running: boolean; queued: number;

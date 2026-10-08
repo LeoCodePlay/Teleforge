@@ -20,6 +20,7 @@ import { createRpcRouter } from '../api/rpc/router.ts';
 import { sshManager as ssh } from './ssh-manager.ts';
 import { localFs } from './local-fs.ts';
 import { agent, setAgentHub } from '../agent/agent.ts';
+import { runningChildIds } from '../agent/subagent-runtime.ts';
 import { clearSearchEngine } from '../agent/tools.ts';
 import { armAskUserDisconnectGrace, disarmAskUserDisconnectGrace } from '../agent/ask-user.ts';
 import { migrateLegacy } from '../store/session-store.ts';
@@ -157,7 +158,10 @@ export function setupWs(httpServer: Server) {
       localNoWorkspace: localFs.noWorkspace,
       localHome: localFs.home,
       agentBusy: agent.busyNow,
-      busySessions: agent.busyIds(),
+      // 运行中的会话 id:父会话 + **子智能体会话**(sa_…)。
+      // 子代理的运行态只有进这个快照,前端"切走再切回子会话"才能重新算出"它还在跑",
+      // 从而补回运行中的状态行与暂停按钮(带 sid 的普通事件只作用于挂着的那个视图)。
+      busySessions: [...agent.busyIds(), ...runningChildIds()],
       llmModel: agent.llm ? (agent.llm.isMock ? 'mock' : agent.llm.model) : null
     });
   };

@@ -1479,7 +1479,7 @@ export default function App() {
                     className="subagent-pane"
                     style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
                   >
-                    {chatPanel({ sid: subagentRunId, busy: false, childMode: true, onFork: (at) => forkSession(at, subagentRunId) })}
+                    {chatPanel({ sid: subagentRunId, busy: busySessions.includes(subagentRunId), childMode: true, onFork: (at) => forkSession(at, subagentRunId) })}
                   </div>
                 )}
               </div>
@@ -1567,7 +1567,8 @@ export default function App() {
             }
             // 子智能体会话:与主对话区**同一个 ChatPanel**(同一套对话系统),所以两处看起来完全一致
             if (tab.kind === 'subagent') {
-              return chatPanel({ sid: tab.contentId, busy: false, childMode: true, onFork: (at) => forkSession(at, tab.contentId) });
+              // 运行态同样取服务端快照:切走再切回时状态行与暂停按钮必须还在
+              return chatPanel({ sid: tab.contentId, busy: busySessions.includes(tab.contentId), childMode: true, onFork: (at) => forkSession(at, tab.contentId) });
             }
             // 终端:直接用主区那个 ConsolePanel(远程 + 本地两个终端,各自独立 WS 会话),
             // 右栏里降级成**窄容器模式**(隐掉右侧那条 200px 列表,改用工具栏的「⌨ 终端 ▾」切换)。

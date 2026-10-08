@@ -440,16 +440,25 @@ const DUSK: ThemeDef = {
   danger: '#e5624f'
 };
 
+/* 浅色预设 = GitHub Primer Light 的 6 色映射(值取自 Primer 官方色彩令牌,非自创):
+     bg      ← bgColor-muted      #f6f8fa   页面底(canvas subtle)
+     surface ← bgColor-default    #ffffff   顶栏 / 面板 / 卡片
+     text    ← fgColor-default    #1f2328
+     accent  ← fgColor-accent     #0969da
+     success ← fgColor-success    #1a7f37
+     danger  ← bgColor-danger-emphasis #cf222e
+   上一版 bg 是偏蓝的冷灰 #eef1f5(亮度 240),整片浅色主题从底色起就"发灰",
+   只在派生公式上做 1~2 级微调根本亮不起来 —— 换成近白的中性 canvas 才有亮色主题。 */
 const PAPER: ThemeDef = {
   id: 'paper',
   name: '纸白',
   preset: true,
-  bg: '#eef1f5',
+  bg: '#f6f8fa',
   surface: '#ffffff',
-  text: '#16191f',
-  accent: '#2563eb',
-  success: '#1a7f4b',
-  danger: '#c93a3a'
+  text: '#1f2328',
+  accent: '#0969da',
+  success: '#1a7f37',
+  danger: '#cf222e'
 };
 
 export const PRESET_THEMES: ThemeDef[] = [INK, GRAPHITE, DUSK, PAPER];

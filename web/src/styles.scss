@@ -358,40 +358,39 @@ button.action-icon { border-color: transparent; }
   --err-text: color-mix(in srgb, var(--red) 62%, var(--text));
 }
 
-/* ---- 浅色主题:弹窗内部的阶梯按「往更亮 = 抬起」重排 ----
-   深色主题里浮层本体比页面底亮,卡片再比本体亮 —— 一条链路单调向上。
-   浅色主题若照抄这套关系就反了:本体是纯白,卡片只能靠"更深"来抬,于是弹窗里
-   越大块的面越灰(卡片占满整屏),而页面底(#eef1f5)反而比弹窗本体更暗 ——
-   同一屏里"抬起"一会儿是变亮、一会儿是变深,整片设置面板就读成灰蒙蒙的一坨。
+/* ---- 浅色主题:弹窗画布回到纯白,分层交给描边 + 投影 ----
+   深色主题里「浮层本体比页面底亮、卡片再比本体亮」是一条单调向上的链路,浅色主题照抄
+   这套关系就反了:本体已是纯白,卡片只能靠"更深"来抬,于是弹窗里越大块的面越灰(卡片
+   占满整屏)—— 用户要的是**白主题**,不该看见一整片灰底。
 
-   浅色下正确的单调关系是:页面底(238) → 弹窗画布(246) → 白卡片(255) 逐级变亮。
-   所以这里把浅色弹窗的画布压到略低于纯白,卡片回到纯白,灰色只留给**真正凹陷**的
-   槽(输入框 / 代码块 / 徽标)与选中态。深色主题不受影响(见 :root[data-dark] 开关)。 */
+   浅色下改用 GitHub Primer 的分层口径:**画布与卡片同为纯白**,边界交给 1px 描边与投影;
+   灰色只留给**真正凹陷**的槽(输入框 / 代码块 / 徽标)与选中、悬浮态,方向仍是"往文字色
+   压灰"(DESIGN_SYSTEM §2.1)。深色主题不受影响(见 :root[data-dark] 开关)。 */
 :root[data-dark='0'] .modal,
 :root[data-dark='0'] .settings {
-  /* 画布:比纯白低一档,让卡片的白有对比对象 */
-  --ovl: color-mix(in srgb, var(--text) 4%, var(--overlay-bg));
-  /* 卡片 = 纯白,靠 1px 描边与画布分开 */
+  /* 画布 = 纯白,和卡片同色;边界由 --line 与 --glass-shadow-lg 承担 */
+  --ovl: var(--overlay-bg);
   --glass-bg: var(--overlay-bg);
   --glass-bg-strong: var(--overlay-bg);
-  /* 选中 / 悬浮:比画布深一档的实色(白卡片上"再抬"已无空间,只能靠色深区分) */
-  --card-hover: color-mix(in srgb, var(--text) 10%, var(--overlay-bg));
-  /* 按钮底:比白卡片深、比画布深,靠描边收口 */
-  --fill-1: color-mix(in srgb, var(--text) 4%, var(--overlay-bg));
-  --fill-1-lo: color-mix(in srgb, var(--text) 3%, var(--overlay-bg));
-  --fill-2: color-mix(in srgb, var(--text) 9%, var(--overlay-bg));
-  --fill-2-lo: color-mix(in srgb, var(--text) 7%, var(--overlay-bg));
-  /* 凹陷槽:方向仍是"往文字色压灰"(DESIGN_SYSTEM §2.1),不能沿用深色的"往 bg-deep 压"
-     —— 浅色下页面底离白只差 17 级,同样的比例混出来是 rgb(250),输入框在弹窗上几乎看不见 */
-  --glass-bg-inset: color-mix(in srgb, var(--text) 9%, var(--overlay-bg));
+  /* 选中 / 悬浮:Primer gray.1 一档(≈#eaeef2),弹窗内唯一"比白深"的静止面 */
+  --card-hover: color-mix(in srgb, var(--text) 9%, var(--overlay-bg));
+  /* 按钮底:比画布深一档即可,靠描边收口 —— 不再用大块灰把按钮压出来 */
+  --fill-1: color-mix(in srgb, var(--text) 3%, var(--overlay-bg));
+  --fill-1-lo: color-mix(in srgb, var(--text) 2%, var(--overlay-bg));
+  --fill-2: color-mix(in srgb, var(--text) 6%, var(--overlay-bg));
+  --fill-2-lo: color-mix(in srgb, var(--text) 5%, var(--overlay-bg));
+  /* 凹陷槽 = Primer bgColor-inset #f6f8fa 一档。这条**必须**在浅色里重定义:
+     深色块里它按 --bg-deep 混色,而浅色页面底本身接近纯白,混出来是 rgb(252),
+     输入框在白画布上等于消失(方向也反了)。 */
+  --glass-bg-inset: color-mix(in srgb, var(--text) 4%, var(--overlay-bg));
   --surface-inset: var(--glass-bg-inset);
-  --code-bg: color-mix(in srgb, var(--text) 9%, var(--overlay-bg));
+  --code-bg: color-mix(in srgb, var(--text) 4%, var(--overlay-bg));
   --bg-code: var(--code-bg);
-  --code-bg-soft: color-mix(in srgb, var(--text) 6%, var(--overlay-bg));
+  --code-bg-soft: color-mix(in srgb, var(--text) 3%, var(--overlay-bg));
   /* 原生 select 弹出层:系统弹层里半透明会串色,保持不透明的更深一档 */
-  --code-bg-solid: color-mix(in srgb, var(--text) 12%, var(--overlay-bg));
-  --surface-2: color-mix(in srgb, var(--text) 6%, var(--overlay-bg));
-  --surface-3: color-mix(in srgb, var(--text) 9%, var(--overlay-bg));
+  --code-bg-solid: color-mix(in srgb, var(--text) 7%, var(--overlay-bg));
+  --surface-2: color-mix(in srgb, var(--text) 4%, var(--overlay-bg));
+  --surface-3: color-mix(in srgb, var(--text) 7%, var(--overlay-bg));
 }
 @keyframes modal-in {
   from { opacity: 0; transform: scale(.98) translateY(8px); }

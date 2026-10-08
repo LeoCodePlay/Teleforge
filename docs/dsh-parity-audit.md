@@ -567,6 +567,11 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
   "父会话不在线也能收到"),载不回来就与 dsh 的"父代理不在现场直接 return"一样丢掉。
   实时用 `steer_message` 事件把通知行插进本轮;刷新后由 `projectEvents` 的 `inline` 标记投影出同一形态
   (轮内通知行:折叠行带 `source.summary` 一行账,不说"触发本轮")。
+- **子会话的运行态进"会话快照"**(`busySessions`):前端父会话的运行态一直是靠服务端 status 快照
+  (`busySessions`)算的,但子代理的运行态以前只走带 sid 的实时事件 —— 于是**切走再切回子会话**时那
+  个视图是新挂载的,既没有「运行中」状态行、也没有可以按的暂停按钮,内容却在默默往外流。现在
+  `emitStatus()` 的 `busySessions` = `agent.busyIds() + subagent-runtime.runningChildIds()`,
+  子会话面板(主对话区 + 右侧栏)的 `busy` 都从这份快照里取自己那个 `sa_…`,与父会话同一口径。
 - **活跃时长口径 = dsh 的 `subagentTiming` 投影**(`packages/subagent/subagent/src/projection.ts`,规格见
   `tests/timing-projection.spec.ts`):只累计**已收尾回合**的耗时(`settledMs`)+ 当前开着的那一轮
   (`active.since`),闲置时间不计;`lastTurnCompleted` 记录最近收尾的轮是否正常完成 —— 前端据此把行显示成

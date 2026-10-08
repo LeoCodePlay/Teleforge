@@ -259,23 +259,53 @@ try {
   check('面包屑里子智能体标题只出现一次',
     (headerText.match(/看工作区目录/g) || []).length === 1, headerText.replace(/\n/g, ' | '));
 
-  // ---- 续聊 + 暂停:默认派发的子代理是常驻的(可继续/可暂停)----
+  // ---- 续聊 + 切走切回 + 暂停:默认派发的子代理是常驻的(可继续/可暂停)----
   // 用的是父会话同一个输入卡与同一个「停止」按钮:.send-btn.stop → stop_agent{ sid } → 子代理暂停
-  console.log('\n[子会话续聊 + 暂停]');
+  // 运行态必须来自服务端快照(busySessions 里带子代理):**切走再切回**时,运行中的状态行与暂停
+  // 按钮都得还在 —— 否则会像用户报的那样"没有运行中的状态、也没法暂停,内容却在默默往外流"。
+  console.log('\n[子会话续聊 + 切走切回 + 暂停]');
   {
-    const watchStop = (async () => {
-      for (let i = 0; i < 150; i++) {
-        if ((await view.locator('.send-btn.stop').count()) > 0) return true;
-        await page.waitForTimeout(40);
-      }
-      return false;
-    })();
-    await composerInput.fill('再补一句证据');
-    await composerInput.press('Enter');
-    const stopSeen = await watchStop;
-    check('子代理跑起来时出现父会话同款「停止」按钮(= 暂停当前这一轮)', stopSeen, '');
-    await view.getByText('再补一句证据').first().waitFor({ timeout: 15000 });
-    check('子会话里能看到人类发出的后续消息(subagent_prompt 链路通)', true);
+    // 把 mock 模型卡在闸门上,让这一轮稳定停在"运行中",才能可靠地做切走/切回。
+    // 注意要改**原型**:子代理用的是它自己那份 LlmClient 实例,改 agent.llm.chat 拦不住它。
+    const { agent } = await import('../server/agent/agent.ts');
+    const proto = Object.getPrototypeOf(agent.llm);
+    const realChat = proto.chat;
+    let release = () => {};
+    const gate = new Promise((r) => { release = r; });
+    proto.chat = async function (o) { await gate; return realChat.call(this, o); };
+    try {
+      await composerInput.fill('再补一句证据');
+      await composerInput.press('Enter');
+      await view.locator('.send-btn.stop').first().waitFor({ timeout: 15000 });
+      check('子代理跑起来时出现父会话同款「停止」按钮(= 暂停当前这一轮)', true, '');
+      await view.getByText('再补一句证据').first().waitFor({ timeout: 15000 });
+      check('子会话里能看到人类发出的后续消息(subagent_prompt 链路通)', true);
+
+      // 切到父会话再切回来(用户报的场景)
+      await page.locator('[data-session-crumb]').first().click();
+      await page.waitForTimeout(400);
+      check('切走:子会话视图关闭、回到主会话', (await page.locator('.subagent-pane').count()) === 0);
+      await page.locator('[data-subagent-catalog="count"]').first().click();
+      await page.locator('[data-subagent-menu]').first().waitFor({ timeout: 8000 });
+      await page.locator('[data-subagent-row]').first().click();
+      await page.locator('.subagent-pane').first().waitFor({ timeout: 10000 });
+      await page.waitForTimeout(300);
+      check('切回子会话:运行中的状态行回来了(不是静默输出)',
+        (await page.locator('.subagent-pane .running-row').count()) > 0);
+      check('切回子会话:暂停按钮还在(随时可以打断)',
+        (await page.locator('.subagent-pane .send-btn.stop').count()) > 0);
+      // 末条回复还在流式:它不该提前长出收尾产物(分支/复制那一排)
+      const lastAssistantHasBranch = await page.evaluate(() => {
+        const msgs = [...document.querySelectorAll('.subagent-pane .msg.assistant')];
+        const last = msgs[msgs.length - 1];
+        return last ? !!last.querySelector('[aria-label="在新对话中分支"]') : null;
+      });
+      check('切回子会话:末条回复仍按流式渲染(收尾产物没提前冒出来)',
+        lastAssistantHasBranch === false, String(lastAssistantHasBranch));
+    } finally {
+      release();
+      proto.chat = realChat;
+    }
     // 跑完后回到空闲(按钮从「停止」变回「发送」),而不是终局
     await page.waitForFunction(
       () => { const el = document.querySelector('.subagent-pane .composer-box .send-btn'); return !!el && !el.classList.contains('stop'); },

@@ -603,6 +603,9 @@ async function main() {
     check('(前置)跑起来时状态 running 且有"开着的那一轮"(前端据此走计时器)',
       await waitFor(() => saStore.get(runId)?.status === 'running' && saStore.get(runId)?.activeSince != null),
       JSON.stringify({ status: saStore.get(runId)?.status, activeSince: saStore.get(runId)?.activeSince }));
+    // 前端 status 快照的来源:运行中的子代理要能被重新算出来(切走再切回子会话时靠它补回运行态)
+    check('运行中的子代理出现在 runningChildIds() 里(前端 status 快照用它补回运行态)',
+      rt.runningChildIds().includes(runId), JSON.stringify(rt.runningChildIds()));
     check('还在跑时 settledMs 仍是 0(只有收尾的回合才计入)',
       Number(saStore.get(runId)?.settledMs || 0) === 0, String(saStore.get(runId)?.settledMs));
 
@@ -616,6 +619,8 @@ async function main() {
       JSON.stringify({ settledMs: rec?.settledMs }));
     check('跑完就没有"开着的那一轮"了(activeSince = null → 前端计时器停下)',
       rec?.activeSince == null, JSON.stringify({ activeSince: rec?.activeSince }));
+    check('跑完的子代理不再出现在 runningChildIds() 里',
+      !rt.runningChildIds().includes(runId), JSON.stringify(rt.runningChildIds()));
     check('最近一轮正常完成(lastTurnCompleted = true → 行显示「已完成」)',
       rec?.lastTurnCompleted === true, JSON.stringify({ lastTurnCompleted: rec?.lastTurnCompleted }));
 
