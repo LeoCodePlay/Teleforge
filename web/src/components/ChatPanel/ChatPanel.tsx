@@ -123,6 +123,19 @@ function formatMsgTime(ts?: number) {
 function runDurationText(ms: number): string {
   return formatRunDuration(ms).map((p) => p.text).join('');
 }
+/** 本轮运行的起点(ms):视图末尾挂着流式回复,说明本轮已上屏,取本轮那条真实 user 消息的
+ *  时间(start 事件写入的发送时刻);视图里还没有本轮内容(刚点发送、消息尚未渲染)时返回 0,
+ *  由调用方用"现在"起算 —— 绝不拿上一轮的旧时间戳兜底,那会让时长一开始就是几十秒。 */
+function liveTurnStartMs(msgs: ChatMessage[], now: number): number {
+  const tail = msgs[msgs.length - 1];
+  if (!tail || tail.role !== 'assistant' || !tail.streaming) return 0;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (!isRealUserRow(msgs[i])) continue;
+    const t = msgs[i].time;
+    return typeof t === 'number' && t > 0 && t <= now && now - t < 24 * 3600_000 ? t : 0;
+  }
+  return 0;
+}
 const IconCopy = () => (
   <svg width={15} height={15} viewBox="0 0 16 16" fill="none" aria-hidden="true">
     <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
@@ -719,6 +732,10 @@ function railPreview(parts: string[], limit: number): string {
 
 export default function ChatPanel({ connected, workspace, localWorkspace, remoteCwd, localCwd, busy, sessionSeq = 0, sid = null, home = null, savedWs = [], localHome = null, savedLocalWs = [], noWorkspace = false, localNoWorkspace = false, remoteLocked = false, localLocked = false, onWorkspaceSet, onLocalWorkspaceSet, onDeleteWs, onDeleteLocalWs, onFork, onSessionCreated, draftSid, onSessionTouched, onOpenFile, onOpenLocalFile, onOpenFileAside, onOpenLocalFileAside, onOpenChanges, onOpenSubagent, compact = false, childMode = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // 渲染期同步最新消息:运行状态行的时长计时器要读历史里最新一条消息的时间
+  // (切回一个本视图没跑过的运行中会话时,本地没有本轮打戳,只能靠它兜底起点)
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = messages;
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
   // 输入草稿:切换会话时保存当前输入、恢复目标会话输入(见 [sessionSeq, sid] effect);
@@ -1854,24 +1871,46 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     return acc;
   }, []);
 
+  // 距底部多少像素内仍视为"在底部":容掉惯性滚动的残余位移与亚像素取整,
+  // 避免流式增长时因 1px 误差误判为"用户上滑"而暂停吸附
+  const STICK_EPS = 48;
+
   // 计算当前激活点:视口 40% 参考线之下的最后一条用户消息。
   // rAF 节流 + 文档序单调早停:滚动帧里不再对全部用户消息逐条 getBoundingClientRect
   // (强制整文档布局),首个越过参考线的点之后位置只会更靠下,直接终止遍历;
   // 加上 .msg 的 content-visibility,长会话滑动时每帧的开销稳定在常量级。
+  // 末尾兜底:最新一轮的提问只要已经进入视口(刚发出消息瞬时触底时,新提问往往贴在
+  // 视口下缘、落在 40% 参考线之下),激活状态就直接归到最后一轮——参考线只回答
+  // "读到哪了",不应该让"底部明明显示着最新提问、导轨却还亮着上一轮"出现。
   const dotRafRef = useRef(0);
+  // 每次渲染同步一份最新索引:被合并掉的那些帧之后消息可能又长了(发出提问后紧接着
+  // 就是助手回包/流式追加),rAF 回调若读渲染闭包里的旧索引,就会漏掉刚出现的最新一轮
+  // 用户消息,导轨于是停在上一轮。
+  const userMsgIndicesRef = useRef<number[]>([]);
+  userMsgIndicesRef.current = userMsgIndices;
   const updateActiveDot = () => {
     if (dotRafRef.current) return; // 上一帧的度量还没跑完,合并本次需求
     dotRafRef.current = requestAnimationFrame(() => {
       dotRafRef.current = 0;
       const el = scrollRef.current;
       if (!el) return;
-      const line = el.getBoundingClientRect().top + el.clientHeight * 0.4;
+      const list = userMsgIndicesRef.current; // 取测量当帧的最新一轮信息,不用可能的旧闭包
+      const box = el.getBoundingClientRect();
+      const line = box.top + el.clientHeight * 0.4;
       let cur = -1;
-      for (const i of userMsgIndices) {
+      for (const i of list) {
         const node = userMsgRefs.current[i];
         if (!node) continue;
         if (node.getBoundingClientRect().top > line) break; // 文档序单调:之后都更靠下
         cur = i;
+      }
+      // 最后一条用户消息可见(顶边越过视口下缘)或视图本就贴着底部时,一律激活最后一轮:
+      // 这两种情况下用户看到的就是最新一轮,再停在上一轮属于误判。
+      const last = list[list.length - 1];
+      if (last !== undefined && last > cur) {
+        const lastNode = userMsgRefs.current[last];
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_EPS;
+        if (lastNode && (atBottom || lastNode.getBoundingClientRect().top < box.bottom)) cur = last;
       }
       setActiveDot(cur);
     });
@@ -1964,10 +2003,6 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       response: latest === '' ? '' : railPreview([railPreviewText(latest)], RAIL_RESPONSE_LIMIT),
     };
   }, [previewDot, messages, userMsgIndices.length]);
-
-  // 距底部多少像素内仍视为"在底部":容掉惯性滚动的残余位移与亚像素取整,
-  // 避免流式增长时因 1px 误差误判为"用户上滑"而暂停吸附
-  const STICK_EPS = 48;
 
   // 瞬时触底并恢复吸附(发送消息/切换会话/点击回底按钮共用)。
   // 与既有滚底一致用瞬时定位:平滑滚动目标是调用瞬间的底部,流式追加会让目标
@@ -2715,6 +2750,25 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
 
   // 发送后等待回答 / agent 工作期间都应允许暂停:busy(服务端 status) 与 agentState 任一命中即视为工作中
   const working = busy || agentState === 'working';
+  // 运行状态行的已运行时长:working 期间每秒走一格(与 SessionHeader 的子代理时长同一做法)。
+  // 起点只认**本轮**:本轮内容已上屏时取本轮 user 消息的发送时刻(切回运行中会话也准),
+  // 本轮还没上屏(点击发送 → 服务端 status=running 先到,start/消息晚几帧到)则从现在起算,
+  // 严格从 0 开始 —— 上一轮的旧时间戳不参与,否则第二轮一出现就是几十秒。
+  const [runningSec, setRunningSec] = useState(0);
+  useEffect(() => {
+    if (!working) { setRunningSec(0); return; }
+    let start = liveTurnStartMs(messagesRef.current, Date.now()) || Date.now();
+    const tick = () => {
+      const now = Date.now();
+      // 消息随后上屏:拿到本轮真实起点后只往回认一次(时长不倒退后再跳来跳去)
+      const real = liveTurnStartMs(messagesRef.current, now);
+      if (real && real < start) start = real;
+      setRunningSec(Math.max(0, Math.floor((now - start) / 1000)));
+    };
+    tick(); // 立刻先出一格:首秒就有数字,不会先空一拍
+    const timer = setInterval(tick, 1000);
+    return () => { clearInterval(timer); };
+  }, [working, sid]);
   // 一次性子智能体(显式 run_in_background:false):历史留在记录里,但不能再发消息 ——
   // 输入卡换成只读说明(dsh 的 SubagentReadOnlyComposer 接管规则)。可继续的照常给输入卡。
   const childOneShot = childMode && childInfo?.mode === 'one-shot';
@@ -2936,7 +2990,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {/* 运行中指示行:agent 工作期间挂在消息列表末尾(StateDot ongoing 像素追光)。
               长耗时步骤(如大文件写入/命令执行)没有文本增量流出,此行让"仍在运行"
               可见,避免误以为卡死;提问挂起时 agent 在等用户作答,不算运行中。
-              生图在途时复用同一行改文案(不再在气泡内另起一行),成图返回后自动变回原文案。 */}
+              生图在途时复用同一行改文案(不再在气泡内另起一行),成图返回后自动变回原文案。
+              「Agent 正在运行」后面跟已运行时长(中文,每秒递增一格,与「本轮用时」同一格式化器)。 */}
           {working && !askPending && !askChecking && (
             <div className={`running-row${rowImgJob ? ' image-waiting' : ''}`} role="status" aria-live="polite">
               <StateDot state="ongoing" size={12} />
@@ -2945,7 +3000,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   ? rowImgJob.mode === 'i2i'
                     ? `正在生成图片(图生图${rowImgJob.refs > 1 ? ` · 参考 ${rowImgJob.refs} 张` : ''})…`
                     : '正在生成图片…'
-                  : 'Agent 正在运行…'}
+                  : `Agent 正在运行 ${runDurationText(runningSec * 1000)}…`}
               </span>
               {rowImgJob && <span className="running-hint">生图为同步等待,通常需 30 秒至数分钟</span>}
             </div>
