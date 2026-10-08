@@ -269,7 +269,7 @@ export function TextPreview({
             <Menu
               open={menuOpen}
               anchor={(
-                <button type="button" className={clsx(css.tool, css.viewerTool)} aria-label={t('openWith')} title={selected.title()} data-document-viewer-menu onClick={() => { setMenuOpen(value => !value) }}>
+                <button type="button" className={clsx(css.tool, css.viewerTool)} aria-label={t('openWith')} data-tip={selected.title()} data-document-viewer-menu onClick={() => { setMenuOpen(value => !value) }}>
                   {selected.title()}
                 </button>
               )}

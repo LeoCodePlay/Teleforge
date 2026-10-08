@@ -126,7 +126,7 @@ function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete, onResetKey }
                 {bad
                   ? (
                     <>
-                      <span className="badge warn" title={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
+                      <span className="badge warn" data-tip={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
                         {st?.invalid ? '失效' : '无余额'}
                       </span>
                       <button className="sm" onClick={() => onResetKey(k)}>重置</button>
@@ -343,13 +343,13 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                       placeholder={i === 0 ? 'sk-…(主 Key)' : 'sk-…(备用 Key)'}
                       onChange={(e) => setApiKeys((cur) => cur.map((v, j) => (j === i ? e.target.value : v)))} />
                     {bad && (
-                      <span className="badge warn" title={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
+                      <span className="badge warn" data-tip={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
                         {st?.invalid ? '失效' : '无余额'}
                       </span>
                     )}
                     {/* 显隐切换:点眼睛在明文/遮罩之间切换(仅影响显示,不改动值) */}
                     <button type="button" className="key-reveal action-icon"
-                      title={shown ? '隐藏' : '显示明文'}
+                      data-tip={shown ? '隐藏' : '显示明文'}
                       aria-label={shown ? '隐藏 Key' : '显示 Key 明文'}
                       aria-pressed={shown}
                       onClick={() => setRevealed((cur) => {
@@ -362,7 +362,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                     {/* 单 Key 行不给删除:删空后无从恢复「主 Key」输入位,由上方「＋ 添加 Key」重新加行 */}
                     {apiKeys.length > 1 && (
                       <button type="button" className="key-del action-icon danger"
-                        title="删除该 Key" aria-label="删除该 Key"
+                        data-tip="删除该 Key" aria-label="删除该 Key"
                         onClick={() => setApiKeys((cur) => cur.filter((_, j) => j !== i))}>
                         <IconTrashOutline14 size={14} />
                       </button>

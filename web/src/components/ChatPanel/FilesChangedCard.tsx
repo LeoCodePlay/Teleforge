@@ -93,7 +93,7 @@ export const FilesChangedCard = memo(function FilesChangedCard({ items, workspac
               <li
                 key={`${it.local ? 'local' : 'remote'}:${it.path}`}
                 className={`fcc-item${canOpen ? ' openable' : ''}${it.kind === 'delete' ? ' deleted' : ''}${canAside ? ' has-aside' : ''}${canCompare ? ' has-compare' : ''}`}
-                title={canOpen ? `点击打开 ${it.path}` : it.kind === 'delete' ? `${it.path}(已删除)` : it.path}
+                data-tip={canOpen ? `点击打开 ${it.path}` : it.kind === 'delete' ? `${it.path}(已删除)` : it.path}
               >
                 {canOpen ? (
                   <button type="button" className="fcc-row" onClick={() => { if (handler) handler(it.path); }}>
@@ -104,13 +104,13 @@ export const FilesChangedCard = memo(function FilesChangedCard({ items, workspac
                 )}
                 {canCompare && (
                   <button type="button" className="fcc-aside fcc-compare" data-open-diff={it.path}
-                    title={`查看 ${it.path} 的改动对比`}
+                    data-tip={`查看 ${it.path} 的改动对比`}
                     aria-label={`查看 ${it.path} 的改动对比`}
                     onClick={() => { if (onOpenChanges) onOpenChanges(it.path); }}>对比</button>
                 )}
                 {canAside && (
                   <button type="button" className="fcc-aside" data-open-aside={it.path}
-                    title={`在右侧栏打开 ${it.path}(对照阅读)`}
+                    data-tip={`在右侧栏打开 ${it.path}(对照阅读)`}
                     aria-label={`在右侧栏打开 ${it.path}`}
                     onClick={() => { if (asideHandler) asideHandler(it.path); }}>侧栏</button>
                 )}

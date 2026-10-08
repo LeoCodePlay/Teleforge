@@ -619,7 +619,7 @@ export default function BrowserPanel({
         {page.loading && <span className="bp-progress" aria-hidden="true" />}
       </div>
 
-      {note && <div className="bp-note" title={note}>{note}</div>}
+      {note && <div className="bp-note" data-tip={note}>{note}</div>}
 
       <div
         className="bp-stage"
@@ -735,7 +735,7 @@ export default function BrowserPanel({
 
       <div className="bp-status">
         <span className={`bp-dot ${statusKind}`} aria-hidden="true" />
-        <span className={`bp-status-text${page.error ? ' err' : ''}`} title={page.error || statusText}>{statusText}</span>
+        <span className={`bp-status-text${page.error ? ' err' : ''}`} data-tip={page.error || statusText}>{statusText}</span>
         {/* 左下角:这个预览浏览器连的是哪个会话 —— 一个预览只服务一个对话,归属一眼可见。
             必须排在 .bp-spacer 之前:spacer 是 flex:1,排在它后面会被推到状态栏最右侧。 */}
         <span className={`bp-owner${locked ? ' locked' : ''}`} data-tip={ownerHint}>
@@ -748,8 +748,8 @@ export default function BrowserPanel({
           )}
         </span>
         <span className="bp-spacer" />
-        {page.title && <span className="bp-title" title={page.title}>{page.title}</span>}
-        <span className="bp-ai" title="本会话的 AI 可以操控这个页面(打开/点击/输入/截图)">AI 可操控</span>
+        {page.title && <span className="bp-title" data-tip={page.title}>{page.title}</span>}
+        <span className="bp-ai" data-tip="本会话的 AI 可以操控这个页面(打开/点击/输入/截图)">AI 可操控</span>
       </div>
     </div>
   );

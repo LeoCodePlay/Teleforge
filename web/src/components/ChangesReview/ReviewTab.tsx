@@ -117,7 +117,7 @@ export default function ReviewTab({ sid, path, turn, active = true, onOpenWholeF
       <div className="cr-head">
         <div className="cr-selector" ref={pickRef}>
           <button type="button" className="cr-selector-btn" aria-haspopup="listbox" aria-expanded={pickOpen}
-            title={cur?.path || path}
+            data-tip={cur?.path || path}
             onClick={() => setPickOpen((v) => !v)}>
             <span className="cr-selector-label">{display}</span>
             {cur && <span className="cr-counts">
@@ -148,26 +148,26 @@ export default function ReviewTab({ sid, path, turn, active = true, onOpenWholeF
         </div>
         <div className="cr-tools">
           <button type="button" className="cr-tool" aria-pressed={view === 'split'}
-            title={view === 'split' ? '改为统一视图' : '改为并排对比'}
+            data-tip={view === 'split' ? '改为统一视图' : '改为并排对比'}
             aria-label={view === 'split' ? '改为统一视图' : '改为并排对比'}
             onClick={() => setViewPersist(view === 'split' ? 'unified' : 'split')}>
             <IconCompare size={15} />
           </button>
           <button type="button" className="cr-tool" aria-pressed={wrap}
-            title={wrap ? '取消自动换行' : '自动换行'}
+            data-tip={wrap ? '取消自动换行' : '自动换行'}
             aria-label={wrap ? '取消自动换行' : '自动换行'}
             onClick={() => setWrapPersist(!wrap)}>
             <IconWrap size={15} />
           </button>
           {onOpenWholeFile && (
             <button type="button" className="cr-tool" data-open-whole
-              title="在文件查看器里打开整个文件" aria-label="在文件查看器里打开整个文件"
+              data-tip="在文件查看器里打开整个文件" aria-label="在文件查看器里打开整个文件"
               onClick={() => onOpenWholeFile(cur?.path || path, local)}>
               <IconExternal size={15} />
             </button>
           )}
           {onClose && (
-            <button type="button" className="cr-tool" title="关闭对比" aria-label="关闭对比" onClick={onClose}>
+            <button type="button" className="cr-tool" data-tip="关闭对比" aria-label="关闭对比" onClick={onClose}>
               <span aria-hidden>✕</span>
             </button>
           )}

@@ -37,7 +37,7 @@ export function PresentedFileCard({ file, cwd, phase, host, onPreview, actions, 
       : reveal === 'directory' && phase === 'revealing' ? 'presented.directoryOpening'
         : reveal === 'directory' && phase === 'revealError' ? 'presented.directoryError' : `presented.${phase}`)
   return <div className={css.file} data-presented-file>
-    <button type="button" className={css.cardPreview} title={resolveWorkspacePath(cwd, file.path)}
+    <button type="button" className={css.cardPreview} data-tip={resolveWorkspacePath(cwd, file.path)}
       aria-label={t('presented.previewCard', { name: file.path })} onClick={onPreview} />
     <span className={css.fileIcon}><FileTypeIcon path={file.path} size={20} /></span>
     <div className={css.fileBody}>

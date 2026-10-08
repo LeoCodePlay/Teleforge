@@ -183,7 +183,7 @@ function MessageActions({ text, onBranch, elapsedMs, usage }: {
       {(usage || dur) && (
         <span className="msg-actions-stats" data-turn-tail-stats>
           {usage && <TurnUsagePill usage={usage} />}
-          {dur && <span className="msg-actions-time" title="本轮用时">{dur}</span>}
+          {dur && <span className="msg-actions-time" data-tip="本轮用时">{dur}</span>}
         </span>
       )}
     </div>
@@ -387,7 +387,7 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
           // 目标自动续跑轮:气泡渲染成「🎯 目标第 N 轮」而不是一段像用户说的话
           ...(t.goalRound ? { goalRound: t.goalRound } : {}),
           // 非人类消息的来源归属(通知行据此渲染:标题/时间/展开正文,而不是用户气泡)
-          ...(t.source ? { source: t.source } : {}),
+          ...(t.source ? { source: t.source, ...(t.inline ? { inline: true } : {}) } : {}),
           ...(t.compaction ? { compaction: t.compaction } : {})
         });
         turnToOut[ti] = idx;
@@ -543,7 +543,7 @@ function MentionText({ text }: { text: string }) {
   return (
     <>
       {splitMentions(text).map((s, i) => s.t === 'mention'
-        ? <span className="bubble-mention" key={i} title={s.path}>{s.v}</span>
+        ? <span className="bubble-mention" key={i} data-tip={s.path}>{s.v}</span>
         : <React.Fragment key={i}>{s.v}</React.Fragment>)}
     </>
   );
@@ -1202,8 +1202,20 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 只作用于当前正在查看的会话,其他会话的目标在切回时经 get_history 回填
             if (!m.sid || m.sid === activeRef.current) setGoal((m.goal ?? null) as GoalInfo | null);
             break;
-          case 'iteration':
-            // 每次迭代对应一条 assistant/message turn;truncate 重开会重复相同 iter,去重
+          case 'steer_message':
+            // 运行中送达的非人类通知(子代理结算等,见 dsh 的 notifySettlement → steer):
+            // 它属于**正在跑的这一轮**,不是排队等下一轮的用户输入。此刻把通知行插进本轮,
+            // 并另起一条 assistant 行承接后续步骤 —— 与刷新后服务端投影出的行序完全一致
+            // (projectEvents 给这条日志行打 inline 标记,前端同样按"轮内通知行"渲染)。
+            if (!m.sid || m.sid === activeRef.current) {
+              forkTurnRef.current += 1; // 它在日志里是一条 user/message,分支点计数与刷新口径对齐
+              push((msgs) => [...msgs,
+                { role: 'user', content: m.text, source: m.source, inline: true, time: m.time || Date.now(), forkTail: Math.max(0, forkTurnRef.current - 1) },
+                { role: 'assistant', segments: [], streaming: true, forkTail: Math.max(0, forkTurnRef.current - 1) }
+              ]);
+            }
+            break;
+          case 'iteration':            // 每次迭代对应一条 assistant/message turn;truncate 重开会重复相同 iter,去重
             if (m.iter !== lastIterRef.current) {
               forkTurnRef.current += 1; lastIterRef.current = m.iter;
               push((msgs) => {
@@ -2759,10 +2771,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 ? <div className="retry-msg-wrap"><RetryRow data={m.retry} /></div>
                 : <div className="bubble notice-bubble">⚠ {m.content}</div>)}
               {/* 非人类消息(source.form='notice':子代理结算 / 自动化任务 / 目标续跑……):
-                  渲染成 dsh 的「触发这一轮的通知」行 —— 图标 + 标题 + 时间,展开才看模型可见正文。
-                  它**不是**用户气泡:没有删除/回退,也不参与"这句话是用户说的"那套操作栏。 */}
+                  渲染成 dsh 的通知行 —— 图标 + 标题 + 时间,展开才看模型可见正文。
+                  它**不是**用户气泡:没有删除/回退,也不参与"这句话是用户说的"那套操作栏。
+                  `inline` = 运行中 steer 进来的(轮内送达):折叠行带一行账,不说"触发本轮"。 */}
               {m.role === 'user' && !m.compaction && m.source?.form === 'notice' && (
-                <TurnTriggerRow source={m.source} content={m.content} time={m.time} />
+                <TurnTriggerRow source={m.source} content={m.content} time={m.time} inline={!!m.inline} />
               )}
               {m.role === 'user' && !m.compaction && m.source?.form !== 'notice' && (
                 <>
@@ -3189,9 +3202,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             {/* 工作中且输入框为空(且无附件):显示停止按钮;有内容/附件时变为发送按钮,
                 发送后默认进入待执行队列等待执行 */}
             {working && !askPending && !input.trim() && attachments.length === 0
-              ? <button className="send-btn stop" onClick={stop} title="停止当前任务">⏹</button>
+              ? <button className="send-btn stop" onClick={stop} data-tip="停止当前任务" aria-label="停止当前任务">⏹</button>
               : <button className="send-btn"
-                  title={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
+                  data-tip={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
+                  aria-label={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
                   disabled={!canSend || (!input.trim() && attachments.length === 0)} onClick={send}>➤</button>}
           </div>
         </div>
@@ -3313,7 +3327,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               value={llm.model === '__custom__' ? llm.customModel : llm.model}
               onChange={(e) => { if (llm.model === '__custom__') llm.setCustomModel(e.target.value); else llm.setModel(e.target.value); }}
               placeholder="自定义模型名"
-              title="输入模型名" />
+              data-tip="输入模型名" />
           )}
           </>)}
         </div>

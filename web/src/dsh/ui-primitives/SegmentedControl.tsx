@@ -126,7 +126,7 @@ export function SegmentedControl<Value extends string>({
             aria-controls={`${id}-${option.value}-panel`}
             tabIndex={active ? 0 : -1}
             disabled={disabled || option.disabled === true}
-            title={option.title}
+            data-tip={option.title}
             className={css.tab}
             onClick={() => { if (!active) onChange(option.value) }}
             onKeyDown={onKeyDown}

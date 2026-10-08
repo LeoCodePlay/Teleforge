@@ -406,6 +406,103 @@ async function main() {
     await waitFor(() => saStore.get(rid)?.status === 'idle');
   }
 
+  // ---- 9. 父会话**运行中**收到结算通知:直接 steer 进正在跑的那一轮(dsh 的 notifySettlement)----
+  //
+  // dsh 的投递目标是选出来的:parent.status === 'idle' ? 'queue' : 'steer'。
+  // 运行中的父会话收到通知**不该**进"待执行队列"等人点「立即执行」(那会把它变成一条用户消息),
+  // 而是交给正在跑的那一轮的下一个 step 边界认领(dsh 的 inbox next-step)。
+  {
+    const { projectEvents } = await import('../server/agent/agent.ts');
+    const emitted = [];
+    const a = new Agent({ emit: (ev, p) => emitted.push(p) });
+    a.setPermissionMode('full-access');
+    a.configureLlm({ baseUrl: 'http://x', apiKey: 'k', model: 'fake' });
+    const sid = a.createSession('运行中收通知').id;
+    let release = () => {};
+    const gate = new Promise((r) => { release = r; });
+    let calls = 0;
+    const seenMsgs = [];
+    a.llm = {
+      isMock: false,
+      async chat({ messages, signal }) {
+        calls += 1; seenMsgs.push(messages);
+        if (calls === 1) {
+          // 卡住第一步的模型请求(此刻父会话正在跑)
+          await waitGate(gate, signal);
+          // 第一步就发起一个工具调用 → 这一轮还有第二步(通知会在那一步边界被认领)
+          return { content: '', toolCalls: [{ id: 'c1', name: 'list_local_dir', arguments: JSON.stringify({ path: root }) }] };
+        }
+        return { content: '收到子代理的通知,接着处理。', toolCalls: [] };
+      }
+    };
+    a.submit(sid, '干个长活'); // 不 await:这一轮会卡在 gate 上
+    await waitFor(() => calls >= 1, 4000);
+    check('(前置)父会话此刻正在跑', a._runtimes.get(sid).busy === true, String(a._runtimes.get(sid).busy));
+
+    const summary = '后台子代理 sa_busy 已完成;除非你再给它发消息,它不会再做任何事。';
+    const src = { kind: 'subagent-settled', form: 'notice', summary, senderSessionId: 'sa_busy' };
+    // 走**真实投递通路**(子代理收尾 → parentNotifier → agent 的投递目标选择)
+    const { parentNotifier } = await import('../server/agent/subagent-runtime.ts');
+    parentNotifier(a, sid)(`${summary}\n\n它的收尾消息:\n结论:目录可读`, src);
+    check('运行中投递通知被受理(交给正在跑的这一轮,而不是丢弃)',
+      a._runtimes.get(sid).steer.length === 1, JSON.stringify(a._runtimes.get(sid).steer.map((s) => s.text)));
+    check('运行中收到的通知**不进"待执行队列"**(dsh 用 steer,不需要人点「立即执行」)',
+      a.queueSnapshot(sid).length === 0, JSON.stringify(a.queueSnapshot(sid)));
+    check('实时推了一条 steer_message(前端据此把通知行插进本轮,不必刷新)',
+      emitted.some((p) => p.event === 'steer_message' && p.sid === sid
+        && p.source?.form === 'notice' && String(p.text).includes('它的收尾消息')),
+      JSON.stringify(emitted.filter((p) => p.event === 'steer_message').map((p) => p.sid)));
+
+    release();
+    await waitFor(() => calls >= 2, 8000);
+    const evs = a._runtimes.get(sid).session.events;
+    const noticeEv = evs.find((e) => e.type === 'user/message' && e.data?.source?.kind === 'subagent-settled');
+    check('通知作为一条 user/message 落进日志(刷新/切回后仍在原位)',
+      !!noticeEv && noticeEv.data.source.form === 'notice' && noticeEv.data.source.senderSessionId === 'sa_busy',
+      JSON.stringify(noticeEv?.data?.source));
+    check('它落在**同一轮**里(steer 被正在跑的那一轮的下一个 step 认领,不为它新开一轮)',
+      evs.filter((e) => e.type === 'turn/start').length === 1,
+      String(evs.filter((e) => e.type === 'turn/start').length));
+    const pRow = projectEvents(evs).find((r) => r.role === 'user' && r.source?.form === 'notice');
+    check('投影把它标成轮内通知(inline:前端渲染轮内通知行,不是用户气泡)',
+      !!pRow && pRow.inline === true, JSON.stringify(pRow && { inline: pRow.inline, source: pRow.source }));
+    check('下一步的模型请求里带着这条通知(被正在跑的这一轮认领,而不是等下一轮)',
+      seenMsgs.length >= 2 && JSON.stringify(seenMsgs[1]).includes('它的收尾消息'), '');
+
+    // 单步轮次里投递(模型这一步就收尾、没有下一个 step 边界):通知仍不进队列,
+    // 由下一步活动开头认领 —— dsh 的 inbox 在开新轮时同样会领取 next-step 里的消息
+    await waitFor(() => a._runtimes.get(sid).busy === false, 8000);
+    let release2 = () => {};
+    const gate2 = new Promise((r) => { release2 = r; });
+    const before = calls;
+    a.llm = {
+      isMock: false,
+      async chat({ messages, signal }) {
+        calls += 1; seenMsgs.push(messages);
+        if (calls === before + 1) { await waitGate(gate2, signal); return { content: '这轮就一句话收尾。', toolCalls: [] }; }
+        return { content: '第二段:通知我已经看了。', toolCalls: [] };
+      }
+    };
+    a.submit(sid, '再来个长活');
+    await waitFor(() => calls >= before + 1, 4000);
+    const summary2 = '后台子代理 sa_next 已完成;除非你再给它发消息,它不会再做任何事。';
+    a.deliverNotice(sid, `${summary2}\n\n它的收尾消息:\n结论:好了`, {
+      source: { kind: 'subagent-settled', form: 'notice', summary: summary2, senderSessionId: 'sa_next' }
+    });
+    check('单步轮次里投递同样不进队列', a.queueSnapshot(sid).length === 0, JSON.stringify(a.queueSnapshot(sid)));
+    release2();
+    await waitFor(() => calls >= before + 2, 8000);
+    const evs2 = a._runtimes.get(sid).session.events;
+    const proj2 = projectEvents(evs2);
+    const rows = proj2.filter((r) => r.role === 'user' && r.source?.kind === 'subagent-settled');
+    check('没有下一步可认领时,通知作为下一轮的开头被认领(仍是通知行,不是用户气泡)',
+      rows.length === 2 && !!rows[1] && rows[1].inline === undefined,
+      JSON.stringify(rows.map((r) => ({ inline: r.inline, kind: r.source?.kind }))));
+    check('这条通知同样带着 dsh 的 source(前端渲染成「触发本轮的通知」)',
+      rows[1]?.source?.form === 'notice' && rows[1]?.source?.senderSessionId === 'sa_next',
+      JSON.stringify(rows[1]?.source));
+  }
+
   rt.disposeAll();
   console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
   process.exit(fail > 0 ? 1 : 0);

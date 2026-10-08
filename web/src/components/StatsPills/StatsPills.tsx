@@ -98,7 +98,7 @@ function Pill({ id, icon, label, title, ariaLabel, children }: {
   return (
     <span ref={rootRef} className="stat-pill-anchor" data-stat={id}>
       <button type="button" className="stat-pill" aria-haspopup="dialog" aria-expanded={open}
-        aria-label={ariaLabel} title={ariaLabel} onClick={() => setOpen((v) => !v)}>
+        aria-label={ariaLabel} data-tip={ariaLabel} onClick={() => setOpen((v) => !v)}>
         <span className="stat-pill-icon" aria-hidden>{icon}</span>
         <span className="stat-pill-label">{label}</span>
       </button>

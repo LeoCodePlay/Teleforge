@@ -81,27 +81,27 @@ export default function GoalBar({ goal, onEdit, onPause, onResume, onClear, pend
               else if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
             }}
           />
-          <button type="button" className="goal-icon-btn" title="保存目标" disabled={pending || !draft.trim()}
+          <button type="button" className="goal-icon-btn" data-tip="保存目标" aria-label="保存目标" disabled={pending || !draft.trim()}
             onClick={submitEdit}>✓</button>
-          <button type="button" className="goal-icon-btn" title="取消编辑" disabled={pending}
+          <button type="button" className="goal-icon-btn" data-tip="取消编辑" aria-label="取消编辑" disabled={pending}
             onClick={() => setEditing(false)}>✕</button>
         </span>
       ) : (
         <>
-          <span className="goal-objective" title={title}>{goal.objective}</span>
-          <span className="goal-rounds" title={title}>{goal.roundsStarted}/{goal.maxGoalRounds} 轮</span>
+          <span className="goal-objective" data-tip={title}>{goal.objective}</span>
+          <span className="goal-rounds" data-tip={title}>{goal.roundsStarted}/{goal.maxGoalRounds} 轮</span>
           <span className="goal-actions">
             {goal.phase === 'active' && goal.activation === 'armed' && (
-              <button type="button" className="goal-icon-btn" title="暂停目标" disabled={pending}
+              <button type="button" className="goal-icon-btn" data-tip="暂停目标" aria-label="暂停目标" disabled={pending}
                 onClick={() => { void onPause(); }}>⏸</button>
             )}
             {showResume && (
-              <button type="button" className="goal-icon-btn" title="恢复目标" disabled={pending}
+              <button type="button" className="goal-icon-btn" data-tip="恢复目标" aria-label="恢复目标" disabled={pending}
                 onClick={() => { void onResume(); }}>▶</button>
             )}
-            <button type="button" className="goal-icon-btn" title="编辑目标" disabled={pending}
+            <button type="button" className="goal-icon-btn" data-tip="编辑目标" aria-label="编辑目标" disabled={pending}
               onClick={() => { setDraft(goal.objective); setEditing(true); }}>✎</button>
-            <button type="button" className="goal-icon-btn danger" title="清除目标" disabled={pending}
+            <button type="button" className="goal-icon-btn danger" data-tip="清除目标" aria-label="清除目标" disabled={pending}
               onClick={() => { void onClear(); }}>🗑</button>
           </span>
         </>

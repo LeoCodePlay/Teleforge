@@ -557,8 +557,16 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
   结果以一条 **dsh 形状的结算通知**进父会话(否则后台派发就没有回路):正文 = 一句话账 + 「它的收尾消息:」
   + 子代理最后的文字(dsh 的 `createSettlementMessage`),`source` 是对象
   `{kind:'subagent-settled', form:'notice', summary, senderSessionId}` —— 前端据此把它渲染成
-  **「触发这一轮的通知」行**(图标 + 标题「子任务状态更新」+ 时间,展开才是模型可见正文),
+  **通知行**(图标 + 标题「子任务状态更新」 + 时间,展开才是模型可见正文),
   **不是**用户气泡(见下一条:通知是运行时替子代理说的话,不能替它认领用户身份)。
+- **投递目标逐条对齐 dsh 的 `notifySettlement`**:父会话**空闲** → 排一轮(`followup`,唤醒它自己开一轮,
+  `Agent.deliverNotice` 内部走 `submit(auto)`),前端渲染成「触发本轮的通知」行;
+  父会话**正在跑** → `steer`(dsh 的 inbox `next-step`):交给正在跑的那一轮的**下一个 step 边界**认领,
+  不打断、不新开轮、**不进"待执行队列"** —— 通知本该自动送达,不能变成"等人点「立即执行」"的用户消息;
+  活动已中止(dsh 的 `wakingAfterAbort`)→ 退回排一轮;会话不在内存 → 先按记录载回来(我们的产品要求
+  "父会话不在线也能收到"),载不回来就与 dsh 的"父代理不在现场直接 return"一样丢掉。
+  实时用 `steer_message` 事件把通知行插进本轮;刷新后由 `projectEvents` 的 `inline` 标记投影出同一形态
+  (轮内通知行:折叠行带 `source.summary` 一行账,不说"触发本轮")。
 - 前端:**子会话直接用父会话的对话系统** —— 同一个 `ChatPanel`,只是 `sid` 换成了派发记录 id(`sa_…`)、
   打开 `childMode`。服务端按 sid 前缀把 `get_history` / `speak` / `stop_agent` / `queue_steer` /
   `queue_remove` 分流到子代理运行时(harness 的形态:子代理本来就是一个会话),所以子会话的回合折叠行、

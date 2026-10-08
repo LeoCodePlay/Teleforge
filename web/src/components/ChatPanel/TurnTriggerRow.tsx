@@ -52,31 +52,39 @@ function clockOf(ts?: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export function TurnTriggerRow({ source, content, time }: {
+export function TurnTriggerRow({ source, content, time, inline = false }: {
   source: MessageSource;
   /** 模型可见正文(展开后才显示) */
   content?: string;
   time?: number;
+  /** true = 这条通知是**轮内送达**的(运行中 steer 进来,见 dsh 的 context 节点形态):
+   *  折叠行带上 `summary` 一行账(DSH: "The one-line account also rides the collapsed row"),
+   *  且不再说"触发本轮"(本轮早就开始了,它不是触发者)。 */
+  inline?: boolean;
 }) {
   // 默认收起:dsh 同款(折叠行已经把"发生了什么"说清楚了,正文按需展开)
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   const title = triggerTitle(source.kind);
   const timeText = clockOf(time);
+  // 轮内形态的一行账:优先用 source.summary(dsh 的 boundContextSummary)
+  const summary = String(source.summary || '').trim();
   return (
     <section className="ttr" data-turn-trigger={source.kind}
       data-trigger-form={source.form || undefined}
+      data-trigger-inline={inline || undefined}
       data-trigger-sender={source.senderSessionId || undefined}>
       <button type="button" className="ttr-header" aria-expanded={open} aria-controls={bodyId}
         onClick={(e) => { e.currentTarget.focus(); setOpen((v) => !v); }}>
         <span className="ttr-icon" aria-hidden><IconAgentPreset size={14} /></span>
         <span className="ttr-title">{title}</span>
+        {inline && summary && <><span className="ttr-sep" aria-hidden /><span className="ttr-summary" data-trigger-summary>{summary}</span></>}
         {timeText && <time className="ttr-time" dateTime={new Date(time || 0).toISOString()}>{timeText}</time>}
         <span className="ttr-chevron" aria-hidden>{open ? <IconChevronUp size={12} /> : <IconChevronDown size={12} />}</span>
       </button>
       {open && (
         <div id={bodyId} className="ttr-body">
-          <p className="ttr-explanation">这条通知触发了本轮回复。</p>
+          {!inline && <p className="ttr-explanation">这条通知触发了本轮回复。</p>}
           <div className="ttr-content">{content || ''}</div>
         </div>
       )}

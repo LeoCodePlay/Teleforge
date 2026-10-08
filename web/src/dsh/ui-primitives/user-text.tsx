@@ -132,7 +132,7 @@ export function projectUserText(
           : undefined
     const className = clsx(css.refChip, referenceKind === undefined && css.slashChip)
     parts.push(open === undefined
-      ? <span key={tokenStart} className={className} data-ref-chip={referenceKind ?? slashKind} title={label}>
+      ? <span key={tokenStart} className={className} data-ref-chip={referenceKind ?? slashKind} data-tip={label}>
         {contents}
       </span>
       : <button
@@ -140,7 +140,7 @@ export function projectUserText(
         type="button"
         className={clsx(className, markdownCss.fileMention)}
         data-ref-chip={referenceKind ?? slashKind}
-        title={label}
+        data-tip={label}
         onClick={(event) => {
           if (event.detail > 1 || (event.detail !== 0 && event.currentTarget.ownerDocument.getSelection()?.isCollapsed === false)) return
           open()

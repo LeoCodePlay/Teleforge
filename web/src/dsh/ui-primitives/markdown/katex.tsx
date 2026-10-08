@@ -78,7 +78,7 @@ export function renderTexToReact(value: string, displayMode: boolean): ReactNode
         <span
           className="katex-error"
           style={{ color: 'var(--red)' }}
-          title={String(error)}
+          data-tip={String(error)}
         >
           {value}
         </span>

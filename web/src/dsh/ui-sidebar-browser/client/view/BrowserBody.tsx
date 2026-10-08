@@ -79,8 +79,8 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
   return (
     <div className={css.root}>
       <form className={css.toolbar} onSubmit={submit}>
-        <button type="button" className={css.tool} aria-label={t('back')} title={t('back')} disabled={!frame.canGoBack} onClick={() => { goBack(tab.id) }}><IconChevronLeftOutlineRegular /></button>
-        <button type="button" className={css.tool} aria-label={t('forward')} title={t('forward')} disabled={!frame.canGoForward} onClick={() => { goForward(tab.id) }}><IconChevronRightOutlineRegular /></button>
+        <button type="button" className={css.tool} aria-label={t('back')} data-tip={t('back')} disabled={!frame.canGoBack} onClick={() => { goBack(tab.id) }}><IconChevronLeftOutlineRegular /></button>
+        <button type="button" className={css.tool} aria-label={t('forward')} data-tip={t('forward')} disabled={!frame.canGoForward} onClick={() => { goForward(tab.id) }}><IconChevronRightOutlineRegular /></button>
         <Tooltip label={t('reload')} shortcutKeys={tab.refreshShortcut?.keys} side="bottom" delayMs={500}>
           <button type="button" className={css.tool} aria-label={t('reload')} aria-keyshortcuts={tab.refreshShortcut?.aria} disabled={target === undefined || mountEpoch === 0} onClick={() => { reload(tab.id) }}><IconRefreshOutlineRegular /></button>
         </Tooltip>
@@ -94,16 +94,16 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
             onChange={(event) => { setDraft(event.currentTarget.value) }}
           />
           {unknown && <span className={css.addressChanged}>{t('address.changed')}</span>}
-          <button type="submit" className={[css.tool, css.addressGo].join(' ')} aria-label={t('go')} title={t('go')}><IconLinkOutlineRegular /></button>
+          <button type="submit" className={[css.tool, css.addressGo].join(' ')} aria-label={t('go')} data-tip={t('go')}><IconLinkOutlineRegular /></button>
         </div>
-        <button type="button" className={css.tool} aria-label={t('external')} title={t('external')} disabled={externalUrl === undefined}
+        <button type="button" className={css.tool} aria-label={t('external')} data-tip={t('external')} disabled={externalUrl === undefined}
           onClick={externalUrl === undefined ? undefined : () => { window.open(externalUrl, '_blank', 'noopener,noreferrer') }}
         ><IconRightUpOutlineRegular size={14} /></button>
         {sandboxed !== undefined && <button
           type="button"
           className={[css.tool, sandboxed ? '' : css.sandboxOff].join(' ')}
           aria-label={t(sandboxed ? 'sandbox.disable' : 'sandbox.enable')}
-          title={t(sandboxed ? 'sandbox.disable' : 'sandbox.enable')}
+          data-tip={t(sandboxed ? 'sandbox.disable' : 'sandbox.enable')}
           aria-pressed={!sandboxed}
           onClick={() => { setSandbox(tab.id, !sandboxed) }}
         ><SandboxPolicyIcon sandboxed={sandboxed} /></button>}

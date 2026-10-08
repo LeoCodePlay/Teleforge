@@ -378,7 +378,7 @@ export default function AiTermPanel({ active, embedded = false, onCounts, sid }:
         <footer className="aiterm-bar">
           <StateDot state={stateDotOf(current.state)} size={10} />
           <span className={`aiterm-state st-${current.state}`}>{stateTextOf(current)}</span>
-          <span className="aiterm-cmd" title={current.command}>{shortCommand(current.command)}</span>
+          <span className="aiterm-cmd" data-tip={current.command}>{shortCommand(current.command)}</span>
           <span className="aiterm-meta">
             {current.target === 'remote' ? '远程' : '本机'}
             {current.cwd ? ` · ${current.cwd}` : ''}

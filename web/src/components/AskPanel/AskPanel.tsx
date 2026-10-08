@@ -174,7 +174,7 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
                   className={`ask-step ${i === idx ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`}
                   aria-label={`第 ${i + 1} 题,${answered(qn) ? '已作答' : '未作答'}`}
                   aria-current={i === idx ? 'step' : undefined}
-                  title={`第 ${i + 1} 题 · ${answered(qn) ? '已作答' : '未作答'}`}
+                  data-tip={`第 ${i + 1} 题 · ${answered(qn) ? '已作答' : '未作答'}`}
                   onClick={() => setQIndex(i)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setQIndex(i); } }}
                 />

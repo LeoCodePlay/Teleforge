@@ -66,7 +66,7 @@ export default function DeliverablesCard({ files, cwd, onOpen, onOpenAside }: {
             <li key={f.path} className={onOpenAside ? 'has-aside' : undefined}>
               {/* 整行可点:与「文件已更改」卡一致,点开走文件查看 */}
               <button type="button" className="deliverables-row" data-deliverable={f.path}
-                title={f.path} onClick={() => onOpen?.(f.path)}>
+                data-tip={f.path} onClick={() => onOpen?.(f.path)}>
                 <span className="deliverables-ico" aria-hidden><IconEye16 size={15} /></span>
                 <span className="deliverables-name">{name}</span>
                 {/* 说明是模型写的人话;没有就不占位(而不是拿文件名凑数) */}
@@ -74,12 +74,12 @@ export default function DeliverablesCard({ files, cwd, onOpen, onOpenAside }: {
                 <span className="deliverables-gap" />
                 {kind && <span className="deliverables-kind">{kind}</span>}
                 {/* 相对路径帮助区分同名文件;完整路径在 title 里 */}
-                <span className="deliverables-path" title={f.path}>{shown}</span>
+                <span className="deliverables-path" data-tip={f.path}>{shown}</span>
               </button>
               {/* 次要入口:侧栏对照阅读。默认隐藏,悬停/聚焦才出现 */}
               {onOpenAside && (
                 <button type="button" className="deliverables-aside" data-deliverable-aside={f.path}
-                  title={`在右侧栏打开 ${f.path}`} aria-label={`在右侧栏打开 ${f.path}`}
+                  data-tip={`在右侧栏打开 ${f.path}`} aria-label={`在右侧栏打开 ${f.path}`}
                   onClick={() => onOpenAside(f.path)}>侧栏</button>
               )}
             </li>

@@ -6,7 +6,7 @@
   display: flex; align-items: center;
   width: 100%; min-width: 0;
   height: calc(33px + var(--dsh-content-font-delta, 0px));
-  padding: 0 0 8px;
+  padding: 0px;
   border: none;
   background: none;
   color: var(--dsw-alias-label-tertiary);
@@ -17,6 +17,9 @@
 }
 .pf:disabled { cursor: default; }
 .pf:hover:not(:disabled) { color: var(--dsw-alias-label-secondary); }
+/* 只做文字高光:**不吃全局 button 的 hover/active 叠底**(styles.scss 的 button:hover/active
+   会铺一层背景)。dsh 的 .root:hover 同样只有 color,点击也无背景反馈。 */
+.pf:is(:hover, :active):not(:disabled) { background: none; }
 
 .pf-label {
   min-width: 0; overflow: hidden;

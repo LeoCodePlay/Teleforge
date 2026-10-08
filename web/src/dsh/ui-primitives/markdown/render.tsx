@@ -318,7 +318,7 @@ function renderNode(node: Md.RootContent, key: Key, context: MarkdownRenderConte
             <button
               type="button"
               className={css.fileMention}
-              title={mention.title}
+              data-tip={mention.title}
               aria-label={mention.label}
               onClick={mention.open}
             >
@@ -592,7 +592,7 @@ function MarkdownFileLink({ file, glyph, children }: {
     <button
       type="button"
       className={clsx(css.fileMention, css.fileLink)}
-      title={src === undefined ? file.path : undefined}
+      data-tip={src === undefined ? file.path : undefined}
       onClick={() => { openFile(file.path, file.line === undefined ? undefined : { line: file.line }) }}
     >
       {glyph && <LinkIconMedium kind={classifyLinkPath(file.path)} className={css.linkIcon} />}
@@ -655,7 +655,7 @@ function LoadedMarkdownImage({ src, alt, destination, preview }: {
     onError={() => { setFailed(true) }} loading="lazy" decoding="async" referrerPolicy="no-referrer" />
   if (preview === undefined) return img
   return <>
-    <button type="button" className={css.imageButton} title={preview.labels.open}
+    <button type="button" className={css.imageButton} data-tip={preview.labels.open}
       aria-label={alt ? `${preview.labels.open}: ${alt}` : preview.labels.open}
       onClick={() => { setOpen(true) }}>{img}</button>
     {open && <ImageLightbox src={src} alt={alt} labels={preview.labels} onClose={close} />}

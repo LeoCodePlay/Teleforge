@@ -110,7 +110,7 @@ export default function FileViewer({ path, name, onDirtyChange, onClose, onBack 
   return (
     <div className="fviewer">
       <div className="fviewer-head">
-        {onBack && <button className="ghost sm fviewer-back" onClick={onBack} title="返回文件管理">←</button>}
+        {onBack && <button className="ghost sm fviewer-back" onClick={onBack} data-tip="返回文件管理" aria-label="返回文件管理">←</button>}
         <span className="fviewer-title" data-tip={path}>📄 {name} <span className="muted">{media
           ? MEDIA_KIND_LABEL[media]
           : meta && `${fmtSize(meta.size)}${meta.truncated ? ' (仅展示前部)' : ''}`}</span></span>

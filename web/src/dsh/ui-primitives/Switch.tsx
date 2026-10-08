@@ -31,7 +31,7 @@ export function Switch({ checked, onChange, label, disabled = false, title, clas
       role="switch"
       aria-checked={checked}
       aria-label={label}
-      title={title}
+      data-tip={title}
       disabled={disabled}
       className={clsx(css.switch, className)}
       onClick={() => { onChange(!checked) }}

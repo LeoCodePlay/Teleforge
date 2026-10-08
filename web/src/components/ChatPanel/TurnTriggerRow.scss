@@ -28,6 +28,17 @@
 
 .ttr-icon { display: inline-flex; flex: none; color: inherit; }
 .ttr-title { flex: none; font-size: var(--dsh-content-font-size, 14px); }
+/* 轮内形态的一行账(dsh 的 context 行:`· summary`):省略号截断,不撑破行 */
+.ttr-sep { flex: none; width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: .5; }
+.ttr-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+}
 .ttr-time { flex: none; margin-left: auto; color: inherit; font: var(--dsw-font-xxs-12); }
 .ttr-chevron { display: inline-flex; flex: none; color: inherit; }
 

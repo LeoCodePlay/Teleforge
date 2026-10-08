@@ -25,5 +25,5 @@ export function TerminalRecovery({ restore, t }: PropsRuntime<'conversation.sess
     })
     return () => { active = false }
   }, [restore, attempt])
-  return error === undefined ? null : <button type="button" title={t('recoveryFailed', { message: error })} onClick={() => { setError(undefined); setAttempt(value => value + 1) }}>{t('retryRecovery')}</button>
+  return error === undefined ? null : <button type="button" data-tip={t('recoveryFailed', { message: error })} onClick={() => { setError(undefined); setAttempt(value => value + 1) }}>{t('retryRecovery')}</button>
 }

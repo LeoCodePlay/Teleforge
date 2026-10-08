@@ -104,7 +104,7 @@ function Entry({ parent, entry, tree }: { parent: string; entry: WorkspaceDirect
   }
   return (
     <li className={css.item} data-files-entry="other" data-files-path={path}>
-      <span className={clsx(css.row, css.other)} aria-disabled="true" title={tree.t('entry.other')}>
+      <span className={clsx(css.row, css.other)} aria-disabled="true" data-tip={tree.t('entry.other')}>
         <span className={css.name}>{entry.name}</span>
       </span>
     </li>
@@ -197,7 +197,7 @@ export function FilesBody({
         <span hidden>
           <button type="button" className={css.tool} aria-label={t('autoRefresh')}
             aria-pressed={state.autoRefresh} data-files-auto-refresh
-            title={t(state.autoRefresh ? 'autoRefresh.disable' : 'autoRefresh.enable')}
+            data-tip={t(state.autoRefresh ? 'autoRefresh.disable' : 'autoRefresh.enable')}
             onClick={() => { setAutoRefresh(tab.id, !state.autoRefresh) }}>
             {state.autoRefresh ? <IconPauseOutlineRegular /> : <IconPlayOutlineRegular />}
           </button>

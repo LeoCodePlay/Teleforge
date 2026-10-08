@@ -582,7 +582,7 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
           <div className="grow" />
           {/* 右栏窄容器:列表默认折叠,这里只做一个开合开关(展开后在右边缘那条抽屉里点选终端) */}
           {compact && !coarse && (
-            <button className="chip-btn" aria-expanded={railOpen} title="终端列表(默认折叠)"
+            <button className="chip-btn" aria-expanded={railOpen} data-tip="终端列表(默认折叠)"
               onClick={() => setRailOpen((v) => !v)}>
               ☰ 终端列表 {railOpen ? '▸' : '◂'}
             </button>

@@ -115,7 +115,7 @@ export function ReviewTab({
           ? <span className={css.selectorLabel}>{t('review.title', { turn: String(coordinates.turn) })}</span>
           : <Menu className={css.selector} open={menuOpen} autoFocus portal align="start" dense onClose={() => { setMenuOpen(false) }}
             anchor={<button type="button" className={css.selectorButton} aria-haspopup="menu" aria-expanded={menuOpen}
-              aria-label={t('review.selectFile')} title={file.display} data-review-file={file.path}
+              aria-label={t('review.selectFile')} data-tip={file.display} data-review-file={file.path}
               onClick={() => { setMenuOpen(value => !value) }}>
               <PathLabel path={file.display} />
               <IconChevronDownOutlineRegular size={12} />

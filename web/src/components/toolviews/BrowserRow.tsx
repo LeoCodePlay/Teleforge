@@ -21,7 +21,7 @@ export function BrowserRow({ call, inspect }: {
     <div className="dsh-browser">
       {url && (
         <div className="dsh-browser-bar">
-          <span className="dsh-browser-url" title={url}>{url}</span>
+          <span className="dsh-browser-url" data-tip={url}>{url}</span>
           {isPreviewUrl(url) && (
             <button type="button" className="dsh-browser-open" onClick={() => openPreview(url)}>
               在预览标签打开

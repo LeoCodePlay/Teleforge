@@ -321,6 +321,10 @@ export function projectEvents(events) {
   // 回填而不是新增行 —— 不占消息面下标,回退/分支的下标口径完全不受影响。
   let curTurn = 0;
   let turnStartAt = 0;
+  // 本轮是否已经出过模型回复/工具活动:用来区分"这一轮的第一条消息"与
+  // "轮内注入"(如运行中 steer 进来的子代理结算通知)—— 前者是「触发本轮的通知」行,
+  // 后者是轮内的通知行(dsh: 同样的 source,form='notice',但节点形态不同)
+  let sawAssistantInTurn = false;
   // 本轮 turn/start 在 events 里的下标:turn/end 时按 [turnStartIdx, 本轮末) 折叠单轮用量
   let turnStartIdx = 0;
   const turnRows = new Map<number, number[]>();
@@ -340,6 +344,7 @@ export function projectEvents(events) {
       curTurn = Number(d.turn) || 0;
       turnStartAt = ev.time;
       turnStartIdx = ei;
+      sawAssistantInTurn = false;
       continue;
     }
     if (ev.type === 'turn/end') {
@@ -373,9 +378,12 @@ export function projectEvents(events) {
         role: 'user', content: d.display ?? d.content,
         // 事件时间戳随投影下发,前端据此显示"今天/昨天/日期+时间"
         time: ev.time,
-        // 非人类消息的归属(dsh 的 MessageSource):带 form='notice' 的由前端渲染成"触发本轮的
-        // 通知行"(子代理结算 / 自动化任务 / 目标续跑……),而不是用户气泡
-        ...(d.source && typeof d.source === 'object' ? { source: d.source } : {}),
+        // 非人类消息的归属(dsh 的 MessageSource):带 form='notice' 的由前端渲染成"通知行"
+        // (子代理结算 / 自动化任务 / 目标续跑……),而不是用户气泡。`inline` = 它出现在本轮
+        // 已经出过回复之后(运行中 steer 进来的),此时是"轮内通知行",而不是"触发本轮的通知"。
+        ...(d.source && typeof d.source === 'object'
+          ? { source: d.source, ...(sawAssistantInTurn ? { inline: true } : {}) }
+          : {}),
         // 目标续跑轮(移植自 harness GoalMessageSource):前端把这条用户消息渲染成「目标第 N 轮」
         ...(d.source === 'goal' && Number.isFinite(Number(d.round))
           ? { goalRound: { round: Number(d.round), revision: Number(d.revision) || undefined } }
@@ -432,6 +440,7 @@ export function projectEvents(events) {
       out.push({ role: 'user', content: '', time: ev.time, compaction: { failed: true, manual: d.manual === true, reason: String(d.reason || '摘要不可用') } });
     } else if (ev.type === 'assistant/message') {
       placeCpsBefore(ev.seq);
+      sawAssistantInTurn = true; // 本轮已经出过回复:之后再来的非人类通知属于"轮内"而不是"触发本轮"
       const m = d.message || {};
       alive = new Set((Array.isArray(m.tool_calls) ? m.tool_calls : []).map((t: any) => t.id));
       out.push({
@@ -1845,6 +1854,47 @@ export class Agent {
   run(userText, opts = {}) { return this.submit(this.sessionId, userText, opts); }
   steer(userText, opts = {}) { return this.submit(this.sessionId, userText, opts); }
 
+  /**
+   * 投递一条**非人类通知**(子代理结算 / 自动化任务……)。
+   *
+   * 投递目标逐条对齐 dsh 的 `notifySettlement`
+   * (packages/subagent/subagent/src/continuation-activation.ts):
+   *
+   *     parent.status === 'idle' ? 'queue' : 'steer'
+   *
+   * - **父会话空闲** → `queue`(dsh 的 followup):排一轮并唤醒它自己开一轮回答;
+   *   前端渲染成「触发本轮的通知」行。
+   * - **父会话正在跑** → `steer`(dsh 的 steer):交给**正在跑的那一轮的下一个 step 边界**认领,
+   *   不打断、不新开轮、**不进"待执行队列"** —— 通知本来就该自动送达,
+   *   不该在输入框上方等人点「立即执行」(那会把它变成一条用户消息)。
+   * - 活动已中止(dsh 的 wakingAfterAbort:唤醒型输入不能加入已中止的活动)→ 退回排一轮。
+   * - 会话不在内存:先按记录载回来再投(我们的产品要求"父会话不在线也能收到通知");
+   *   载不回来就与 dsh 的"父代理不在现场直接 return"一样丢掉,绝不编造一次投递。
+   *
+   * @returns 是否真的投出去了(调用方只用来记日志/断言,失败不影响子代理)
+   */
+  deliverNotice(sid: string | null | undefined, text: string, { source = null, display = null }: { source?: MessageSource | null; display?: string | null } = {}): boolean {
+    const id = sid != null ? String(sid) : '';
+    if (!id) return false;
+    if (!this._runtimes.has(id)) { try { this.ensureRuntime(id); } catch { /* 载不回来:按下面丢 */ } }
+    const rt = this._runtimes.get(id);
+    if (!rt) return false;
+    const aborted = !!rt.signal && !!rt.signal.signal?.aborted;
+    if (rt.busy && !rt.compacting && !aborted) {
+      // 运行中:下一步认领(dsh 的 steer)。此处刻意**不**走 submit ——
+      // submit 在忙碌时会进待执行队列,那会把它变成"等人点立即执行"的用户消息。
+      rt.steer.push({ text, reasoning: 'default', source, display, internal: false });
+      // 实时把这条通知行推给前端(它此刻已属于正在跑的这一轮),
+      // 刷新后从日志投影出来的是同一形态(见 projectEvents 的 inline 标记)
+      this.emit('agent', { event: 'steer_message', sid: id, text, source, time: Date.now() });
+      return true;
+    }
+    // 空闲 / 正在压缩 / 已中止:排一轮,由驱动唤醒后正常开新轮
+    const p = this.submit(id, text, { auto: true, source, display });
+    if (p && typeof p.catch === 'function') p.catch(() => { /* 投递失败与调用方无关 */ });
+    return true;
+  }
+
   // 唤醒某会话的 driver:同一会话同一时刻只有一个驱动在跑,并发提交复用同一个 promise
   _drive(rt, id) {
     // 只有"上一次驱动确实还在跑"才复用它的 promise;已收尾(即使 promise 还没被清掉)必须开新驱动
@@ -1976,8 +2026,7 @@ export class Agent {
   }
 
   async _runTurnInner(rt, runSessionId, { text, reasoning, attachments, auto = false, display = null, source = null, taskId = null, messageId = null, scheduleId = null, goalRound = null }: { text: string; reasoning: string; attachments?: AttachmentMeta[] | null; auto?: boolean; display?: string | null; source?: MessageSource | null; taskId?: string | null; messageId?: string | null; scheduleId?: string | null; goalRound?: { goalId: string; revision: number; round: number } | null }, boundConn) {
-    const session = rt.session; // 锁定本轮操作的运行时与会话,中途切换活跃会话不影响本轮写入
-    // 本轮首个 user 消息的来源(工具侧据此判定"是否人类直接请求",见 goal.ts requireDirectHuman)。
+    const session = rt.session; // 锁定本轮操作的运行时与会话,中途切换活跃会话不影响本轮写入    // 本轮首个 user 消息的来源(工具侧据此判定"是否人类直接请求",见 goal.ts requireDirectHuman)。
     // 对象来源(通知类)一律原样落盘:它带着 kind/form/summary,前端据此渲染成通知行而不是用户气泡;
     // `auto` 只在字符串来源时才改写成 'auto-resume'(那是"后端自己接着跑"的内部标记)。
     const turnSource: MessageSource = source && typeof source === 'object'
@@ -2159,7 +2208,9 @@ export class Agent {
         // 真实用户输入到达时重置 repeat-tool-reminder 计数(对齐 harness guard 的 reset 语义)
         for (const s of rt.steer.splice(0)) {
           session.append('user/message', {
-            content: s.text, source: 'steer',
+            // 注入消息保留自己的来源归属:通知类(form='notice')在日志里也是通知行,
+            // 刷新后与实时渲染一致 —— 不会变成一条"用户说的话"
+            content: s.text, source: s.source ?? 'steer', ...(s.display ? { display: s.display } : {}),
             ...(Array.isArray(s.attachments) && s.attachments.length ? { attachments: s.attachments } : {})
           });
           if (!s.internal) { rt.lastCallKey = null; rt.lastCallCount = 0; }

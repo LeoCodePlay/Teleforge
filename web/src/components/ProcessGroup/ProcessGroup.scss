@@ -15,6 +15,9 @@
   transition: color 100ms ease;
 }
 .dsh-pg-title:hover { color: var(--dsw-alias-label-secondary); }
+/* 同折叠行:组头只要文字高光,**不叠全局 button 的 hover/active 背景**(dsh 的 .title:hover
+   也只有 color),点击无背景反馈。 */
+.dsh-pg-title:is(:hover, :active):not(:disabled) { background: none; }
 
 /* 前导槽:活动图标与 chevron 叠在同一个 16px 槽里,靠透明度互换 */
 .dsh-pg-leading {

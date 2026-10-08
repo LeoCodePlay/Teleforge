@@ -207,7 +207,7 @@ function CatalogRows({ source, currentRunId, actions, closeCatalog }: CatalogRow
                     {durationMetric !== undefined && (
                       <span
                         className={css.metricDuration}
-                        title={tSub('duration.exactTitle', { duration: durationMetric.exact })}
+                        data-tip={tSub('duration.exactTitle', { duration: durationMetric.exact })}
                       >
                         {durationMetric.compact}
                       </span>

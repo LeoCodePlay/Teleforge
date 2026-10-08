@@ -65,7 +65,7 @@ export function PresentRow({ call, inspect }: { call: ToolCallInfo; inspect?: ()
               <span className="dsh-presentIcon" aria-hidden><IconEye16 size={13} /></span>
               <span className="dsh-presentName">{baseName(f.path)}</span>
               {f.description && <span className="dsh-presentDesc">{f.description}</span>}
-              <span className="dsh-presentPath" title={f.path}>{f.path}</span>
+              <span className="dsh-presentPath" data-tip={f.path}>{f.path}</span>
             </li>
           ))}
         </ul>

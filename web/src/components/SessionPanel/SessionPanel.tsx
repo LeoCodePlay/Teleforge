@@ -195,7 +195,7 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
           </svg>
           <span className="s-group-ico">{icon}</span>
         </span>
-        <span className="s-group-title" title={label}>{label}</span>
+        <span className="s-group-title" data-tip={label}>{label}</span>
         {/* 尾部只留一格:「运行状态点 + 任务数」与「在此工作区新建会话」按钮叠放在同一格交叉切换。
             悬停分组头时按钮旋入、计数淡出;移开则还原——按钮不再隐形常驻占位,右侧不会空出一片 */}
         <span className="s-group-tail" onClick={(e) => e.stopPropagation()}>

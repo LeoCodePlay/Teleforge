@@ -159,7 +159,7 @@ function JobItem({ job, output, expanded, now, onToggle, kill }: {
   const durationCell = (
     <span
       className={css.duration}
-      title={tJob(live ? 'duration.title.live' : 'duration.title.done', { duration })}
+      data-tip={tJob(live ? 'duration.title.live' : 'duration.title.done', { duration })}
     >
       {duration}
     </span>
@@ -170,9 +170,9 @@ function JobItem({ job, output, expanded, now, onToggle, kill }: {
         <StateDot state={dotState('running')} className={css.rowDot} />
         <span className={css.main}>
           <span className={css.primary}>
-            <span className={css.label} title={job.label}>{job.label}</span>
+            <span className={css.label} data-tip={job.label}>{job.label}</span>
           </span>
-          <span className={css.secondary} title={detail ?? status}>
+          <span className={css.secondary} data-tip={detail ?? status}>
             <span className={css.kind}>{kindOf(job)}</span>
             {detail !== undefined ? <span className={css.status}>{detail}</span> : null}
             {durationCell}
@@ -187,8 +187,8 @@ function JobItem({ job, output, expanded, now, onToggle, kill }: {
       <>
         <StateDot state={dotState(statusOf(job))} className={css.rowDot} />
         <span className={css.kind}>{kindOf(job)}</span>
-        <span className={css.label} title={job.label}>{job.label}</span>
-        <span className={css.status} title={detail ?? status}>{detail ?? status}</span>
+        <span className={css.label} data-tip={job.label}>{job.label}</span>
+        <span className={css.status} data-tip={detail ?? status}>{detail ?? status}</span>
         {durationCell}
         <span className={css.chevronBox}>
           <IconChevronDownOutlineRegular size={12} className={expanded ? `${css.chevron} ${css.chevronOpen}` : css.chevron} />
@@ -226,7 +226,7 @@ function JobItem({ job, output, expanded, now, onToggle, kill }: {
               data-job-kill={job.id}
               disabled={kill.state === 'pending'}
               aria-label={killTitle}
-              title={killTitle}
+              data-tip={killTitle}
               onClick={kill.onPress}
             >
               <IconStopFillRegular size={10} />

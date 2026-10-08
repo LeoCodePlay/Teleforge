@@ -824,11 +824,15 @@ export function parentNotifier(agent: any, sid: string | null | undefined) {
   if (!parentSid) return undefined;
   return (text: string, source?: MessageSource) => {
     try {
-      if (!agent || typeof agent.submit !== 'function') return;
+      if (!agent) return;
+      // 投递目标由 dsh 的 notifySettlement 决定(空闲=排一轮 / 运行中=steer 进正在跑的那一轮);
+      // agent.deliverNotice 实现了那套选择,submit 只作为老 agent 实例的兜底
+      const src = source ?? 'subagent-settled';
+      if (typeof agent.deliverNotice === 'function') { agent.deliverNotice(parentSid, text, { source: src }); return; }
       try { agent.ensureRuntime?.(parentSid); } catch { /* 载不回来就按下面的 submit 兜底 */ }
-      const p = agent.submit(parentSid, text, { auto: true, source: source ?? 'subagent-settled' });
+      const p = agent.submit(parentSid, text, { auto: true, source: src });
       if (p && typeof p.catch === 'function') p.catch(() => { /* 投递失败与子代理无关 */ });
-    } catch { /* 父会话不在内存:丢弃通知(子代理自己的记录里仍有完整结论) */ }
+    } catch { /* 父会话载不回来:丢弃通知(子代理自己的记录里仍有完整结论) */ }
   };
 }
 

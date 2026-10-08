@@ -180,12 +180,12 @@ function ThemeCard({ t, active, onClick, onEdit, onDelete }: ThemeCardProps) {
         {t.preset ? <span className="muted sm">预设</span> : active ? <span className="badge ok">使用中</span> : null}
       </div>
       <div className="tc-swatches">
-        <span className="sw" style={{ background: t.bg }} title="背景色" />
-        <span className="sw" style={{ background: t.surface }} title="表面色" />
-        <span className="sw" style={{ background: t.text }} title="文字色" />
-        <span className="sw" style={{ background: t.accent }} title="强调色" />
-        <span className="sw" style={{ background: t.success }} title="成功色" />
-        <span className="sw" style={{ background: t.danger }} title="危险色" />
+        <span className="sw" style={{ background: t.bg }} data-tip="背景色" />
+        <span className="sw" style={{ background: t.surface }} data-tip="表面色" />
+        <span className="sw" style={{ background: t.text }} data-tip="文字色" />
+        <span className="sw" style={{ background: t.accent }} data-tip="强调色" />
+        <span className="sw" style={{ background: t.success }} data-tip="成功色" />
+        <span className="sw" style={{ background: t.danger }} data-tip="危险色" />
       </div>
       <div className="tc-actions" onClick={(e) => e.stopPropagation()}>
         {onEdit && <button className="sm" onClick={onEdit}>编辑</button>}

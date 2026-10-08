@@ -416,9 +416,12 @@ export interface ChatMessage {
   /** 目标自动续跑轮(服务端 user/message 的 source='goal' 投影):用户气泡渲染成「🎯 目标第 N 轮」 */
   goalRound?: { round: number; revision?: number };
   /** 非人类消息的来源归属(服务端 session.ts 的 MessageSource 对象形态)。
-   *  `form='notice'` 的消息(子代理结算 / 自动化任务 / 目标续跑…)渲染成 **触发本轮的通知行**,
+   *  `form='notice'` 的消息(子代理结算 / 自动化任务 / 目标续跑…)渲染成 **通知行**,
    *  而不是用户气泡 —— 它替运行时/子代理说话,不是用户打的字(见 dsh 的 MessageSource)。 */
   source?: { kind: string; form?: string; summary?: string; senderSessionId?: string };
+  /** 这条通知是**轮内送达**的(运行中 steer 进来):渲染成轮内通知行(带一行账),
+   *  而不是"触发本轮的通知"行(服务端投影与实时事件都用这个标记) */
+  inline?: boolean;
 }
 
 /** 任务计划项(todo_write 工具维护,状态对齐 deepseek-harness) */

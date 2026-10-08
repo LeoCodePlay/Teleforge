@@ -42,7 +42,7 @@ export function CodeToolbar({ lang, title, status, labels, copyLabel, copiedLabe
     <div className={css.header} data-code-block-banner>
       <div className={css.heading}>
         <span className={css.language}>{supportsHighlighting(lang) ? lang : labels.codeLabel}</span>
-        {title !== undefined && <span className={css.title} title={title}>{title}</span>}
+        {title !== undefined && <span className={css.title} data-tip={title}>{title}</span>}
       </div>
       <div className={css.actions}>
         {status !== undefined && <span className={css.status}>{status}</span>}

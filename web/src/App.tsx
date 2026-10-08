@@ -1035,7 +1035,7 @@ export default function App() {
         data-tab-id={t.id}
         className={`btab${activeTabId === t.id ? ' active' : ''}${pinned ? ' pinned' : ''}${draggingId === t.id ? ' dragging' : ''}${t.dirty ? ' dirty' : ''}`}
         draggable={!pinned}
-        title={t.kind === 'file' || t.kind === 'browser' ? t.path : `${t.name}(固定标签)`}
+        data-tip={t.kind === 'file' || t.kind === 'browser' ? t.path : `${t.name}(固定标签)`}
         onDragStart={(e) => onTabDragStart(e, t.id)}
         onDragOver={(e) => onTabDragOver(e, t.id)}
         onDragEnd={onTabDragEnd}
@@ -1051,7 +1051,8 @@ export default function App() {
         {!fixed && (
           <button
             className="btab-close"
-            title={t.dirty ? '有未保存修改' : '关闭标签'}
+            data-tip={t.dirty ? '有未保存修改' : '关闭标签'}
+            aria-label={t.dirty ? '有未保存修改' : '关闭标签'}
             onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
           >
             {t.dirty ? '●' : '✕'}
@@ -1455,18 +1456,8 @@ export default function App() {
                 onOpenSubagentAside={(runId) => openSubagentPanel(runId)}
                 onBackToSession={() => { setSubagentRunId(null); closeSubagentPanel(); }}
               />
-              {/* 后台运行任务:按 dsh 的方式**放在顶部栏**(不再是右上角悬浮胶囊 + 抽屉)。
-                  数据源是同一个 useRunningTermSessions;点一下切到终端视图看它。 */}
-              {termRunningIds.length > 0 && (
-                <div className="session-tasks" aria-label={`后台运行任务 ${termRunningIds.length} 个`}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px', fontSize: 12, color: 'var(--muted)' }}>
-                  <span>后台任务</span>
-                  <span className="st-chip"
-                    style={{ border: '1px solid var(--border)', borderRadius: 999, padding: '0 8px', lineHeight: '18px' }}>
-                    {termRunningIds.length} 个运行中
-                  </span>
-                </div>
-              )}
+              {/* 后台运行任务的入口在 SessionHeader 的 JobListAction(按 sid 只看本会话),
+                  这里不再放全局计数条:否则任一对话有后台任务时,所有对话标题下都会出现同一个数字。 */}
               {/* 主对话区里的两个内容槽(与 App.scss 的 .agent-slot 对应):
                   子智能体会话与父会话**并列常驻挂载**,看子会话时父会话那个槽加 .hide,回来时反过来
                   —— 两边的草稿与滚动位置都保住。

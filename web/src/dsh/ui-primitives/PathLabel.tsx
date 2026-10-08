@@ -31,7 +31,7 @@ export function PathLabel({ path, className, ...attributes }: {
     return () => { observer?.disconnect() }
   }, [path])
   return (
-    <span {...attributes} ref={boxRef} className={clsx(css.path, className)} title={path} data-path-label>
+    <span {...attributes} ref={boxRef} className={clsx(css.path, className)} data-tip={path} data-path-label>
       <span ref={textRef} className={css.text}>
         {directory !== '' && <span className={css.directory}>{directory}</span>}
         <span className={css.name}>{name}</span>

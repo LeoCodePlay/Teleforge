@@ -139,7 +139,7 @@ function JsonCopyAction({ store, target, persistent, labels, onCopy, onClose }: 
               data-json-copy-button
               data-state={state}
               aria-label={copyTitle}
-              title={labels.copyButtonTitle(copyTitle)}
+              data-tip={labels.copyButtonTitle(copyTitle)}
               onClick={() => void onCopy(target, object ? 'prettyJson' : 'value')}
               onContextMenu={(event) => {
                 event.preventDefault()
@@ -427,7 +427,7 @@ function JsonString({
               type="button"
               className={css.actionButton}
               aria-label={stringWrapping.label}
-              title={stringWrapping.label}
+              data-tip={stringWrapping.label}
               aria-pressed={wrapped}
               aria-controls={contentsId}
               onClick={() => {
@@ -443,7 +443,7 @@ function JsonString({
             type="button"
             className={css.actionButton}
             aria-label={labels.collapseNode}
-            title={labels.collapseNode}
+            data-tip={labels.collapseNode}
             aria-expanded
             aria-controls={contentsId}
             onClick={() => { setExpanded(false) }}

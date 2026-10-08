@@ -206,16 +206,16 @@ export function Lightbox({ src, onClose }: { src: LightboxSrc | null; onClose: (
         onPointerCancel={() => { dragRef.current = null; }}
       />
       <div className="lightbox-toolbar" onClick={(e) => e.stopPropagation()}>
-        <button type="button" aria-label="缩小" title="缩小(−)" onClick={() => zoomAt(null, null, 1 / LB_STEP)}>
+        <button type="button" aria-label="缩小" data-tip="缩小(−)" onClick={() => zoomAt(null, null, 1 / LB_STEP)}>
           <IconZoomOut />
         </button>
-        <button type="button" className="lightbox-pct" title="图像原始像素占比,点击恢复适应窗口" onClick={reset}>
+        <button type="button" className="lightbox-pct" data-tip="图像原始像素占比,点击恢复适应窗口" onClick={reset}>
           {pct}%
         </button>
-        <button type="button" aria-label="放大" title="放大(+)" onClick={() => zoomAt(null, null, LB_STEP)}>
+        <button type="button" aria-label="放大" data-tip="放大(+)" onClick={() => zoomAt(null, null, LB_STEP)}>
           <IconZoomIn />
         </button>
-        <button type="button" aria-label="适应窗口" title="适应窗口(0)" onClick={reset}>
+        <button type="button" aria-label="适应窗口" data-tip="适应窗口(0)" onClick={reset}>
           <IconFit />
         </button>
       </div>
@@ -288,7 +288,7 @@ export function AttachRail({ items, onRemove, onOpen }: {
       <div className="att-rail-track" ref={railRef} role="group" aria-label="待发送附件" onScroll={updateEdges}>
         {items.map((item) => (
           <div key={item.key} className={`att-item ${item.error ? 'err' : ''}`}>
-            <button type="button" className="att-thumb" title={item.error || item.name}
+            <button type="button" className="att-thumb" data-tip={item.error || item.name}
               disabled={item.uploading}
               onClick={() => { if (!item.error && item.kind === 'image') onOpen(item); }}>
               {item.uploading ? <span className="att-spin" aria-label="上传中" /> : <TileVisual item={item} />}
@@ -297,7 +297,7 @@ export function AttachRail({ items, onRemove, onOpen }: {
               <IconClose />
             </button>
             {(item.kind !== 'image' || item.error) && (
-              <span className="att-name" title={item.error || item.name}>{item.error ? '失败' : item.name}</span>
+              <span className="att-name" data-tip={item.error || item.name}>{item.error ? '失败' : item.name}</span>
             )}
           </div>
         ))}
@@ -343,7 +343,7 @@ function MessageImageSingle({ att, onOpen }: {
   return (
     <button type="button" className="msg-att-img single"
       style={fit ? { width: fit.width, height: fit.height } : undefined}
-      title={`查看 ${att.name}`}
+      data-tip={`查看 ${att.name}`}
       aria-label={`查看 ${att.name}`}
       onClick={() => onOpen({ src: url, alt: att.name })}>
       {!fit && <span className="msg-att-loading" aria-hidden>加载中…</span>}
@@ -374,7 +374,7 @@ export function MessageAttachments({ items, onOpen }: {
             const url = a.url || `/api/attachments/${a.id}`;
             return (
               <button key={a.id} type="button" className="msg-att-img tile"
-                title={`查看 ${a.name}`}
+                data-tip={`查看 ${a.name}`}
                 onClick={() => onOpen({ src: url, alt: a.name })}>
                 <img src={url} alt={a.name} loading="lazy" />
               </button>
@@ -385,7 +385,7 @@ export function MessageAttachments({ items, onOpen }: {
       {others.map((a) => {
         const url = a.url || `/api/attachments/${a.id}`;
         return (
-          <a key={a.id} className="msg-att-file" href={url} target="_blank" rel="noreferrer" title={`打开 ${a.name}`}>
+          <a key={a.id} className="msg-att-file" href={url} target="_blank" rel="noreferrer" data-tip={`打开 ${a.name}`}>
             <IconFile />
             <span className="msg-att-file-main">
               <span className="msg-att-file-name">{a.name}</span>
