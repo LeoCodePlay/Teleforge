@@ -118,6 +118,16 @@
 - **技能注入提醒**：当某个技能已随消息注入正文时，目录提醒自动排除「再调 skill 工具」的冗余提示，避免模型因读到「指令就在下方」而重复加载（只会白占上下文）。
 - **无 SSH 也可用**：未连接 SSH 时技能目录仍然可发现与加载本地技能，不依赖远程工作区。
 
+**MCP 接入（Model Context Protocol）**
+
+- **外部 MCP 服务器**：设置 →「MCP 服务」里**直接编辑那份 JSON**（一个数组,每个元素一个 server)即可新增 / 修改 / 删除,「保存并应用」立即生效;上半部分是各 server 的实时连接状态与工具清单(只读)。传输支持 **stdio**(本机子进程,如 `npx -y @modelcontextprotocol/server-github`)与 **Streamable HTTP**(远端服务 URL + 请求头);字段与 deepseek-harness 的 `dsh-mcp-client` 逐项对齐(`serverName` / `command` / `args` / `env` / `cwd` / `url` / `headers` / `toolCallTimeoutMs` / `failOnStartupError` / `maxInstructionBytes` / `reconnect.*`,面板里有「字段速查」),落盘 `data/mcp-servers.json`。保存的是整份配置,校验不通过会整份拒绝并指出错在第几项,不会写坏现有配置。
+- **工具直接进模型工具列表**：每个 server 的工具用它自己声明的输入 schema 与描述，工具名固定为 `mcp__<serverName>__<工具名>`（超长或含非法字符时按 DeepSeek function-name 契约归一化并追加 12 位 SHA-256 身份哈希，保证不同工具不撞名）；server 的工具清单变化时**整代替换**——要么全套生效、要么保留上一代，绝不出现半套。
+- **MCP 资源**：三个共享工具 `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`（以 `server` 参数选择服务器）。二进制 blob 只回一句描述，不进模型上下文。
+- **instructions 进上下文**：server 自己声明的 instructions 以 `### MCP server: <名称>` 段进入模型上下文；随运行时快照下发，system 提示词保持逐字节稳定（前缀缓存不失效）。
+- **断线自愈**：连接掉线自动按指数退避重连（默认 500ms 起、每次翻倍、封顶 30s、连续失败 10 次后放弃并注销该 server 的工具）；`failOnStartupError` 可让初次连接失败直接记为致命错误。
+- **凭据隔离**：stdio 子进程不继承宿主环境里密钥形状的变量（名字含 KEY/PASSWORD/SECRET/TOKEN）与 `TELEFORGE_*` / `DSH_*` 控制变量，只有 `env` 里显式声明过的才会传进去。
+- **权限口径**：MCP 工具是外部能力、无法在本机声明细粒度，访问类别按 fail-closed 记为「写」——计划模式直接拒绝，确认模式先弹审批。
+
 **全局指令注入**
 
 - 在设置中维护 prompt-inject 文本，自动作为**高优先级 system 指令**注入每次会话。

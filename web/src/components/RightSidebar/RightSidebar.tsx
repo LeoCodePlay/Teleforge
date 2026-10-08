@@ -10,6 +10,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LayoutOp, TabRecord } from '@deepseek-ai/dsh-client-ui-dockkit';
 import DockSidebar, { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH } from './DockSidebar';
+import { sidebarMaxWidth } from '../../utils/layout';
 import './RightSidebar.scss';
 
 /** 外部请求「在右侧栏打开某内容」;nonce 变化即视为一次新请求(即使内容相同也要能再次触发) */
@@ -40,8 +41,6 @@ interface Props {
 }
 
 const WIDTH_KEY = 'teleforge.sidebar-right.width.v1';
-/** 主区域最小宽度:右栏再宽也不能把对话区挤到不可用 */
-const MIN_MAIN = 420;
 
 // ---- 布局持久化:按会话保存 dockkit 记下的**操作序列**,下次挂载时重放它 ----
 // 为什么不存整棵布局树:dockkit 的序列是纯数据(`LayoutOp[]`),每条操作自带它创建的 id,
@@ -92,6 +91,15 @@ export default function RightSidebar({ sid, request, collapsed = false, onToggle
   // 宽度按会话持久化:不同会话的阅读习惯不同,切会话不该互相干扰
   useEffect(() => { try { localStorage.setItem(WIDTH_KEY, String(width)); } catch { /* 忽略 */ } }, [width]);
 
+  // 视口变窄时把宽度收回上限内 —— 拖拽那一刻的夹取挡不住"拖完之后缩小窗口"。
+  // 挂载也跑一次:上次落盘的宽度可能是在更宽的窗口 / 更窄的左栏下拖出来的,直接用它会把对话区挤没。
+  useEffect(() => {
+    const fit = () => setWidth((w) => Math.min(w, sidebarMaxWidth('.sidebar-left', SIDEBAR_MIN_WIDTH)));
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, []);
+
   // 拖左边缘改宽度:拖动期间只改本地像素,抬手不再提交别的状态(没有 op 需要回放)。
   // 拖拽期间锁住整页的文字选择并保持 col-resize 光标:不然划过对话区会顺手选中一大片文本。
   const onEdgeDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -108,7 +116,9 @@ export default function RightSidebar({ sid, request, collapsed = false, onToggle
     const onMove = (ev: PointerEvent) => {
       if (!dragging.current) return;
       const next = startW + (startX - ev.clientX);
-      const maxW = Math.max(SIDEBAR_MIN_WIDTH, window.innerWidth - MIN_MAIN);
+      // 上限 = 视口 - 对话区底线 - 左栏当前占的宽度:右栏一个人拖到底也留得下对话区
+      // (旧行为只看视口,左栏一宽就把中间挤成一条缝)。
+      const maxW = sidebarMaxWidth('.sidebar-left', SIDEBAR_MIN_WIDTH);
       setWidth(Math.min(maxW, Math.max(SIDEBAR_MIN_WIDTH, next)));
     };
     const onUp = () => {

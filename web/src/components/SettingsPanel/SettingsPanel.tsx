@@ -5,6 +5,7 @@ import AiConfigPanel from '../AiConfigPanel/AiConfigPanel';
 import ImageGenPanel from '../ImageGenPanel/ImageGenPanel';
 import SkillsPanel from '../SkillsPanel/SkillsPanel';
 import PluginsPanel from '../PluginsPanel/PluginsPanel';
+import McpPanel from '../McpPanel/McpPanel';
 import PromptInjectPanel from '../PromptInjectPanel/PromptInjectPanel';
 import ThemePanel from '../ThemePanel/ThemePanel';
 import AboutPanel from '../AboutPanel/AboutPanel';
@@ -16,6 +17,7 @@ const MENUS = [
   { id: 'theme', icon: '🎨', label: '主题' },
   { id: 'skills', icon: '🧩', label: '技能' },
   { id: 'plugins', icon: '🔌', label: '工具插件' },
+  { id: 'mcp', icon: '🔗', label: 'MCP 服务' },
   { id: 'inject', icon: '📌', label: '全局指令' },
   { id: 'about', icon: 'ℹ️', label: '关于与更新' }
 ];
@@ -52,6 +54,7 @@ export default function SettingsPanel({ onClose, connected = false, initialTab =
             {active === 'theme' && <ThemePanel />}
             {active === 'skills' && <SkillsPanel connected={connected} />}
             {active === 'plugins' && <PluginsPanel />}
+            {active === 'mcp' && <McpPanel />}
             {active === 'inject' && <PromptInjectPanel />}
             {active === 'about' && <AboutPanel />}
           </div>

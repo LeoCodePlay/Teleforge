@@ -119,6 +119,16 @@ In Confirm mode, approval prompts are sent through the **`ask_user_question` cha
 - **Skill injection awareness** — when a skill's instructions have already been injected into the current turn, the catalog prompt drops the redundant "call the skill tool to load it" reminder, preventing the model from wasting context on a duplicate load.
 - **Works without SSH** — the skill catalog still discovers and loads local skills when no SSH connection is active; it does not depend on a remote workspace.
 
+**MCP (Model Context Protocol)**
+
+- **External MCP servers** — edit the JSON document directly under Settings → "MCP 服务": an array of server objects, so adding, changing and removing entries is a plain text edit, and "保存并应用" applies it immediately. The list above it is a read-only view of each server's live connection state and tool inventory. Transports are **stdio** (a local child process, e.g. `npx -y @modelcontextprotocol/server-github`) and **Streamable HTTP** (a remote endpoint URL plus headers). Every field mirrors deepseek-harness's `dsh-mcp-client` (`serverName` / `command` / `args` / `env` / `cwd` / `url` / `headers` / `toolCallTimeoutMs` / `failOnStartupError` / `maxInstructionBytes` / `reconnect.*`; see the built-in field reference), persisted to `data/mcp-servers.json`. The whole document is saved at once: if validation fails nothing is written and the offending entry is named, so a typo cannot damage a working configuration.
+- **Tools land in the model's tool list** — each server's tools keep their own input schema and description under the stable name `mcp__<serverName>__<tool>`. Names that would exceed the DeepSeek function-name contract are normalized and suffixed with a 12-hex-char SHA-256 identity hash so distinct tools never collide. When a server changes its tool list the whole generation is swapped — either the full set takes effect or the previous one stays, never a partial set.
+- **MCP resources** — three shared tools, `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`, each taking the configured `server` name. Binary blobs are rendered as a one-line description instead of entering the model's context.
+- **Server instructions reach the model** — instructions a server declares arrive as a `### MCP server: <name>` section in the runtime snapshot, so the system prompt itself stays byte-stable for prefix caching.
+- **Self-healing connections** — a dropped connection reconnects with bounded exponential backoff (500 ms initial, doubling, capped at 30 s, giving up after 10 consecutive failures and unregistering that server's tools). `failOnStartupError` can make a failed initial connection a loud error instead.
+- **Credential isolation** — the stdio child does not inherit credential-shaped host variables (names containing KEY/PASSWORD/SECRET/TOKEN) or `TELEFORGE_*` / `DSH_*` control variables; only names you declare explicitly in `env` are passed through.
+- **Permission stance** — MCP tools are external capability that cannot declare a narrower category locally, so they are classified fail-closed as "write": plan mode rejects them and confirm mode asks for approval first.
+
 **Global Instruction Injection**
 
 - Maintain a prompt-inject text in settings that is automatically injected into every session as a **high-priority system instruction**.

@@ -26,6 +26,7 @@ import { getUpdateInfo, openExternal } from './utils/updater';
 import { useIsPhone, useIsTablet, useIsDesktop } from './hooks/useMediaQuery';
 import { scrollMovesPanel } from './utils/scrollClose';
 import { useVisualViewportInset } from './hooks/useVisualViewport';
+import { LEFT_SIDEBAR_MAX_RATIO, LEFT_SIDEBAR_MIN, sidebarMaxWidth } from './utils/layout';
 import { useLlm } from './context/llm-context';
 import { useFeedback } from './context/feedback';
 import './App.scss';
@@ -187,6 +188,19 @@ export default function App() {
   }, []);
   const [leftWidth, setLeftWidth] = useState(320);
   const leftRef = useRef<HTMLElement>(null);
+
+  // 视口变窄时把左栏收回上限内:拖拽时的夹取只在"拖的那一刻"成立,之后缩小窗口又会把对话区挤没。
+  // 挂载也跑一次(首次渲染后 .sidebar-right 已挂好,量得到它的宽度)。
+  useEffect(() => {
+    const fit = () => setLeftWidth((w) => Math.min(
+      w,
+      window.innerWidth * LEFT_SIDEBAR_MAX_RATIO,
+      sidebarMaxWidth('.sidebar-right', LEFT_SIDEBAR_MIN),
+    ));
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, []);
   /** 自动化任务里"已过触发时间还没跑"的条数(标签页「🕘 自动化任务」据此显示红点) */
   const [scheduleOverdue, setScheduleOverdue] = useState(0);
 
@@ -242,14 +256,20 @@ export default function App() {
     setActiveTabId(activeFile ? activeFile.id : (files[files.length - 1]?.id ?? FILES_HOME_ID));
   };
 
-  // 左侧边栏拖拽调整宽度
+  // 左侧边栏拖拽调整宽度:上下限见 utils/layout —— 上限同时受「视口 60%」和
+  // 「给中间对话区留够 MIN_MAIN_WIDTH(还要扣掉右栏当前占的宽度)」约束,
+  // 否则左栏一个人就能把对话区挤没。
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startW = leftRef.current?.offsetWidth || 320;
     const onMove = (ev: PointerEvent) => {
-      const w = Math.min(Math.max(startW + ev.clientX - startX, 220), window.innerWidth * 0.6);
-      setLeftWidth(w);
+      const next = startW + ev.clientX - startX;
+      const maxW = Math.min(
+        window.innerWidth * LEFT_SIDEBAR_MAX_RATIO,
+        sidebarMaxWidth('.sidebar-right', LEFT_SIDEBAR_MIN),
+      );
+      setLeftWidth(Math.min(Math.max(next, LEFT_SIDEBAR_MIN), maxW));
     };
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);

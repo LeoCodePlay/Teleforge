@@ -34,6 +34,10 @@ import { PLAN_POLICY_TEXT, exitPlanModeTool, isPlanMode as foldPlanActive, modeB
 
 import { localFs, runWithLocalWorkspaceBinding } from '../core/local-fs.ts';
 import { renderPromptInjectSection } from './prompt-inject.ts';
+// 已接入的 MCP server 发布的 instructions 与资源服务器清单(连接变化才换文本)。
+// 与 harness 的 system prompt section 语义相同,只是随 runtime_context 快照下发:
+// system 必须逐字节稳定(前缀缓存),而这部分文本会随 MCP 重连而变。
+import { renderMcpPromptSections } from '../mcp/state.ts';
 import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.ts';
 import * as sessions from '../store/session-store.ts';
 import { consumeCleanQuitFlag } from '../store/clean-quit.ts';
@@ -3060,6 +3064,11 @@ export class Agent {
     if (lenv && lenv.workspace === localFs.workspace) {
       sections.push(`已知本地环境信息(来自最近一次探测,若无变化直接使用,无需重复调用 get_local_info):\n${String(lenv.summary || '').slice(0, AGENT.ENV_SNAPSHOT_MAX_CHARS)}`);
     }
+    // MCP:各已连接 server 发布的 instructions + 可用资源服务器清单(照搬 harness 的
+    // MCP_SERVERS 提示段,含 `### MCP server: <name>` 与 `## MCP resource servers` 原文)。
+    // 没有配置任何 server 时为空串,不贡献任何提示文本(与 harness 同一可见性规则)。
+    const mcp = renderMcpPromptSections();
+    if (mcp) sections.push(mcp);
     // 本会话名下的浏览器预览清单:属会话运行时状态,随快照走 user 消息(不进 system)。
     // 每一步重算:同一轮里刚 browser_open 出来的预览,下一步请求就能看到,不必等到下一轮。
     const preview = this._browserPreviewSection(sid);

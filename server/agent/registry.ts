@@ -138,6 +138,15 @@ export class ToolRegistry {
    */
   setAliasFilter(fn: (def: ToolDef) => boolean): void { this.aliasFilter = fn; }
 
+  /**
+   * 让 schemas() 的投影缓存失效。
+   * 缓存键只由"启用工具名集合 + localOnly"构成,所以**同名工具的 schema 内容变化**
+   * (例如某个 MCP server 重连后改了同一个工具的 description/parameters)不会自动
+   * 失效。动态注册工具的一方(见 server/mcp/tools.ts)在整代换掉之后显式调用本方法,
+   * 保证模型下一步拿到的是新 schema,而不是上一代的残留。
+   */
+  invalidateSchemasCache(): void { this._schemasCache = null; }
+
   get(name: string): ToolDef | undefined { return this.tools.get(this.canonical(name)); }
 
   /** 全部已注册工具定义(设置面板列出用;含启用状态) */

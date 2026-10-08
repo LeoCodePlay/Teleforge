@@ -17,6 +17,7 @@ import { registerComputerUse } from '../server/api/rpc/computer-use.ts';
 import { registerExtension } from '../server/api/rpc/extension.ts';
 import { registerChanges } from '../server/api/rpc/changes.ts';
 import { registerSchedule } from '../server/api/rpc/schedule.ts';
+import { registerMcp } from '../server/api/rpc/mcp.ts';
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) pass++; else fail++; console.log(`  ${c ? '✓' : '✗'} ${n} ${e}`); };
@@ -52,7 +53,8 @@ const GOLDEN = {
   'computer-use': ['computer_use_status', 'computer_use_set'],
   extension: ['ext_status', 'ext_tabs', 'ext_grant', 'ext_revoke', 'ext_set_mode'],
   changes:  ['changes_find', 'changes_summary', 'changes_diff'],
-  schedule: ['schedule_list', 'schedule_catalog', 'schedule_history', 'schedule_delete', 'schedule_update', 'schedule_preview']
+  schedule: ['schedule_list', 'schedule_catalog', 'schedule_history', 'schedule_delete', 'schedule_update', 'schedule_preview'],
+  mcp:      ['mcp_list', 'mcp_save', 'mcp_reload']
 };
 
 // 各模块 golden:逐个注册到 scratch,类型清单一致
@@ -73,7 +75,8 @@ for (const [name, fn, types] of [
   ['computer-use', registerComputerUse, GOLDEN['computer-use']],
   ['extension', registerExtension, GOLDEN.extension],
   ['changes', registerChanges, GOLDEN.changes],
-  ['schedule', registerSchedule, GOLDEN.schedule]
+  ['schedule', registerSchedule, GOLDEN.schedule],
+  ['mcp', registerMcp, GOLDEN.mcp]
 ]) {
   const rpc = scratchRpc();
   fn(rpc);

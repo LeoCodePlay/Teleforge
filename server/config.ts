@@ -44,6 +44,9 @@ export const SESSIONS_DIR       = path.join(DATA_DIR, 'sessions');
 // 子代理运行记录(每次派发一个文件;面板按会话列出并回看其完整对话)
 export const SUBAGENTS_DIR      = path.join(DATA_DIR, 'subagents');
 export const SETTINGS_FILE      = path.join(DATA_DIR, 'settings.json');
+// MCP(Model Context Protocol)外部服务器清单:每条=一个待接入的 MCP server,
+// 字段与 deepseek-harness 的 dsh-mcp-client 配置一一对应,见 server/mcp/store.ts
+export const MCP_SERVERS_FILE   = process.env.MCP_SERVERS_FILE   || path.join(DATA_DIR, 'mcp-servers.json');
 // 自动化任务(定时把一句话投递进某个会话):任务表 + 运行记录,见 server/schedule/
 export const SCHEDULES_FILE     = process.env.SCHEDULES_FILE     || path.join(DATA_DIR, 'schedules.json');
 // 「上次是用户主动退出」的标记文件(见 store/clean-quit.ts):用来区分"进程崩了该自动接着做"

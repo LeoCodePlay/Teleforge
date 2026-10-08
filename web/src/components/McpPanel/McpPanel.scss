@@ -1,0 +1,97 @@
+/* ---- McpPanel:等权列表用细分隔线分组,JSON 配置区在下方 ---- */
+
+.mcp-meta { color: var(--muted); font-size: 12px; }
+
+/* 一行引导语,并挂载折叠的说明与字段参考 */
+.mcp-lead { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.mcp-lead > code { font-family: var(--mono); }
+
+/* ---- 反馈(错误 / 成功):常驻高度不跳,内容为空时不渲染 ---- */
+.mcp-feedback {
+  margin: 0 0 10px; padding: 7px 10px; border-radius: var(--r-sm);
+  font-size: 12px; line-height: 1.6; cursor: pointer;
+  border: 1px solid var(--glass-border); background: var(--fill-1);
+}
+.mcp-feedback.ok { color: var(--green); }
+.mcp-feedback.err { color: var(--red); }
+
+/* ---- 服务器列表:一个容器 + 行间细分隔线(不给每行描边) ---- */
+.mcp-servers {
+  border: 1px solid var(--glass-border); border-radius: var(--r-md); overflow: hidden;
+  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+.mcp-row {
+  display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px;
+}
+.mcp-row + .mcp-row { border-top: 1px solid var(--line-soft); }
+.mcp-row.off { opacity: .6; }
+.mcp-row-main { flex: 1 1 60%; min-width: 0; }
+.mcp-row-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.mcp-name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--text); }
+.mcp-state { font-size: 11.5px; }
+.mcp-state.ok { color: var(--green); }
+.mcp-state.warn { color: var(--amber); }
+.mcp-state.idle { color: var(--muted); }
+.mcp-count { font-size: 11px; color: var(--muted); }
+/* 目标行只用来"认出这是哪个 server":过长就截断,完整值留在悬停提示里 */
+.mcp-target {
+  margin-top: 3px; font-family: var(--mono); font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcp-errline { margin-top: 4px; font-size: 11px; color: var(--red); word-break: break-all; }
+.mcp-toggle { flex: none; font-size: 11.5px; }
+/* 工具清单可能上百条:紧凑多列 + 限高滚动,而不是一条一个项目符号 */
+.mcp-toolgrid {
+  flex: 1 1 100%; margin-top: 2px; padding: 8px 10px; max-height: 168px; overflow: auto;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 3px 12px;
+  border: 1px dashed var(--line-dash); border-radius: var(--r-sm);
+}
+.mcp-toolgrid code { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+
+/* ---- 空态:给出"怎么开始"的下一步 ---- */
+.mcp-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+
+/* ---- JSON 配置区 ---- */
+.mcp-editor-title { margin-top: 18px; }
+.mcp-dirty { font-size: 11px; color: var(--amber); }
+.mcp-editor {
+  width: 100%; min-height: 240px; margin-top: 4px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.65;
+  white-space: pre; overflow: auto; tab-size: 2; resize: vertical;
+}
+.mcp-editor-actions { margin-top: 8px; gap: 8px; flex-wrap: wrap; }
+
+/* ---- 说明与字段速查(默认折叠:参考材料不该占版面) ---- */
+.mcp-fields { display: inline; margin-left: 8px; }
+.mcp-fields summary { cursor: pointer; color: var(--accent-2); display: inline; }
+.mcp-fields-body { margin-top: 8px; display: flex; flex-direction: column; gap: 14px; }
+.mcp-note { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.7; max-width: 78ch; }
+.mcp-snippet {
+  margin: 0; padding: 9px 11px; border-radius: var(--r-sm);
+  background: var(--code-bg); border: 1px solid var(--code-bor); color: var(--code-ink);
+  font-family: var(--mono); font-size: 11px; line-height: 1.6; overflow-x: auto;
+}
+.mcp-field-group h4 {
+  margin: 0 0 6px; font-size: 11.5px; font-weight: 600; color: var(--text-2);
+}
+.mcp-field {
+  display: grid; grid-template-columns: minmax(150px, 190px) minmax(72px, 96px) 1fr;
+  gap: 2px 12px; align-items: baseline; padding: 2px 0;
+  font-size: 11px; line-height: 1.6;
+}
+.mcp-field code { font-family: var(--mono); font-size: 10.5px; color: var(--text-2); }
+.mcp-def, .mcp-desc { color: var(--muted); }
+
+/* 移动端:字段参考收成单列(显式声明,不假设"表格会自己适配") */
+@media (max-width: 768px) {
+  .mcp-field { grid-template-columns: 1fr; gap: 0; padding: 5px 0; }
+  .mcp-row-main { flex-basis: auto; }
+  .mcp-toolgrid { grid-template-columns: 1fr; }
+}
+
+/* 低动效偏好:这里的过渡只是悬停反馈,直接关掉 */
+@media (prefers-reduced-motion: reduce) {
+  .mcp-panel *, .mcp-panel *::before, .mcp-panel *::after { transition: none !important; }
+}

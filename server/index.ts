@@ -13,6 +13,7 @@ import { browserManager } from './core/browser-manager.ts';
 import { closeTunnels } from './core/port-tunnel.ts';
 import { markCleanQuit } from './store/clean-quit.ts';
 import { scheduleService } from './schedule/index.ts';
+import { mcpManager } from './mcp/manager.ts';
 import * as sessions from './store/session-store.ts';
 import registerBasic from './api/http/basic.ts';
 import registerProviders from './api/http/providers.ts';
@@ -82,6 +83,10 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
   // AI 电脑操控:把实际监听端口交给控制器,悬浮窗「停止」按钮要回调本机 HTTP 急停接口
   computerUse.configure({ port });
   await app.listen({ port, host });
+  // MCP 外部服务器:按 data/mcp-servers.json 连接并注册其工具。
+  // 不 await:连接与工具发现异步进行(慢/挂掉的 server 不该拖住宿主启动),
+  // 状态由「设置 → MCP 服务」面板查询;与 harness"工具在首个回合前就位"的差别仅此一处。
+  void mcpManager.start().catch((e) => console.error('[mcp] 启动失败:', e?.message || e));
   if (!quiet) {
     console.log('==============================================');
     console.log('  SSH 远程 AI 编程工具已启动');
@@ -105,6 +110,7 @@ if (isMain) {
       markCleanQuit('signal');
       console.log('\n正在退出…');
       void scheduleService.dispose(); // 停表 + 等在途投递收尾,别在退出过程中再投递任务
+      void mcpManager.dispose(); // 关掉全部 MCP 连接(含 stdio 子进程),别把子进程留成孤儿
       try { wss.close(); } catch {}
       try { termWss.close(); } catch {}
       try { browserWss.close(); } catch {}
