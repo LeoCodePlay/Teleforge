@@ -256,6 +256,17 @@ export interface SubagentRunInfo {
   prompt: string;
   /** 结束补充说明(被停止 / 出错原因) */
   note?: string | null;
+  /**
+   * 活跃时长口径(服务端按 dsh 的 subagentTiming 折叠):**只累计真正在跑的回合**,
+   * 闲置时间不计 —— 常驻子代理停在「当前未运行」时,显示的时间是定住的,不会一直涨。
+   */
+  settledMs?: number;
+  /** 当前开着的那一轮的起点(ms);没有开着的轮 = null(前端据此决定计时器还走不走) */
+  activeSince?: number | null;
+  /** 开着的这一轮里最后一个事件的时间 */
+  activeThrough?: number | null;
+  /** 最近一次关闭的轮是否正常完成(前端据此把行显示成「已完成」而不是「当前未运行」) */
+  lastTurnCompleted?: boolean | null;
 }
 
 /** 子代理内部的一条对话消息 */

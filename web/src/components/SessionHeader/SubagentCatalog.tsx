@@ -82,17 +82,26 @@ function tokenTotal(run: SubagentRunInfo): number | undefined {
   return total > 0 ? total : undefined;
 }
 
-/** 一次派发的活跃时长:结束后取真实耗时,常驻(running/idle)按 now 递增。 */
+/** 一次派发的活跃时长(ms)—— 对齐 dsh 的 subagentTiming(见 SubagentHeaderLineage 的 activityDuration):
+ *  只累计**真正在跑的回合**(settledMs)+ 当前开着的那一轮已跑的时间;
+ *  没有开着的轮(常驻但已停/已收尾)= 定住的 settledMs,**不再按 wall-clock 涨**。 */
 function durationOf(run: SubagentRunInfo, now: number): number {
-  const alive = run.status === 'running' || run.status === 'idle';
-  const end = run.endedAt ?? (alive ? now : run.startedAt);
-  return Math.max(0, end - run.startedAt);
+  const settled = run.settledMs ?? 0;
+  if (run.activeSince == null) {
+    // 没有活跃时长口径的老记录:一次性派发用它的真实耗时兜底;常驻的按已结算值(0)
+    return run.endedAt != null ? Math.max(0, (run.ms ?? (run.endedAt - run.startedAt)) || 0) : settled;
+  }
+  // 与 dsh 同款:只有"还在跑"才拿 now 兜底,否则用那一轮最后一个事件的时间(避免瞬时多算)
+  const end = run.status === 'running' ? now : (run.activeThrough ?? run.activeSince);
+  return settled + Math.max(0, end - run.activeSince);
 }
 
-/** 子智能体的活动语义:运行中 / 已完成 / 当前未运行(dsh 的同名三态)。 */
+/** 子智能体的活动语义:运行中 / 已完成 / 当前未运行(dsh 的同名三态)。
+ *  「已完成」= 当前没在跑,且最近一次收尾的轮是正常完成的(dsh: inactive && lastTurnCompleted)。 */
 function activityOf(run: SubagentRunInfo): 'running' | 'completed' | 'inactive' {
   if (run.status === 'running') return 'running';
-  return run.status === 'done' ? 'completed' : 'inactive';
+  if (run.status === 'done') return 'completed';
+  return run.lastTurnCompleted === true ? 'completed' : 'inactive';
 }
 
 /** Render catalog loading without inventing child membership. */
@@ -111,7 +120,9 @@ interface CatalogRowsProps {
 function CatalogRows({ source, currentRunId, actions, closeCatalog }: CatalogRowsProps) {
   const { runs, loading, error } = source;
   const [now, setNow] = useState(() => Date.now());
-  const running = runs.some(run => run.status === 'running' || run.status === 'idle');
+  // 计时器只在**真的有轮在跑**时走(activeSince 有值 = 有一轮没闭合);
+  // 常驻但停在"当前未运行"的那种行不进这里 —— 否则一个已经停住的子代理会白白每秒重渲染
+  const running = runs.some(run => run.activeSince != null);
 
   // 运行中时每秒走一次,时长那一格才会真实递增(与 dsh 同一做法)
   useEffect(() => {

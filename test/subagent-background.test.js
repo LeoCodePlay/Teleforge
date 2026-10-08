@@ -580,6 +580,80 @@ async function main() {
     check('没有可分支对话的子代理如实报错', /没有可分支的对话/.test(bad), bad);
   }
 
+  // ---- 11. 活跃时长口径:只累计真正在跑的回合(用户报的 bug:停住后时间还在涨)----
+  //
+  // 逐条对齐 dsh 的 subagentTiming(packages/subagent/subagent/src/projection.ts):
+  //   settledMs = 每个**收尾**回合的耗时累加(闲置不计);active = 当前开着的那一轮;
+  //   lastTurnCompleted = 最近收尾的那一轮是不是正常完成(前端据此显示「已完成」)。
+  {
+    let release = () => {};
+    const gate = new Promise((r) => { release = r; });
+    const llm = {
+      isMock: false,
+      async chat({ signal }) {
+        await waitGate(gate, signal);
+        return { content: '结论:计时用例跑完了。', toolCalls: [] };
+      }
+    };
+    const started = await toolRegistry.execute({
+      name: 'subagent', args: JSON.stringify({ ...BRIEF, description: '计时用例' }),
+      invokeCtx: { sid: 's_timing', llm, registry: toolRegistry, emit: () => {}, agent: { submit: () => {} } }
+    });
+    const runId = started.meta.subagent.runId;
+    check('(前置)跑起来时状态 running 且有"开着的那一轮"(前端据此走计时器)',
+      await waitFor(() => saStore.get(runId)?.status === 'running' && saStore.get(runId)?.activeSince != null),
+      JSON.stringify({ status: saStore.get(runId)?.status, activeSince: saStore.get(runId)?.activeSince }));
+    check('还在跑时 settledMs 仍是 0(只有收尾的回合才计入)',
+      Number(saStore.get(runId)?.settledMs || 0) === 0, String(saStore.get(runId)?.settledMs));
+
+    await new Promise((r) => setTimeout(r, 300)); // 真跑一会儿,好有个明显 > 0 的耗时
+    release();
+    check('(前置)跑完停在可继续状态',
+      await waitFor(() => saStore.get(runId)?.status === 'idle'), String(saStore.get(runId)?.status));
+    const rec = saStore.get(runId);
+    check('收尾的回合计入 settledMs(只算真正在跑的这段)',
+      Number(rec?.settledMs) >= 300 && Number(rec?.settledMs) < 5000,
+      JSON.stringify({ settledMs: rec?.settledMs }));
+    check('跑完就没有"开着的那一轮"了(activeSince = null → 前端计时器停下)',
+      rec?.activeSince == null, JSON.stringify({ activeSince: rec?.activeSince }));
+    check('最近一轮正常完成(lastTurnCompleted = true → 行显示「已完成」)',
+      rec?.lastTurnCompleted === true, JSON.stringify({ lastTurnCompleted: rec?.lastTurnCompleted }));
+
+    // 等一会儿再看:闲置时间**不会**被算进去(这正是用户看到的"时间一直涨")
+    const settledBefore = Number(rec?.settledMs) || 0;
+    await new Promise((r) => setTimeout(r, 700));
+    check('闲置 0.7s 后 settledMs 不变(执行时间不会自己涨)',
+      Number(saStore.get(runId)?.settledMs || 0) === settledBefore,
+      JSON.stringify({ before: settledBefore, after: saStore.get(runId)?.settledMs }));
+
+    // 再派一个、跑起来后立刻暂停:那一轮收尾不是 completed → 行回到「当前未运行」
+    let release2 = () => {};
+    const gate2 = new Promise((r) => { release2 = r; });
+    const llm2 = {
+      isMock: false,
+      async chat({ signal }) {
+        await waitGate(gate2, signal);
+        return { content: '这一轮不会正常结束。', toolCalls: [] };
+      }
+    };
+    const second = await toolRegistry.execute({
+      name: 'subagent', args: JSON.stringify({ ...BRIEF, description: '暂停计时用例' }),
+      invokeCtx: { sid: 's_timing', llm: llm2, registry: toolRegistry, emit: () => {}, agent: { submit: () => {} } }
+    });
+    const run2 = second.meta.subagent.runId;
+    check('(前置)第二个子代理跑起来了',
+      await waitFor(() => saStore.get(run2)?.status === 'running' && saStore.get(run2)?.activeSince != null),
+      JSON.stringify({ status: saStore.get(run2)?.status }));
+    await new Promise((r) => setTimeout(r, 200));
+    rt.interruptChild(run2, '测试暂停');
+    release2();
+    check('被暂停后停在可继续,且"最近一轮没正常完成"(行显示「当前未运行」)',
+      await waitFor(() => saStore.get(run2)?.status === 'idle' && saStore.get(run2)?.lastTurnCompleted === false, 8000),
+      JSON.stringify({ status: saStore.get(run2)?.status, done: saStore.get(run2)?.lastTurnCompleted }));
+    check('暂停后也没有"开着的那一轮"(计时器同样停住)',
+      saStore.get(run2)?.activeSince == null, JSON.stringify({ activeSince: saStore.get(run2)?.activeSince }));
+  }
+
   rt.disposeAll();
   console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);
   process.exit(fail > 0 ? 1 : 0);

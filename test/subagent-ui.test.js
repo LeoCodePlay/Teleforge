@@ -313,6 +313,14 @@ try {
   const rowText = await row.innerText();
   check('行上有子智能体描述', rowText.includes('看工作区目录'), rowText);
   check('行上有「可继续」模式标记(默认派发的是 continuable 子代理)', rowText.includes('可继续'), rowText);
+  // 跑完的那一轮是正常完成的 → 行显示「已完成」(dsh 的 activity.completed),而不是「当前未运行」
+  check('跑完的子代理行显示「已完成」而不是「当前未运行」',
+    rowText.includes('已完成') && !rowText.includes('当前未运行'), rowText.replace(/\n/g, ' | '));
+  // 活跃时长:只算真正在跑的回合 —— 停住之后**不会**自己涨(用户报的 bug)
+  const dur1 = (await row.locator('[data-tip*="总活跃耗时"]').first().innerText()).trim();
+  await page.waitForTimeout(2600);
+  const dur2 = (await page.locator('[data-subagent-row]').first().locator('[data-tip*="总活跃耗时"]').first().innerText()).trim();
+  check('子智能体没在跑时,执行时长定住不涨(不再按 wall-clock 递增)', dur1 === dur2, `${dur1} → ${dur2}`);
   check('行尾有「在侧边栏打开」按钮', await page.locator('[data-subagent-aside]').first().isVisible());
 
   // 行内左侧不留分支占位的空块;状态点必须在行高里垂直居中

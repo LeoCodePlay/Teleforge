@@ -567,6 +567,12 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
   "父会话不在线也能收到"),载不回来就与 dsh 的"父代理不在现场直接 return"一样丢掉。
   实时用 `steer_message` 事件把通知行插进本轮;刷新后由 `projectEvents` 的 `inline` 标记投影出同一形态
   (轮内通知行:折叠行带 `source.summary` 一行账,不说"触发本轮")。
+- **活跃时长口径 = dsh 的 `subagentTiming` 投影**(`packages/subagent/subagent/src/projection.ts`,规格见
+  `tests/timing-projection.spec.ts`):只累计**已收尾回合**的耗时(`settledMs`)+ 当前开着的那一轮
+  (`active.since`),闲置时间不计;`lastTurnCompleted` 记录最近收尾的轮是否正常完成 —— 前端据此把行显示成
+  「运行中 / 已完成 / 当前未运行」三态(与我们原来的 `now - startedAt` 不同:那个会让停在"当前未运行"的
+  子代理时间一直涨)。服务端每次落进度时按 `foldTiming` 折叠并写进运行记录(`settledMs`/`activeSince`/
+  `activeThrough`/`lastTurnCompleted`),前端 `durationOf` 只在 `activeSince` 有值时让计时器继续走。
 - **在子智能体会话里「在新对话中分支」= 把这个子智能体当成一个新的父对话克隆**(dsh 的 fork 语义):
   dsh 的分支动作作用于**当前正在看的那个会话**(`ui-chat/apply.ts` 的 `forkAt` → `ctx.sessions.fork({ sessionId, atSeq })`,
   `sessionId` 是视图所属会话;子代理视图里它就是子代理),fork 出来的是一条 seed 了那份日志的

@@ -66,6 +66,18 @@ export interface SubagentRunInfo {
   prompt: string;
   /** 结束补充说明(达到步数上限 / 被停止 / 出错原因) */
   note?: string | null;
+  /**
+   * 活跃时长口径(移植 dsh 的 subagentTiming,见 subagent-runtime 的 foldTiming):
+   * **只累计真正在跑的回合**,闲置时间不计 —— 所以常驻子代理停在"当前未运行"时,
+   * 前端显示的时间是定住的,不会一直涨。
+   */
+  settledMs?: number;
+  /** 当前开着的那一轮的起点(ms);没有开着的轮 = null(前端据此决定计时器还走不走) */
+  activeSince?: number | null;
+  /** 开着的这一轮里最后一个事件的时间(留档;前端只在还在跑时用 now 兜底) */
+  activeThrough?: number | null;
+  /** 最近一次关闭的轮是否正常完成(前端据此把行显示成「已完成」而不是「当前未运行」) */
+  lastTurnCompleted?: boolean | null;
 }
 
 /** 详情 = 列表快照 + 完整对话 */
@@ -170,6 +182,8 @@ export function finishRun(runId: string, patch: {
 export function updateRun(runId: string, patch: {
   status?: SubagentStatus; steps?: number; toolCalls?: number;
   promptTokens?: number; completionTokens?: number; note?: string | null; queued?: number;
+  settledMs?: number; activeSince?: number | null; activeThrough?: number | null;
+  lastTurnCompleted?: boolean | null;
 }): SubagentRun | null {
   const run = cache.get(runId);
   if (!run) return null;
@@ -180,6 +194,11 @@ export function updateRun(runId: string, patch: {
   if (patch.completionTokens !== undefined) run.completionTokens = patch.completionTokens;
   if (patch.note !== undefined) run.note = patch.note;
   if (patch.queued !== undefined) run.queued = patch.queued;
+  // 活跃时长(只累计真正在跑的回合):与状态一起落盘,刷新/切回后口径一致
+  if (patch.settledMs !== undefined) run.settledMs = patch.settledMs;
+  if (patch.activeSince !== undefined) run.activeSince = patch.activeSince;
+  if (patch.activeThrough !== undefined) run.activeThrough = patch.activeThrough;
+  if (patch.lastTurnCompleted !== undefined) run.lastTurnCompleted = patch.lastTurnCompleted;
   persist(run);
   return run;
 }

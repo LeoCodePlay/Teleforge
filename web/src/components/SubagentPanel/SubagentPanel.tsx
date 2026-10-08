@@ -28,12 +28,16 @@ import './SubagentPanel.scss';
 
 const POLL_MS = 1500; // 运行中记录的兜底刷新(事件为主,轮询只防丢事件)
 
-/** 状态文案与状态点语义(点=真实状态,不是装饰) */
-function statusOf(s: SubagentRunInfo['status']): { text: string; dot: 'ongoing' | 'done' | 'error' | 'warning' | 'idle' } {
+/** 状态文案与状态点语义(点=真实状态,不是装饰)。
+ *  常驻子代理停在"当前未运行"时,还要看它**最近一轮是不是正常完成的**:
+ *  完成了就是「已完成」(dsh 的 activity.completed),被中断/出错才是「当前未运行」。 */
+function statusOf(s: SubagentRunInfo['status'], lastTurnCompleted?: boolean | null): { text: string; dot: 'ongoing' | 'done' | 'error' | 'warning' | 'idle' } {
   switch (s) {
     case 'running': return { text: '运行中', dot: 'ongoing' };
-    // 常驻但当前没在跑:不是"已完成",而是在等后续消息(可继续)
-    case 'idle': return { text: '当前未运行', dot: 'idle' };
+    // 常驻但当前没在跑:任务这一轮跑完了 = 已完成;中途被打断/出错 = 当前未运行(等后续消息)
+    case 'idle': return lastTurnCompleted === true
+      ? { text: '已完成', dot: 'done' }
+      : { text: '当前未运行', dot: 'idle' };
     case 'error': return { text: '出错', dot: 'error' };
     case 'stopped': return { text: '已停止', dot: 'warning' };
     default: return { text: '已完成', dot: 'done' };
@@ -263,7 +267,7 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
         </div>
       )}
       {runs.map((r) => {
-        const st = statusOf(r.status);
+        const st = statusOf(r.status, r.lastTurnCompleted);
         return (
           <button
             type="button"
@@ -329,7 +333,7 @@ export default function SubagentPanel({ active, sid, open, runId, onOpen, onClos
       </div>
       {run && (
         <footer className="sa-foot">
-          <span className={`sa-item-status st-${run.status}`}>{statusOf(run.status).text}</span>
+          <span className={`sa-item-status st-${run.status}`}>{statusOf(run.status, run.lastTurnCompleted).text}</span>
           <span className="sa-foot-gap" />
           <span className="sa-foot-provider">{run.provider}</span>
         </footer>

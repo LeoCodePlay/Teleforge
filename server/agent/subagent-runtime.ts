@@ -77,6 +77,8 @@ interface Child {
   inbox: QueuedTurn[];
   /** 已写进 session、等下一步认领的 steer 消息条数 */
   steerPending: number;
+  /** 活跃时长折叠状态(见 timingOf:只累计真正在跑的回合,闲置不计) */
+  timing?: ChildTiming;
   busy: boolean;
   signal: AbortController | null;
   draining: Promise<void> | null;
@@ -187,8 +189,72 @@ function publish(c: Child, status: 'running' | 'idle') {
     toolCalls: c.toolCalls,
     promptTokens: c.promptTokens,
     completionTokens: c.completionTokens,
-    queued: c.inbox.length + c.steerPending
+    queued: c.inbox.length + c.steerPending,
+    // 活跃时长投影:只累计**真正在跑**的回合,闲置时间不计(见 foldTiming)
+    ...timingOf(c)
   });
+}
+
+/** 计时折叠状态(逐字对齐 dsh 的 TimingState,省掉它处理"种子日志"的 descriptor 部分) */
+interface ChildTiming {
+  /** 已完成回合的耗时累加(ms) */
+  settledMs: number;
+  /** 当前开着的那一轮的起点;没有开着的轮 = null */
+  activeSince: number | null;
+  /** 开着的这一轮内最后一个事件的时间(前端只在"还在跑"时用它兜底) */
+  activeThrough: number | null;
+  /** 最近一次关闭的轮是否正常完成(前端据此显示「已完成」/「当前未运行」) */
+  lastTurnCompleted: boolean | null;
+  /** 已经折进状态的事件条数(增量折叠用;事件日志是 append-only) */
+  at: number;
+}
+
+/**
+ * 子代理的**活跃时长**投影 —— 逐字照搬 dsh 的 subagentTiming
+ * (packages/subagent/subagent/src/projection.ts,规格见它的 timing-projection.spec.ts):
+ *
+ *   - `settledMs`:已完成回合的耗时**累加** —— 只算 turn/start → turn/end 那段,
+ *     中间的闲置时间(等消息、面板开着放那儿)一律不计;
+ *   - `active`:当前开着的那一轮(有它 = 这一轮还在跑,前端才让计时器继续走);
+ *   - `lastTurnCompleted`:最近一次关闭的轮是不是正常结束 —— 前端据此把这一行显示成
+ *     「已完成」而不是「当前未运行」。
+ *
+ * 为什么必须这样:曾经用 `now - startedAt` 当"执行时间",于是常驻子代理跑完停在那儿时,
+ * 那一行明明写着「当前未运行」,时间却一直涨(用户报的就是这个)。
+ *
+ * 增量折叠:事件日志 append-only,子会话被冷恢复重建时才从头折一次。
+ */
+function foldTimingStep(st: ChildTiming, ev: { type: string; time?: number; data?: any }): ChildTiming {
+  if (ev.type === 'turn/start') {
+    const at = Number(ev.time) || 0;
+    return { ...st, activeSince: at, activeThrough: at, lastTurnCompleted: null };
+  }
+  if (ev.type === 'turn/end') {
+    const end = Number(ev.time) || 0;
+    return {
+      ...st,
+      settledMs: st.settledMs + (st.activeSince === null ? 0 : Math.max(0, end - st.activeSince)),
+      activeSince: null,
+      activeThrough: null,
+      lastTurnCompleted: String(ev.data?.reason?.kind || '') === 'completed'
+    };
+  }
+  if (st.activeSince === null) return st;
+  return { ...st, activeThrough: Number(ev.time) || st.activeThrough };
+}
+
+function timingOf(c: Child) {
+  let st: ChildTiming = c.timing && c.timing.at <= c.session.events.length
+    ? c.timing
+    : { settledMs: 0, activeSince: null, activeThrough: null, lastTurnCompleted: null, at: 0 };
+  for (let i = st.at; i < c.session.events.length; i++) st = foldTimingStep(st, c.session.events[i]);
+  c.timing = { ...st, at: c.session.events.length };
+  return {
+    settledMs: st.settledMs,
+    activeSince: st.activeSince,
+    activeThrough: st.activeThrough,
+    lastTurnCompleted: st.lastTurnCompleted
+  };
 }
 
 function isAbort(e: any): boolean {
@@ -398,7 +464,9 @@ async function drive(child: Child) {
       updateRun(child.runId, {
         status: 'idle', steps: child.steps, toolCalls: child.toolCalls,
         promptTokens: child.promptTokens, completionTokens: child.completionTokens,
-        queued: child.inbox.length, note: parked
+        queued: child.inbox.length, note: parked,
+        // 活跃时长:这一轮跑完了就定住(闲置时间不计,见 foldTiming)
+        ...timingOf(child)
       });
       notify(child);
       deliverNotice(child, parked ? 'stopped' : 'done', parked);
@@ -415,7 +483,8 @@ async function drive(child: Child) {
 function publishTerminal(child: Child, status: 'done' | 'error' | 'stopped', note: string | null) {
   updateRun(child.runId, {
     status, steps: child.steps, toolCalls: child.toolCalls,
-    promptTokens: child.promptTokens, completionTokens: child.completionTokens, note
+    promptTokens: child.promptTokens, completionTokens: child.completionTokens, note,
+    ...timingOf(child)
   });
 }
 
@@ -439,6 +508,9 @@ async function runOneTurn(child: Child, item: QueuedTurn) {
   const turn = child.session.nextTurn();
   let reason: 'completed' | 'aborted' | 'error' = 'completed';
   child.session.append('turn/start', { turn });
+  // 一轮一开就落一次进度:活跃时长口径里的 `active` 就是这一轮的起点,前端据此走计时器
+  // (否则"第一步的模型请求还在跑"这段时间里,记录里没有开着的轮 → 时长会停着不动)
+  publish(child, 'running');
   try {
     // 排队时只进队列面板;真正开轮时才落成会话里的 user 消息(与父会话同一口径)
     if (!item.steered) child.session.append('user/message', { content: item.content, source: item.source });
