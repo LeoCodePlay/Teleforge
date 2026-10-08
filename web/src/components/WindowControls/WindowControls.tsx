@@ -42,14 +42,14 @@ export default function WindowControls() {
 
   return (
     <div className="winctls">
-      <button className="winctl winctl-min" data-tip="最小化" aria-label="最小化"
+      <button className="winctl winctl-min" aria-label="最小化"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => { win()?.minimize().catch(() => {}); }}>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" strokeWidth="1.1" />
         </svg>
       </button>
-      <button className="winctl winctl-max" data-tip={maximized ? '还原' : '最大化'} aria-label={maximized ? '还原' : '最大化'}
+      <button className="winctl winctl-max" aria-label={maximized ? '还原' : '最大化'}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => { win()?.toggleMaximize().catch(() => {}); }}>
         {maximized ? (
@@ -64,7 +64,7 @@ export default function WindowControls() {
           </svg>
         )}
       </button>
-      <button className="winctl winctl-close" data-tip="关闭" aria-label="关闭"
+      <button className="winctl winctl-close" aria-label="关闭"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => { win()?.close().catch(() => {}); }}>
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">

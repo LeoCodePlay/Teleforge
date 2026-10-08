@@ -4,6 +4,7 @@
 // 推理等级 → 6 档 reasoning_effort 列表。点击外部关闭,Esc 先退回根菜单再关闭。
 import React, { useEffect, useRef, useState } from 'react';
 import { useLlm } from '../../context/llm-context';
+import { IconChevronDownOutline14 } from '../icons/icons';
 import './ModelMenu.scss';
 
 // 推理等级 = 模型的 reasoning_effort 参数,共 6 档:
@@ -101,7 +102,7 @@ export default function ModelMenu({ reasoning, onChangeReasoning }: ModelMenuPro
       >
         <span className="msm-label">{curModel}</span>
         {curLevel && <span className="msm-effort">{curLevel.label}</span>}
-        <span className="msm-arrow">▾</span>
+        <span className="msm-arrow"><IconChevronDownOutline14 size={13} /></span>
       </button>
       {open && (
         <div ref={menuRef} className="msm-menu" role="menu" onKeyDown={onMenuKeyDown}>

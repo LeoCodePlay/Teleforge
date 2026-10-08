@@ -324,12 +324,8 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cmx-meta { color: var(--muted); }
 .fviewer .cmx-err { color: var(--red); text-decoration: underline wavy var(--red); }
 
-/* 编辑器内原生滚动条:全局隐藏过,这里给编辑器保留细窄可见的 */
-.fviewer .cm-scroller::-webkit-scrollbar { width: 6px; height: 6px; }
-.fviewer .cm-scroller::-webkit-scrollbar-track { background: transparent; }
-.fviewer .cm-scroller::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
-.fviewer .cm-scroller::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
-.fviewer .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb-x) transparent; }
+/* 编辑器内原生滚动条:已并入 styles.scss 的「全站滚动条唯一规格」
+   (.fviewer .cm-scroller 是原生例外之一);此处不再单独定义,避免出现第二套外观 */
 
 /* ---- 移动端(<768):头部加高容纳返回钮,编辑器触控友好 ---- */
 @media (max-width: 767px) {

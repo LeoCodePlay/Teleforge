@@ -125,7 +125,7 @@
 .msg-action[data-unavailable] { cursor: default; opacity: .35; }
 
 /* ---- 操作栏尾部的统计行(照搬 dsh turn-tail 的 endInfo)----
-   排布:复制 / 分支图标之后接「🗄 用量 31.2M tok  2分19秒」。
+   排布:复制 / 分支图标之后接「⟨数据仓〉用量 31.2M tok  2分19秒」。
    静止色统一走 --muted —— 与 .action-icon、.stat-pill 同一档,
    统计信息与操作图标看起来才是同一层附属信息,而不是新的视觉层级。
    颜色不硬编码:用量胶囊的悬停底色复用 .stat-pill 已有的 --glass-bg-hover。 */
@@ -587,8 +587,16 @@
 /* 本地工作区 chip:用文字色与远程(强调色)区分,描边保持全站同一条中性线 */
 .ws-chip.local { color: var(--green); }
 .ws-chip.local.none { color: var(--muted); border-color: var(--line); }
-.ws-chip-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-chip-arrow { flex: none; font-size: 10px; color: var(--muted); }
+/* chip 内的「图标 + 路径」两段:图标定宽不压缩,路径负责省略号;
+   图标是内联 SVG(远程=云 / 本地=文件夹 / 锁定时锁),颜色随 chip 文字色 */
+.ws-chip-path { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.ws-chip-ico { flex: none; display: inline-flex; align-items: center; }
+.ws-chip-ico svg { display: block; }
+.ws-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 开合箭头:与「模型选择」用同一个 chevron 图标(同尺寸 13px),展开时同一条 180° 旋转动画 */
+.ws-chip-arrow { flex: none; display: inline-flex; align-items: center; color: var(--muted); transition: transform .18s; }
+.ws-chip-arrow svg { display: block; }
+.ws-chip.open .ws-chip-arrow { transform: rotate(180deg); }
 .ws-pick {
   position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 120;
   min-width: 280px; max-width: min(560px, 92vw);

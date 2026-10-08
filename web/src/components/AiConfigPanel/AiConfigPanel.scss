@@ -94,6 +94,11 @@
 .key-list { display: flex; flex-direction: column; gap: 6px; }
 .key-row { display: flex; align-items: center; gap: 6px; }
 .key-row input { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 12px; }
+/* 去掉 input[type=password] 自带的显隐小眼睛(Edge/WebView2 的 ::-ms-reveal 会渲染在输入框内部,
+   与本行行尾的显隐按钮重复:两个眼睛一个能点一个点不动,反而不知道按哪个)。
+   显隐只由 .key-reveal 负责,输入框内一律不再出现浏览器控件 */
+.key-row input::-ms-reveal,
+.key-row input::-ms-clear { display: none; }
 .key-row.exhausted input { border-color: var(--warn-border); }
 /* 行尾图标按钮(显隐 / 删除)。颜色/hover/按下反馈由 .action-icon(.danger) 统一提供,
    这里只定几何 —— 与输入框等高(30px)的方形热区,保证同一行的隐式高度不被按钮撑高 */

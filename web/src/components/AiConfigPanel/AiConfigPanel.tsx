@@ -6,7 +6,7 @@ import React, { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLlm } from '../../context/llm-context';
 import { PROVIDERS, getDefaultModelContext } from '../../data/llm-providers';
-import type { LlmProvider, ProviderDraft, ModelContextConfig, KeyState } from '../../types';
+import type { LlmProvider, ProviderDraft, ModelContextConfig, KeyState, LlmProtocol } from '../../types';
 import { parseCountInput, formatCountInput } from '../../utils/tokens';
 import { IconTrashOutline14, IconEye16, IconEyeOff16 } from '../icons/icons';
 import GlassSelect from '../GlassSelect/GlassSelect';
@@ -107,6 +107,8 @@ function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete, onResetKey }
       <div className="pc-head">
         <span className="pc-name">{p.name}</span>
         {active && <span className="badge ok">使用中</span>}
+        {/* 非 OpenAI 协议的条目要一眼能认出来:它决定了端点与请求形态,排查时不能靠点开弹窗才知道 */}
+        {p.protocol && p.protocol !== 'openai' && <span className="badge">{PROTOCOL_LABEL[p.protocol]}</span>}
       </div>
       <div className="pc-url">{p.baseUrl}</div>
       <div className="pc-meta">
@@ -156,10 +158,35 @@ interface ProviderModalProps {
   onSave: (data: ProviderDraft) => Promise<boolean>;
 }
 
+/** 协议选项:决定请求端点、鉴权头与请求/响应体方言(见 server/agent/llm.ts 的协议适配) */
+const PROTOCOL_OPTIONS: { value: LlmProtocol; label: string; hint: string }[] = [
+  { value: 'openai', label: 'OpenAI 兼容 · /chat/completions', hint: '默认,覆盖绝大多数网关' },
+  { value: 'anthropic', label: 'Anthropic Messages · /v1/messages', hint: 'Claude 及兼容端点' },
+  { value: 'gemini', label: 'Google Gemini · 原生', hint: 'streamGenerateContent' }
+];
+
+/** 协议短名(卡片徽标、预置下拉后缀用) */
+const PROTOCOL_LABEL: Record<string, string> = {
+  openai: 'OpenAI 兼容',
+  anthropic: 'Anthropic 协议',
+  gemini: 'Gemini 协议'
+};
+
+/** Base URL 的占位按协议给:协议已在上方选定,标签统一为 "Base URL",
+ *  地址形态由占位示例表达(官方地址直接填,不必自己补 /v1/messages 之类的路径段) */
+const PROTOCOL_URL_PLACEHOLDER: Record<LlmProtocol, string> = {
+  openai: 'https://your-gateway/v1',
+  anthropic: 'https://api.anthropic.com',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta'
+};
+
 function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   const isEdit = !!editProvider;
   const [name, setName] = useState(isEdit ? editProvider.name : '');
   const [baseUrl, setBaseUrl] = useState(isEdit ? editProvider.baseUrl : '');
+  // 协议:旧条目没有该字段 → 按 OpenAI 兼容处理
+  const [protocol, setProtocol] = useState<LlmProtocol>(isEdit ? (editProvider.protocol || 'openai') : 'openai');
+  const isOpenAiProtocol = protocol === 'openai';
   // 多个 API Key(轮询用):某个 Key 余额不足时自动切换到下一个;首位为主 Key
   const [apiKeys, setApiKeys] = useState<string[]>(() => {
     if (!isEdit) return [''];
@@ -218,12 +245,16 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
     });
   };
 
-  // 预置模板下拉(添加模式):选中后填充名称与 Base URL
+  // 预置模板下拉(添加模式):选中后填充名称、协议与 Base URL
   const [presetId, setPresetId] = useState('');
   const applyPreset = (id: string) => {
     setPresetId(id);
     const p = PROVIDERS.find((x) => x.id === id);
-    if (p) { setName(p.name); setBaseUrl(p.baseUrl); }
+    if (p) {
+      setName(p.name);
+      setBaseUrl(p.baseUrl);
+      setProtocol(p.protocol || 'openai');
+    }
   };
 
   // 获取模型列表(经服务端代理,避免浏览器 CORS)
@@ -241,7 +272,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
       const r = await fetch('/api/providers/fetch-models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: b, apiKey: (apiKeys[0] || '').trim() })
+        body: JSON.stringify({ baseUrl: b, apiKey: (apiKeys[0] || '').trim(), protocol })
       });
       let j: any;
       try { j = await r.json(); }
@@ -298,7 +329,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
     setError('');
     // 去空去重后提交:apiKey 镜像首个(主 Key),apiKeys 是完整轮询列表
     const keys = [...new Set(apiKeys.map((k) => k.trim()).filter(Boolean))];
-    const ok = await onSave({ name: n, baseUrl: b, models, apiKey: keys[0] || '', apiKeys: keys, modelConfig });
+    const ok = await onSave({ name: n, baseUrl: b, protocol, models, apiKey: keys[0] || '', apiKeys: keys, modelConfig });
     if (ok) onClose();
     else setSaving(false);
   };
@@ -315,10 +346,14 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
         <div className="modal-body">
           {!isEdit && (
             <div className="field">
-              <label>从预置提供商快速填充(可选,选择后自动带入名称与地址)</label>
+              <label>从预置提供商快速填充(可选,选择后自动带入名称、协议与地址)</label>
               <GlassSelect full value={presetId} onChange={(v) => applyPreset(v)}
                 placeholder="选择预置提供商…"
-                options={PROVIDERS.filter((p) => !p.mock).map((p) => ({ value: p.id, label: p.name }))} />
+                options={PROVIDERS.filter((p) => !p.mock).map((p) => ({
+                  value: p.id,
+                  label: p.name,
+                  hint: PROTOCOL_LABEL[p.protocol || 'openai']
+                }))} />
             </div>
           )}
           <div className="field">
@@ -326,9 +361,15 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
             <input value={name} onChange={(e) => setName(e.target.value)}
               placeholder="如 公司内部网关 / my-proxy" autoFocus={!isEdit} />
           </div>
+          {/* 协议决定端点与鉴权方式:非 OpenAI 兼容的厂商(Claude / Gemini)必须在这里选对,否则请求形态不匹配 */}
           <div className="field">
-            <label>Base URL(OpenAI 兼容端点)</label>
-            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://your-gateway/v1" />
+            <label>协议</label>
+            <GlassSelect full value={protocol} onChange={(v) => setProtocol(v as LlmProtocol)}
+              options={PROTOCOL_OPTIONS.map((o) => ({ value: o.value, label: o.label, hint: o.hint }))} />
+          </div>
+          <div className="field">
+            <label>Base URL</label>
+            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={PROTOCOL_URL_PLACEHOLDER[protocol]} />
           </div>
           <div className="field">
             <label>API Key(可填多个:某个 Key 不可用时自动切换到下一个;仅存本机)</label>
@@ -349,7 +390,6 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                     )}
                     {/* 显隐切换:点眼睛在明文/遮罩之间切换(仅影响显示,不改动值) */}
                     <button type="button" className="key-reveal action-icon"
-                      data-tip={shown ? '隐藏' : '显示明文'}
                       aria-label={shown ? '隐藏 Key' : '显示 Key 明文'}
                       aria-pressed={shown}
                       onClick={() => setRevealed((cur) => {
@@ -362,7 +402,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                     {/* 单 Key 行不给删除:删空后无从恢复「主 Key」输入位,由上方「＋ 添加 Key」重新加行 */}
                     {apiKeys.length > 1 && (
                       <button type="button" className="key-del action-icon danger"
-                        data-tip="删除该 Key" aria-label="删除该 Key"
+                        aria-label="删除该 Key"
                         onClick={() => setApiKeys((cur) => cur.filter((_, j) => j !== i))}>
                         <IconTrashOutline14 size={14} />
                       </button>
@@ -393,8 +433,10 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                 {models.map((m) => {
                   const cfg = modelConfig[m] || {};
                   const dflt = getDefaultModelContext(m);
+                  // 生图链路只实现了 OpenAI 协议端点(/images/generations|edits):
+                  // 非 OpenAI 协议下该开关不生效(禁用),避免"开了却不走生图"的静默错配
                   const mm = cfg.multimodal === true;
-                  const ig = cfg.imageGen === true;
+                  const ig = cfg.imageGen === true && isOpenAiProtocol;
                   const ctxKey = draftKey(m, 'contextWindow');
                   const outKey = draftKey(m, 'maxTokens');
                   return (
@@ -402,14 +444,17 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                       <span className="mc-name" data-tip={m}>{m}</span>
                       {/* 生图开关:纯图像端点模型(gpt-image-2 等)在 chat/completions 会被网关 503 拒绝,
                           开启后该对话每一轮直接走 /images/generations(文生图)或 /images/edits(图生图) */}
-                      <label className="mc-field mc-ig" data-tip={ig
-                        ? '已开启:该对话每轮直接生成图片(文生图 / 图生图 / 按上文成图迭代修改)'
-                        : '开启后本对话切换为生图对话:直接调用 /images/generations 与 /images/edits,不再走文本对话与工具'}>
+                      <label className="mc-field mc-ig" data-tip={!isOpenAiProtocol
+                        ? '生图对话只支持 OpenAI 兼容协议(/images/generations 与 /images/edits);当前协议下该开关不生效'
+                        : ig
+                          ? '已开启:该对话每轮直接生成图片(文生图 / 图生图 / 按上文成图迭代修改)'
+                          : '开启后本对话切换为生图对话:直接调用 /images/generations 与 /images/edits,不再走文本对话与工具'}>
                         <span>生图</span>
                         <button
                           type="button"
                           role="switch"
                           aria-checked={ig}
+                          disabled={!isOpenAiProtocol}
                           className={`mc-switch ${ig ? 'on' : ''}`}
                           onClick={() => {
                             // 与多模态互斥:生图模型没有 chat 通道,"看图对话"这一能力对它无意义

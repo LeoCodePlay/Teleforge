@@ -211,9 +211,11 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey, apiKeysSig, keyStatesSig, isMock]);
 
-  // 统一生效的 llm 下发载荷(baseUrl/key/model + 上下文能力 + 多模态/生图开关)
+  // 统一生效的 llm 下发载荷(baseUrl/key/model + 协议 + 上下文能力 + 多模态/生图开关)
   const llmPayload = () => ({
     baseUrl: effBaseUrl, apiKey: usableApiKeys[0] || effKey, model: effModel,
+    // 协议(openai | anthropic | gemini):服务端据此选择端点、鉴权头与请求/响应体方言
+    protocol: provider.protocol || 'openai',
     // 多 Key 轮询:只下发「可用」的 Key(已排除无余额的),服务端据此自动切换
     apiKeys: usableApiKeys,
     // 提供商 id:服务端把「无余额」标记写回该提供商,供界面展示与重置
@@ -458,7 +460,7 @@ export function LlmProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: p.name + '(副本)', baseUrl: p.baseUrl, models: p.models, apiKey: p.apiKey,
+          name: p.name + '(副本)', baseUrl: p.baseUrl, protocol: p.protocol, models: p.models, apiKey: p.apiKey,
           apiKeys: p.apiKeys || (p.apiKey ? [p.apiKey] : []),
           ...(p.modelConfig ? { modelConfig: p.modelConfig } : {})
         })

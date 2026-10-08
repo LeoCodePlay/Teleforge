@@ -167,7 +167,7 @@ export default function ReviewTab({ sid, path, turn, active = true, onOpenWholeF
             </button>
           )}
           {onClose && (
-            <button type="button" className="cr-tool" data-tip="关闭对比" aria-label="关闭对比" onClick={onClose}>
+            <button type="button" className="cr-tool" aria-label="关闭对比" onClick={onClose}>
               <span aria-hidden>✕</span>
             </button>
           )}

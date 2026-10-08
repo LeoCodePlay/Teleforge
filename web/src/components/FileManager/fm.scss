@@ -23,6 +23,13 @@
 /* 操作行(上级/刷新/上传/传到本地):原内联 margin-top 收敛到类上;
    窄侧栏下允许换行,保证所有操作按钮完整可见 */
 .fm-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 8px; }
+/* 操作行按钮的行盒只由字号决定(unitless line-height 不吃字形度量)。
+   ▾ / emoji 这类字形 Arial 里没有,走回落字体,ascent/descent 比正文高:实测「上传 ▾」
+   25.2px,同级「上级」「传到本地」24.4px。远程面板比本地面板多这一个按钮,于是两个面板的
+   操作行不同高 → 切 Tab 时下方文件列表(以及垂直居中的按钮)整体上下跳 1 物理像素。
+   固定行盒后按钮高度与字形无关,行高不再随面板的按钮集变化(多选操作条同理)。
+   line-height 取 1.4:与 12px 正文原有的自然行盒等高,视觉零变化。 */
+.fm-actions button, .fm-selbar button { line-height: 1.4; }
 /* 「上传」菜单与文件管理器右键菜单:portal 到 body 渲染(坐标由组件按按钮位置计算)。
    上传菜单若嵌在侧栏(backdrop-filter 元素)内部,Chromium 不对其后代应用
    backdrop-filter(Playwright 挂具已复现),玻璃模糊会失效;
@@ -49,13 +56,16 @@
   background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
   box-shadow: inset 0 0 0 1px var(--accent-border);
 }
-/* 图标固定槽位:各平台 emoji 字宽不一,定宽保证重命名输入框左偏移确定、各行文件名对齐 */
-.fm-ico { flex: none; width: 20px; }
+/* 图标固定槽位:各平台 emoji 字宽不一,定宽保证重命名输入框左偏移确定、各行文件名对齐。
+   文件夹已换成 SVG(IconFolder16),用 inline-flex 让图标在 20px 槽内垂直居中 */
+.fm-ico { flex: none; width: 20px; display: inline-flex; align-items: center; }
 /* 重命名时隐藏底层内容但保留占位:visibility 不参与布局,行高/行宽不变,消除抖动 */
 .fm-hide { visibility: hidden; }
 /* 文件名列:超长省略显示(悬停有完整名称 tooltip) */
 .fm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-time { flex: none; width: 108px; text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* 多选操作条的按钮:图标换成 SVG 后自己撑起行内排版(图标 + 文字,不吃基线对齐) */
+.fm-selbar button { display: inline-flex; align-items: center; gap: 5px; }
 /* 重命名/新建输入框:绝对定位覆盖名称+时间区,左缘起于图标槽之后
    (10px 行 padding + 20px 图标槽 + 8px 列间距 = 38px)。
    行首图标始终可见,便于分辨正在编辑的是文件还是文件夹;
@@ -99,10 +109,13 @@
   to   { background-position: -200% 0; }
 }
 
-/* 多选模式开关:仅触屏设备显示(桌面有 Ctrl/Shift 多选,按钮不渲染出来占位置) */
-.fm-select-toggle { display: none; }
+/* 多选模式开关:仅触屏设备显示(桌面有 Ctrl/Shift 多选,按钮不渲染出来占位置)。
+   这里**不挂共享的 .icon-btn**:styles.scss 的 `button.icon-btn` 是「元素+class」权重,
+   比 `.fm-select-toggle` 单个 class 高,会把 display:none 顶掉 —— 桌面端就冒出这个按钮。
+   所以排版权(居中/间距)与可见性一起写在本文件里,谁都顶不掉。 */
+.fm-select-toggle { display: none; align-items: center; justify-content: center; gap: 5px; }
 @media (hover: none) and (pointer: coarse) {
-  .fm-select-toggle { display: inline-block; }
+  .fm-select-toggle { display: inline-flex; }
 }
 
 /* ---- 移动端(<768):行加大触控目标,窄屏只留图标+文件名,多选操作条 ---- */

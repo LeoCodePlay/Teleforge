@@ -6,6 +6,7 @@ import { useHorizontalScroller } from '../../hooks/useHorizontalScroller';
 import { useLongPress } from '../../hooks/useLongPress';
 import { scrollMovesPanel } from '../../utils/scrollClose';
 import type { DirEntry } from '../../types';
+import { IconChecklistOutline14, IconClose16, IconCopy16, IconFile16, IconFolder16, IconFolderUp16, IconLink16, IconPaste16, IconPencil16, IconReload16, IconTag16, IconTransfer16, IconTrashOutline14 } from '../icons/icons';
 import './fm.scss';
 
 function fmtTime(ms: number | undefined) {
@@ -111,8 +112,9 @@ function FmRow({ entry, selected, navLoading, renaming, renameBusy, renameDraft,
       onClick={(ev) => { if (lp.wasLongPress()) return; onRowClick(ev, entry); }}
       onDoubleClick={() => onOpen(entry)}
       onContextMenu={(ev) => onMenu(ev, entry)}>
-      {/* 图标在重命名时保留可见,便于分辨编辑的是文件还是文件夹 */}
-      <span className="fm-ico">{entry.type === 'dir' ? '📁' : entry.type === 'link' ? '🔗' : '📄'}</span>
+      {/* 图标在重命名时保留可见,便于分辨编辑的是文件还是文件夹。
+          文件夹用与「本地工作区」同源的 SVG(📁 换成 IconFolder16),文件/软链仍用字形图标 */}
+      <span className="fm-ico">{entry.type === 'dir' ? <IconFolder16 size={14} /> : entry.type === 'link' ? '🔗' : '📄'}</span>
       {/* 名称/时间列留在文档流(fm-hide 仅隐藏文字、保留占位),行高/行宽与普通行完全一致 */}
       <span className={`fm-name${renaming ? ' fm-hide' : ''}`} data-tip={entry.name} data-tip-ellipsis data-tip-follow>{entry.name}</span>
       {renaming && (
@@ -614,17 +616,15 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
       </div>
 
       <div className="row gap fm-actions">
-        <button className="ghost sm" onClick={up} disabled={isRoot}>⬆ 上级</button>
-        <button className="ghost sm" onClick={refresh}>↻</button>
+        <button className="ghost sm icon-btn" onClick={up} disabled={isRoot}><IconFolderUp16 size={13} />上级</button>
+        <button className="ghost sm icon-btn" onClick={refresh} data-tip="重新读取当前目录" aria-label="刷新"><IconReload16 size={13} /></button>
         {/* 多选模式:仅触屏设备渲染(桌面有 Ctrl/Shift 多选,不需要) */}
         <button className={`ghost sm fm-select-toggle${selectMode ? ' on' : ''}`} onClick={toggleSelectMode}>
-          {selectMode ? '✕ 退出多选' : '☑ 多选模式'}
+          {selectMode ? <><IconClose16 size={13} />退出多选</> : <><IconChecklistOutline14 size={13} />多选模式</>}
         </button>
-        <button className="ghost sm" disabled={opCount === 0 || !remoteCwd || transferring}
+        <button className="ghost sm icon-btn" disabled={opCount === 0 || !remoteCwd || transferring}
           onClick={doTransferToRemote}
-          data-tip={!remoteCwd ? '请先连接服务器并查看远程目录' : `把选中项传到远程当前目录 ${remoteCwd||''}(同名覆盖)`}>
-          ⬆ 传到远程
-        </button>
+          data-tip={!remoteCwd ? '请先连接服务器并查看远程目录' : `把选中项传到远程当前目录 ${remoteCwd||''}(同名覆盖)`}><IconTransfer16 size={13} />传到远程</button>
         <span className="muted sm fm-status"
           data-tip={deleting ? `正在删除: ${deleting.current || deleting.name}` : selection.size > 1 ? `已选 ${selection.size} 项,点空白处取消` : msg}>
           {statusText}
@@ -675,7 +675,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
         ))}
         {creating && (
           <div className="fmrow">
-            <span className="fm-ico">{creating === 'dir' ? '📁' : '📄'}</span>
+            <span className="fm-ico">{creating === 'dir' ? <IconFolder16 size={14} /> : '📄'}</span>
             <span className="fm-name fm-hide" />
             <span className="fm-time fm-hide" />
             <input className="fm-rename" autoFocus value={createDraft}
@@ -705,9 +705,9 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
       {selectMode && selection.size > 0 && (
         <div className="fm-selbar">
           <span className="muted sm">已选 {selection.size} 项</span>
-          <button className="ghost sm" onClick={doCopy}>📋 复制</button>
-          <button className="ghost sm" disabled={transferring || !remoteCwd} onClick={doTransferToRemote}>⬆ 传到远程</button>
-          <button className="danger sm" disabled={!!deleting} onClick={doDelete}>🗑 删除</button>
+          <button className="ghost sm" onClick={doCopy}><IconCopy16 size={13} />复制</button>
+          <button className="ghost sm" disabled={transferring || !remoteCwd} onClick={doTransferToRemote}><IconTransfer16 size={13} />传到远程</button>
+          <button className="danger sm" disabled={!!deleting} onClick={doDelete}><IconTrashOutline14 size={13} />删除</button>
         </div>
       )}
 
@@ -716,41 +716,41 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
       {menu && createPortal(
         <div ref={menuRef} className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
           {menu.item && selection.size === 1 && menu.item.type === 'dir' && (
-            <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}><span className="ctx-ico">📂</span>打开</button>
+            <button onClick={() => { const p = entryPath(menu.item!.name); closeMenu(); load(p, { itemPath: p }); }}><span className="ctx-ico"><IconFolder16 size={14} /></span>打开</button>
           )}
           {menu.item && selection.size === 1 && menu.item.type !== 'dir' && (
-            <button onClick={() => { closeMenu(); onOpenLocalFile(entryPath(menu.item!.name)); }}><span className="ctx-ico">📄</span>打开</button>
+            <button onClick={() => { closeMenu(); onOpenLocalFile(entryPath(menu.item!.name)); }}><span className="ctx-ico"><IconFile16 size={14} /></span>打开</button>
           )}
           {menu.item && (
-            <button onClick={() => { closeMenu(); doTransferToRemote(); }}><span className="ctx-ico">⬆</span>传到远程当前目录{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button onClick={() => { closeMenu(); doTransferToRemote(); }}><span className="ctx-ico"><IconTransfer16 size={14} /></span>传到远程当前目录{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button onClick={() => { closeMenu(); doCopy(); }}><span className="ctx-ico">📋</span>复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button onClick={() => { closeMenu(); doCopy(); }}><span className="ctx-ico"><IconCopy16 size={14} /></span>复制{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button onClick={() => { closeMenu(); doCopyPath(); }}><span className="ctx-ico">🔗</span>复制路径{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button onClick={() => { closeMenu(); doCopyPath(); }}><span className="ctx-ico"><IconLink16 size={14} /></span>复制路径{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && (
-            <button onClick={() => { closeMenu(); doCopyName(); }}><span className="ctx-ico">📝</span>复制文件名{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+            <button onClick={() => { closeMenu(); doCopyName(); }}><span className="ctx-ico"><IconTag16 size={14} /></span>复制文件名{opCount > 1 ? `(${opCount} 项)` : ''}</button>
           )}
           {menu.item && selection.size === 1 && !deleting && (
-            <button onClick={() => startRename(menu.item!.name)}><span className="ctx-ico">✏️</span>重命名</button>
+            <button onClick={() => startRename(menu.item!.name)}><span className="ctx-ico"><IconPencil16 size={14} /></span>重命名</button>
           )}
           {clipboard ? (
-            <button onClick={() => { closeMenu(); pasteHere(path); }}><span className="ctx-ico">📥</span>粘贴到此处</button>
+            <button onClick={() => { closeMenu(); pasteHere(path); }}><span className="ctx-ico"><IconPaste16 size={14} /></span>粘贴到此处</button>
           ) : (
-            <button disabled data-tip="先右键复制文件/文件夹,再到这里粘贴"><span className="ctx-ico">📥</span>粘贴到此处</button>
+            <button disabled data-tip="先右键复制文件/文件夹,再到这里粘贴"><span className="ctx-ico"><IconPaste16 size={14} /></span>粘贴到此处</button>
           )}
           {menu.item && (
             <>
               <div className="ctx-sep" />
-              <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}><span className="ctx-ico">🗑</span>删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
+              <button className="danger" disabled={!!deleting} onClick={() => { closeMenu(); doDelete(); }}><span className="ctx-ico"><IconTrashOutline14 size={14} /></span>删除{opCount > 1 ? `(${opCount} 项)` : ''}</button>
             </>
           )}
           {/* 新建项不依赖是否命中条目:在空白处(含空目录)右键同样能新建到当前目录 */}
           <div className="ctx-sep" />
-          <button onClick={() => startCreate('file')}><span className="ctx-ico">📄</span>新建文件</button>
-          <button onClick={() => startCreate('dir')}><span className="ctx-ico">📁</span>新建文件夹</button>
+          <button onClick={() => startCreate('file')}><span className="ctx-ico"><IconFile16 size={14} /></span>新建文件</button>
+          <button onClick={() => startCreate('dir')}><span className="ctx-ico"><IconFolder16 size={14} /></span>新建文件夹</button>
         </div>,
         document.body
       )}

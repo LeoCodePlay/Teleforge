@@ -206,13 +206,13 @@ export function Lightbox({ src, onClose }: { src: LightboxSrc | null; onClose: (
         onPointerCancel={() => { dragRef.current = null; }}
       />
       <div className="lightbox-toolbar" onClick={(e) => e.stopPropagation()}>
-        <button type="button" aria-label="缩小" data-tip="缩小(−)" onClick={() => zoomAt(null, null, 1 / LB_STEP)}>
+        <button type="button" aria-label="缩小" onClick={() => zoomAt(null, null, 1 / LB_STEP)}>
           <IconZoomOut />
         </button>
         <button type="button" className="lightbox-pct" data-tip="图像原始像素占比,点击恢复适应窗口" onClick={reset}>
           {pct}%
         </button>
-        <button type="button" aria-label="放大" data-tip="放大(+)" onClick={() => zoomAt(null, null, LB_STEP)}>
+        <button type="button" aria-label="放大" onClick={() => zoomAt(null, null, LB_STEP)}>
           <IconZoomIn />
         </button>
         <button type="button" aria-label="适应窗口" data-tip="适应窗口(0)" onClick={reset}>

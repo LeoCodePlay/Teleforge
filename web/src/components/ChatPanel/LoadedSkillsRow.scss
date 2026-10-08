@@ -45,6 +45,6 @@
   word-break: break-word;
   color: var(--text-2);
 }
-.loaded-skills-body::-webkit-scrollbar-track { margin: 6px 0; }
-
+/* 这里原先有一条 ::-webkit-scrollbar-track{ margin } 的搬运残留:全站原生条宽为 0,
+   那条规则永远画不出来;本卡片的滚动条由悬浮引擎按统一规格绘制(见 styles.scss) */
 .loaded-skills-note { padding: 0 12px 10px; font-size: 11px; line-height: 16px; color: var(--text-faint); }

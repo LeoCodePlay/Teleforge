@@ -1,15 +1,64 @@
 /* ---- 任务列表面板独有样式:工作区分组 + 会话行 + 跨服务器会话 ---- */
 
-/* 面板根节点:填满上分栏,标题/作用域固定,列表区独立滚动 */
+/* 面板根节点:填满上分栏,标题/作用域固定,列表区独立滚动。
+   右侧留出 --scroll-gutter:悬浮滚动条拇指画在容器内边缘(离边 2px、宽 4px),
+   不留白的话它会压在会话行右端(圆角高亮/描边)上,看着像列表被啃掉一块 */
 .s-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: none; }
-.s-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.s-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: var(--scroll-gutter); }
 
-/* ---- 分区(远程任务列表 / 本地任务列表) ---- */
-.s-section { margin-top: 10px; }
-.s-section-title {
-  font-size: 11px; color: var(--muted); margin-bottom: 4px; padding: 0 10px;
-  display: flex; align-items: center; gap: 6px;
+/* ---- 分区(远程工作区 / 本地工作区)----
+   每块的标题行同时是它的工具行:左标题、中部搜索、右上「添加工作区」。
+   行高 30px,与 33px 的会话行同密度,不额外吃高度;sticky 吸在列表顶部,
+   滚长列表时搜索入口不会跟着滚走。 */
+.s-sec-head {
+  display: flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 10px;
+  position: sticky; top: 0; z-index: 5;
+  background: var(--bar-tint-a);
 }
+.s-sec-label {
+  flex: none; max-width: 45%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--muted); letter-spacing: .2px;
+}
+/* 搜索:收起时只占一个图标位(26px),展开时铺满标题与右上按钮之间的空档 */
+.s-search {
+  flex: 1; max-width: 26px; min-width: 0;
+  display: flex; align-items: center;
+  margin-left: auto; overflow: hidden;
+  border: 1px solid transparent; border-radius: var(--r-sm);
+  transition: max-width .18s ease, background-color .18s ease, border-color .18s ease, box-shadow .16s ease;
+}
+.s-search.open {
+  max-width: 100%; padding-right: 2px;
+  background: var(--glass-bg-inset); border-color: var(--line);
+}
+.s-search.open:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.s-search-btn { flex: none; width: 26px; height: 26px; }
+/* 输入框本体无框无底:视觉上的「槽」由外层 .s-search.open 提供,避免双层描边 */
+.s-search-input {
+  flex: 1; width: 0; min-width: 0;
+  background: transparent; border: none; border-radius: 0; padding: 0 2px 0 0;
+  font-size: 12.5px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .12s ease;
+}
+.s-search-input:focus { background: transparent; border: none; box-shadow: none; }
+.s-search.open .s-search-input { opacity: 1; pointer-events: auto; }
+.s-search-clear { flex: none; width: 20px; height: 20px; margin-right: 2px; }
+/* 右上「添加工作区」:搜索展开时整块收起让位(与 dsh 一致,不给输入框留夹缝)。
+   收起用 visibility 一并摘掉键盘可达性,否则 Tab 还能走到一个看不见的按钮上 */
+.s-sec-actions {
+  flex: none; display: flex; align-items: center;
+  max-width: 26px; overflow: hidden; opacity: 1; visibility: visible;
+  transition: max-width .18s ease, opacity .12s ease, visibility 0s linear;
+}
+.s-sec-actions.hide {
+  max-width: 0; opacity: 0; visibility: hidden; pointer-events: none;
+  transition: max-width .18s ease, opacity .12s ease, visibility 0s linear .18s;
+}
+.s-sec-add { flex: none; width: 26px; height: 26px; }
+.s-sec-empty { font-size: 12px; color: var(--muted); padding: 2px 10px 0; }
 .s-scope { margin-top: 6px; font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 工作区分组头:折叠箭头 + 图标 + 路径名 + 计数 + 组内新建 ---- */
@@ -189,6 +238,7 @@
   .session-item { min-height: 46px; padding: 8px 12px; height: auto; }
   .s-panel { padding: 10px 12px; }
   .s-group-header { padding: 8px 12px; }
+  .s-sec-head { padding: 0 12px; height: 34px; }
   /* 触控:会话行内边距加大到 12px,同列偏移跟着重算(1+12+7+6),并给足点按高度 */
   .s-group-body .s-group-more { margin-left: 26px; padding: 4px 0; }
 }
@@ -205,6 +255,11 @@
   /* 触屏无 hover:箭头常显(占住图标位),保留展开状态指示 */
   .s-group-header .s-group-caret { opacity: 1; }
   .s-group-header .s-group-ico { opacity: 0; }
+  /* 触屏:工具行的图标按钮加宽到 30px,点按才够得着 */
+  .s-sec-head { height: 36px; }
+  .s-search { max-width: 30px; }
+  .s-search-btn, .s-sec-add { width: 30px; height: 30px; }
+  .s-sec-actions { max-width: 30px; }
 }
 
 
@@ -215,7 +270,10 @@
   .s-group-header .s-group-caret,
   .s-group-header .s-group-ico,
   .s-group-header .s-group-meta,
-  .s-group-header .s-group-add { transition: none; }
+  .s-group-header .s-group-add,
+  .s-search,
+  .s-search-input,
+  .s-sec-actions { transition: none; }
   .s-group-body { transform: none; }
   /* 不做旋入动画:直接以正位淡入淡出互换 */
   .s-group-header .s-group-add { transform: none; }

@@ -59,11 +59,17 @@
 .bp-addr.ok .bp-addr-ico { color: var(--green); }
 .bp-addr.err { border-color: var(--red); }
 .bp-addr.err .bp-addr-ico { color: var(--red); }
+/* 全局 styles.scss 的 `input` / `input:focus` 会给控件自身加边框、内嵌底色和光圈,
+   而它打包在组件样式之后、特异性又与本块相同,会把下面的重置覆盖掉,
+   结果就是「外壳一个框 + 里面 input 又一个框」。这里连 :focus 一起显式压掉,
+   让输入框与外壳始终是一体的(聚焦反馈只由 .bp-addr:focus-within 统一给)。 */
 .bp-addr input {
-  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text);
+  flex: 1; min-width: 0; width: auto; border: 0; background: transparent; box-shadow: none;
+  color: var(--text);
   font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   outline: none; padding: 0;
 }
+.bp-addr input:focus { border: 0; background: transparent; box-shadow: none; }
 .bp-addr input::placeholder { color: var(--muted); }
 .bp-go {
   flex: none; width: 24px; height: 24px; padding: 0; box-shadow: none;
@@ -162,9 +168,11 @@
 .bp-empty-form:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
 .bp-empty-form-ico { flex: none; display: inline-flex; color: var(--muted); }
 .bp-empty-form input {
-  flex: 1; min-width: 0; padding: 6px 0; border: 0; background: transparent; color: var(--text);
+  flex: 1; min-width: 0; width: auto; padding: 6px 0; border: 0; background: transparent; box-shadow: none;
+  color: var(--text);
   font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; outline: none;
 }
+.bp-empty-form input:focus { border: 0; background: transparent; box-shadow: none; }
 .bp-empty-form input::placeholder { color: var(--muted); }
 .bp-empty-form button {
   flex: none; padding: 7px 14px; border: 1px solid var(--line); box-shadow: none;

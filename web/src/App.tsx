@@ -29,6 +29,7 @@ import { useVisualViewportInset } from './hooks/useVisualViewport';
 import { LEFT_SIDEBAR_MAX_RATIO, LEFT_SIDEBAR_MIN, sidebarMaxWidth } from './utils/layout';
 import { useLlm } from './context/llm-context';
 import { useFeedback } from './context/feedback';
+import { IconAiChat16, IconBrowser16, IconSchedule16, IconSidebar16, IconTerminal16 } from './components/icons/icons';
 import './App.scss';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -201,7 +202,7 @@ export default function App() {
     window.addEventListener('resize', fit);
     return () => window.removeEventListener('resize', fit);
   }, []);
-  /** 自动化任务里"已过触发时间还没跑"的条数(标签页「🕘 自动化任务」据此显示红点) */
+  /** 自动化任务里"已过触发时间还没跑"的条数(标签页「自动化任务」据此显示红点) */
   const [scheduleOverdue, setScheduleOverdue] = useState(0);
 
   // 桌面壳启动时静默检查 GitHub 最新版本;有更新则在顶栏显示角标(失败静默,不打扰)
@@ -748,7 +749,7 @@ export default function App() {
   }, [sessions]);
   /** 终端标签的序号:每条终端有自己的 contentId(dockkit 按 (kind, contentId) 去重,不能复用)。 */
   const terminalSeq = useRef(0);
-  /** 在右栏开一条终端标签(标签条末端的 ⌨ 与标签条的 ＋ 都走它)。 */
+  /** 在右栏开一条终端标签(标签条末端的终端图标与标签条的 ＋ 都走它)。 */
   const openSidebarTerminal = useCallback(() => {
     terminalSeq.current += 1;
     openInSidebar('terminal', `terminal:${terminalSeq.current}`, '终端');
@@ -1059,12 +1060,15 @@ export default function App() {
     const fixed = isFixedTab(t.kind); // 内置固定页(AI 助手/终端/自动化任务);文件与预览标签可拖可关
     const pinned = fixed || !!t.pinnedFile;   // 不参与滚动:pinned 区
     return (
+      // 提示只在「有额外信息」时给:固定标签(助手/终端/自动化任务)的名字已写在标签上,
+      // 不再弹同名提示;文件/浏览器标签给完整路径,且只在标签被省略号截断时才弹。
       <div
         key={t.id}
         data-tab-id={t.id}
         className={`btab${activeTabId === t.id ? ' active' : ''}${pinned ? ' pinned' : ''}${draggingId === t.id ? ' dragging' : ''}${t.dirty ? ' dirty' : ''}`}
         draggable={!pinned}
-        data-tip={t.kind === 'file' || t.kind === 'browser' ? t.path : `${t.name}(固定标签)`}
+        data-tip={t.kind === 'file' || t.kind === 'browser' ? t.path : undefined}
+        data-tip-ellipsis
         onDragStart={(e) => onTabDragStart(e, t.id)}
         onDragOver={(e) => onTabDragOver(e, t.id)}
         onDragEnd={onTabDragEnd}
@@ -1073,14 +1077,21 @@ export default function App() {
         onAuxClick={(e) => { if (e.button === 1) closeTab(t.id); }}
         onContextMenu={(e) => { if (t.kind === 'file' || t.kind === 'browser') openTabMenu(e, t); }}
       >
-        <span className="btab-icon">{t.kind === 'agent' ? '💬' : t.kind === 'console' ? '⌨️' : t.kind === 'schedule' ? '🕘' : t.kind === 'browser' ? '🌐' : tabIcon(t.name)}
+        {/* 固定页(助手/终端/自动化)、预览与文件标签同处一条:前四类用内联 SVG 图标
+            (与全站图标同一网格,随文字色),文件标签仍按媒体类型用字形图标 */}
+        <span className="btab-icon">
+          {t.kind === 'agent' ? <IconAiChat16 size={14} />
+            : t.kind === 'console' ? <IconTerminal16 size={14} />
+            : t.kind === 'schedule' ? <IconSchedule16 size={14} />
+            : t.kind === 'browser' ? <IconBrowser16 size={14} />
+            : tabIcon(t.name)}
           {t.kind === 'schedule' && scheduleOverdue > 0 && <span className="btab-dot" aria-label={`${scheduleOverdue} 个任务待触发`} />}
         </span>
         <span className="btab-label">{t.name}</span>
         {!fixed && (
           <button
             className="btab-close"
-            data-tip={t.dirty ? '有未保存修改' : '关闭标签'}
+            data-tip={t.dirty ? '有未保存修改' : undefined}
             aria-label={t.dirty ? '有未保存修改' : '关闭标签'}
             onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
           >
@@ -1189,16 +1200,28 @@ export default function App() {
     });
   };
 
-  // 任务列表「组内新建」:先切到该分组的工作区,再进入新会话草稿态。
+  // 任务列表「组内新建」:先切到该分组一侧的工作区,并把**另一侧**置为「不使用工作区」,
+  // 再进入新会话草稿态。
+  // 「另一侧置空」是必须的:连接级工作区属于连接状态而非分组状态,在本地分组里新建时若远程
+  // 工作区还留着上次选的目录,新会话就会继承它、发消息后被归到远程分组(用户看到的
+  // "在本地分组新建,发出去却跑到远程工作区下面了");反向对称。
   // 工作区切换带 sid:null(草稿态),只改连接级工作区、不重绑其他会话;
   // 先 await 工作区生效再 newSession,避免首条消息早于工作区切换落地。
-  const newInWorkspace = async (ws: string | null, localWs: string | null) => {
+  const newInWorkspace = async (ws: string | null, localWs: string | null, side: 'remote' | 'local') => {
     try {
+      // 远程侧:显式给了目录就绑它;没给(从本地分组进入)则回到「整台服务器」。
+      // 未连接时不写:服务端 set_workspace 会把全盘标记落到连接级回落字段,
+      // 给下一次连接(甚至换一台服务器)留下幽灵边界;断线本身的回落字段已复位,无需清。
       if (ws) {
         await api.request('set_workspace', { path: ws, sid: null }, 20000);
         onWorkspaceSet(ws);
+      } else if (side === 'local' && connected) {
+        await api.request('set_workspace', { path: NO_WORKSPACE, sid: null }, 20000);
+        onWorkspaceSet(NO_WORKSPACE);
       }
+      // 本地侧:显式给了目录就绑它;没给(从远程分组进入)则回到「整台电脑」
       if (localWs) await onSetLocalWorkspace(localWs, null);
+      else if (side === 'remote') await onSetLocalWorkspace(NO_WORKSPACE, null);
       newSession();
     } catch (e) {
       toast.error(`切换到工作区失败: ${(e as Error).message}`);
@@ -1284,7 +1307,8 @@ export default function App() {
           {previewHint && (
             <button className="ghost edge-toggle preview-chip" data-tip={`点击在预览标签打开 ${previewHint}`}
               onClick={() => { ensureBrowserTab(previewHint); setPreviewHint(null); }}>
-              🌐 预览 {previewLabel(previewHint)}
+              <IconBrowser16 size={13} />
+              <span className="preview-chip-label">预览 {previewLabel(previewHint)}</span>
               <span className="preview-chip-x" onClick={(e) => { e.stopPropagation(); setPreviewHint(null); }}>✕</span>
             </button>
           )}
@@ -1333,6 +1357,12 @@ export default function App() {
                 onDelete={deleteSession}
                 onDeleteGroup={deleteGroup}
                 onRevealGroup={revealGroup}
+                remoteHome={status.home}
+                localHome={status.localHome}
+                remoteWorkspace={status.workspace}
+                localWorkspace={status.localWorkspace}
+                onAddRemoteWorkspace={(p) => { void newInWorkspace(p, null, 'remote'); setDrawerOpen(false); setActiveTabId('agent'); }}
+                onAddLocalWorkspace={(p) => { void newInWorkspace(null, p, 'local'); setDrawerOpen(false); setActiveTabId('agent'); }}
               />
             </div>
             <div className="side-divider" onPointerDown={startSideSplit} />
@@ -1372,13 +1402,19 @@ export default function App() {
                 scopeLabel={scopeLabel}
                 scopeKey={scopeKey}
                 onNew={() => { newSession(); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
-                onNewInWorkspace={(ws, lws) => { void newInWorkspace(ws, lws).then(() => { setSessionDrawerOpen(false); setActiveTabId('agent'); }); }}
+                onNewInWorkspace={(ws, lws, side) => { void newInWorkspace(ws, lws, side).then(() => { setSessionDrawerOpen(false); setActiveTabId('agent'); }); }}
                 onSwitch={(id) => { switchSession(id); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
                 onSwitchForeign={(id, key) => { switchForeignSession(id, key); setSessionDrawerOpen(false); setActiveTabId('agent'); }}
                 onRename={renameSession}
                 onDelete={deleteSession}
                 onDeleteGroup={deleteGroup}
                 onRevealGroup={revealGroup}
+                remoteHome={status.home}
+                localHome={status.localHome}
+                remoteWorkspace={status.workspace}
+                localWorkspace={status.localWorkspace}
+                onAddRemoteWorkspace={(p) => { void newInWorkspace(p, null, 'remote').then(() => { setSessionDrawerOpen(false); setActiveTabId('agent'); }); }}
+                onAddLocalWorkspace={(p) => { void newInWorkspace(null, p, 'local').then(() => { setSessionDrawerOpen(false); setActiveTabId('agent'); }); }}
               />
             </aside>
           </>
@@ -1410,11 +1446,10 @@ export default function App() {
             {/* 右侧栏开合:入口在「打开浏览器预览」旁边(标签条末端) */}
             <button
               className={`tabstrip-add rsb-toggle${rightOpen ? ' on' : ''}`}
-              data-tip={rightOpen ? '收起右侧栏' : '打开右侧栏'}
               aria-label={rightOpen ? '收起右侧栏' : '打开右侧栏'}
               aria-pressed={rightOpen}
               onClick={() => setRightOpen((v) => !v)}
-            >▤</button>
+            ><IconSidebar16 size={15} /></button>
           </div>
           {tabMenu && createPortal(
             <div
@@ -1531,7 +1566,7 @@ export default function App() {
                 onNewTask={() => setActiveTabId('agent')}
               />
             </div>
-            {/* 手机:文件管理(底部栏「📁 文件」且无文件打开时);打开文件后由文件标签页接管 */}
+            {/* 手机:文件管理(底部栏「文件」且无文件打开时);打开文件后由文件标签页接管 */}
             {isPhone && mobileView === 'files' && effActiveTabId === FILES_HOME_ID && (
               <div className="tab-pane mobile-pane">
                 <WorkspacePanel
@@ -1566,10 +1601,10 @@ export default function App() {
           collapsed={!rightOpen}
           onToggleCollapse={() => setRightOpen((v) => !v)}
           request={sidebarReq}
-          // 标签条末端的宿主控件:⌨ 开一条终端标签(标签条的 ＋ 也开终端)
+          // 标签条末端的宿主控件:终端图标开一条终端标签(标签条的 ＋ 也开终端)
           chrome={(
             <button type="button" className="rsb-term" data-tip="在侧栏打开终端"
-              aria-label="在侧栏打开终端" onClick={openSidebarTerminal}>⌨</button>
+              aria-label="在侧栏打开终端" onClick={openSidebarTerminal}><IconTerminal16 size={15} /></button>
           )}
           renderBody={(tab, tabApi) => {
             if (tab.kind === 'file') return <FileViewer path={tab.contentId} name={tab.title} onClose={tabApi.close} />;

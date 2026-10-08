@@ -23,6 +23,10 @@ import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } 
 import { searchKeymap } from '@codemirror/search';
 import { langOf, syntaxStyle } from './codeMirrorTheme';
 import { scrollMovesPanel } from '../../utils/scrollClose';
+import {
+  IconCopy16, IconCut16, IconLink16, IconPaste16, IconRedo16, IconSave16,
+  IconSelectAll16, IconTag16, IconUndo16
+} from '../icons/icons';
 
 /** Ctrl+F 搜索面板的中文短语:CodeMirror 原生面板文案默认英文,这里整体替换为中文 */
 const CM_PHRASES: Record<string, string> = {
@@ -259,17 +263,17 @@ export default function CodeEditor({ fileName, path, initial, onEdit, onSave }: 
           style={{ left: menu.x, top: menu.y }}
           onContextMenu={(e) => e.preventDefault()}
         >
-          <button onClick={onUndo} disabled={!menu.canUndo}><span className="ctx-ico">↺</span>撤销<span className="ctx-key">Ctrl+Z</span></button>
-          <button onClick={onRedo} disabled={!menu.canRedo}><span className="ctx-ico">↻</span>重做<span className="ctx-key">Ctrl+Y</span></button>
+          <button onClick={onUndo} disabled={!menu.canUndo}><span className="ctx-ico"><IconUndo16 size={14} /></span>撤销<span className="ctx-key">Ctrl+Z</span></button>
+          <button onClick={onRedo} disabled={!menu.canRedo}><span className="ctx-ico"><IconRedo16 size={14} /></span>重做<span className="ctx-key">Ctrl+Y</span></button>
           <div className="ctx-sep" />
-          <button onClick={onCut} disabled={!menu.hasSel}><span className="ctx-ico">✂</span>剪切<span className="ctx-key">Ctrl+X</span></button>
-          <button onClick={onCopy} disabled={!menu.hasSel}><span className="ctx-ico">📋</span>复制<span className="ctx-key">Ctrl+C</span></button>
-          <button onClick={onPaste}><span className="ctx-ico">📥</span>粘贴<span className="ctx-key">Ctrl+V</span></button>
-          <button onClick={onSelectAll}><span className="ctx-ico">☑</span>全选<span className="ctx-key">Ctrl+A</span></button>
-          <button onClick={onMenuSave}><span className="ctx-ico">💾</span>保存<span className="ctx-key">Ctrl+S</span></button>
+          <button onClick={onCut} disabled={!menu.hasSel}><span className="ctx-ico"><IconCut16 size={14} /></span>剪切<span className="ctx-key">Ctrl+X</span></button>
+          <button onClick={onCopy} disabled={!menu.hasSel}><span className="ctx-ico"><IconCopy16 size={14} /></span>复制<span className="ctx-key">Ctrl+C</span></button>
+          <button onClick={onPaste}><span className="ctx-ico"><IconPaste16 size={14} /></span>粘贴<span className="ctx-key">Ctrl+V</span></button>
+          <button onClick={onSelectAll}><span className="ctx-ico"><IconSelectAll16 size={14} /></span>全选<span className="ctx-key">Ctrl+A</span></button>
+          <button onClick={onMenuSave}><span className="ctx-ico"><IconSave16 size={14} /></span>保存<span className="ctx-key">Ctrl+S</span></button>
           <div className="ctx-sep" />
-          <button onClick={onCopyPath}><span className="ctx-ico">📄</span>复制文件路径</button>
-          <button onClick={onCopyName}><span className="ctx-ico">🏷</span>复制文件名</button>
+          <button onClick={onCopyPath}><span className="ctx-ico"><IconLink16 size={14} /></span>复制文件路径</button>
+          <button onClick={onCopyName}><span className="ctx-ico"><IconTag16 size={14} /></span>复制文件名</button>
         </div>,
         document.body
       )}

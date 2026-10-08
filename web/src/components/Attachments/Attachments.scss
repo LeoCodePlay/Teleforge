@@ -31,15 +31,16 @@
   gap: 2px; color: var(--muted); width: 100%; height: 100%;
 }
 .att-file-ext { font-size: 9px; font-family: var(--mono); letter-spacing: .04em; color: var(--text); }
-/* 删除钮:默认隐藏,悬停/聚焦露出(触屏无 hover:媒体查询常显) */
+/* 删除钮:默认隐藏,悬停/聚焦露出(触屏无 hover:媒体查询常显)。
+   颜色与全站行内删除同一口径:静止 --muted、悬浮 --red(原先用 --text 白字,与别处不一致) */
 .att-remove {
   position: absolute; top: 4px; right: 4px; z-index: 1;
   width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
   display: grid; place-items: center;
-  background: var(--pop-bg-strong); color: var(--text); cursor: pointer;
-  opacity: 0; transition: opacity .2s ease-in-out;
+  background: var(--pop-bg-strong); color: var(--muted); cursor: pointer;
+  opacity: 0; transition: opacity .2s ease-in-out, color .15s ease;
 }
-.att-item:hover .att-remove, .att-remove:focus-visible { opacity: 1; }
+.att-item:hover .att-remove, .att-remove:hover, .att-remove:focus-visible { opacity: 1; color: var(--red); }
 @media (pointer: coarse) { .att-remove { opacity: 1; } }
 /* 文件/错误项的名字:覆盖在 tile 底部内侧(轨道 overflow hidden,不能探出 tile) */
 .att-name {

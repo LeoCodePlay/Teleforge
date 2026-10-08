@@ -3,4 +3,5 @@
 .dsh-skill-header { padding: 8px 12px; border-bottom: 1px solid var(--line-strong); background: var(--code-bg-soft); font-size: 11px; font-weight: 500; line-height: 16px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
 .dsh-skill-body { min-height: 0; margin: 0; padding: 10px 12px 12px; max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 18px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); }
 .dsh-skill-body[data-error] { color: var(--red); }
-.dsh-skill-body::-webkit-scrollbar-track { margin: 6px 0; }
+/* 这里原先有一条 ::-webkit-scrollbar-track{ margin } 的搬运残留:全站原生条宽为 0,
+   那条规则永远画不出来;本卡片的滚动条由悬浮引擎按统一规格绘制(见 styles.scss) */

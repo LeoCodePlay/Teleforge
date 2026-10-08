@@ -1,0 +1,480 @@
+{
+  "name": "teleforge-workspace-nav-icons",
+  "version": "1.1.0",
+  "project": "Teleforge(远程 SSH AI 编程工具)",
+  "sourceOfTruth": "web/src/components/icons/icons.tsx",
+  "preview": "docs/design/icons/icon-preview.html",
+  "sprite": "docs/design/icons/icon.sprite.svg",
+  "spec": "docs/design/icons/icon.spec.md",
+  "recommendedTech": "svg",
+  "recommendedTechReason": [
+    "全部是 12~20px 的界面图标:矢量缩放无损、随 currentColor 换主题、单枚约 0.3KB 且可被 gzip 复用",
+    "需要随标签/行文字换色(激活态、锁定态、远程/本地语义色),CSS 颜色与 SVG 同源最省事",
+    "无需像素处理、无需大量动态图元:不构成 Canvas 触发条件(见 canvas 字段)"
+  ],
+  "canvas": {
+    "needed": false,
+    "triggerConditions": [
+      "同一画布上成千上万图元(如大规模连线图/拓扑图)",
+      "需要逐像素读写(滤镜、抠像、导出位图)",
+      "需要每帧重绘的复杂动效(粒子、波形)"
+    ],
+    "reuseHint": "如后续要做 Canvas 版,可直接复用这里的 path d 常量,以 Path2D(d) 绘制;颜色用 ctx.strokeStyle = getComputedStyle(el).color 取主题色",
+    "demo": null
+  },
+  "style": {
+    "grid": 16,
+    "viewBox": "0 0 16 16",
+    "strokeWidth": 1.6,
+    "stroke": "currentColor",
+    "fill": "none(两处实心是表意需要:IconAiChat16 的星芒、IconTheme16 的对比半圆)",
+    "strokeLinecap": "round",
+    "strokeLinejoin": "round",
+    "cornerRadius": "1.4~2.2(按形状在网格上取整)",
+    "naming": "Icon<PascalName><Grid>(如 IconCloud16)",
+    "api": "{ size?: number; className?: string } —— 尺寸靠 size 显式给(不靠 font-size),颜色靠所在行文字色",
+    "optics": "内容 bbox 统一居中于 8,8;单侧留白 1.2~2.8 网格单位(见 preview 中各图标的实测边距)"
+  },
+  "semantics": {
+    "pairing": "远程 vs 本地各用一个完整形状,不做「文件夹 + 小角标」的叠图(≤14px 会糊)",
+    "remoteWorkspace": "云 = 远端(AI 通过 SSH 在远端读写)",
+    "localWorkspace": "文件夹 = 本机目录",
+    "remoteWholeMachine": "机架 = 不绑目录,边界=整台服务器",
+    "localWholeMachine": "显示器 = 不绑目录,边界=整台电脑"
+  },
+  "icons": [
+    {
+      "id": "i-cloud-16",
+      "component": "IconCloud16",
+      "meaning": "远程工作区",
+      "category": "workspace",
+      "sizes": [13, 14],
+      "usedIn": [
+        "web/src/components/ChatPanel/ChatPanel.tsx(输入框下方远程工作区 chip)",
+        "web/src/components/SessionPanel/SessionPanel.tsx(远程工作区分组头)"
+      ]
+    },
+    {
+      "id": "i-folder-16",
+      "component": "IconFolder16",
+      "meaning": "本地工作区 / 文件夹 / 文件",
+      "category": "workspace",
+      "sizes": [13, 14, 20],
+      "usedIn": [
+        "web/src/components/ChatPanel/ChatPanel.tsx(本地工作区 chip、浏览选择其他目录…)",
+        "web/src/components/SessionPanel/SessionPanel.tsx(本地工作区分组头)",
+        "web/src/components/BottomBar/BottomBar.tsx(手机底部栏「文件」)",
+        "web/src/components/FileManager/FileManager.tsx(远程文件列表的文件夹行 + 新建文件夹行)",
+        "web/src/components/FileManager/LocalFileManager.tsx(本地文件列表的文件夹行 + 新建文件夹行)",
+        "web/src/components/DirBrowser/DirBrowser.tsx、LocalDirBrowser.tsx(选择目录弹窗的目录行)"
+      ]
+    },
+    {
+      "id": "i-server-16",
+      "component": "IconServer16",
+      "meaning": "不使用工作区(整台服务器)",
+      "category": "workspace",
+      "sizes": [13],
+      "usedIn": ["web/src/components/ChatPanel/ChatPanel.tsx(远程工作区 chip 的全盘态 / 下拉项)"]
+    },
+    {
+      "id": "i-desktop-16",
+      "component": "IconDesktop16",
+      "meaning": "不使用工作区(整台电脑)",
+      "category": "workspace",
+      "sizes": [13],
+      "usedIn": ["web/src/components/ChatPanel/ChatPanel.tsx(本地工作区 chip 的全盘态 / 下拉项)"]
+    },
+    {
+      "id": "i-home-16",
+      "component": "IconHome16",
+      "meaning": "家目录",
+      "category": "workspace",
+      "sizes": [13],
+      "usedIn": ["web/src/components/ChatPanel/ChatPanel.tsx(远程工作区下拉「家目录」)"]
+    },
+    {
+      "id": "i-ai-chat-16",
+      "component": "IconAiChat16",
+      "meaning": "AI 编程助手",
+      "category": "navigation",
+      "sizes": [14, 20],
+      "usedIn": [
+        "web/src/App.tsx(顶部标签条固定标签「AI 编程助手」)",
+        "web/src/components/BottomBar/BottomBar.tsx(手机底部栏「AI助手」)"
+      ]
+    },
+    {
+      "id": "i-terminal-16",
+      "component": "IconTerminal16",
+      "meaning": "终端",
+      "category": "navigation",
+      "sizes": [14, 15, 20],
+      "usedIn": [
+        "web/src/App.tsx(顶部标签条固定标签「终端」+ 标签条末端「在侧栏打开终端」按钮)",
+        "web/src/components/BottomBar/BottomBar.tsx(手机底部栏「终端」)"
+      ]
+    },
+    {
+      "id": "i-schedule-16",
+      "component": "IconSchedule16",
+      "meaning": "自动化任务",
+      "category": "navigation",
+      "sizes": [14, 20],
+      "usedIn": [
+        "web/src/App.tsx(顶部标签条固定标签「自动化任务」,右上角仍挂 .btab-dot 红点)",
+        "web/src/components/BottomBar/BottomBar.tsx(手机底部栏「自动化」)"
+      ]
+    },
+    {
+      "id": "i-browser-16",
+      "component": "IconBrowser16",
+      "meaning": "浏览器预览",
+      "category": "navigation",
+      "sizes": [14, 20],
+      "usedIn": [
+        "web/src/App.tsx(顶部标签条预览标签;此前是 🌐 emoji,为标签条不再混用 emoji 一并换掉)",
+        "web/src/App.tsx(顶栏「检测到项目地址」的预览 chip)",
+        "web/src/components/BottomBar/BottomBar.tsx(手机底部栏「预览」)"
+      ]
+    },
+    {
+      "id": "i-robot-16",
+      "component": "IconRobot16",
+      "meaning": "设置 · AI 配置",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 1 项)"]
+    },
+    {
+      "id": "i-image-16",
+      "component": "IconImage16",
+      "meaning": "设置 · 生图配置",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 2 项)"]
+    },
+    {
+      "id": "i-theme-16",
+      "component": "IconTheme16",
+      "meaning": "设置 · 主题",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 3 项)"]
+    },
+    {
+      "id": "i-puzzle-16",
+      "component": "IconPuzzle16",
+      "meaning": "设置 · 技能",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 4 项)"]
+    },
+    {
+      "id": "i-plug-16",
+      "component": "IconPlug16",
+      "meaning": "设置 · 工具插件",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 5 项)"]
+    },
+    {
+      "id": "i-hub-16",
+      "component": "IconHub16",
+      "meaning": "设置 · MCP 服务",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 6 项)"]
+    },
+    {
+      "id": "i-clipboard-16",
+      "component": "IconClipboard16",
+      "meaning": "设置 · 全局指令",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 7 项)"]
+    },
+    {
+      "id": "i-info-16",
+      "component": "IconInfo16",
+      "meaning": "设置 · 关于与更新",
+      "category": "settings",
+      "sizes": [15],
+      "usedIn": ["web/src/components/SettingsPanel/SettingsPanel.tsx(左侧菜单第 8 项)"]
+    },
+    {
+      "id": "i-file-16",
+      "component": "IconFile16",
+      "meaning": "文件列表菜单 · 打开文件 / 新建文件 / 上传文件",
+      "category": "fileMenu",
+      "sizes": [14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx(右键菜单 + 上传下拉)",
+        "web/src/components/FileManager/LocalFileManager.tsx(右键菜单)"
+      ]
+    },
+    {
+      "id": "i-download-16",
+      "component": "IconDownload16",
+      "meaning": "文件列表菜单 · 下载 / 传到本地",
+      "category": "fileMenu",
+      "sizes": [13, 14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx(右键菜单「下载」、多选操作条「下载」)"
+      ]
+    },
+    {
+      "id": "i-transfer-16",
+      "component": "IconTransfer16",
+      "meaning": "文件列表菜单 · 传到本地 / 传到远程(双向传输)",
+      "category": "fileMenu",
+      "sizes": [13, 14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx(右键菜单「传到本地」、多选操作条「传到本地」)",
+        "web/src/components/FileManager/LocalFileManager.tsx(右键菜单「传到远程当前目录」、多选操作条「传到远程」)"
+      ]
+    },
+    {
+      "id": "i-link-16",
+      "component": "IconLink16",
+      "meaning": "文件列表菜单 · 复制路径",
+      "category": "fileMenu",
+      "sizes": [14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(右键菜单)"
+      ]
+    },
+    {
+      "id": "i-tag-16",
+      "component": "IconTag16",
+      "meaning": "文件列表菜单 · 复制文件名",
+      "category": "fileMenu",
+      "sizes": [14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(右键菜单)"
+      ]
+    },
+    {
+      "id": "i-pencil-16",
+      "component": "IconPencil16",
+      "meaning": "文件列表菜单 · 重命名",
+      "category": "fileMenu",
+      "sizes": [14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(右键菜单)"
+      ]
+    },
+    {
+      "id": "i-paste-16",
+      "component": "IconPaste16",
+      "meaning": "文件列表菜单 · 粘贴到此处",
+      "category": "fileMenu",
+      "sizes": [14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(右键菜单)"
+      ]
+    },
+    {
+      "id": "i-folder-up-16",
+      "component": "IconFolderUp16",
+      "meaning": "文件工具栏 · 上级目录",
+      "category": "toolbar",
+      "sizes": [13],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(工具栏)",
+        "web/src/components/DirBrowser/DirBrowser.tsx、LocalDirBrowser.tsx(选目录弹窗)"
+      ]
+    },
+    {
+      "id": "i-upload-16",
+      "component": "IconUpload16",
+      "meaning": "文件工具栏 · 上传(与「下载」同一形状反向)",
+      "category": "toolbar",
+      "sizes": [13],
+      "usedIn": ["web/src/components/FileManager/FileManager.tsx(工具栏「上传 ▾」)"]
+    },
+    {
+      "id": "reused-reload",
+      "component": "IconReload16(既有,未新增)",
+      "meaning": "文件工具栏 · 刷新(同一个环形箭头,不再另造一枚)",
+      "category": "toolbar",
+      "sizes": [13],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(工具栏 ↻)"
+      ]
+    },
+    {
+      "id": "i-send-16",
+      "component": "IconSend16",
+      "meaning": "输入区 · 发送(纸飞机)",
+      "category": "toolbar",
+      "sizes": [15],
+      "usedIn": ["web/src/components/ChatPanel/ChatPanel.tsx(composer 发送按钮)"]
+    },
+    {
+      "id": "i-stop-16",
+      "component": "IconStop16",
+      "meaning": "输入区 · 停止当前任务(圆角方块,与发送同一按钮位)",
+      "category": "toolbar",
+      "sizes": [15],
+      "usedIn": ["web/src/components/ChatPanel/ChatPanel.tsx(composer 停止按钮)"]
+    },
+    {
+      "id": "i-sidebar-16",
+      "component": "IconSidebar16",
+      "meaning": "顶栏 · 打开 / 收起右侧栏",
+      "category": "toolbar",
+      "sizes": [15],
+      "usedIn": ["web/src/App.tsx(标签条末端 .tabstrip-add.rsb-toggle)"]
+    },
+    {
+      "id": "i-close-16",
+      "component": "IconClose16",
+      "meaning": "退出多选 / 取消",
+      "category": "toolbar",
+      "sizes": [13],
+      "usedIn": ["web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(多选模式切换的「退出多选」)"]
+    },
+    {
+      "id": "i-edit-line-16",
+      "component": "IconEditLine16",
+      "meaning": "SSH 连接面板 · 编辑该服务器(铅笔 + 下方编辑线)",
+      "category": "toolbar",
+      "sizes": [13],
+      "usedIn": ["web/src/components/SshConnectModal/SshConnectModal.tsx(已保存服务器列表每行的编辑按钮)"]
+    },
+    {
+      "id": "i-back-16",
+      "component": "IconBack16",
+      "meaning": "弹窗表单 · 返回上一层(表单 → 列表)",
+      "category": "toolbar",
+      "sizes": [13],
+      "usedIn": ["web/src/components/SshConnectModal/SshConnectModal.tsx(表单底部「返回」按钮)"
+      ]
+    },
+    {
+      "id": "i-stopwatch-16",
+      "component": "IconStopwatch16",
+      "meaning": "对话统计 · 活动胶囊(轮/步 + 解码速度)",
+      "category": "chatStats",
+      "sizes": [12],
+      "usedIn": [
+        "web/src/components/StatsPills/StatsPills.tsx(对话面板最底一行的活动胶囊)"
+      ]
+    },
+    {
+      "id": "i-database-16",
+      "component": "IconDatabase16",
+      "meaning": "对话统计 · 用量胶囊(token 总量 / 缓存命中)",
+      "category": "chatStats",
+      "sizes": [12],
+      "usedIn": [
+        "web/src/components/StatsPills/StatsPills.tsx(会话级用量胶囊)",
+        "web/src/components/StatsPills/StatsPills.tsx(TurnUsagePill:每条回复操作栏末尾的「本轮用量」)"
+      ]
+    },
+    {
+      "id": "reused-ssh-delete",
+      "component": "IconTrashOutline14(既有,未新增)",
+      "meaning": "SSH 连接面板 · 删除已保存服务器",
+      "category": "toolbar",
+      "sizes": [13],
+      "usedIn": ["web/src/components/SshConnectModal/SshConnectModal.tsx(已保存列表每行的删除按钮)"]
+    },
+    {
+      "id": "reused-copy-trash",
+      "component": "IconCopy16 / IconTrashOutline14(既有,未新增)",
+      "meaning": "文件列表菜单 · 复制 / 删除",
+      "category": "fileMenu",
+      "sizes": [13, 14],
+      "usedIn": [
+        "web/src/components/FileManager/FileManager.tsx、LocalFileManager.tsx(右键菜单与多选操作条)"
+      ]
+    },
+    {
+      "id": "i-undo-16",
+      "component": "IconUndo16",
+      "meaning": "编辑器右键菜单 · 撤销(左向折返箭头)",
+      "category": "editorMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/components/FileViewer/CodeEditor.tsx(编辑器右键菜单)"]
+    },
+    {
+      "id": "i-redo-16",
+      "component": "IconRedo16",
+      "meaning": "编辑器右键菜单 · 重做(撤销的镜像)",
+      "category": "editorMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/components/FileViewer/CodeEditor.tsx(编辑器右键菜单)"]
+    },
+    {
+      "id": "i-cut-16",
+      "component": "IconCut16",
+      "meaning": "编辑器右键菜单 · 剪切(剪刀)",
+      "category": "editorMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/components/FileViewer/CodeEditor.tsx(编辑器右键菜单)"]
+    },
+    {
+      "id": "i-select-all-16",
+      "component": "IconSelectAll16",
+      "meaning": "编辑器右键菜单 · 全选(选择框 + 勾)",
+      "category": "editorMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/components/FileViewer/CodeEditor.tsx(编辑器右键菜单)"]
+    },
+    {
+      "id": "i-save-16",
+      "component": "IconSave16",
+      "meaning": "编辑器右键菜单 · 保存(软盘)",
+      "category": "editorMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/components/FileViewer/CodeEditor.tsx(编辑器右键菜单)"]
+    },
+    {
+      "id": "reused-editor-clipboard",
+      "component": "IconCopy16 / IconPaste16 / IconLink16 / IconTag16(既有,未新增)",
+      "meaning": "编辑器右键菜单 · 复制 / 粘贴 / 复制文件路径 / 复制文件名(与文件列表右键菜单同一套)",
+      "category": "editorMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/components/FileViewer/CodeEditor.tsx(编辑器右键菜单)"]
+    },
+    {
+      "id": "reused-terminal-mode",
+      "component": "IconCloud16 / IconDesktop16(既有,未新增)",
+      "meaning": "终端列表 · 远程终端 / 本地终端归属标记(与工作区 chip 同一套语言:云 = 远端、显示器 = 整台电脑)",
+      "category": "terminalList",
+      "sizes": [13],
+      "usedIn": [
+        "web/src/components/ConsolePanel/ConsolePanel.tsx(右侧终端列表项的名字前)",
+        "web/src/components/ConsolePanel/ConsolePanel.tsx(手机端「⌨ 终端 ▾」下拉里的同一项)"
+      ]
+    },
+    {
+      "id": "reused-dirbrowser",
+      "component": "IconFolderUp16 / IconDesktop16 / IconHome16 / IconFolder16 / IconFile16(既有,未新增)",
+      "meaning": "目录浏览弹窗 · 上级 / 我的电脑 / 家目录 / 目录行 / 文件行(全部复用工作区那套语言:显示器 = 这台电脑、房子 = 家目录、文件夹 = 目录、文档 = 文件)",
+      "category": "dirBrowser",
+      "sizes": [13],
+      "usedIn": [
+        "web/src/components/DirBrowser/LocalDirBrowser.tsx(选择本地工作区:💻 我的电脑、🏠 家目录、不可点的 📄 文件行)",
+        "web/src/components/DirBrowser/DirBrowser.tsx(选择远程工作区:远程侧家目录原来挂 📁、不可点的 📄 文件行)"
+      ]
+    }
+  ],
+  "notMigrated": [
+    "web/src/components/ConsolePanel/ConsolePanel.tsx:终端列表的 🌐/💻 归属标记已换成 SVG(见 terminalList 分类);工具栏的「⌨ 终端 (n)」切换按钮与列表项的删除「✕」仍是字形,本次未动",
+    "文件列表里未被右键的普通文件行仍是 📄、软链行仍是 🔗(列表列图标只换了文件夹);要整列统一可再补",
+    "DirBrowser / LocalDirBrowser 的文件行已随本轮收敛到 IconFile16(见 dirBrowser 分类)",
+    "web/src/App.tsx:标签右键菜单仍是 📌 / ✕ / 🗂 / 🗑 四个字形(同样挂在 .ctx-ico 槽里),本次未动",
+    "文件标签(tabIcon)按媒体类型仍用 🖼️/📄 字形:它是内容类型标记,不是导航图标",
+    "FileViewer 的「⬇ 下载」是正文里的文字链接(不是按钮),本次未动",
+    "CodeEditor 右键菜单的文本类动作已换成 SVG(见 editorMenu);CodeMirror 原生搜索面板(Ctrl+F)里的按钮仍是其自带字形,不在本次范围",
+    "SshConnectModal 弹窗头部的关闭「✕」与错误行前缀「✕」仍是文字字形:本次只按需求换了「编辑」与「返回」两处"
+  ],
+  "qualityGates": {
+    "typecheck": "npx tsc --noEmit 通过",
+    "geometry": "preview 页用 getBBox() 实测(含 0.8 描边外扩):IconStopwatch16 留白 [2.1,1.6,2.1,1.3]、IconDatabase16 [2.7,1.8,2.7,1.8]、IconEditLine16 [2.4,1.5,2.6,1.7]、IconBack16 [2.4,3.8,2,3.8]、IconUndo16 [2.4,2.7,2.3,2.6]、IconRedo16 [2.3,2.7,2.4,2.6]、IconCut16 [2.7,2,2.7,1.4]、IconSelectAll16 [1.8,1.8,1.8,1.8]、IconSave16 [2,2,2,2],全部落在 1.2~2.8 网格单位内且不裁切;中心 cx/cy 均在 8±0.3(返回箭头本身扁,纵向留白自然偏大)",
+    "color": "全部 currentColor,深/浅色主题随文字色自动切换(见 preview 的暗/亮对照)"
+  }
+}

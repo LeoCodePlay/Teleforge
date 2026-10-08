@@ -85,7 +85,13 @@
   border: 1px solid var(--accent-border); background: var(--code-bg-solid); color: var(--text); outline: none;
 }
 .term-list-item .term-dot { margin-right: 0; flex: none; }
-.term-list-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+/* 终端归属标记(本机 = 显示器 / 远端 = 云):图标槽与名字拆两段 —— 图标 flex:none
+   垂直居中,名字那段单独承担 overflow ellipsis(整格直接挂 ellipsis 会把图标一起截掉)。
+   桌面列表与手机下拉共用这套 class。 */
+.term-mode-name, .term-list-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.term-list-name { flex: 1; font-size: 12.5px; }
+.term-mode-ico { flex: none; }
+.term-mode-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .term-list-del {
   flex: none; border: none; background: transparent; cursor: pointer;
   width: 19px; height: 19px; line-height: 1; font-size: 12px; border-radius: 6px;
@@ -111,6 +117,10 @@
 }
 .term-menu-item:hover:not(:disabled) { background: var(--glass-bg-hover); }
 .term-menu-item:disabled { opacity: .4; cursor: default; }
+/* 菜单里的危险项(删除终端):静止即红 + 悬浮红 scrim,与全局 .ctxmenu button.danger 同一口径;
+   不显式给色会继承上面的 --text,深色主题里就是一枚"白字删除" */
+.term-menu-item.danger { color: var(--red); }
+.term-menu-item.danger:hover:not(:disabled) { background: var(--danger-soft); }
 .term-menu-key { font-size: 10.5px; color: var(--muted); letter-spacing: .3px; }
 
 /* ---- 移动端(<768):右侧终端列表隐藏,终端主体全宽 ----

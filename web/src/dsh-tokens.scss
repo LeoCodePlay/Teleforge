@@ -122,8 +122,13 @@
   --dsw-focus-ring-color: var(--accent-border);
   --dsw-focus-ring-width: 2px;
   --dsw-mask-blur: none;
-  --dsw-alias-scrollbar-bg-l2: transparent;
-  --dsw-alias-scrollbar-hover-l2: var(--scroll-thumb);
+  /* dsh 的滚动条 token:本项目的 dsh 搬运件原样保留了 `--dsh-scrollbar-*` 的引用,
+     但消费它们的 dsh 样式表(ui-theme styles/scrollbar.css)没有搬过来 —— 这些变量
+     目前没有消费者。映射接到项目自己的滚动条规格上(见 styles.scss),
+     免得将来真接上时"静止=透明、悬停=静止色"又把外观分成两套。 */
+  --dsw-alias-scrollbar-bg-l2: var(--scroll-thumb);
+  --dsw-alias-scrollbar-hover-l2: var(--scroll-thumb-hover);
+  --dsh-scrollbar-width: var(--scroll-size);
   --dsw-shadow-lv3: var(--glass-shadow-lg);
 
   /* ---- 语义状态 ---- */

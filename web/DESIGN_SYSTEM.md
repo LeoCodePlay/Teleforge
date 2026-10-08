@@ -219,10 +219,27 @@ button:hover:not(:disabled) {
 |---|---|
 | 圆角 | `--r-sm`(6px),**所有按钮**;全站禁止胶囊(999px)/ 圆形(50%)按钮 |
 | 描边 | 静止态一律 `1px solid var(--line)`;hover 提亮到 `--line-strong` |
-| 底色 | 普通 `--fill-2` / 幽灵 `transparent` / 主按钮 `--accent` / 危险 `--danger-soft` |
+| 底色 | 普通 `--fill-2` / 幽灵 `transparent` / 主按钮 `--accent` / 危险 `--fill-2`(与普通按钮同一个底) |
 | 语义 | 只靠**底色 + 文字色**表达(选中/危险/警告),不再出现绿框、红框、蓝框按钮 |
 | 投影 | 零投影 |
 | padding / 字号 | `7px 13px` / `13px`;小号 `button.sm` = `4px 11px` / `12px` |
+
+**危险(删除)按钮统一口径** —— 全站只有一个危险红 `--red`,分两种形态:
+
+| 形态 | 类 | 静止 | 悬浮 |
+|---|---|---|---|
+| 文字按钮 | `button.danger` | 底 `--fill-2` + 描边 `--line` + 文字 `--red` | 叠 `--danger-soft-strong` scrim + 描边 `--line-strong` |
+| 图标按钮 | `.action-icon.danger` | 透明底 + 图标 `--red` | 底 `--danger-soft`、图标 `--red` |
+| 菜单项 | `.ctxmenu button.danger` / `.term-menu-item.danger` | 透明底 + 文字 `--red` | 底 `--danger-soft`、文字 `--red` |
+
+两条硬规则,历史上都踩过坑:
+
+1. **所有独立删除按钮必须挂 `danger` 类**。漏挂就继承默认 `color: var(--text)`,
+   深色主题里直接变成「白字删除」;菜单项还需显式给 `color: var(--red)`,
+   否则被 `.ctxmenu button` 的 `--text` / `.term-menu-item` 的 `--text` 盖掉。
+2. **不要再用 `--err-text` 给按钮/图标上色**。`--err-text` 是给错误**文案条**(`.error`)
+   用的,它比 `--red` 多掺一档 `text`、更灰;混用会让文字删除按钮「偏淡」、
+   图标删除按钮「偏鲜艳」,同屏出现两种红。危险按钮/图标一律 `--red`。
 
 结构件例外(共 3 处,已在 `styles.scss` 内联注明):
 
@@ -280,6 +297,24 @@ button:hover:not(:disabled) {
 
 移动端:`<768` 弹窗全屏化;断点与 `App.scss` / `useMediaQuery.ts` 保持一致
 (`<768 phone` / `768–1279 tablet` / `≥1280 desktop`)。
+
+### 5.4 滚动条(全站一套)
+
+规格只有一处:`web/src/styles.scss` 的「滚动条:全站唯一规格」。
+色值仍来自 6 色派生(`--scroll-thumb` / `--scroll-thumb-hover` / `--scroll-thumb-x`,见 2.1)。
+
+| 项 | 值 |
+|---|---|
+| 视觉拇指 | `--scroll-size` = 4px,`--r-pill` 胶囊圆角,轨道透明 |
+| 覆盖式拇指间距 | `--scroll-gap` = 2px(引擎 `scrollbar-ui.ts` 悬浮拇指离容器内边缘) |
+| 原生例外条宽 | `--scroll-bar` = 6px(4px 拇指 + 左右各 1px 透明边) |
+| 内容侧留白 | `--scroll-gutter` = 6px(内容会被悬浮拇指压住的容器加 `padding-right`) |
+| 原生例外 | 只有 xterm / `textarea` / `.md table` / `.fviewer .cm-scroller`;必须写 `scrollbar-width: auto`,写成 `thin` 会切回平台滚动条(实测 10px),就又变成第二套 |
+| 故意隐藏原生条 | 标签条、附件轨道、触摸横滑区等横向手势容器(各有交互理由,见各处注释) |
+
+新增滚动容器时默认什么都不用写(原生条已全局隐藏、拇指由引擎按同一规格绘制);
+只有「内容贴右边缘、且右端有圆角/描边/悬停底色」的列表,才需要
+`padding-right: var(--scroll-gutter)`,否则滚动时拇指会压在内容上。
 
 ---
 

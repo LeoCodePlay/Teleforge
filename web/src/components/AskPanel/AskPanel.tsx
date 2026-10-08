@@ -1,6 +1,9 @@
 // 模型向用户提问面板(ask_user_question 工具):
-// 收到 agent 事件 ask_user 后,在会话页输入框上方以内联玻璃卡片展示(无遮罩)。
-// 支持单选/多选/"其它"自定义,多道提问可"上一道/下一道"或点头部进度段逐道作答,最后统一提交。
+// 收到 agent 事件 ask_user 后,在会话页输入框上方以内联卡片展示(无遮罩)。
+// 布局对齐 harness 的提问面板(ui-user-questions/QuestionComposer):题目正文直接做卡片标题,
+// 选项是整行可点的编号行(单选=序号 / 多选=勾选框),自定义回答是与选项同形的输入行,
+// 顶部一条按题切片的进度轨(绿=已答 / 强调色=当前 / 灰=未答,可点跳题),底部只放翻题与提交。
+// 单选点选项即作答并自动进入下一题;最后一题作答完、且所有题目都已作答时才自动提交。
 // 提问挂起期间通过 onPendingChange 通知父组件锁定输入框与停止按钮(未作答前不能继续输入/暂停);
 // 取消/超时/停止 Agent 时自动关闭并恢复输入;页面刷新后挂载时经 ask_user_list
 // 从服务端拉回全部挂起提问恢复面板(全部前端断开且 20s 宽限期内未回来才会真正作废)。
@@ -10,6 +13,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { AskAnswerItem, AskQuestion, AskRequest } from '../../types';
+import { IconArrowLeft16, IconArrowRight16, IconCheck16, IconClose16, IconPencil16 } from '../icons/icons';
 import './AskPanel.scss';
 
 interface AskPanelProps {
@@ -22,18 +26,48 @@ interface AskPanelProps {
   onBootChange?: (checking: boolean) => void;
 }
 
+/** 一道题的作答草稿 */
+interface AskDraft {
+  selected: string[];
+  custom: string;
+}
+
+/** 未作答的空草稿共享同一个常量,避免每次读取都新建对象 */
+const NO_DRAFTS: Record<number, AskDraft> = {};
+
+/** 自动跳题后的冷却窗口:挡住同一次连点 / 重复回车落到下一题同一位置的选项上 */
+const ADVANCE_COOLDOWN_MS = 260;
+
+/**
+ * 拆出选项 label 末尾的「(推荐)/(recommended)」后缀做角标展示。
+ * 回传给模型的答案仍是**原始 label**,展示与取值不共用同一个字符串。
+ */
+function splitRecommended(label: string): { text: string; recommended: boolean } {
+  const suffix = /\s*[（(](?:推荐|recommended)[)）]\s*$/i;
+  return suffix.test(label)
+    ? { text: label.replace(suffix, ''), recommended: true }
+    : { text: label, recommended: false };
+}
+
 export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPanelProps) {
   const [queue, setQueue] = useState<AskRequest[]>([]);
   const [qIndex, setQIndex] = useState(0);
-  // 每题的选择:questionId -> 已选 option label;自定义文本:questionId -> 输入
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [customs, setCustoms] = useState<Record<string, string>>({});
+  // 作答草稿按「题目下标」存,不按模型给的题目 id 存:服务端对 id 只做 String(q.id || 随机),
+  // 模型给多道题重复 id(或给了同一个语义 id)时不会报错,前端若按 id 归档答案,
+  // 第 1 题的选择就会串进第 2 题 —— 表现为"选完自己跳到第二题、第一题像没选过"。
+  // 草稿连 askId 一起存:换批次时旧草稿整体失效,不会有一帧读到上一批的答案。
+  const [drafts, setDrafts] = useState<{ askId: string; map: Record<number, AskDraft> }>({ askId: '', map: {} });
+  const [hint, setHint] = useState<string | null>(null);
   // 启动检查期:挂载后向服务端确认有无挂起提问,期间父组件先扣住输入区不渲染
   const [checking, setChecking] = useState(true);
 
   // 当前显示会话的 ref(订阅只挂一次,事件按此判断"是否插到当前会话的第一道题")
   const sidRef = useRef(sid);
   sidRef.current = sid;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // 跳题后把焦点移出选项行:键盘回车/空格重复触发时不会二次命中新一题同一位置的按钮
+  const wantFocusRef = useRef(false);
+  const advanceUntilRef = useRef(0);
 
   // 只取属于当前会话的提问;切走会话(旧会话仍有挂起提问)时面板隐藏,切回仍可见。
   // 检查期内要求 sid 已恢复且能对上号才显示(sid 刚刷新时还是 null,宽松匹配会让
@@ -48,7 +82,11 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
   // 就会沿用越界下标 —— active 存在却取不到题,面板渲染 null,
   // 而父组件仍按 pending 锁死输入区,表现为"卡在提问、没有面板、也没有输入框"。
   const activeAskId = active ? active.askId : null;
-  useLayoutEffect(() => { setQIndex(0); }, [activeAskId]);
+  useLayoutEffect(() => {
+    setQIndex(0);
+    setHint(null);
+    advanceUntilRef.current = 0;
+  }, [activeAskId]);
   // 夹取下标兜底:批次切换与上面 effect 之间可能隔一帧,保证有挂起提问就一定取得到题
   const idx = active ? Math.min(Math.max(qIndex, 0), active.questions.length - 1) : 0;
   const q: AskQuestion | null = active ? active.questions[idx] || null : null;
@@ -60,6 +98,17 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
   // 检查期状态上抛:父组件据此在检查完成前先不渲染输入区(防抖动)
   useEffect(() => { onBootChange?.(checking); }, [checking, onBootChange]);
 
+  // 跳题后把焦点交给新一题:有选项交给正文容器(焦点不落在某一行上,
+  // 键盘继续输入/回车都不会误触上一题同一位置的按钮);没选项直接给输入框,跳过去就能打字
+  useEffect(() => {
+    if (!wantFocusRef.current) return;
+    wantFocusRef.current = false;
+    const body = bodyRef.current;
+    if (!body) return;
+    const target = body.querySelector('.ask-opt') ? body : body.querySelector<HTMLElement>('.ask-custom');
+    target?.focus({ preventScroll: true });
+  }, [idx, activeAskId]);
+
   useEffect(() => {
     // 订阅不过滤会话:所有会话的 ask_user 事件都入队(带 sid)——
     // 否则切到别的会话时,原会话背景中提出的问题会被直接丢弃,
@@ -67,11 +116,14 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
     // 是否显示由上方 active 按 sid 匹配,切回该会话即自动重新展示并锁定输入。
     const off = api.on('agent', (m: any) => {
       if (m.event === 'ask_user' && m.askId && Array.isArray(m.questions) && m.questions.length > 0) {
-        setQueue((prev) => prev.some((x) => x.askId === m.askId) ? prev : [...prev, { askId: m.askId, questions: m.questions, sid: m.sid }]);
-        // 只有当前正在看的会话来了新一批提问,才把作答指针重置到第一道;
-        // 背景会话的提问只入队,不打扰正在显示的批次
-        const cur = sidRef.current;
-        if (!cur || !m.sid || m.sid === cur) setQIndex(0);
+        setQueue((prev) => {
+          // 只有真的是新批次才把作答指针拨回第一道:同一 askId 的重复投递
+          // (重连重放 / 多路径广播)不能把用户正在答的题悄悄拨回第一题
+          if (prev.some((x) => x.askId === m.askId)) return prev;
+          const cur = sidRef.current;
+          if (!cur || !m.sid || m.sid === cur) { setQIndex(0); setHint(null); }
+          return [...prev, { askId: m.askId, questions: m.questions, sid: m.sid }];
+        });
       } else if (m.event === 'ask_user_cancelled' && m.askId) {
         // 作答/取消/超时/停止统一走该事件:从队列移除对应批次
         setQueue((prev) => prev.filter((x) => x.askId !== m.askId));
@@ -107,29 +159,33 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
 
   if (!active || !q) return null;
 
-  const answered = (qn: AskQuestion) => {
-    const sel = (selections[qn.id] || []).length > 0;
-    const custom = (customs[qn.id] || '').trim().length > 0;
-    return sel || custom;
+  const total = active.questions.length;
+  const draftMap = drafts.askId === activeAskId ? drafts.map : NO_DRAFTS;
+  const draftAt = (i: number): AskDraft => draftMap[i] || { selected: [], custom: '' };
+  const answeredIn = (map: Record<number, AskDraft>, i: number): boolean => {
+    const d = map[i];
+    return !!d && (d.selected.length > 0 || d.custom.trim().length > 0);
+  };
+  const answered = (i: number) => answeredIn(draftMap, i);
+  const writeDraft = (i: number, next: AskDraft) => {
+    setDrafts((prev) => ({
+      askId: activeAskId || '',
+      map: { ...(prev.askId === activeAskId ? prev.map : {}), [i]: next },
+    }));
+    setHint(null);
   };
 
-  const toggleOption = (label: string) => {
-    const cur = selections[q.id] || [];
-    if (q.multi_select) {
-      setSelections({ ...selections, [q.id]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label] });
-    } else {
-      setSelections({ ...selections, [q.id]: cur.includes(label) ? [] : [label] });
+  const submit = (map: Record<number, AskDraft> = draftMap) => {
+    const firstUnanswered = active.questions.findIndex((_, i) => !answeredIn(map, i));
+    if (firstUnanswered >= 0) {
+      wantFocusRef.current = true;
+      setQIndex(firstUnanswered);
+      setHint('还有题目未作答,已跳到那一题');
+      return;
     }
-  };
-
-  const setCustom = (v: string) => setCustoms({ ...customs, [q.id]: v });
-
-  const submit = () => {
-    const firstUnanswered = active.questions.findIndex((qn) => !answered(qn));
-    if (firstUnanswered >= 0) { setQIndex(firstUnanswered); return; }
-    const answers: AskAnswerItem[] = active.questions.map((qn) => {
-      const item: AskAnswerItem = { id: qn.id, selected: selections[qn.id] || [] };
-      const custom = (customs[qn.id] || '').trim();
+    const answers: AskAnswerItem[] = active.questions.map((qn, i) => {
+      const item: AskAnswerItem = { id: qn.id, selected: map[i]?.selected || [] };
+      const custom = (map[i]?.custom || '').trim();
       if (custom) item.custom = custom;
       return item;
     });
@@ -137,129 +193,194 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
     setQueue((prev) => prev.filter((x) => x.askId !== active.askId));
   };
 
+  /** 选一个候选选项:多选是勾/取消勾;单选即作答,并自动进入下一题 */
+  const choose = (label: string) => {
+    if (Date.now() < advanceUntilRef.current) return;
+    const cur = draftAt(idx);
+    if (q.multi_select) {
+      const selected = cur.selected.includes(label)
+        ? cur.selected.filter((l) => l !== label)
+        : [...cur.selected, label];
+      writeDraft(idx, { selected, custom: cur.custom });
+      return;
+    }
+    // 单选语义下选项与自定义文本互斥(选选项清空自定义,输入自定义清空选项),
+    // 免得回传的答案里两者同时存在、模型不知道该听哪个
+    const next: AskDraft = { selected: [label], custom: '' };
+    writeDraft(idx, next);
+    const merged = { ...draftMap, [idx]: next };
+    if (idx < total - 1) {
+      advanceUntilRef.current = Date.now() + ADVANCE_COOLDOWN_MS;
+      wantFocusRef.current = true;
+      setQIndex(idx + 1);
+      return;
+    }
+    // 最后一题:所有题目都已作答才自动提交,否则留在原地等用户补
+    if (active.questions.every((_, i) => answeredIn(merged, i))) submit(merged);
+  };
+
+  const setCustom = (v: string) => {
+    const cur = draftAt(idx);
+    writeDraft(idx, { selected: q.multi_select ? cur.selected : [], custom: v });
+  };
+
   const cancel = () => {
     api.send('ask_user_cancel', { askId: active.askId });
     setQueue((prev) => prev.filter((x) => x.askId !== active.askId));
   };
 
-  const goNext = () => {
-    if (idx < active.questions.length - 1) setQIndex(idx + 1);
-    else submit();
+  const goPrev = () => {
+    setHint(null);
+    wantFocusRef.current = true;
+    setQIndex(Math.max(0, idx - 1));
   };
 
-  const total = active.questions.length;
+  const goNext = () => {
+    // 本题没作答就不许越过:否则一路"下一道"会把前面的题悄悄跳过
+    if (!answered(idx)) {
+      setHint(q.options?.length ? '先选一项,或填写自定义回答' : '先填写回答');
+      return;
+    }
+    setHint(null);
+    if (idx < total - 1) {
+      wantFocusRef.current = true;
+      setQIndex(idx + 1);
+      return;
+    }
+    submit();
+  };
+
   const isFirst = idx === 0;
   const isLast = idx === total - 1;
 
   return (
-    <div className="ask-panel" role="dialog" aria-modal="false" aria-label="AI 需要你确认">
-      {/* 头部:左侧身份(徽标+标题),右侧题目进度段(可点跳转)+ 关闭。
-          原先挤在标题后的"第 x/y 题 · 已答 x/y"文字由进度段的颜色语义承担:
-          绿=已答,冰蓝=当前题,灰=未答;单道提问时不渲染进度段,头部保持极简 */}
-      <div className="ask-head">
-        <div className="ask-id">
-          <span className="ask-badge" aria-hidden>?</span>
-          <span className="ask-title">AI 需要你确认</span>
-        </div>
-        <div className="ask-head-side">
-          {total > 1 && (
-            <div className="ask-steps" role="group" aria-label="题目进度,点击跳转">
-              {active.questions.map((qn, i) => (
-                /* 进度段不用 <button>:全局按钮样式的投影/hover 会一层层渗进来,
-                   div + cursor:pointer 一劳永逸;键盘可达性用 role + 回车/空格补齐 */
-                <div
-                  key={qn.id}
-                  role="button"
-                  tabIndex={0}
-                  className={`ask-step ${i === idx ? 'cur' : ''} ${answered(qn) ? 'done' : ''}`}
-                  aria-label={`第 ${i + 1} 题,${answered(qn) ? '已作答' : '未作答'}`}
-                  aria-current={i === idx ? 'step' : undefined}
-                  data-tip={`第 ${i + 1} 题 · ${answered(qn) ? '已作答' : '未作答'}`}
-                  onClick={() => setQIndex(i)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setQIndex(i); } }}
-                />
-              ))}
-            </div>
-          )}
-          <button className="ghost sm ask-close" onClick={cancel} aria-label="取消提问">✕</button>
-        </div>
+    <div className="ask-panel" role="dialog" aria-modal="false" aria-labelledby={`ask-title-${active.askId}-${idx}`}>
+      {/* 顶部进度轨:多题时按题切片(绿=已答 / 强调色=当前 / 灰=未答),点击跳题;
+          单题时是一条整条强调色,表示"当前只有这一问" */}
+      <div
+        className={`ask-rail${total > 1 ? ' split' : ''}`}
+        role={total > 1 ? 'group' : undefined}
+        aria-label={total > 1 ? '题目进度,点击跳转' : undefined}
+      >
+        {total > 1
+          ? active.questions.map((qn, i) => (
+              <div
+                key={i}
+                role="button"
+                tabIndex={0}
+                className={`ask-seg${answered(i) ? ' done' : ''}${i === idx ? ' cur' : ''}`}
+                aria-label={`第 ${i + 1} 题,${answered(i) ? '已作答' : '未作答'}`}
+                aria-current={i === idx ? 'step' : undefined}
+                data-tip={`第 ${i + 1} 题 · ${answered(i) ? '已作答' : '未作答'}`}
+                onClick={() => { setHint(null); setQIndex(i); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setHint(null); setQIndex(i); } }}
+              />
+            ))
+          : <div className="ask-seg cur" />}
       </div>
 
-      <div className="ask-body" key={q.id}>
-        {q.header && <div className="ask-header">{q.header}</div>}
-        <div className="ask-question">{q.question}</div>
+      {/* 头部:题面即标题(可选分类小标签在标题上方),右上角关闭 */}
+      <div className="ask-head">
+        <div className="ask-heading">
+          {q.header && <div className="ask-eyebrow">{q.header}</div>}
+          <h2 className="ask-title" id={`ask-title-${active.askId}-${idx}`}>{q.question}</h2>
+        </div>
+        <button className="ghost ask-close" onClick={cancel} aria-label="取消提问" title="取消提问">
+          <IconClose16 size={14} />
+        </button>
+      </div>
+
+      <div className="ask-body" key={`${active.askId}:${idx}`} ref={bodyRef} tabIndex={-1}>
         {/* 长正文(如计划模式 exit_plan_mode 送审的完整计划):等宽正文 + 独立滚动,
             不让长计划把选项按钮挤到屏幕外(harness 的计划审阅同款呈现) */}
         {q.detail && <pre className="ask-detail" tabIndex={0}>{q.detail}</pre>}
 
-        {q.options && q.options.length > 0 && (
-          <div
-            className={`ask-opts ${q.multi_select ? 'multi' : ''}`}
-            role={q.multi_select ? 'group' : undefined}
-            aria-label={q.multi_select ? '多选' : '单选'}
-          >
-            {q.options.map((opt, i) => {
-              const on = (selections[q.id] || []).includes(opt.label);
-              return (
-                <button
-                  key={opt.label}
-                  type="button"
-                  className={`ask-opt ${on ? 'on' : ''}`}
-                  aria-pressed={on}
-                  style={{ '--i': i } as React.CSSProperties}
-                  onClick={() => toggleOption(opt.label)}
-                >
-                  {/* 选中标记为内联 SVG 图标:单选=同心圆环靶标(外环+中心实心圆),
-                      多选=圆角方框+圆头对勾;形状描边在 SCSS 中按选中态着色 */}
-                  <span className="ask-opt-mark" aria-hidden>
-                    {q.multi_select ? (
-                      <svg viewBox="0 0 16 16">
-                        <rect className="ask-mark-box" x="1.25" y="1.25" width="13.5" height="13.5" rx="4" />
-                        <path className="ask-mark-check" d="M4.6 8.6 7 11 11.6 5.6" pathLength="12" />
-                      </svg>
-                    ) : (
-                      <svg viewBox="0 0 16 16">
-                        <circle className="ask-mark-ring" cx="8" cy="8" r="6.75" />
-                        <circle className="ask-mark-core" cx="8" cy="8" r="3.4" />
-                      </svg>
-                    )}
-                  </span>
-                  <span className="ask-opt-main">
-                    <span className="ask-opt-label">{opt.label}</span>
-                    {opt.description && <span className="ask-opt-desc">{opt.description}</span>}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {(!q.options || q.options.length === 0) && (
-          <div className="hint ask-noopts">可直接在下方填写回答</div>
-        )}
+        <div
+          className={`ask-opts${q.multi_select ? ' multi' : ''}`}
+          role={q.options?.length ? (q.multi_select ? 'group' : 'radiogroup') : undefined}
+          aria-label={q.options?.length ? (q.multi_select ? '多选' : '单选') : undefined}
+        >
+          {(q.options || []).map((opt, i) => {
+            const on = draftAt(idx).selected.includes(opt.label);
+            const display = splitRecommended(opt.label);
+            return (
+              <button
+                key={i}
+                type="button"
+                className={`ask-opt${on ? ' on' : ''}`}
+                role={q.multi_select ? 'checkbox' : 'radio'}
+                aria-checked={on}
+                aria-label={display.recommended ? `${display.text}(推荐)` : display.text}
+                style={{ '--i': i } as React.CSSProperties}
+                onClick={() => choose(opt.label)}
+              >
+                {/* 前导标记:单选=序号,多选=圆角方框 + 圆头对勾(形状在 SCSS 中按选中态着色) */}
+                <span className={`ask-mark${q.multi_select ? ' box' : ''}`} aria-hidden>
+                  {q.multi_select ? (
+                    <svg viewBox="0 0 16 16">
+                      <rect className="ask-mark-box" x="1.25" y="1.25" width="13.5" height="13.5" rx="4" />
+                      <path className="ask-mark-check" d="M4.6 8.6 7 11 11.6 5.6" pathLength="12" />
+                    </svg>
+                  ) : i + 1}
+                </span>
+                <span className="ask-opt-main">
+                  <span className="ask-opt-label">{display.text}</span>
+                  {display.recommended && <span className="ask-badge">推荐</span>}
+                  {opt.description && <span className="ask-opt-desc">{opt.description}</span>}
+                </span>
+              </button>
+            );
+          })}
 
-        <label className="ask-custom-wrap">
-          <span className="ask-custom-icon" aria-hidden>✎</span>
-          <input
-            className="ask-custom"
-            type="text"
-            value={customs[q.id] || ''}
-            placeholder={q.options?.length ? '其它(自定义回答,可不填)…' : '在这里输入你的回答…'}
-            autoFocus={!q.options?.length}
-            onChange={(e) => setCustom(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); goNext(); } }}
-          />
-        </label>
+          {/* 自定义回答:有选项时是与选项同形的输入行(前导标记换成铅笔/勾选框),
+              没有选项时它本身就是要填的正文框 */}
+          {q.options?.length ? (
+            <label className={`ask-custom-row${(draftAt(idx).custom || '').trim() ? ' filled' : ''}`}>
+              <span className={`ask-mark${q.multi_select ? ' box' : ''}`} aria-hidden>
+                {q.multi_select
+                  ? <svg viewBox="0 0 16 16">
+                      <rect className="ask-mark-box" x="1.25" y="1.25" width="13.5" height="13.5" rx="4" />
+                      <path className="ask-mark-check" d="M4.6 8.6 7 11 11.6 5.6" pathLength="12" />
+                    </svg>
+                  : <IconPencil16 size={13} />}
+              </span>
+              <input
+                className="ask-custom"
+                type="text"
+                value={draftAt(idx).custom}
+                placeholder="其它(自定义回答,可不填)…"
+                onChange={(e) => setCustom(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); goNext(); } }}
+              />
+            </label>
+          ) : (
+            <label className="ask-custom-block">
+              <input
+                className="ask-custom"
+                type="text"
+                value={draftAt(idx).custom}
+                placeholder="在这里输入你的回答…"
+                autoFocus
+                onChange={(e) => setCustom(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); goNext(); } }}
+              />
+            </label>
+          )}
+        </div>
       </div>
 
-      {/* 底部只保留动作:取消在左,翻题/提交在右;进度展示已上移到头部进度段 */}
+      {/* 底部:取消在左,校验提示居中,翻题/提交在右 */}
       <div className="ask-foot">
         <button className="ghost sm ask-cancel" onClick={cancel}>取消提问</button>
+        <div className="ask-hint" role="status">{hint}</div>
         <div className="ask-nav">
           {total > 1 && (
-            <button className="ghost sm" disabled={isFirst} onClick={() => setQIndex(idx - 1)}>‹ 上一道</button>
+            <button className="ghost sm icon-btn" disabled={isFirst} onClick={goPrev}>
+              <IconArrowLeft16 size={13} />上一道
+            </button>
           )}
-          <button className={isLast ? 'primary sm' : 'ghost sm'} onClick={goNext}>
-            {isLast ? '提交 ✓' : '下一道 ›'}
+          <button className={`${isLast ? 'primary' : 'ghost'} sm icon-btn`} onClick={goNext}>
+            {isLast ? '提交' : '下一道'}{isLast ? <IconCheck16 size={13} /> : <IconArrowRight16 size={13} />}
           </button>
         </div>
       </div>

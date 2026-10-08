@@ -294,3 +294,446 @@ export function IconCheck16(props: IconProps) {
     </svg>
   );
 }
+
+// ---- 应用级导航 / 工作区图标(16 号线性,与上面 LINE 家族同一网格与笔画) ----
+// 统一约定:viewBox 0 0 16 16、stroke=currentColor、strokeWidth 1.6、圆头圆角、不填色
+// (AI 星芒是唯一的实心点缀)。尺寸随 {size} 缩放、颜色随所在行的文字色(currentColor),
+// 因此标签条 / 工作区 chip / 手机底部栏 / 会话分组头里都能与同行文字同色同调。
+//
+// 语义配对(远程 vs 本地):每个概念各自成一个完整形状,不做「文件夹叠小角标」的合成图
+// —— 在 12~14px 下叠图会糊成一团。配对关系:
+//   远程工作区 = 云(远端)         本地工作区 = 文件夹(本机目录)
+//   整台服务器 = 机架(不绑目录)   整台电脑   = 显示器(不绑目录)
+
+/** 远程工作区:云(远端)。 */
+export function IconCloud16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M11.7 6.7h-.79A4.95 4.95 0 1 0 6.14 12.9h5.56a3.1 3.1 0 0 0 0-6.2Z" />
+    </svg>
+  );
+}
+
+/** 本地工作区:文件夹(本机目录)。 */
+export function IconFolder16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M13.44 13.76a1.36 1.36 0 0 0 1.36-1.36V5.6a1.36 1.36 0 0 0-1.36-1.36H8.07a1.36 1.36 0 0 1-1.15-.61L6.37 2.81A1.36 1.36 0 0 0 5.23 2.2H2.56a1.36 1.36 0 0 0-1.36 1.36v8.84a1.36 1.36 0 0 0 1.36 1.36Z" />
+    </svg>
+  );
+}
+
+/** 不使用远程工作区:服务器机架(边界=整台服务器)。 */
+export function IconServer16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="2.2" y="2.5" width="11.6" height="5.2" rx="1.5" />
+      <rect x="2.2" y="8.3" width="11.6" height="5.2" rx="1.5" />
+      <path d="M4.9 5.1h.02M4.9 10.9h.02" />
+      <path d="M7.7 5.1h4.2M7.7 10.9h4.2" />
+    </svg>
+  );
+}
+
+/** 不使用本地工作区:显示器(边界=整台电脑)。 */
+export function IconDesktop16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="1.9" y="2.6" width="12.2" height="8.4" rx="1.5" />
+      <path d="M8 11v2.3" />
+      <path d="M4.9 13.4h6.2" />
+    </svg>
+  );
+}
+
+/** 家目录:房子。 */
+export function IconHome16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.4 6.5 8 2.2l5.6 4.3v6.1a1.4 1.4 0 0 1-1.4 1.4H3.8a1.4 1.4 0 0 1-1.4-1.4Z" />
+      <path d="M6.4 14V9.8h3.2V14" />
+    </svg>
+  );
+}
+
+/** 浏览器预览:窗口 + 标题栏。 */
+export function IconBrowser16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="1.9" y="2.8" width="12.2" height="10.4" rx="1.6" />
+      <path d="M1.9 6.1h12.2" />
+      <path d="M4.5 4.4h.02M6.4 4.4h.02" />
+    </svg>
+  );
+}
+
+/** AI 编程助手:对话气泡 + 星芒(星芒为实心点缀,是整套图标里唯一的填色)。 */
+export function IconAiChat16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.2 4.8A2.2 2.2 0 0 1 4.4 2.6h7.2A2.2 2.2 0 0 1 13.8 4.8v4.4a2.2 2.2 0 0 1-2.2 2.2H6.9L4.4 13.4v-2A2.2 2.2 0 0 1 2.2 9.2Z" />
+      <path fill="currentColor"
+        d="M8 4.6Q8.24 6.81 10.45 7.05Q8.24 7.29 8 9.5Q7.76 7.29 5.55 7.05Q7.76 6.81 8 4.6Z" />
+    </svg>
+  );
+}
+
+/** 终端:窗口 + 提示符 ›_。 */
+export function IconTerminal16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="1.7" y="2.6" width="12.6" height="10.8" rx="1.8" />
+      <path d="M4.6 6.3 6.8 8.3 4.6 10.3" />
+      <path d="M8.4 10.5h3.2" />
+    </svg>
+  );
+}
+
+/** 自动化任务:时钟(表圈即一圈循环箭头 = 到点自动跑)。 */
+export function IconSchedule16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M13.08 6.15A5.4 5.4 0 1 1 10.7 3.32" />
+      <path d="M9.8 2.25 10.7 3.32 9.32 3.56" />
+      <path d="M8 4.8V8l2.5 1.7" />
+    </svg>
+  );
+}
+
+// ---- 设置面板菜单图标(同一套 16 号网格,一枚一概念,互不重形) ----
+// 原来的 🤖🖼️🎨🧩🔌🔗📌ℹ️ 换成下面这组:菜单项挨在一起竖排,emoji 的彩色/
+// 字形差异带来的高低不齐在这列里最扎眼,换成同族线性图标后整列基线一致。
+
+/** AI 配置:机器人头(与 🤖 同一心智)。 */
+export function IconRobot16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="2.8" y="5.6" width="10.4" height="7.8" rx="2.2" />
+      <path d="M8 5.6V3.6M8 2.8h.02" />
+      <path d="M6.1 8.9h.02M9.9 8.9h.02" />
+      <path d="M6.4 11.5h3.2" />
+    </svg>
+  );
+}
+
+/** 生图配置:图片(相框 + 太阳 + 山)。 */
+export function IconImage16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="2.1" y="3.3" width="11.8" height="9.4" rx="1.8" />
+      <circle cx="5.7" cy="6.5" r="1.1" />
+      <path d="M3.8 12.4 6.6 9.6 8.7 11.7 10.3 10.1 12.4 12.2" />
+    </svg>
+  );
+}
+
+/** 主题:明暗对比圆(右半实心)。实心是表意需要 —— 半明半暗只剩描边看不出来。 */
+export function IconTheme16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8" r="5.6" />
+      <path fill="currentColor" d="M8 2.4a5.6 5.6 0 0 1 0 11.2Z" />
+    </svg>
+  );
+}
+
+/** 技能:拼图块(可插拔的模块)。 */
+export function IconPuzzle16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M5 5.1h1.2a1.8 1.8 0 1 1 3.6 0H11a2.2 2.2 0 0 1 2.2 2.2v3.8A2.2 2.2 0 0 1 11 13.3H5a2.2 2.2 0 0 1-2.2-2.2V7.3A2.2 2.2 0 0 1 5 5.1Z" />
+    </svg>
+  );
+}
+
+/** 工具插件:插头。 */
+export function IconPlug16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M5.8 2.6v3M10.2 2.6v3" />
+      <path d="M3.8 5.6h8.4v2.4a4.2 4.2 0 0 1-8.4 0Z" />
+      <path d="M8 11.4v2.6" />
+    </svg>
+  );
+}
+
+/** MCP 服务:中心节点 + 两个外部服务(协议把外部服务接到一起)。 */
+export function IconHub16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="10.6" cy="8" r="2.6" />
+      <circle cx="3.6" cy="4.2" r="1.6" />
+      <circle cx="3.6" cy="11.8" r="1.6" />
+      <path d="M5 5 8.3 6.8M5 11 8.3 9.2" />
+    </svg>
+  );
+}
+
+/** 全局指令:指令板(夹子 + 条目 = 每轮都注入的那份常驻指令)。 */
+export function IconClipboard16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="3.4" y="3.8" width="9.2" height="10.2" rx="1.6" />
+      <path d="M6.2 3.8V2.9a1.1 1.1 0 0 1 1.1-1.1h1.4a1.1 1.1 0 0 1 1.1 1.1v0.9" />
+      <path d="M5.9 7.9h4.2M5.9 10.2h4.2M5.9 12.5h2.6" />
+    </svg>
+  );
+}
+
+/** 关于与更新:信息圆。 */
+export function IconInfo16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M8 6.9v4.3" />
+      <path d="M8 4.6h.02" />
+    </svg>
+  );
+}
+
+// ---- 右键菜单图标(文件列表 · 本地/远程共用一套) ----
+// 这些动作原来也是 emoji(📂📄⬇⬆📋🔗📝✏️📥🗑):菜单是**文字左对齐**的一列,
+// emoji 的彩色与字宽差异让图标列左右不齐、也压过了菜单文字。换成同族线性图标后
+// 图标列定宽 18px、统一 14px 尺寸,文字起点一致。
+
+/** 打开 / 新建 / 上传:文件(文档 + 折角)。 */
+export function IconFile16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M9.2 1.8H4.6A1.6 1.6 0 0 0 3 3.4v9.2a1.6 1.6 0 0 0 1.6 1.6h6.8a1.6 1.6 0 0 0 1.6-1.6V5.6Z" />
+      <path d="M9.2 1.8v3.8H13" />
+    </svg>
+  );
+}
+
+/** 下载:托盘 + 向下箭头。 */
+export function IconDownload16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 2.3v7.3" />
+      <path d="M5.1 6.7 8 9.6 10.9 6.7" />
+      <path d="M2.9 11v1.3a1.6 1.6 0 0 0 1.6 1.6h7a1.6 1.6 0 0 0 1.6-1.6V11" />
+    </svg>
+  );
+}
+
+/** 传到本地 / 传到远程:双向传输(⇄)。 */
+export function IconTransfer16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M13.2 5.2H3.2M5.6 2.8 3.2 5.2l2.4 2.4" />
+      <path d="M2.8 10.8h10M10.4 8.4l2.4 2.4-2.4 2.4" />
+    </svg>
+  );
+}
+
+/** 复制路径:链环(🔗 的线性版)。 */
+export function IconLink16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.5 11.3a1.5 1.5 0 0 0 2.2 2.2l4.8-4.8a1.5 1.5 0 0 0-2.2-2.2Z" />
+      <path d="M6.5 7.3a1.5 1.5 0 0 0 2.2 2.2l4.8-4.8a1.5 1.5 0 0 0-2.2-2.2Z" />
+    </svg>
+  );
+}
+
+/** 复制文件名:标签(名字牌)。 */
+export function IconTag16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.2 3.8a1.6 1.6 0 0 1 1.6-1.6h3.2a1.6 1.6 0 0 1 1.13.47l5.2 5.2a1.6 1.6 0 0 1 0 2.26l-3.2 3.2a1.6 1.6 0 0 1-2.26 0l-5.2-5.2A1.6 1.6 0 0 1 2.2 7Z" />
+      <path d="M5.3 4.9h.02" />
+    </svg>
+  );
+}
+
+/** 重命名:铅笔。 */
+export function IconPencil16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.5 13.5 4.1 10.3 11.8 2.5l1.7 1.7L5.7 11.9Z" />
+      <path d="M4.1 10.3 5.7 11.9" />
+    </svg>
+  );
+}
+
+/** 粘贴到此处:剪贴板 + 向下箭头(与「全局指令」的指令板区分:这里没有条目线,是箭头)。 */
+export function IconPaste16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="3.6" width="10" height="10.6" rx="1.4" />
+      <path d="M6.1 3.6v-.8A1.1 1.1 0 0 1 7.2 1.7h1.6a1.1 1.1 0 0 1 1.1 1.1v.8" />
+      <path d="M8 7.3v4.2M6.2 9.7 8 11.5l1.8-1.8" />
+    </svg>
+  );
+}
+
+// ---- 工具栏 / 输入区 / 顶栏按钮 ----
+
+/** 上级目录:文件夹 + 上箭头(工具栏的「⬆ 上级」)。 */
+export function IconFolderUp16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M3.4 12.9a1.2 1.2 0 0 1-1.2-1.2V4.3a1.2 1.2 0 0 1 1.2-1.2h2.2a1.2 1.2 0 0 1 .96.48l.7.94a1.2 1.2 0 0 0 .96.48h4.18a1.2 1.2 0 0 1 1.2 1.2v5.5a1.2 1.2 0 0 1-1.2 1.2Z" />
+      <path d="M7.9 11.9V7.6" />
+      <path d="M6.1 9.4 7.9 7.6 9.7 9.4" />
+    </svg>
+  );
+}
+
+/** 上传:托盘 + 向上箭头(与「下载」同一套形状,方向相反)。 */
+export function IconUpload16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 10.4V2.7" />
+      <path d="M5.1 5.6 8 2.7 10.9 5.6" />
+      <path d="M2.9 10.5v1.3a1.6 1.6 0 0 0 1.6 1.6h7a1.6 1.6 0 0 0 1.6-1.6v-1.3" />
+    </svg>
+  );
+}
+
+/** 发送:纸飞机(折线是机身折痕)。 */
+export function IconSend16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M13.8 2.2 8.9 13.9 6.9 8.9 2.2 6.9Z" />
+      <path d="M13.8 2.2 6.9 8.9" />
+    </svg>
+  );
+}
+
+/** 停止:圆角方块(与发送按钮同一位,工作态替换发送)。 */
+export function IconStop16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="2.2" />
+    </svg>
+  );
+}
+
+/** 右侧栏:窗口 + 竖向分栏线(右侧那一栏即侧栏)。 */
+export function IconSidebar16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1.6" />
+      <path d="M9.8 3.2v9.6" />
+    </svg>
+  );
+}
+
+/** 关闭 / 退出:叉(退出多选、清空选择这类"取消"动作)。 */
+export function IconClose16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M3.2 3.2 12.8 12.8M12.8 3.2 3.2 12.8" />
+    </svg>
+  );
+}
+
+// ---- 对话统计胶囊图标(对话面板最底一行:轮/步 · 速度,以及 token 用量) ----
+// 这两处原来用 ⏱ / 🗄 两个 emoji:彩色字形与同一行 11.5px 的等宽数字不同源,
+// 基线与视觉重量都随系统字体漂移。换成与其余面板同一套的 16 号线性图标后,
+// 颜色跟随所在行文字色(currentColor)、尺寸随 {size} 缩放(统计行用 12)。
+
+/** 对话活动:秒表(表冠 + 指针 = 正在跑的轮次与解码速度)。 */
+export function IconStopwatch16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8.8" r="5.1" />
+      <path d="M8 6.4v2.4l1.8 1.3" />
+      <path d="M6.6 2.4h2.8" />
+      <path d="M8 2.4v1.3" />
+    </svg>
+  );
+}
+
+/** Token 用量:数据仓(圆柱 = 累计计费与缓存命中的存量)。 */
+export function IconDatabase16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="8" cy="4.5" rx="4.5" ry="1.9" />
+      <path d="M12.5 4.5v7c0 1.05-2.01 1.9-4.5 1.9s-4.5-.85-4.5-1.9v-7" />
+      <path d="M12.5 8c0 1.05-2.01 1.9-4.5 1.9S3.5 9.05 3.5 8" />
+    </svg>
+  );
+}
+
+// ---- 弹窗表单:编辑 / 返回 ----
+
+/** 编辑服务器配置:铅笔 + 下方编辑线(与「重命名」那枚纯铅笔 IconPencil16 区分)。 */
+export function IconEditLine16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M3.2 10.7 4.6 8.1 11 2.3l1.5 1.5-5.9 6.1Z" />
+      <path d="M4.6 8.1 6.6 9.9" />
+      <path d="M3.4 13.5h9.2" />
+    </svg>
+  );
+}
+
+/** 返回上一层视图(表单 → 列表):带箭杆的左箭头(比纯折线的箭头更明确是"回到上一层")。 */
+export function IconBack16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M13.2 8H3.2" />
+      <path d="M6.8 4.6 3.2 8l3.6 3.4" />
+    </svg>
+  );
+}
+
+// ---- 文件编辑器右键菜单 ----
+// 「复制 / 粘贴 / 复制路径 / 复制文件名」复用既有成员(IconCopy16 / IconPaste16 /
+// IconLink16 / IconTag16),与文件列表右键菜单同一套;这里只补编辑器独有的五个动作。
+
+/** 撤销:左向折返箭头(与「重做」成镜像一对)。 */
+export function IconUndo16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M3.2 6.4h6.6a3.1 3.1 0 0 1 0 6.2H8.6" />
+      <path d="M6.1 3.5 3.2 6.4l2.9 2.9" />
+    </svg>
+  );
+}
+
+/** 重做:右向折返箭头(「撤销」的镜像,方位即时间方向)。 */
+export function IconRedo16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M12.8 6.4H6.2a3.1 3.1 0 0 0 0 6.2h1.2" />
+      <path d="M9.9 3.5 12.8 6.4l-2.9 2.9" />
+    </svg>
+  );
+}
+
+/** 剪切:两片刀口交叉 + 两个握环(剪刀)。 */
+export function IconCut16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="5.4" cy="11.9" r="1.9" />
+      <circle cx="10.6" cy="11.9" r="1.9" />
+      <path d="M6.9 10.5 12.3 2.8" />
+      <path d="M9.1 10.5 3.7 2.8" />
+    </svg>
+  );
+}
+
+/** 全选:选择框 + 勾(与纯勾的 IconCheck16 区分:框代表"整段范围")。 */
+export function IconSelectAll16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="2" />
+      <path d="M5.6 8.2 7.4 10 10.6 6" />
+    </svg>
+  );
+}
+
+/** 保存:软盘(外壳 + 上滑片 + 标签)。 */
+export function IconSave16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.8 4.2A1.4 1.4 0 0 1 4.2 2.8h6.6l2.4 2.4v6.6a1.4 1.4 0 0 1-1.4 1.4H4.2a1.4 1.4 0 0 1-1.4-1.4Z" />
+      <path d="M5.4 2.8v3.4h5.2V2.8" />
+      <path d="M4.8 13.2v-3.6h6.4v3.6" />
+    </svg>
+  );
+}

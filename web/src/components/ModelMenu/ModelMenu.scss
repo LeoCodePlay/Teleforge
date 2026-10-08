@@ -17,7 +17,9 @@
   font-family: var(--mono);
 }
 .msm-effort { flex: none; font-size: 10.5px; color: var(--muted); }
-.msm-arrow { flex: none; font-size: 9px; color: var(--muted); transition: transform .18s; }
+/* 开合箭头:与远程/本地工作区 chip(.ws-chip-arrow)同款 chevron 图标、同尺寸 13px、同一条旋转动画 */
+.msm-arrow { flex: none; display: inline-flex; align-items: center; color: var(--muted); transition: transform .18s; }
+.msm-arrow svg { display: block; }
 .msm.open .msm-arrow { transform: rotate(180deg); }
 /* 二级菜单:右对齐、向上弹出,同款实色卡片 */
 .msm-menu {

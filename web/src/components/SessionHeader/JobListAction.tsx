@@ -170,7 +170,7 @@ function JobItem({ job, output, expanded, now, onToggle, kill }: {
         <StateDot state={dotState('running')} className={css.rowDot} />
         <span className={css.main}>
           <span className={css.primary}>
-            <span className={css.label} data-tip={job.label}>{job.label}</span>
+            <span className={css.label} data-tip={job.label} data-tip-ellipsis>{job.label}</span>
           </span>
           <span className={css.secondary} data-tip={detail ?? status}>
             <span className={css.kind}>{kindOf(job)}</span>
@@ -187,8 +187,8 @@ function JobItem({ job, output, expanded, now, onToggle, kill }: {
       <>
         <StateDot state={dotState(statusOf(job))} className={css.rowDot} />
         <span className={css.kind}>{kindOf(job)}</span>
-        <span className={css.label} data-tip={job.label}>{job.label}</span>
-        <span className={css.status} data-tip={detail ?? status}>{detail ?? status}</span>
+        <span className={css.label} data-tip={job.label} data-tip-ellipsis>{job.label}</span>
+        <span className={css.status} data-tip={detail ?? status} data-tip-ellipsis>{detail ?? status}</span>
         {durationCell}
         <span className={css.chevronBox}>
           <IconChevronDownOutlineRegular size={12} className={expanded ? `${css.chevron} ${css.chevronOpen}` : css.chevron} />

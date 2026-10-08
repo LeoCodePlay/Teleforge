@@ -386,7 +386,7 @@ export default function AiTermPanel({ active, embedded = false, onCounts, sid }:
           <span className="aiterm-bar-gap" />
           <button
             type="button"
-            className="aiterm-del"
+            className="aiterm-del danger"
             disabled={busyId === current.id}
             onClick={() => { void removeTerm(current); }}
             data-tip={current.state === 'running' ? '终止该进程并从列表移除' : '从列表移除'}

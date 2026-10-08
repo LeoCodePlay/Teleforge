@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { api } from '../../api';
 import type { DirEntry } from '../../types';
+import { IconFile16, IconFolder16, IconFolderUp16, IconHome16 } from '../icons/icons';
 import './dirbrowser.scss';
 
 interface DirBrowserProps {
@@ -45,12 +46,12 @@ export default function DirBrowser({ initial, home, onClose, onPick }: DirBrowse
         <div className="modal-head"><span>选择远程工作区</span><button className="ghost" onClick={onClose}>✕</button></div>
         <div className="modal-body">
           <div className="row gap">
-            <button className="ghost" onClick={up} disabled={path === '/'}>⬆ 上级</button>
+            <button className="ghost icon-btn" onClick={up} disabled={path === '/'}><IconFolderUp16 size={13} />上级</button>
             <input className="grow" value={path} onChange={(e) => setPath(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') load(path); }} />
             <button onClick={() => load(path)} disabled={loadingPath !== null}>{loadingPath === path ? '…' : '跳转'}</button>
           </div>
-          {home && <button className="link" onClick={() => load(home)}>📁 家目录 {home}</button>}
+          {home && <button className="link icon-btn" onClick={() => load(home)}><IconHome16 size={13} />家目录 {home}</button>}
           {error && <div className="error">✕ {error}</div>}
           <div className="dirlist-wrap">
             <div className="dirlist">
@@ -61,13 +62,15 @@ export default function DirBrowser({ initial, home, onClose, onPick }: DirBrowse
                   <div key={e.name} className="dirlink"
                     onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}
                     onDoubleClick={() => load(fp)}>
-                    <span>📁 {e.name}</span>
+                    <span><IconFolder16 size={13} className="dirlink-ico" />{e.name}</span>
                     {loadingPath === fp && <span className="spinner-inline" />}
                   </div>
                 );
               })}
               {entries.filter((e) => e.type !== 'dir').slice(0, 50).map((e) => (
-                <div key={e.name} className="dirlink muted2 disabled" onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}>📄 {e.name}</div>
+                <div key={e.name} className="dirlink muted2 disabled" onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}>
+                  <span><IconFile16 size={13} className="dirlink-ico" />{e.name}</span>
+                </div>
               ))}
             </div>
             {/* 加载蒙版与列表同级(而非列表内部):滚动容器内的绝对定位元素会随内容滚走,底部必然漏出缺口 */}

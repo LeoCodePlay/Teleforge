@@ -56,8 +56,7 @@ const FencedCode = memo(function FencedCode({ lang, code }: { lang: string; code
     <div className="md-code">
       <div className="md-code-bar">
         <span className="md-code-lang">{lang}</span>
-        <button type="button" className="md-code-copy action-icon" aria-label="复制代码"
-          data-tip={copied ? '已复制' : '复制代码'} onClick={onCopy}>
+        <button type="button" className="md-code-copy action-icon" aria-label="复制代码" onClick={onCopy}>
           {copied ? <IconCheck16 size={14} /> : <IconCopy16 size={14} />}
         </button>
       </div>

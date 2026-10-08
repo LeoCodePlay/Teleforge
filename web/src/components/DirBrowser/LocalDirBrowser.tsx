@@ -4,6 +4,7 @@
 import React, { useState } from 'react';
 import { api } from '../../api';
 import type { DirEntry } from '../../types';
+import { IconDesktop16, IconFile16, IconFolder16, IconFolderUp16, IconHome16 } from '../icons/icons';
 import './dirbrowser.scss';
 
 const ROOT = 'root:';
@@ -66,14 +67,14 @@ export default function LocalDirBrowser({ initial, home, onClose, onPick }: Loca
         <div className="modal-head"><span>选择本地工作区</span><button className="ghost" onClick={onClose}>✕</button></div>
         <div className="modal-body">
           <div className="row gap">
-            <button className="ghost" onClick={up} disabled={isRoot}>⬆ 上级</button>
+            <button className="ghost icon-btn" onClick={up} disabled={isRoot}><IconFolderUp16 size={13} />上级</button>
             <input className="grow" value={path} onChange={(e) => setPath(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') load(path); }} />
             <button onClick={() => load(path)} disabled={loadingPath !== null}>{loadingPath === path ? '…' : '跳转'}</button>
           </div>
           <div className="row gap" style={{ marginTop: 6 }}>
-            <button className="link" onClick={() => load(ROOT)}>💻 我的电脑</button>
-            {home && <button className="link" onClick={() => load(home)}>🏠 家目录 {home}</button>}
+            <button className="link icon-btn" onClick={() => load(ROOT)}><IconDesktop16 size={13} />我的电脑</button>
+            {home && <button className="link icon-btn" onClick={() => load(home)}><IconHome16 size={13} />家目录 {home}</button>}
             {isRoot && <span className="muted sm">请选择一个磁盘/文件夹</span>}
           </div>
           {error && <div className="error">✕ {error}</div>}
@@ -85,13 +86,15 @@ export default function LocalDirBrowser({ initial, home, onClose, onPick }: Loca
                 <div key={e.name} className="dirlink"
                   onMouseDown={(ev) => { if (ev.detail > 1) ev.preventDefault(); }}
                   onDoubleClick={() => load(fp)}>
-                  <span>📁 {e.name}</span>
+                  <span><IconFolder16 size={13} className="dirlink-ico" />{e.name}</span>
                   {loadingPath === fp && <span className="spinner-inline" />}
                 </div>
               );
             })}
             {entries.filter((e) => e.type !== 'dir').slice(0, 50).map((e) => (
-              <div key={e.name} className="dirlink muted2 disabled">📄 {e.name}</div>
+              <div key={e.name} className="dirlink muted2 disabled">
+                <span><IconFile16 size={13} className="dirlink-ico" />{e.name}</span>
+              </div>
             ))}
           </div>
         </div>

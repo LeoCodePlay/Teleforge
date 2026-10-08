@@ -20,7 +20,11 @@
   color: var(--accent-2);
   background: var(--accent-fill);
 }
-.bb-ico { position: relative; font-size: 20px; line-height: 1; }
+.bb-ico {
+  position: relative; font-size: 20px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.bb-ico svg { display: block; }
 .bb-badge {
   position: absolute; top: -4px; right: -10px;
   min-width: 15px; height: 15px; padding: 0 4px;

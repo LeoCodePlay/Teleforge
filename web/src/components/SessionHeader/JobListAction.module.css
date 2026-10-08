@@ -100,11 +100,17 @@
 }
 
 .sectionToggle:hover,
-.sectionToggle:focus-visible,
-.sectionClear:hover,
-.sectionClear:focus-visible {
+.sectionToggle:focus-visible {
   background: var(--dsw-alias-fill-l1);
   color: var(--dsw-alias-label-secondary);
+}
+
+/* 「清空已结束」是破坏性次要操作:悬浮给危险红 + 红 scrim,
+   与全站行内删除同一口径(静止仍保持 tertiary,不常驻红点) */
+.sectionClear:hover,
+.sectionClear:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--red);
 }
 
 .sectionChevron {

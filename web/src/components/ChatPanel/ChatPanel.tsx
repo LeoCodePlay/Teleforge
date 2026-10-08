@@ -42,7 +42,7 @@ import { tailAssistantIndex, applyRetryNotice, isRealUserRow } from '../../utils
 import { mergeAttachments, mergeDeliverables } from '../../utils/mergeAttachments';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
-import { IconChevronDownOutline14 } from '../icons/icons';
+import { IconChevronDownOutline14, IconCloud16, IconDesktop16, IconFolder16, IconHome16, IconLock16, IconSend16, IconServer16, IconStop16, IconTrashOutline14 } from '../icons/icons';
 import { AttachRail, MessageAttachments, Lightbox, classifyKind } from '../Attachments/Attachments';
 import type { ComposerAttachment, LightboxSrc } from '../Attachments/Attachments';
 import type { AttachmentInfo } from '../../types';
@@ -114,7 +114,7 @@ function formatMsgTime(ts?: number) {
 // - 分支:从这条回复处开启新会话继续——作用于任意一条历史消息,不只最新一条;
 //   新会话克隆到该条回复为止的事件日志,后续对话从分支点另起炉灶(原会话保留)
 // - 统计行(dsh 的 turn-tail):图标簇之后跟「用量胶囊 + 本轮用时」——
-//   一轮跑完看到「🗄 用量 31.2M tok  2分19秒」,点胶囊展开本轮用量明细
+//   一轮跑完看到「⟨数据仓〉用量 31.2M tok  2分19秒」,点胶囊展开本轮用量明细
 //
 // 用时取的是**本轮权威耗时**(服务端 turn/end 的 turnElapsedMs,与折叠行
 // 「已完成,用时 2分19秒」同一个字段、同一个格式化器),而不是消息时钟,
@@ -178,8 +178,7 @@ function MessageActions({ text, onBranch, elapsedMs, usage }: {
   const dur = elapsedMs === undefined ? null : runDurationText(elapsedMs);
   return (
     <div className="msg-actions">
-      <button type="button" className="msg-action action-icon" aria-label="复制"
-        data-tip={copied ? '已复制' : '复制'} onClick={onCopy}>
+      <button type="button" className="msg-action action-icon" aria-label="复制" onClick={onCopy}>
         {copied ? <IconCheck /> : <IconCopy />}
       </button>
       {onBranch && (
@@ -240,13 +239,11 @@ function UserMessageActions({ text, onDelete, onRewind }: {
   };
   return (
     <div className="msg-actions user-msg-actions">
-      <button type="button" className="msg-action action-icon" aria-label="复制"
-        data-tip={copied ? '已复制' : '复制'} onClick={onCopy}>
+      <button type="button" className="msg-action action-icon" aria-label="复制" onClick={onCopy}>
         {copied ? <IconCheck /> : <IconCopy />}
       </button>
       {onDelete && (
-        <button type="button" className="msg-action action-icon danger" aria-label="删除消息"
-          data-tip="删除消息" onClick={onDelete}>
+        <button type="button" className="msg-action action-icon danger" aria-label="删除消息" onClick={onDelete}>
           <IconTrash />
         </button>
       )}
@@ -736,6 +733,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // (切回一个本视图没跑过的运行中会话时,本地没有本轮打戳,只能靠它兜底起点)
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
+  // 屏幕上的 messages 属于哪个会话:新会话的历史是**异步回载**的,回载完成前视图里挂着的还是
+  // 上一个会话的内容。运行状态行的计时器据此判断"能不能拿这段消息当本会话本轮起点"——
+  // 认错了会话,两个会话后面就会跟着同一个已跑时长(运行中的 A 切到后开跑的 B,B 显示 A 的时长)。
+  // 与 setMessages 在同一个 effect 里同批更新:状态一起提交,计时器 effect 依据它重新认领起点。
+  const [msgsSid, setMsgsSid] = useState<string | null>(sid);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState('');
   // 输入草稿:切换会话时保存当前输入、恢复目标会话输入(见 [sessionSeq, sid] effect);
@@ -1157,6 +1159,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'start':
             hasLive.current = true;
+            // 本轮的用户消息/app 回复行马上要追加到屏幕上:内容已是本会话的。
+            // 这行的另一个用处:切会话时历史回载还在路上就来了 start(hasLive 会挡掉回载),
+            // 屏幕上是"上一会话残留 + 本会话新轮"的混合,但**最后一条真实 user 消息**是本轮的,
+            // 计时器认它才准;不认就只剩"从切换那一刻起算"的错值。
+            setMsgsSid(activeRef.current);
             turnStartRef.current = Date.now(); // 回合计时起点(折叠行「已完成,用时 X」用)
             turnClosedRef.current = false; // 新一轮开始:重新进入「未收尾」状态
             // 本轮首条 user/message 计入分支点计数
@@ -1688,6 +1695,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     // 则沿用原切换重载逻辑(请求 get_history 拿回服务端活跃会话)
     if (target === NEW_SESSION_ID) {
       setSuppressIn(true);
+      setMsgsSid(target); // 空对话就是本(草稿)会话的内容
       setMessages([]);
       setSwitching(false);
       permTouchedRef.current = false; // 新草稿:本次尚未手动改过权限档位
@@ -1706,13 +1714,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     // 不重置消息(事件流 start/steer 到达即渲染),也不清空,避免与事件竞态
     if (skipHistory) {
       histCache.current.delete(target ?? '');
+      setMsgsSid(target); // 屏幕上的消息就是新建会话正在流的内容:已属于本会话
       setSuppressIn(true);
       setSwitching(false);
       return () => { alive = false; };
     }
     // 有缓存则立即显示(切回已看过的会话零等待);无缓存时保留旧内容 + 加载指示
     const cached = histCache.current.get(target ?? '');
-    if (cached) { setSuppressIn(true); setMessages(cached.msgs); setTodos(cached.todos); setSwitching(false); }
+    if (cached) { setMsgsSid(target); setSuppressIn(true); setMessages(cached.msgs); setTodos(cached.todos); setSwitching(false); }
     else setSwitching(true);
     api.request('get_history', { sid: sidArg(target) }, 8000)
       .then((r) => {
@@ -1744,6 +1753,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         }
         histCache.current.set(target ?? '', { msgs, todos: Array.isArray(r.todos) ? r.todos : [] });
         setSuppressIn(true); // 历史整表替换:抑制最新一条的入场动画,切换画面保持静止
+        setMsgsSid(target); // 本会话历史已上屏:计时器现在可以认它的本轮起点了
         setMessages(msgs);
         setTodos(Array.isArray(r.todos) ? r.todos : []); // 该会话当前的任务计划
         setQueue(Array.isArray(r.queue) ? r.queue : []); // 该会话的待执行队列快照
@@ -1760,6 +1770,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         if (cached) return; // 有缓存:继续显示缓存(可能略旧),静默忽略本次刷新失败
         // 无缓存且加载失败:清掉可能已混入的上一会话内容,提示可重试(会话项不再被 activeId 守卫挡住)
         histCache.current.delete(target ?? '');
+        setMsgsSid(target); // 内容已清空(不再混着上一会话):计时器不会去认别人的起点
         setMessages([]);
         setTodos([]);
         setErrorMsg(`加载会话历史失败: ${(e as Error).message} — 再次点击该会话可重试`);
@@ -2722,9 +2733,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     setLocalWsBrowserOpen(false); setLocalWsMenuOpen(false);
   };
 
-  // 工作区 chip 文案的三种状态:绑定了目录 / 不使用工作区(边界=整台服务器·整台电脑)/ 尚未选择
-  const remoteChip = noWorkspace ? `🌐 ${WHOLE_LABEL.remote}` : workspace ? `📂 ${lastPathSegment(workspace)}` : '选择远程工作区';
-  const localChip = localNoWorkspace ? `🌐 ${WHOLE_LABEL.local}` : localWorkspace ? `🖥 ${lastPathSegment(localWorkspace)}` : '选择本地工作区';
+  // 工作区 chip 的三态:绑定了目录 / 不使用工作区(边界=整台服务器·整台电脑)/ 尚未选择。
+  // 图标与文案分开给:图标是内联 SVG(远程=云、本地=文件夹、不绑目录=整台机),颜色随 chip 文字色走
+  const remoteChip = noWorkspace ? WHOLE_LABEL.remote : workspace ? lastPathSegment(workspace) : '选择远程工作区';
+  const localChip = localNoWorkspace ? WHOLE_LABEL.local : localWorkspace ? lastPathSegment(localWorkspace) : '选择本地工作区';
+  const remoteChipIcon = noWorkspace ? <IconServer16 size={13} /> : <IconCloud16 size={13} />;
+  const localChipIcon = localNoWorkspace ? <IconDesktop16 size={13} /> : <IconFolder16 size={13} />;
 
   // 从历史中删除一条工作区记录:先确认(仅删快捷记录,不动远程/本地目录本身)
   const removeWs = async (p: string) => {
@@ -2754,21 +2768,32 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 起点只认**本轮**:本轮内容已上屏时取本轮 user 消息的发送时刻(切回运行中会话也准),
   // 本轮还没上屏(点击发送 → 服务端 status=running 先到,start/消息晚几帧到)则从现在起算,
   // 严格从 0 开始 —— 上一轮的旧时间戳不参与,否则第二轮一出现就是几十秒。
+  //
+  // 多会话并行 + 来回切换时还必须各算各的账,所以起点判定有两道闸:
+  //   1) 只认**本会话**的 messages:切会话那一帧视图里还挂着上一个会话的内容(msgsSid 还是
+  //      上一个会话),拿它当起点会把上一个会话已跑的时长原样搬到新会话上 —— 两个会话后面
+  //      跟着同一个时间;本会话历史/事件一上屏(msgsSid 更新)立即重新认领;
+  //   2) 从本会话消息里读出的**第一个**真实起点无条件采用(新会话可能是切过来的,它的起点
+  //      未必比"现在"早);此后只允许往回校准一次,时长不倒退、不跳来跳去。
+  //      旧写法只肯往回认(real < start 才算),于是第 1 道闸一旦漏掉那一帧、把上个会话的
+  //      起点写进去,就再也纠不回来了。
   const [runningSec, setRunningSec] = useState(0);
   useEffect(() => {
     if (!working) { setRunningSec(0); return; }
-    let start = liveTurnStartMs(messagesRef.current, Date.now()) || Date.now();
+    let anchored = false; // 是否已采用过来自**本会话**的真实起点
+    let start = Date.now();
     const tick = () => {
       const now = Date.now();
-      // 消息随后上屏:拿到本轮真实起点后只往回认一次(时长不倒退后再跳来跳去)
-      const real = liveTurnStartMs(messagesRef.current, now);
-      if (real && real < start) start = real;
+      const real = msgsSid === sid
+        ? liveTurnStartMs(messagesRef.current, now)
+        : 0; // 屏幕上的内容还属于上一个会话:不认它
+      if (real > 0 && (!anchored || real < start)) { start = real; anchored = true; }
       setRunningSec(Math.max(0, Math.floor((now - start) / 1000)));
     };
     tick(); // 立刻先出一格:首秒就有数字,不会先空一拍
     const timer = setInterval(tick, 1000);
     return () => { clearInterval(timer); };
-  }, [working, sid]);
+  }, [working, sid, msgsSid]);
   // 一次性子智能体(显式 run_in_background:false):历史留在记录里,但不能再发消息 ——
   // 输入卡换成只读说明(dsh 的 SubagentReadOnlyComposer 接管规则)。可继续的照常给输入卡。
   const childOneShot = childMode && childInfo?.mode === 'one-shot';
@@ -3198,7 +3223,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             {!childMode && (
             <div className="composer-add-wrap" ref={addWrapRef}>
               <button type="button" className={`composer-add ${addMenuOpen ? 'on' : ''}`}
-                data-tip="添加附件" aria-label="添加附件" aria-haspopup="menu" aria-expanded={addMenuOpen}
+                aria-label="添加附件" aria-haspopup="menu" aria-expanded={addMenuOpen}
                 onClick={() => setAddMenuOpen((v) => !v)}>＋</button>
               {addMenuOpen && createPortal(
                 (() => {
@@ -3250,18 +3275,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               <PermissionSelect value={permMode} disabled={switching}
                 onChange={changePermMode} anchorRef={composerBoxRef} />
             )}
-            <span className="muted composer-tip">{compact ? '点 ➤ 发送 · 换行直接回车' : 'Enter 发送 · Shift+Enter 换行'}</span>
+            <span className="muted composer-tip">{compact ? '点右侧发送按钮 · 换行直接回车' : 'Enter 发送 · Shift+Enter 换行'}</span>
             </div>
             <ContextMeter messages={messages} input={composedInput}
               contextWindow={llm.effModelContext?.contextWindow || 0} usage={ctxUsage} />
             {/* 工作中且输入框为空(且无附件):显示停止按钮;有内容/附件时变为发送按钮,
                 发送后默认进入待执行队列等待执行 */}
             {working && !askPending && !input.trim() && attachments.length === 0
-              ? <button className="send-btn stop" onClick={stop} data-tip="停止当前任务" aria-label="停止当前任务">⏹</button>
+              ? <button className="send-btn stop" onClick={stop} aria-label="停止当前任务"><IconStop16 size={15} /></button>
               : <button className="send-btn"
-                  data-tip={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
                   aria-label={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
-                  disabled={!canSend || (!input.trim() && attachments.length === 0)} onClick={send}>➤</button>}
+                  disabled={!canSend || (!input.trim() && attachments.length === 0)} onClick={send}><IconSend16 size={15} /></button>}
           </div>
         </div>
         )}
@@ -3277,14 +3301,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {connected && (
             <div className="wsbar" ref={wsBarRef}>
               <button
-                className={`ws-chip ${workspace || noWorkspace ? '' : 'none'}${remoteLocked ? ' locked' : ''}`}
+                className={`ws-chip ${workspace || noWorkspace ? '' : 'none'}${remoteLocked ? ' locked' : ''}${wsMenuOpen ? ' open' : ''}`}
                 disabled={remoteLocked}
                 data-tip={remoteLocked ? '该会话已开始对话,远程工作区已锁定;如需更换请新建会话'
                   : noWorkspace ? `「不使用工作区」:AI 可读写整台远程服务器(必须传绝对路径),点击切换回某个目录工作区` : undefined}
                 onClick={() => { if (!remoteLocked) { setWsMenuOpen((v) => !v); setLocalWsMenuOpen(false); } }}
               >
-                <span className="ws-chip-path">{remoteLocked ? `🔒 ${remoteChip}` : remoteChip}</span>
-                <span className="ws-chip-arrow">{wsMenuOpen ? '▾' : '▸'}</span>
+                <span className="ws-chip-path">
+                  <span className="ws-chip-ico">{remoteLocked ? <IconLock16 size={12} /> : remoteChipIcon}</span>
+                  <span className="ws-chip-name">{remoteChip}</span>
+                </span>
+                <span className="ws-chip-arrow"><IconChevronDownOutline14 size={13} /></span>
               </button>
               {wsMenuOpen && (
                 <div className="ws-pick" onClick={(e) => e.stopPropagation()}>
@@ -3301,25 +3328,28 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                             {workspace === p && <span className="ws-pick-cur">✓</span>}
                           </button>
                           <button type="button" className="ws-pick-del" aria-label={`从历史中删除工作区 ${p}`}
-                            onClick={() => removeWs(p)}>🗑</button>
+                            onClick={() => removeWs(p)}><IconTrashOutline14 size={13} /></button>
                         </div>
                       ))}
                     </div>
                   )}
                   <div className="ctx-sep" />
                   <button className="ws-pick-item ws-pick-action" onClick={() => { setWsMenuOpen(false); setWsBrowserOpen(true); }}>
-                    📁 浏览选择其他目录…
+                    <IconFolder16 size={13} />
+                    <span>浏览选择其他目录…</span>
                   </button>
                   {home && (
                     <button className="ws-pick-item ws-pick-action" onClick={() => setWorkspace(home)}>
-                      🏠 家目录
+                      <IconHome16 size={13} />
+                      <span>家目录</span>
                     </button>
                   )}
                   {/* 不使用工作区:不绑定任何目录,边界放宽到整台远程服务器。与本地侧完全独立 */}
                   <button className={`ws-pick-item ws-pick-action${noWorkspace ? ' on' : ''}`}
                     data-tip="不绑定远程工作目录:AI 可在整台远程服务器上读写文件与执行命令(必须使用绝对路径)。仅影响远程侧,与本地工作区互不影响"
                     onClick={() => setWorkspace(NO_WORKSPACE)}>
-                    🌐 不使用工作区(整台服务器){noWorkspace ? ' ✓' : ''}
+                    <IconServer16 size={13} />
+                    <span>不使用工作区(整台服务器){noWorkspace ? ' ✓' : ''}</span>
                   </button>
                 </div>
               )}
@@ -3327,14 +3357,17 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           )}
           <div className="wsbar" ref={localWsBarRef}>
             <button
-              className={`ws-chip local ${localWorkspace || localNoWorkspace ? '' : 'none'}${localLocked ? ' locked' : ''}`}
+              className={`ws-chip local ${localWorkspace || localNoWorkspace ? '' : 'none'}${localLocked ? ' locked' : ''}${localWsMenuOpen ? ' open' : ''}`}
               disabled={localLocked}
               data-tip={localLocked ? '该本地会话已开始对话,本地工作区已锁定;如需更换请新建会话'
                 : localNoWorkspace ? `「不使用工作区」:AI 可读写这台电脑的整个「此电脑」(所有盘符,必须传绝对路径),点击切换回某个目录工作区` : undefined}
               onClick={() => { if (!localLocked) { setLocalWsMenuOpen((v) => !v); setWsMenuOpen(false); } }}
             >
-              <span className="ws-chip-path">{localLocked ? `🔒 ${localChip}` : localChip}</span>
-              <span className="ws-chip-arrow">{localWsMenuOpen ? '▾' : '▸'}</span>
+              <span className="ws-chip-path">
+                <span className="ws-chip-ico">{localLocked ? <IconLock16 size={12} /> : localChipIcon}</span>
+                <span className="ws-chip-name">{localChip}</span>
+              </span>
+              <span className="ws-chip-arrow"><IconChevronDownOutline14 size={13} /></span>
             </button>
             {localWsMenuOpen && (
               <div className="ws-pick" onClick={(e) => e.stopPropagation()}>
@@ -3351,20 +3384,22 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                           {localWorkspace === p && <span className="ws-pick-cur">✓</span>}
                         </button>
                         <button type="button" className="ws-pick-del" aria-label={`从历史中删除本地工作区 ${p}`}
-                          onClick={() => removeLocalWs(p)}>🗑</button>
+                          onClick={() => removeLocalWs(p)}><IconTrashOutline14 size={13} /></button>
                       </div>
                     ))}
                   </div>
                 )}
                 <div className="ctx-sep" />
                 <button className="ws-pick-item ws-pick-action" onClick={() => { setLocalWsMenuOpen(false); setLocalWsBrowserOpen(true); }}>
-                  📁 浏览选择其他本地目录…
+                  <IconFolder16 size={13} />
+                  <span>浏览选择其他本地目录…</span>
                 </button>
                 {/* 不使用工作区:不绑定任何目录,边界放宽到整台电脑(此电脑/所有盘符)。与远程侧完全独立 */}
                 <button className={`ws-pick-item ws-pick-action${localNoWorkspace ? ' on' : ''}`}
                   data-tip="不绑定本地工作目录:AI 可读写这台电脑的任何位置(C 盘、D 盘…统称「此电脑」),必须使用绝对路径。仅影响本地侧,与远程工作区互不影响"
                   onClick={() => setLocalWorkspace(NO_WORKSPACE)}>
-                  🌐 不使用工作区(整台电脑){localNoWorkspace ? ' ✓' : ''}
+                  <IconDesktop16 size={13} />
+                  <span>不使用工作区(整台电脑){localNoWorkspace ? ' ✓' : ''}</span>
                 </button>
               </div>
             )}

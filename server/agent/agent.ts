@@ -2577,7 +2577,12 @@ export class Agent {
           content: res.content || '',
           tool_calls: (res.toolCalls || []).map((t) => ({
             id: t.id, type: 'function',
-            function: { name: t.name, arguments: typeof t.arguments === 'string' ? t.arguments : JSON.stringify(t.arguments) }
+            function: { name: t.name, arguments: typeof t.arguments === 'string' ? t.arguments : JSON.stringify(t.arguments) },
+            // Gemini 原生协议的思考签名(仅该协议产生):必须随历史原样回传,
+            // 否则下一轮带工具调用的请求会被上游以「missing a thought_signature」拒收
+            ...(t.thoughtSignature
+              ? { thoughtSignature: t.thoughtSignature, thoughtSignatureOnThought: t.thoughtSignatureOnThought === true }
+              : {})
           })),
           ...(res.reasoning ? { reasoning_content: res.reasoning } : {})
         };

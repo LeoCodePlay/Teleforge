@@ -1,6 +1,8 @@
-// 预置 LLM 提供商清单(OpenAI 兼容端点)
+// 预置 LLM 提供商清单(模板:添加提供方时一键带入名称/地址/协议)
 // 说明:模型名随官方更新,这里列各提供商当前代表性模型;均可通过「自定义模型」手动输入最新名称
 // 本地服务(ollama/vllm/lmstudio)需要先在本机/局域网启动对应服务
+// protocol 决定请求方言:openai = OpenAI 兼容(缺省)、anthropic = Anthropic Messages、
+// gemini = Google Gemini 原生(见 server/agent/llm.ts 的协议适配)
 import type { LlmProvider, ModelContextConfig } from '../types';
 
 export type { LlmProvider } from '../types';
@@ -27,7 +29,16 @@ const DEFAULT_CONTEXT: Record<string, ModelContextConfig> = {
   'qwen3-max': { ...MEGA_CONTEXT },
   'qwen-plus': { ...MEGA_CONTEXT },
   'doubao-seed-1-6-250615': { ...MEGA_CONTEXT },
-  'doubao-seed-1-6-flash-250615': { ...MEGA_CONTEXT }
+  'doubao-seed-1-6-flash-250615': { ...MEGA_CONTEXT },
+  // Anthropic:窗口 200k,输出上限各家型号差异大(max_tokens 超上限会被直接拒绝,必须按型号给)
+  'claude-sonnet-4-5': { contextWindow: 200000, maxTokens: 64000 },
+  'claude-opus-4-1': { contextWindow: 200000, maxTokens: 32000 },
+  'claude-haiku-4-5': { contextWindow: 200000, maxTokens: 64000 },
+  'claude-3-5-haiku-latest': { contextWindow: 200000, maxTokens: 8192 },
+  // Google Gemini:2.5 系窗口 1M,输出上限 65k
+  'gemini-2.5-pro': { contextWindow: 1048576, maxTokens: 65536 },
+  'gemini-2.5-flash': { contextWindow: 1048576, maxTokens: 65536 },
+  'gemini-2.5-flash-lite': { contextWindow: 1048576, maxTokens: 65536 }
 };
 // 查询某模型名的默认上下文能力:优先默认表,否则全局兜底(1M/32k)
 // 供「添加/编辑提供方」弹窗在每行模型输入框里以 placeholder 展示默认值
@@ -64,6 +75,43 @@ export const PROVIDERS: LlmProvider[] = [
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3', 'o4-mini'],
     modelConfig: pickCfg(['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano']),
     note: '国际区账号;o3/o4-mini 为推理模型,需较新 Key'
+  },
+  // ---- 非 OpenAI 协议的主流厂商:协议字段决定请求端点与请求/响应体方言 ----
+  {
+    id: 'anthropic',
+    name: 'Anthropic · Claude(Messages 协议)',
+    baseUrl: 'https://api.anthropic.com',
+    protocol: 'anthropic',
+    models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'],
+    modelConfig: pickCfg(['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5']),
+    note: 'Anthropic Messages 协议(/v1/messages),鉴权走 x-api-key;Base URL 填 https://api.anthropic.com 即可'
+  },
+  {
+    id: 'gemini',
+    name: 'Google · Gemini(原生协议)',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    protocol: 'gemini',
+    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+    modelConfig: pickCfg(['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']),
+    note: 'Gemini 原生协议(streamGenerateContent),鉴权走 x-goog-api-key;已处理工具调用所需的思考签名回传'
+  },
+  {
+    id: 'deepseek-anthropic',
+    name: 'DeepSeek(Anthropic 协议)',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    protocol: 'anthropic',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    modelConfig: pickCfg(['deepseek-chat', 'deepseek-reasoner']),
+    note: '同一 Key,Claude Code 风格端点;国内直连比官方 OpenAI 端点更省心'
+  },
+  {
+    id: 'moonshot-anthropic',
+    name: 'Moonshot Kimi(Anthropic 协议)',
+    baseUrl: 'https://api.moonshot.cn/anthropic',
+    protocol: 'anthropic',
+    models: ['kimi-k2-turbo-preview', 'kimi-k2-0711-preview'],
+    modelConfig: pickCfg(['kimi-k2-turbo-preview', 'kimi-k2-0711-preview']),
+    note: 'Kimi 的 Anthropic 兼容端点,适合长上下文与 Claude Code 生态'
   },
   {
     id: 'moonshot',

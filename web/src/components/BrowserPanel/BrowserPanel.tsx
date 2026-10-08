@@ -577,11 +577,11 @@ export default function BrowserPanel({
       <div className="bp-toolbar">
         <div className="bp-nav" role="group" aria-label="导航">
           <button className="bp-ico" onClick={() => doAction('browser_back')} disabled={locked || !page.canGoBack}
-            data-tip="后退" aria-label="后退"><IconArrowLeft16 size={16} /></button>
+            aria-label="后退"><IconArrowLeft16 size={16} /></button>
           <button className="bp-ico bp-fwd" onClick={() => doAction('browser_forward')} disabled={locked || !page.canGoForward}
-            data-tip="前进" aria-label="前进"><IconArrowRight16 size={16} /></button>
+            aria-label="前进"><IconArrowRight16 size={16} /></button>
           <button className={`bp-ico${page.loading ? ' spinning' : ''}`} onClick={() => doAction('browser_reload')}
-            data-tip="刷新" aria-label="刷新" disabled={locked}><IconReload16 size={15} /></button>
+            aria-label="刷新" disabled={locked}><IconReload16 size={15} /></button>
         </div>
         <form className={`bp-addr${page.error ? ' err' : conn ? ' ok' : ''}`}
           onSubmit={(e) => { e.preventDefault(); goto(addr, true); }}>
@@ -598,11 +598,11 @@ export default function BrowserPanel({
             onFocus={(e) => e.currentTarget.select()}
           />
           {addrDirty && !locked && (
-            <button type="submit" className="bp-go" data-tip="前往" aria-label="前往"><IconArrowRight16 size={14} /></button>
+            <button type="submit" className="bp-go" aria-label="前往"><IconArrowRight16 size={14} /></button>
           )}
         </form>
         <button className="bp-ico bp-copy" onClick={copyUrl} disabled={!page.url}
-          data-tip={copied ? '已复制地址' : '复制地址'} aria-label="复制地址">
+          aria-label="复制地址">
           {copied ? <IconCheck16 size={15} /> : <IconCopy16 size={15} />}
         </button>
         {isTouch && (

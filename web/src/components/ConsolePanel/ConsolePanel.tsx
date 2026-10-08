@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { useCoarsePointer } from '../../hooks/useMediaQuery';
+import { IconCloud16, IconDesktop16 } from '../icons/icons';
 import '@xterm/xterm/css/xterm.css';
 import './ConsolePanel.scss';
 
@@ -601,7 +602,10 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
                       className={`term-mobile-item${d.id === visibleDescId ? ' active' : ''}`}
                       onClick={() => { setActiveId(d.id); setTermMenuOpen(false); }}>
                       <i className={`term-dot ${dotClass(d.state)}`} />
-                      <span>{d.mode === 'remote' ? '🌐 ' : '💻 '}{dispName(d)}</span>
+                      <span className="term-mode-name">
+                        {d.mode === 'remote' ? <IconCloud16 size={13} className="term-mode-ico" /> : <IconDesktop16 size={13} className="term-mode-ico" />}
+                        <span className="term-mode-text">{dispName(d)}</span>
+                      </span>
                     </div>
                   ))}
                   <div className="ctx-sep" />
@@ -690,7 +694,10 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
                     onPointerDown={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className="term-list-name">{d.mode === 'remote' ? '🌐 ' : '💻 '}{dnm}</span>
+                  <span className="term-list-name">
+                    {d.mode === 'remote' ? <IconCloud16 size={13} className="term-mode-ico" /> : <IconDesktop16 size={13} className="term-mode-ico" />}
+                    <span className="term-mode-text">{dnm}</span>
+                  </span>
                 )}
                 <button
                   className="term-list-del action-icon danger"
@@ -717,7 +724,7 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
             }}>
               <span>重命名</span>
             </button>
-            <button className="term-menu-item" disabled={descs.length <= 1} onClick={() => {
+            <button className="term-menu-item danger" disabled={descs.length <= 1} onClick={() => {
               const id = listMenu.id;
               setListMenu(null);
               if (descs.length > 1) removeTerminal(id);

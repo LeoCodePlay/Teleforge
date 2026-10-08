@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Teleforge 图标预览 · 工作区 + 顶部导航</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px; font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #0d0f13; color: #e7eaf0; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 13px; margin: 28px 0 10px; color: #9aa6bb; font-weight: 600; letter-spacing: .4px; }
+  p.note { margin: 0 0 18px; color: #7d8798; font-size: 12.5px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; }
+  .card { width: 150px; padding: 12px; border: 1px solid rgba(231,234,240,.12); border-radius: 10px; background: rgba(231,234,240,.04); }
+  .card .stage { display: flex; align-items: flex-end; gap: 12px; height: 56px; color: #e7eaf0; }
+  .card .name { margin-top: 8px; font-size: 12.5px; font-weight: 600; }
+  .card .use { font-size: 11px; color: #7d8798; }
+  .card .sym { font-size: 10.5px; color: #5f6b7d; font-family: ui-monospace, Consolas, monospace; }
+  .light { background: #f4f6fa; color: #10151d; }
+  .light .card { border-color: rgba(16,21,29,.14); background: rgba(16,21,29,.03); }
+  .light .card .stage { color: #10151d; }
+  .light .card .use, .light .card .sym { color: #6b7688; }
+  .light h2 { color: #4a5568; }
+  .bar { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 6px 6px 0 0; font-size: 12.5px; font-weight: 600; color: #8f9bb0; }
+  .bar .on { color: #5b8cff; background: rgba(91,140,255,.14); }
+  .bar > span { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; height: 32px; }
+  .chips { display: flex; gap: 8px; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid rgba(231,234,240,.14); border-radius: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .chip.remote { color: #5b8cff; }
+  .chip.local { color: #3fb26f; }
+  .chip.muted { color: #8f9bb0; }
+  .chip .sep { opacity: .5; }
+  /* 设置面板菜单列:按真实样式复刻(定宽 16px 图标槽 + 选中态左侧指示条) */
+  .smenu { display: flex; flex-direction: column; gap: 3px; width: 190px; padding: 10px 8px; }
+  .smenu button { display: flex; align-items: center; gap: 8px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 12px; font: inherit; font-size: 13px; color: #e7eaf0; cursor: default; }
+  .smenu button span { flex: none; width: 16px; display: inline-flex; align-items: center; justify-content: center; color: #8f9bb0; }
+  .smenu button.on { background: rgba(231, 234, 240, .06); color: #5b8cff; position: relative; }
+  .smenu button.on span { color: inherit; }
+  .smenu button.on::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 2px; height: 15px; border-radius: 0 1px 1px 0; background: #5b8cff; }
+  /* 文件列表右键菜单:按真实样式复刻(18px 图标槽 + 8px 间距,图标随菜单文字色) */
+  .cmenu { display: flex; flex-direction: column; gap: 2px; width: 236px; padding: 5px; border: 1px solid rgba(231, 234, 240, .12); border-radius: 10px; background: rgba(231, 234, 240, .04); }
+  .cmenu button { display: flex; align-items: center; gap: 8px; padding: 7px 11px; border: none; border-radius: 6px; background: transparent; color: #e7eaf0; font: inherit; font-size: 12.5px; text-align: left; }
+  .cmenu button span { flex: none; width: 18px; margin-right: 2px; display: inline-flex; align-items: center; justify-content: center; }
+  .cmenu .sep { height: 1px; margin: 3px 5px; background: rgba(231, 234, 240, .12); }
+  .cmenu button.danger { color: #ef5f5f; }
+  /* 编辑器右键菜单多一列右对齐的快捷键提示(真实样式 .ctxmenu .ctx-key) */
+  .cmenu .key { margin-left: auto; padding-left: 14px; font-size: 11px; color: #6b7688; letter-spacing: .3px; }
+  /* 文件工具栏 / 发送按钮 / 顶栏按钮:按真实尺寸复刻(13px 图标 / 32px 圆钮 / 30×32 顶栏钮) */
+  .fbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .fbar button { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; font: inherit; font-size: 12px; color: #e7eaf0; background: rgba(231, 234, 240, .04); border: 1px solid rgba(231, 234, 240, .12); border-radius: 6px; }
+  .round { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: #5b8cff; border: 1px solid #5b8cff; color: #0b0d12; }
+  .round.stop { background: #ef5f5f; border-color: #ef5f5f; }
+  .topbtn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 32px; color: #8f9bb0; border: 1px solid rgba(231, 234, 240, .12); border-bottom: none; border-radius: 6px 6px 0 0; }
+</style>
+</head>
+<body>
+<h1>Teleforge 图标预览</h1>
+<p class="note">与 <code>web/src/components/icons/icons.tsx</code> 逐字节同源的线性图标:16 号网格、stroke=currentColor、1.6 描边、圆头圆角;仅两处实心,且都是表意需要 —— AI 的星芒、主题的对比半圆。</p>
+
+<!-- ===== 图标源(与 icons.tsx 中的 JSX 输出一致;此处内联以便 file:// 直接打开) ===== -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-cloud-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11.7 6.7h-.79A4.95 4.95 0 1 0 6.14 12.9h5.56a3.1 3.1 0 0 0 0-6.2Z" />
+  </symbol>
+  <symbol id="i-folder-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.44 13.76a1.36 1.36 0 0 0 1.36-1.36V5.6a1.36 1.36 0 0 0-1.36-1.36H8.07a1.36 1.36 0 0 1-1.15-.61L6.37 2.81A1.36 1.36 0 0 0 5.23 2.2H2.56a1.36 1.36 0 0 0-1.36 1.36v8.84a1.36 1.36 0 0 0 1.36 1.36Z" />
+  </symbol>
+  <symbol id="i-server-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.2" y="2.5" width="11.6" height="5.2" rx="1.5" />
+    <rect x="2.2" y="8.3" width="11.6" height="5.2" rx="1.5" />
+    <path d="M4.9 5.1h.02M4.9 10.9h.02" />
+    <path d="M7.7 5.1h4.2M7.7 10.9h4.2" />
+  </symbol>
+  <symbol id="i-desktop-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="1.9" y="2.6" width="12.2" height="8.4" rx="1.5" />
+    <path d="M8 11v2.3" />
+    <path d="M4.9 13.4h6.2" />
+  </symbol>
+  <symbol id="i-home-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.4 6.5 8 2.2l5.6 4.3v6.1a1.4 1.4 0 0 1-1.4 1.4H3.8a1.4 1.4 0 0 1-1.4-1.4Z" />
+    <path d="M6.4 14V9.8h3.2V14" />
+  </symbol>
+  <symbol id="i-browser-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="1.9" y="2.8" width="12.2" height="10.4" rx="1.6" />
+    <path d="M1.9 6.1h12.2" />
+    <path d="M4.5 4.4h.02M6.4 4.4h.02" />
+  </symbol>
+  <symbol id="i-ai-chat-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.2 4.8A2.2 2.2 0 0 1 4.4 2.6h7.2A2.2 2.2 0 0 1 13.8 4.8v4.4a2.2 2.2 0 0 1-2.2 2.2H6.9L4.4 13.4v-2A2.2 2.2 0 0 1 2.2 9.2Z" />
+    <path fill="currentColor" d="M8 4.6Q8.24 6.81 10.45 7.05Q8.24 7.29 8 9.5Q7.76 7.29 5.55 7.05Q7.76 6.81 8 4.6Z" />
+  </symbol>
+  <symbol id="i-terminal-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="1.7" y="2.6" width="12.6" height="10.8" rx="1.8" />
+    <path d="M4.6 6.3 6.8 8.3 4.6 10.3" />
+    <path d="M8.4 10.5h3.2" />
+  </symbol>
+  <symbol id="i-schedule-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.08 6.15A5.4 5.4 0 1 1 10.7 3.32" />
+    <path d="M9.8 2.25 10.7 3.32 9.32 3.56" />
+    <path d="M8 4.8V8l2.5 1.7" />
+  </symbol>
+  <symbol id="i-robot-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.8" y="5.6" width="10.4" height="7.8" rx="2.2" />
+    <path d="M8 5.6V3.6M8 2.8h.02" />
+    <path d="M6.1 8.9h.02M9.9 8.9h.02" />
+    <path d="M6.4 11.5h3.2" />
+  </symbol>
+  <symbol id="i-image-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.1" y="3.3" width="11.8" height="9.4" rx="1.8" />
+    <circle cx="5.7" cy="6.5" r="1.1" />
+    <path d="M3.8 12.4 6.6 9.6 8.7 11.7 10.3 10.1 12.4 12.2" />
+  </symbol>
+  <symbol id="i-theme-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="8" cy="8" r="5.6" />
+    <path fill="currentColor" d="M8 2.4a5.6 5.6 0 0 1 0 11.2Z" />
+  </symbol>
+  <symbol id="i-puzzle-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 5.1h1.2a1.8 1.8 0 1 1 3.6 0H11a2.2 2.2 0 0 1 2.2 2.2v3.8A2.2 2.2 0 0 1 11 13.3H5a2.2 2.2 0 0 1-2.2-2.2V7.3A2.2 2.2 0 0 1 5 5.1Z" />
+  </symbol>
+  <symbol id="i-plug-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5.8 2.6v3M10.2 2.6v3" />
+    <path d="M3.8 5.6h8.4v2.4a4.2 4.2 0 0 1-8.4 0Z" />
+    <path d="M8 11.4v2.6" />
+  </symbol>
+  <symbol id="i-hub-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="10.6" cy="8" r="2.6" />
+    <circle cx="3.6" cy="4.2" r="1.6" />
+    <circle cx="3.6" cy="11.8" r="1.6" />
+    <path d="M5 5 8.3 6.8M5 11 8.3 9.2" />
+  </symbol>
+  <symbol id="i-clipboard-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3.4" y="3.8" width="9.2" height="10.2" rx="1.6" />
+    <path d="M6.2 3.8V2.9a1.1 1.1 0 0 1 1.1-1.1h1.4a1.1 1.1 0 0 1 1.1 1.1v0.9" />
+    <path d="M5.9 7.9h4.2M5.9 10.2h4.2M5.9 12.5h2.6" />
+  </symbol>
+  <symbol id="i-info-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="8" cy="8" r="5.6" />
+    <path d="M8 6.9v4.3" />
+    <path d="M8 4.6h.02" />
+  </symbol>
+  <symbol id="i-file-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9.2 1.8H4.6A1.6 1.6 0 0 0 3 3.4v9.2a1.6 1.6 0 0 0 1.6 1.6h6.8a1.6 1.6 0 0 0 1.6-1.6V5.6Z" />
+    <path d="M9.2 1.8v3.8H13" />
+  </symbol>
+  <symbol id="i-download-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 2.3v7.3" />
+    <path d="M5.1 6.7 8 9.6 10.9 6.7" />
+    <path d="M2.9 11v1.3a1.6 1.6 0 0 0 1.6 1.6h7a1.6 1.6 0 0 0 1.6-1.6V11" />
+  </symbol>
+  <symbol id="i-transfer-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.2 5.2H3.2M5.6 2.8 3.2 5.2l2.4 2.4" />
+    <path d="M2.8 10.8h10M10.4 8.4l2.4 2.4-2.4 2.4" />
+  </symbol>
+  <symbol id="i-link-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 11.3a1.5 1.5 0 0 0 2.2 2.2l4.8-4.8a1.5 1.5 0 0 0-2.2-2.2Z" />
+    <path d="M6.5 7.3a1.5 1.5 0 0 0 2.2 2.2l4.8-4.8a1.5 1.5 0 0 0-2.2-2.2Z" />
+  </symbol>
+  <symbol id="i-tag-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.2 3.8a1.6 1.6 0 0 1 1.6-1.6h3.2a1.6 1.6 0 0 1 1.13.47l5.2 5.2a1.6 1.6 0 0 1 0 2.26l-3.2 3.2a1.6 1.6 0 0 1-2.26 0l-5.2-5.2A1.6 1.6 0 0 1 2.2 7Z" />
+    <path d="M5.3 4.9h.02" />
+  </symbol>
+  <symbol id="i-pencil-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 13.5 4.1 10.3 11.8 2.5l1.7 1.7L5.7 11.9Z" />
+    <path d="M4.1 10.3 5.7 11.9" />
+  </symbol>
+  <symbol id="i-paste-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3.6" width="10" height="10.6" rx="1.4" />
+    <path d="M6.1 3.6v-.8A1.1 1.1 0 0 1 7.2 1.7h1.6a1.1 1.1 0 0 1 1.1 1.1v.8" />
+    <path d="M8 7.3v4.2M6.2 9.7 8 11.5l1.8-1.8" />
+  </symbol>
+  <symbol id="i-folder-up-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.4 12.9a1.2 1.2 0 0 1-1.2-1.2V4.3a1.2 1.2 0 0 1 1.2-1.2h2.2a1.2 1.2 0 0 1 .96.48l.7.94a1.2 1.2 0 0 0 .96.48h4.18a1.2 1.2 0 0 1 1.2 1.2v5.5a1.2 1.2 0 0 1-1.2 1.2Z" />
+    <path d="M7.9 11.9V7.6" />
+    <path d="M6.1 9.4 7.9 7.6 9.7 9.4" />
+  </symbol>
+  <symbol id="i-upload-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 10.4V2.7" />
+    <path d="M5.1 5.6 8 2.7 10.9 5.6" />
+    <path d="M2.9 10.5v1.3a1.6 1.6 0 0 0 1.6 1.6h7a1.6 1.6 0 0 0 1.6-1.6v-1.3" />
+  </symbol>
+  <symbol id="i-reload-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.2 8a5.2 5.2 0 1 1-1.55-3.7" />
+    <path d="M13.4 2.7v3.1h-3.1" />
+  </symbol>
+  <symbol id="i-send-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.8 2.2 8.9 13.9 6.9 8.9 2.2 6.9Z" />
+    <path d="M13.8 2.2 6.9 8.9" />
+  </symbol>
+  <symbol id="i-stop-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="2.2" />
+  </symbol>
+  <symbol id="i-sidebar-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1.6" />
+    <path d="M9.8 3.2v9.6" />
+  </symbol>
+  <symbol id="i-close-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.2 3.2 12.8 12.8M12.8 3.2 3.2 12.8" />
+  </symbol>
+  <!-- 菜单里的「复制」「删除」用的是既有成员(icons.tsx 的 IconCopy16 / IconTrashOutline14),这里直接复用那两个组件 -->
+  <symbol id="i-copy-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="5.6" y="5.6" width="8" height="8" rx="1.6" />
+    <path d="M10.6 5.6V4a1.6 1.6 0 0 0-1.6-1.6H4A1.6 1.6 0 0 0 2.4 4v5a1.6 1.6 0 0 0 1.6 1.6h1.6" />
+  </symbol>
+  <symbol id="i-trash-14" viewBox="0 0 14 14" fill="currentColor">
+    <path d="M5.77563 1.61176C6.10604 1.2343 6.58806 1.00006 7.12429 1.00006C7.66052 1.00006 8.14254 1.2343 8.47294 1.61176C8.72756 1.9022 8.87787 2.27199 8.89832 2.67029L11.6659 2.67029C12.0665 2.67029 12.391 2.99476 12.391 3.3954C12.391 3.79603 12.0665 4.12051 11.6659 4.12051L2.33412 4.12051C1.93349 4.12051 1.60901 3.79603 1.60901 3.3954C1.60901 2.99476 1.93349 2.67029 2.33412 2.67029L5.35026 2.67029C5.37071 2.27199 5.52102 1.9022 5.77563 1.61176ZM6.80861 2.56663C6.88313 2.65183 6.96902 2.67029 7.12429 2.67029C7.27956 2.67029 7.36545 2.65183 7.43997 2.56663C7.50357 2.49408 7.53831 2.38283 7.53831 2.22222C7.53831 2.06161 7.50357 1.95037 7.43997 1.87781C7.36545 1.79262 7.27956 1.77416 7.12429 1.77416C6.96902 1.77416 6.88313 1.79262 6.80861 1.87781C6.74501 1.95037 6.71027 2.06161 6.71027 2.22222C6.71027 2.38283 6.74501 2.49408 6.80861 2.56663Z" />
+    <path d="M3.07355 5.49338C3.43616 5.49338 3.73011 5.78734 3.73011 6.14994L3.73011 11.654C3.73011 11.9853 3.99877 12.254 4.3301 12.254L9.6699 12.254C10.0012 12.254 10.2699 11.9853 10.2699 11.654L10.2699 6.14994C10.2699 5.78734 10.5638 5.49338 10.9264 5.49338C11.289 5.49338 11.583 5.78734 11.583 6.14994L11.583 11.654C11.583 12.7105 10.7264 13.5671 9.6699 13.5671L4.3301 13.5671C3.27356 13.5671 2.417 12.7105 2.417 11.654L2.417 6.14994C2.417 5.78734 2.71095 5.49338 3.07355 5.49338Z" />
+    <path d="M5.65406 6.44501C5.9775 6.44501 6.23978 6.70729 6.23978 7.03073L6.23978 10.0126C6.23978 10.3361 5.9775 10.5984 5.65406 10.5984C5.33062 10.5984 5.06834 10.3361 5.06834 10.0126L5.06834 7.03073C5.06834 6.70729 5.33062 6.44501 5.65406 6.44501Z" />
+    <path d="M8.34594 6.44501C8.66938 6.44501 8.93166 6.70729 8.93166 7.03073L8.93166 10.0126C8.93166 10.3361 8.66938 10.5984 8.34594 10.5984C8.0225 10.5984 7.76022 10.3361 7.76022 10.0126L7.76022 7.03073C7.76022 6.70729 8.0225 6.44501 8.34594 6.44501Z" />
+  </symbol>
+
+  <!-- ---- 对话统计胶囊(面板最底一行) ---- -->
+  <symbol id="i-stopwatch-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="8" cy="8.8" r="5.1" />
+    <path d="M8 6.4v2.4l1.8 1.3" />
+    <path d="M6.6 2.4h2.8" />
+    <path d="M8 2.4v1.3" />
+  </symbol>
+  <symbol id="i-database-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="8" cy="4.5" rx="4.5" ry="1.9" />
+    <path d="M12.5 4.5v7c0 1.05-2.01 1.9-4.5 1.9s-4.5-.85-4.5-1.9v-7" />
+    <path d="M12.5 8c0 1.05-2.01 1.9-4.5 1.9S3.5 9.05 3.5 8" />
+  </symbol>
+
+  <!-- ---- 弹窗表单:编辑 / 返回 ---- -->
+  <symbol id="i-edit-line-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.2 10.7 4.6 8.1 11 2.3l1.5 1.5-5.9 6.1Z" />
+    <path d="M4.6 8.1 6.6 9.9" />
+    <path d="M3.4 13.5h9.2" />
+  </symbol>
+  <symbol id="i-back-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.2 8H3.2" />
+    <path d="M6.8 4.6 3.2 8l3.6 3.4" />
+  </symbol>
+
+  <!-- ---- 文件编辑器右键菜单(复制/粘贴/路径/文件名复用上面既有的 i-copy-16 / i-paste-16 / i-link-16 / i-tag-16) ---- -->
+  <symbol id="i-undo-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.2 6.4h6.6a3.1 3.1 0 0 1 0 6.2H8.6" />
+    <path d="M6.1 3.5 3.2 6.4l2.9 2.9" />
+  </symbol>
+  <symbol id="i-redo-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12.8 6.4H6.2a3.1 3.1 0 0 0 0 6.2h1.2" />
+    <path d="M9.9 3.5 12.8 6.4l-2.9 2.9" />
+  </symbol>
+  <symbol id="i-cut-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="5.4" cy="11.9" r="1.9" />
+    <circle cx="10.6" cy="11.9" r="1.9" />
+    <path d="M6.9 10.5 12.3 2.8" />
+    <path d="M9.1 10.5 3.7 2.8" />
+  </symbol>
+  <symbol id="i-select-all-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="2" />
+    <path d="M5.6 8.2 7.4 10 10.6 6" />
+  </symbol>
+  <symbol id="i-save-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.8 4.2A1.4 1.4 0 0 1 4.2 2.8h6.6l2.4 2.4v6.6a1.4 1.4 0 0 1-1.4 1.4H4.2a1.4 1.4 0 0 1-1.4-1.4Z" />
+    <path d="M5.4 2.8v3.4h5.2V2.8" />
+    <path d="M4.8 13.2v-3.6h6.4v3.6" />
+  </symbol>
+</svg>
+
+<h2>图标一览 · 尺寸递进(12 / 14 / 20 / 32)</h2>
+<div class="row" id="grid"></div>
+
+<h2>暗色 / 亮色对照(随文字色 currentColor)</h2>
+<div class="row">
+  <div class="card light" style="width:100%">
+    <div class="stage" id="lightRow"></div>
+  </div>
+</div>
+
+<h2>实际落位 · 顶部标签条</h2>
+<div class="row">
+  <div class="card" style="width:100%">
+    <div class="bar">
+      <span class="on"><svg width="14" height="14"><use href="#i-ai-chat-16" /></svg> AI 编程助手</span>
+      <span><svg width="14" height="14"><use href="#i-terminal-16" /></svg> 终端</span>
+      <span><svg width="14" height="14"><use href="#i-schedule-16" /></svg> 自动化任务</span>
+      <span><svg width="14" height="14"><use href="#i-browser-16" /></svg> 浏览器预览</span>
+    </div>
+  </div>
+</div>
+
+<h2>实际落位 · 工作区 chip(远程 / 本地 / 锁定 / 不绑目录)</h2>
+<div class="row">
+  <div class="card" style="width:100%">
+    <div class="chips">
+      <span class="chip remote"><svg width="13" height="13"><use href="#i-cloud-16" /></svg> teleforge <span class="sep">▸</span></span>
+      <span class="chip local"><svg width="13" height="13"><use href="#i-folder-16" /></svg> my-project <span class="sep">▸</span></span>
+      <span class="chip muted"><svg width="13" height="13"><use href="#i-server-16" /></svg> 不使用工作区(整台服务器)</span>
+      <span class="chip muted"><svg width="13" height="13"><use href="#i-desktop-16" /></svg> 不使用工作区(整台电脑)</span>
+    </div>
+  </div>
+</div>
+
+<h2>实际落位 · 设置面板菜单(第一项为选中态)</h2>
+<div class="row">
+  <div class="card" style="width:100%; padding:0">
+    <div class="smenu">
+      <button class="on"><span><svg width="15" height="15"><use href="#i-robot-16" /></svg></span>AI 配置</button>
+      <button><span><svg width="15" height="15"><use href="#i-image-16" /></svg></span>生图配置</button>
+      <button><span><svg width="15" height="15"><use href="#i-theme-16" /></svg></span>主题</button>
+      <button><span><svg width="15" height="15"><use href="#i-puzzle-16" /></svg></span>技能</button>
+      <button><span><svg width="15" height="15"><use href="#i-plug-16" /></svg></span>工具插件</button>
+      <button><span><svg width="15" height="15"><use href="#i-hub-16" /></svg></span>MCP 服务</button>
+      <button><span><svg width="15" height="15"><use href="#i-clipboard-16" /></svg></span>全局指令</button>
+      <button><span><svg width="15" height="15"><use href="#i-info-16" /></svg></span>关于与更新</button>
+    </div>
+  </div>
+</div>
+
+<h2>实际落位 · 文件列表右键菜单(远程 / 本地共用一套)</h2>
+<div class="row">
+  <div class="cmenu">
+    <button><span><svg width="14" height="14"><use href="#i-folder-16" /></svg></span>打开</button>
+    <button><span><svg width="14" height="14"><use href="#i-download-16" /></svg></span>下载</button>
+    <button><span><svg width="14" height="14"><use href="#i-transfer-16" /></svg></span>传到本地</button>
+    <button><span><svg width="14" height="14"><use href="#i-copy-16" /></svg></span>复制</button>
+    <button><span><svg width="14" height="14"><use href="#i-link-16" /></svg></span>复制路径</button>
+    <button><span><svg width="14" height="14"><use href="#i-tag-16" /></svg></span>复制文件名</button>
+    <button><span><svg width="14" height="14"><use href="#i-pencil-16" /></svg></span>重命名</button>
+    <button><span><svg width="14" height="14"><use href="#i-paste-16" /></svg></span>粘贴到此处</button>
+    <div class="sep"></div>
+    <button class="danger"><span><svg width="14" height="14"><use href="#i-trash-14" /></svg></span>删除</button>
+    <div class="sep"></div>
+    <button><span><svg width="14" height="14"><use href="#i-file-16" /></svg></span>新建文件</button>
+    <button><span><svg width="14" height="14"><use href="#i-folder-16" /></svg></span>新建文件夹</button>
+  </div>
+</div>
+
+<h2>实际落位 · 文件工具栏 / 发送按钮 / 顶部右侧栏</h2>
+<div class="row">
+  <div class="card" style="width:100%; display:flex; flex-direction:column; gap:14px">
+    <div class="fbar">
+      <button><svg width="13" height="13"><use href="#i-folder-up-16" /></svg>上级</button>
+      <button><svg width="13" height="13"><use href="#i-reload-16" /></svg></button>
+      <button><svg width="13" height="13"><use href="#i-upload-16" /></svg>上传 ▾</button>
+      <button><svg width="13" height="13"><use href="#i-transfer-16" /></svg>传到本地</button>
+    </div>
+    <div style="display:flex; align-items:center; gap:14px">
+      <span class="round"><svg width="15" height="15"><use href="#i-send-16" /></svg></span>
+      <span class="round stop"><svg width="15" height="15"><use href="#i-stop-16" /></svg></span>
+      <span class="topbtn"><svg width="15" height="15"><use href="#i-sidebar-16" /></svg></span>
+      <span class="topbtn" style="color:#5b8cff"><svg width="15" height="15"><use href="#i-sidebar-16" /></svg></span>
+      <span class="fbar"><button><svg width="13" height="13"><use href="#i-close-16" /></svg>退出多选</button></span>
+    </div>
+  </div>
+</div>
+
+<h2>实际落位 · 对话统计行 / SSH 连接列表行(编辑 · 删除)/ 表单「返回」</h2>
+<div class="row">
+  <div class="card" style="width:100%; display:flex; flex-direction:column; gap:16px">
+    <div style="display:flex; align-items:center; gap:18px; color:#9aa4b2; font:11.5px/1 ui-monospace,Consolas,monospace">
+      <span style="display:inline-flex; align-items:center; gap:5px; opacity:.85"><svg width="12" height="12" style="display:block"><use href="#i-stopwatch-16" /></svg>1 轮 88 步 <span style="opacity:.5">·</span> 243 tok/s</span>
+      <span style="display:inline-flex; align-items:center; gap:5px; opacity:.85"><svg width="12" height="12" style="display:block"><use href="#i-database-16" /></svg>13.2M tok <span style="opacity:.5">·</span> 缓存命中 98%</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px; border:1px solid #2a2f38; border-radius:8px; padding:6px 8px">
+      <span style="flex:1; min-width:0; font-size:13px">prod-eu-west <span style="color:#7b8593; font-size:11.5px; font-family:ui-monospace,Consolas,monospace">root@10.0.0.7:22</span></span>
+      <button style="display:inline-flex; align-items:center; gap:5px"><svg width="13" height="13" style="display:block"><use href="#i-edit-line-16" /></svg></button>
+      <button class="danger" style="display:inline-flex; align-items:center; gap:5px"><svg width="13" height="13" style="display:block"><use href="#i-trash-14" /></svg></button>
+    </div>
+    <div class="fbar">
+      <button><svg width="13" height="13"><use href="#i-back-16" /></svg>返回</button>
+    </div>
+  </div>
+</div>
+
+<h2>实际落位 · 文件编辑器右键菜单(复制 / 粘贴 / 路径 / 文件名复用文件列表那套)</h2>
+<div class="row">
+  <div class="card" style="width:100%; padding:0">
+    <div class="cmenu">
+      <button><span><svg width="14" height="14"><use href="#i-undo-16" /></svg></span>撤销<span class="key">Ctrl+Z</span></button>
+      <button><span><svg width="14" height="14"><use href="#i-redo-16" /></svg></span>重做<span class="key">Ctrl+Y</span></button>
+      <div class="sep"></div>
+      <button><span><svg width="14" height="14"><use href="#i-cut-16" /></svg></span>剪切<span class="key">Ctrl+X</span></button>
+      <button><span><svg width="14" height="14"><use href="#i-copy-16" /></svg></span>复制<span class="key">Ctrl+C</span></button>
+      <button><span><svg width="14" height="14"><use href="#i-paste-16" /></svg></span>粘贴<span class="key">Ctrl+V</span></button>
+      <button><span><svg width="14" height="14"><use href="#i-select-all-16" /></svg></span>全选<span class="key">Ctrl+A</span></button>
+      <button><span><svg width="14" height="14"><use href="#i-save-16" /></svg></span>保存<span class="key">Ctrl+S</span></button>
+      <div class="sep"></div>
+      <button><span><svg width="14" height="14"><use href="#i-link-16" /></svg></span>复制文件路径</button>
+      <button><span><svg width="14" height="14"><use href="#i-tag-16" /></svg></span>复制文件名</button>
+    </div>
+  </div>
+</div>
+
+<h2>实际落位 · 终端列表(本机 = 显示器 / 远端 = 云,与工作区 chip 同一套语言)</h2>
+<div class="row">
+  <div class="card" style="width:100%; padding:0">
+    <div style="display:flex; flex-direction:column; gap:5px; width:216px; padding:8px">
+      <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; background:rgba(231,234,240,.06); color:#e7eaf0; font-size:12.5px">
+        <i style="flex:none; width:6px; height:6px; border-radius:50%; background:#3fb26f"></i>
+        <span style="flex:1; min-width:0; display:flex; align-items:center; gap:6px">
+          <svg width="13" height="13" style="flex:none"><use href="#i-cloud-16" /></svg>
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">10.0.0.7</span>
+        </span>
+        <span style="flex:none; color:#6b7688">✕</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; color:#e7eaf0; font-size:12.5px">
+        <i style="flex:none; width:6px; height:6px; border-radius:50%; background:#c19c00"></i>
+        <span style="flex:1; min-width:0; display:flex; align-items:center; gap:6px">
+          <svg width="13" height="13" style="flex:none"><use href="#i-desktop-16" /></svg>
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">本地</span>
+        </span>
+        <span style="flex:none; color:#6b7688">✕</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; color:#8f9bb0; font-size:12.5px">
+        <i style="flex:none; width:6px; height:6px; border-radius:50%; background:#6b7688"></i>
+        <span style="flex:1; min-width:0; display:flex; align-items:center; gap:6px">
+          <svg width="13" height="13" style="flex:none"><use href="#i-cloud-16" /></svg>
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">离线</span>
+        </span>
+        <span style="flex:none; color:#6b7688">✕</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>实际落位 · 目录浏览弹窗(我的电脑 = 显示器 / 家目录 = 房子 / 文件 = 文档)</h2>
+<div class="row">
+  <div class="card" style="width:100%; padding:0">
+    <div style="display:flex; flex-direction:column; gap:8px; width:400px; padding:10px">
+      <div class="fbar">
+        <button><svg width="13" height="13"><use href="#i-folder-up-16" /></svg>上级</button>
+        <button style="background:transparent; border-color:transparent; color:#5b8cff"><svg width="13" height="13"><use href="#i-desktop-16" /></svg>我的电脑</button>
+        <button style="background:transparent; border-color:transparent; color:#5b8cff"><svg width="13" height="13"><use href="#i-home-16" /></svg>家目录 /home/dev</button>
+      </div>
+      <div style="border:1px solid rgba(231,234,240,.14); border-radius:6px; padding:6px; display:flex; flex-direction:column; gap:2px">
+        <div style="padding:6px 9px; border-radius:6px; background:rgba(231,234,240,.06); color:#e7eaf0; font-size:13px">
+          <span style="display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"><svg width="13" height="13" style="vertical-align:-0.5px; margin-right:6px"><use href="#i-folder-16" /></svg>projects</span>
+        </div>
+        <div style="padding:6px 9px; border-radius:6px; color:#e7eaf0; font-size:13px">
+          <span style="display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"><svg width="13" height="13" style="vertical-align:-0.5px; margin-right:6px"><use href="#i-folder-16" /></svg>apps</span>
+        </div>
+        <div style="padding:6px 9px; border-radius:6px; color:#8f9bb0; font-size:13px; opacity:.6">
+          <span style="display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"><svg width="13" height="13" style="vertical-align:-0.5px; margin-right:6px"><use href="#i-file-16" /></svg>README.md</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const ICONS = [
+    ['i-cloud-16', 'IconCloud16', '远程工作区'],
+    ['i-folder-16', 'IconFolder16', '本地工作区 / 文件(手机栏)'],
+    ['i-server-16', 'IconServer16', '不使用工作区(整台服务器)'],
+    ['i-desktop-16', 'IconDesktop16', '不使用工作区(整台电脑)'],
+    ['i-home-16', 'IconHome16', '家目录'],
+    ['i-browser-16', 'IconBrowser16', '浏览器预览标签'],
+    ['i-ai-chat-16', 'IconAiChat16', 'AI 编程助手'],
+    ['i-terminal-16', 'IconTerminal16', '终端'],
+    ['i-schedule-16', 'IconSchedule16', '自动化任务'],
+    ['i-robot-16', 'IconRobot16', '设置 · AI 配置'],
+    ['i-image-16', 'IconImage16', '设置 · 生图配置'],
+    ['i-theme-16', 'IconTheme16', '设置 · 主题'],
+    ['i-puzzle-16', 'IconPuzzle16', '设置 · 技能'],
+    ['i-plug-16', 'IconPlug16', '设置 · 工具插件'],
+    ['i-hub-16', 'IconHub16', '设置 · MCP 服务'],
+    ['i-clipboard-16', 'IconClipboard16', '设置 · 全局指令'],
+    ['i-info-16', 'IconInfo16', '设置 · 关于与更新'],
+    ['i-file-16', 'IconFile16', '菜单 · 打开文件 / 新建文件'],
+    ['i-folder-16', 'IconFolder16', '菜单 · 打开目录 / 新建文件夹'],
+    ['i-download-16', 'IconDownload16', '菜单 · 下载'],
+    ['i-transfer-16', 'IconTransfer16', '菜单 · 传到本地 / 传输'],
+    ['i-copy-16', 'IconCopy16(既有)', '菜单 · 复制'],
+    ['i-link-16', 'IconLink16', '菜单 · 复制路径'],
+    ['i-tag-16', 'IconTag16', '菜单 · 复制文件名'],
+    ['i-pencil-16', 'IconPencil16', '菜单 · 重命名'],
+    ['i-paste-16', 'IconPaste16', '菜单 · 粘贴到此处'],
+    ['i-trash-14', 'IconTrashOutline14(既有)', '菜单 · 删除'],
+    ['i-folder-up-16', 'IconFolderUp16', '文件工具栏 · 上级目录'],
+    ['i-upload-16', 'IconUpload16', '文件工具栏 · 上传'],
+    ['i-reload-16', 'IconReload16(既有)', '文件工具栏 · 刷新'],
+    ['i-send-16', 'IconSend16', '输入区 · 发送'],
+    ['i-stop-16', 'IconStop16', '输入区 · 停止'],
+    ['i-sidebar-16', 'IconSidebar16', '顶栏 · 打开/收起右侧栏'],
+    ['i-close-16', 'IconClose16', '退出多选 / 取消'],
+    ['i-stopwatch-16', 'IconStopwatch16', '对话统计 · 轮/步 + 解码速度'],
+    ['i-database-16', 'IconDatabase16', '对话统计 · token 用量 / 缓存命中'],
+    ['i-edit-line-16', 'IconEditLine16', 'SSH 连接 · 编辑该服务器'],
+    ['i-back-16', 'IconBack16', '弹窗表单 · 返回上一层'],
+    ['i-undo-16', 'IconUndo16', '编辑器菜单 · 撤销'],
+    ['i-redo-16', 'IconRedo16', '编辑器菜单 · 重做'],
+    ['i-cut-16', 'IconCut16', '编辑器菜单 · 剪切'],
+    ['i-select-all-16', 'IconSelectAll16', '编辑器菜单 · 全选'],
+    ['i-save-16', 'IconSave16', '编辑器菜单 · 保存'],
+  ];
+  const grid = document.getElementById('grid');
+  const lightRow = document.getElementById('lightRow');
+  for (const [id, name, use] of ICONS) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<div class="stage">`
+      + [12, 14, 20, 32].map((s) => `<svg width="${s}" height="${s}"><use href="#${id}" /></svg>`).join('')
+      + `</div><div class="name">${name}</div><div class="use">${use}</div><div class="sym">#${id}</div>`;
+    grid.appendChild(card);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', 22); svg.setAttribute('height', 22);
+    svg.innerHTML = `<use href="#${id}" />`;
+    lightRow.appendChild(svg);
+  }
+</script>
+</body>
+</html>

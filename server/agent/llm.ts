@@ -1,14 +1,36 @@
-// LLM 客户端:OpenAI 兼容 chat/completions,流式 + function calling
-// 支持 DeepSeek / OpenAI / Moonshot / Qwen / 本地 vLLM / Ollama 等所有兼容端点
-// 生图模型(imageGen)另走 /images/generations 与 /images/edits 两个非流式端点
+// LLM 客户端:按提供方协议发出流式对话请求,统一解析成同一份 ChatResult。
+//   openai    —— OpenAI 兼容 chat/completions(DeepSeek / OpenAI / Moonshot / Qwen / vLLM / Ollama 等)
+//   anthropic —— Anthropic Messages(/v1/messages,Claude 官方及兼容该协议的网关)
+//   gemini    —— Google Gemini 原生(models/{model}:streamGenerateContent)
+// 协议的线上差异全部收敛在文件末尾的「协议适配」小节:请求体构建(buildXxxBody)与流式解析
+// (parseXxxSse);chat() 本身只关心重试 / 换 Key / 结束语义,对协议无感。
+// 生图模型(imageGen)另走 /images/generations 与 /images/edits 两个非流式端点(仅 OpenAI 协议)。
 // model 设为 'mock' 时进入本地联调模式(无需 API Key,可跑通完整 Agent 循环)
 import type { LlmMessage } from './session.ts';
 import { describeFetchError, outboundFetch } from '../core/net.ts';
+
+/** 提供方协议(与前端 types 的 LlmProtocol、服务端 store 的 AiProviderProtocol 保持一致) */
+export type LlmProtocol = 'openai' | 'anthropic' | 'gemini';
+
+/** 协议归一:缺省 / 未知值一律按 OpenAI 兼容处理(旧配置没有该字段) */
+export function normalizeProtocol(v: unknown): LlmProtocol {
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === 'anthropic' || s === 'gemini' ? s : 'openai';
+}
 
 export interface ToolCallSpec {
   id: string;
   name: string;
   arguments: string;
+  /**
+   * Gemini 原生协议的思考签名(thoughtSignature,仅该协议会产生)。
+   * 2.5 系把签名挂在 thought part 上(此时 thoughtSignatureOnThought=true),
+   * 3 系挂在 functionCall part 上。两种都必须随历史回传,否则下一次带工具调用的
+   * 请求会被上游以「Function call is missing a thought_signature」400 拒收。
+   */
+  thoughtSignature?: string;
+  /** 上面那个签名来自 thought part(true)还是 functionCall part(false/缺省) */
+  thoughtSignatureOnThought?: boolean;
 }
 
 /**
@@ -117,6 +139,8 @@ export interface LlmOptions {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
+  /** 提供方协议(缺省 openai):决定端点、鉴权头与请求/响应体方言 */
+  protocol?: LlmProtocol | string;
   maxTokens?: number;
   contextWindow?: number;
   maxIters?: number;
@@ -191,6 +215,8 @@ export interface ChatOptions {
 export class LlmClient {
   baseUrl: string;
   apiKey: string;
+  /** 提供方协议(见文件头);'openai' 之外的协议只影响请求体与流解析,重试/换 Key 逻辑共用 */
+  protocol: LlmProtocol;
   /** 候选 API Key 列表(含主 Key,已去重去空)。chat() 按序轮询,余额不足就换下一个 */
   apiKeys: string[];
   /** Key 不可用回调(见 LlmOptions.onKeyExhausted) */
@@ -212,16 +238,19 @@ export class LlmClient {
    *  字段仅为兼容旧的提供方配置保留,agent 主循环不再读取 */
   maxIters: number;
 
-  constructor({ baseUrl, apiKey, model, maxTokens, contextWindow, maxIters, multimodal, imageGen, apiKeys, onKeyExhausted }: LlmOptions) {
+  constructor({ baseUrl, apiKey, model, protocol, maxTokens, contextWindow, maxIters, multimodal, imageGen, apiKeys, onKeyExhausted }: LlmOptions) {
     this.baseUrl = (baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
     this.apiKey = apiKey || '';
+    this.protocol = normalizeProtocol(protocol);
     this.apiKeys = normalizeApiKeys(apiKeys, this.apiKey);
     this.onKeyExhausted = onKeyExhausted;
     this.model = model || 'deepseek-chat';
     this.maxTokens = maxTokens || 8192;
     this.contextWindow = Number(contextWindow) > 0 ? Math.floor(Number(contextWindow)) : 0;
     this.multimodal = multimodal === true;
-    this.imageGen = imageGen === true;
+    // 生图链路只实现了 OpenAI 协议端点(/images/generations 与 /images/edits):
+    // 其余协议即便旧配置里标了 imageGen 也不启用,否则整轮会去撞一个不存在的端点
+    this.imageGen = imageGen === true && this.protocol === 'openai';
     this.maxIters = Number(maxIters) > 0 ? Math.floor(Number(maxIters)) : 0;
   }
 
@@ -246,60 +275,29 @@ export class LlmClient {
     // reasoning_content 都必须完整回传,否则上游 400「must be passed back to the API」;
     // 请求不带 tools 时才可省略(上游会忽略,剥离省 token)。规则见 prepareMessagesForWire。
     const hasTools = Array.isArray(tools) && tools.length > 0;
-    const requestMessages = prepareMessagesForWire(messages, { tools: hasTools, model: this.model });
-    validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
-    const url = `${this.baseUrl}/chat/completions`;
+    // 线上差异全部下沉到 buildXxxBody / parseXxxSse(见文件末尾「协议适配」)。
+    // OpenAI 兼容路径要先做消息面的线材预处理与结构校验;其它协议的方言不同,由各自的构建器负责。
+    const isOpenAi = this.protocol === 'openai';
+    const requestMessages = isOpenAi ? prepareMessagesForWire(messages, { tools: hasTools, model: this.model }) : messages;
+    if (isOpenAi) validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
+    // 输出上限:调用方可按本次请求收紧(摘要压缩传 SUMMARY_MAX_TOKENS),否则用模型配置的 maxTokens
+    const outMaxTokens = Number(maxTokens) > 0 ? Math.floor(Number(maxTokens)) : this.maxTokens;
+    const url = chatEndpoint(this.protocol, this.baseUrl, this.model);
+    const body: Record<string, any> = this.protocol === 'anthropic'
+      ? buildAnthropicBody({ model: this.model, messages: requestMessages, tools, maxTokens: outMaxTokens })
+      : this.protocol === 'gemini'
+        ? buildGeminiBody({ model: this.model, messages: requestMessages, tools, maxTokens: outMaxTokens })
+        : buildOpenAiBody({ model: this.model, messages: requestMessages, tools, maxTokens: outMaxTokens, reasoning });
     // ---- 多 API Key 轮询 ----
     // 本次调用固定一份候选 Key 列表(上层下发的都是「当前可用」的 Key,已排除被标记不可用的)。
     // 某个 Key 不可用(余额不足 / 鉴权失败) → 标记它、换下一个,新 Key 重新获得满额重试次数;
     // 全部 Key 都试过才停止(见下面 isKeyUnusable 分支)。
-    // 没有下发 Key 时不带 Authorization 头(本地不鉴权的网关仍可用),而不是发「Bearer 」空值
+    // 没有下发 Key 时不带鉴权头(本地不鉴权的网关仍可用),而不是发「Bearer 」空值
     // ——空 Bearer 会被网关判成 401,把「没配 Key」伪装成「Key 无效」。
     const availKeys = this.availableKeys();
     const keyList = availKeys.length ? availKeys : [''];
     let keyIdx = 0;
     let activeKey = keyList[keyIdx];
-    // 最小兼容请求体:不加 stream_options(部分聚合网关不支持),tools 时显式 tool_choice
-    const body: Record<string, any> = {
-      model: this.model,
-      messages: requestMessages,
-      stream: true,
-      // 输出上限:调用方可按本次请求收紧(摘要压缩传 SUMMARY_MAX_TOKENS),
-      // 否则用模型配置的 maxTokens
-      max_tokens: Number(maxTokens) > 0 ? Math.floor(Number(maxTokens)) : this.maxTokens
-    };
-    if (tools && tools.length) {
-      body.tools = tools;
-      body.tool_choice = 'auto';
-    }
-    // 推理等级(reasoning_effort: default/off/low/high/xhigh/max):
-    // - DeepSeek v4:default 也显式开启思考(对齐 dsh 部署级默认 thinking=enabled)——
-    //   不再依赖网关默认值(各网关默认开/关不一致,会出现"有时有思考、有时整轮没有");
-    //   off 关闭(thinking.type=disabled);非 default 附加 reasoning_effort
-    // - GLM 系列(智谱):off → thinking.type=disabled,显式选档 → enabled;
-    //   default:思考系列(glm-4.5+/glm-5.x,见 GLM_THINKING_RE)也显式 enabled——这些模型
-    //   强制/默认开启深度思考,不传时 glm-5.3-flash 等会返回 400 REASONING_REQUIRED;
-    //   glm-4 及视觉模型(glm-4v)等老模型可能不认该参数,default 保持不发,由用户显式选档
-    // - Qwen 系列(通义兼容模式):off → enable_thinking=false,显式选档 → true;default 不传
-    // - 其他推理模型(OpenAI o 系列 / gpt-5 / grok 等):reasoning_effort 仅 low/high 合法,off/xhigh/max 就近映射
-    const deepseekV4 = isDeepSeekV4(this.model);
-    if (deepseekV4) {
-      if (reasoning === 'off') {
-        body.thinking = { type: 'disabled' };
-      } else {
-        body.thinking = { type: 'enabled' };
-        if (reasoning !== 'default') body.reasoning_effort = reasoning;
-      }
-    } else if (GLM_RE.test(this.model)) {
-      if (reasoning === 'off') body.thinking = { type: 'disabled' };
-      else if (reasoning !== 'default' || GLM_THINKING_RE.test(this.model)) body.thinking = { type: 'enabled' };
-    } else if (QWEN_RE.test(this.model)) {
-      if (reasoning === 'off') body.enable_thinking = false;
-      else if (reasoning !== 'default') body.enable_thinking = true;
-    } else if (reasoning !== 'default' && REASONING_EFFORT_RE.test(this.model)) {
-      const map: Record<string, string> = { off: 'low', low: 'low', high: 'high', xhigh: 'high', max: 'high' };
-      body.reasoning_effort = map[reasoning] || 'high';
-    }
     // 失败重试策略(见文件末尾 LLM_RETRY):网络抖动、网关 5xx、限流 429、超时无响应、以及
     // 「流已经建立但中途被掐断/被截断/返回空响应」一律重试 —— 按指数退避并尊重网关给的
     // Retry-After / retryAfterSeconds,单次 chat 调用最多 10 次请求(次数用尽是唯一放弃条件)。
@@ -420,7 +418,8 @@ export class LlmClient {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(activeKey ? { Authorization: `Bearer ${activeKey}` } : {})
+            // 鉴权头按协议注入(x-api-key / x-goog-api-key / Bearer),无 Key 时不带鉴权字段
+            ...authHeaders(this.protocol, activeKey)
           },
           body: JSON.stringify(body),
           signal: attemptAc.signal
@@ -469,7 +468,8 @@ export class LlmClient {
         // 产生 / 中途切过模型),只靠回传已有的 reasoning 修不好。降级为「剥离历史里全部
         // reasoning_content」再重发一次:请求中不再有任何 reasoning 需要回传,上游不会再以此
         // 拒绝,本轮不至于硬失败(代价是丢掉历史思考链,控制台留痕)。
-        if (!degradedReasoning && (res.status === 400 || res.status >= 500) && REASONING_PASSBACK_RE.test(rawBody)) {
+        // 这是 OpenAI 兼容网关(DeepSeek)的方言,其它协议没有这条回传规则。
+        if (isOpenAi && !degradedReasoning && (res.status === 400 || res.status >= 500) && REASONING_PASSBACK_RE.test(rawBody)) {
           degradedReasoning = true;
           body.messages = messages.map(dropReasoningContent);
           text += '\n(已剥离历史 reasoning_content 后自动重试一次)';
@@ -478,13 +478,13 @@ export class LlmClient {
           console.warn(`[llm] ${this.model} 网关要求 reasoning_content 完整回传,已剥离历史 reasoning 后降级重试`);
           continue;
         }
-        if (/reasoning_content/i.test(text)) {
+        if (isOpenAi && /reasoning_content/i.test(text)) {
           text += '\n提示:DeepSeek 思考模式要求历史完整回传 reasoning_content(已尝试剥离历史 reasoning 自动重试)。若仍失败,请清空当前会话历史,或把推理等级设为 off(关闭思考)。';
         }
         // 纯图像端点模型被误当文本模型使用:网关会明确拒绝(503 "only supported on
         // /v1/images/...")。这是配置级错误,重试只会白等并给出同样结论,
         // 因此立即失败并把"去开生图开关"作为可操作指引返回。
-        if (IMAGES_ONLY_RE.test(text)) {
+        if (isOpenAi && IMAGES_ONLY_RE.test(text)) {
           throw new Error(
             `模型 ${this.model} 是生图模型,不支持文本对话端点(网关已拒绝)。` +
             '请在「设置 → AI 配置 → 编辑提供方」里勾选该模型的「生图」开关,该对话将切换为生图对话(文生图 / 图生图)。'
@@ -502,12 +502,15 @@ export class LlmClient {
       }
       try {
         if (!res.body) throw new Error('LLM API 未返回响应流');
-        const out = await parseSse(res.body, {
+        const sseOpts = {
           signal: attemptAc.signal,
           onDelta: trackedDelta,
           onActivity: kick,
           tolerateMissingEnd: truncatedRetries > 0
-        });
+        };
+        const out = this.protocol === 'anthropic' ? await parseAnthropicSse(res.body, sseOpts)
+          : this.protocol === 'gemini' ? await parseGeminiSse(res.body, sseOpts)
+          : await parseSse(res.body, sseOpts);
         stopWatchdog();
         // 空响应(正文、思考、工具调用全空)几乎都是网关抽风(200 + 错误 JSON、空 SSE 流)。
         // 旧行为把它当成模型没话说直接收尾,界面表现为对话毫无征兆地停住且没有任何报错;
@@ -1012,6 +1015,633 @@ function validateMessages(messages: any[]): void {
     throw new Error(`messages 末尾带 tool_calls 的 assistant 没有被应答(id=${unanswered()}),`
       + '严格提供商会以「insufficient tool messages following tool_calls message」拒绝(400)');
   }
+}
+
+// ---------------- 协议适配:端点 / 鉴权头 ----------------
+
+/** Anthropic Messages 的 API 版本头(官方要求显式声明;该日期版本至今向后兼容) */
+const ANTHROPIC_VERSION = '2023-06-01';
+
+/** 去掉结尾斜杠的端点基址 */
+function trimBase(baseUrl: string): string {
+  return String(baseUrl || '').replace(/\/+$/, '');
+}
+
+/** Anthropic 端点:{base}/v1/…;base 已带版本段(/v1)时不重复拼 */
+function anthropicUrl(baseUrl: string, path: string): string {
+  const b = trimBase(baseUrl);
+  return /\/v\d+$/.test(b) ? b + path : b + '/v1' + path;
+}
+
+/** Gemini 端点:{base}/v1beta/…;base 已带版本段时不重复拼 */
+function geminiUrl(baseUrl: string, path: string): string {
+  const b = trimBase(baseUrl);
+  return /\/v\d+(beta|alpha)?$/i.test(b) ? b + path : b + '/v1beta' + path;
+}
+
+/** 按协议注入鉴权头。无 Key 时不带鉴权字段(本地不鉴权的网关仍可用),而不是发空值把自己伪装成 401。
+ *  Anthropic 无论有没有 Key 都要带 anthropic-version;Gemini 走 x-goog-api-key(不接受 Bearer)。 */
+export function authHeaders(protocol: LlmProtocol, apiKey: string): Record<string, string> {
+  if (protocol === 'anthropic') {
+    return apiKey ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION } : { 'anthropic-version': ANTHROPIC_VERSION };
+  }
+  if (protocol === 'gemini') return apiKey ? { 'x-goog-api-key': apiKey } : {};
+  return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+}
+
+/** 流式对话端点。URL 口径只有这一处(「获取模型列表」等转发路径也复用同一套拼接规则) */
+export function chatEndpoint(protocol: LlmProtocol, baseUrl: string, model: string): string {
+  if (protocol === 'anthropic') return anthropicUrl(baseUrl, '/messages');
+  if (protocol === 'gemini') return geminiUrl(baseUrl, `/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`);
+  return `${trimBase(baseUrl)}/chat/completions`;
+}
+
+/** 模型列表端点(三种协议方言不同:OpenAI /models、Anthropic /v1/models、Gemini /v1beta/models) */
+export function modelsEndpoint(protocol: LlmProtocol, baseUrl: string): string {
+  if (protocol === 'anthropic') return anthropicUrl(baseUrl, '/models');
+  if (protocol === 'gemini') return geminiUrl(baseUrl, '/models?pageSize=1000');
+  return `${trimBase(baseUrl)}/models`;
+}
+
+/** 从模型列表响应里抽出模型名:OpenAI/Anthropic 是 data[].id,Gemini 是 models[].name(带 models/ 前缀) */
+export function parseModelList(protocol: LlmProtocol, raw: any): string[] {
+  const list: any[] = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw?.models) ? raw.models : [];
+  const names: string[] = list.map((m: any): string => {
+    const s = typeof m === 'string' ? m : String(m?.id ?? m?.name ?? '');
+    // Gemini 的模型名带 models/ 前缀,而请求路径里用的是裸名
+    return protocol === 'gemini' ? s.replace(/^models\//, '') : s;
+  });
+  return [...new Set(names.map((s) => s.trim()).filter(Boolean))].sort();
+}
+
+// ---------------- 协议适配:请求体 ----------------
+
+/** 取消息文本(内部消息面的 content 可能是字符串,也可能是多模态物化后的内容段数组) */
+function textOf(content: any): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join('');
+  }
+  return content == null ? '' : String(content);
+}
+
+/** 工具调用参数(内部以 JSON 字符串保存)→ 对象。解析失败退化成空对象:参数坏掉不该打断整轮 */
+function parseArgsJson(raw: any): Record<string, any> {
+  if (raw && typeof raw === 'object') return raw;
+  const s = String(raw ?? '').trim();
+  if (!s) return {};
+  try {
+    const v = JSON.parse(s);
+    return v && typeof v === 'object' ? v : { value: v };
+  } catch { return {}; }
+}
+
+/** data URL → { mime, base64 }。非 data URL(远端 http 图片)返回 null:
+ *  两个非 OpenAI 协议都只吃内联字节,不替上游下载外链(那会把一次模型请求变成不确定的网络依赖)。 */
+function splitDataUrl(url: any): { mime: string; data: string } | null {
+  if (typeof url !== 'string') return null;
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+  return m ? { mime: m[1], data: m[2] } : null;
+}
+
+/** OpenAI 兼容请求体(含各家网关的思考参数方言) */
+function buildOpenAiBody({ model, messages, tools, maxTokens, reasoning }: {
+  model: string; messages: any[]; tools?: any[]; maxTokens: number; reasoning: string;
+}): Record<string, any> {
+  // 最小兼容请求体:不加 stream_options(部分聚合网关不支持),tools 时显式 tool_choice
+  const body: Record<string, any> = { model, messages, stream: true, max_tokens: maxTokens };
+  if (tools && tools.length) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
+  // 推理等级(reasoning_effort: default/off/low/high/xhigh/max):
+  // - DeepSeek v4:default 也显式开启思考(对齐 dsh 部署级默认 thinking=enabled)——
+  //   不再依赖网关默认值(各网关默认开/关不一致,会出现"有时有思考、有时整轮没有");
+  //   off 关闭(thinking.type=disabled);非 default 附加 reasoning_effort
+  // - GLM 系列(智谱):off → thinking.type=disabled,显式选档 → enabled;
+  //   default:思考系列(glm-4.5+/glm-5.x,见 GLM_THINKING_RE)也显式 enabled——这些模型
+  //   强制/默认开启深度思考,不传时 glm-5.3-flash 等会返回 400 REASONING_REQUIRED;
+  //   glm-4 及视觉模型(glm-4v)等老模型可能不认该参数,default 保持不发,由用户显式选档
+  // - Qwen 系列(通义兼容模式):off → enable_thinking=false,显式选档 → true;default 不传
+  // - 其他推理模型(OpenAI o 系列 / gpt-5 / grok 等):reasoning_effort 仅 low/high 合法,off/xhigh/max 就近映射
+  if (isDeepSeekV4(model)) {
+    if (reasoning === 'off') {
+      body.thinking = { type: 'disabled' };
+    } else {
+      body.thinking = { type: 'enabled' };
+      if (reasoning !== 'default') body.reasoning_effort = reasoning;
+    }
+  } else if (GLM_RE.test(model)) {
+    if (reasoning === 'off') body.thinking = { type: 'disabled' };
+    else if (reasoning !== 'default' || GLM_THINKING_RE.test(model)) body.thinking = { type: 'enabled' };
+  } else if (QWEN_RE.test(model)) {
+    if (reasoning === 'off') body.enable_thinking = false;
+    else if (reasoning !== 'default') body.enable_thinking = true;
+  } else if (reasoning !== 'default' && REASONING_EFFORT_RE.test(model)) {
+    const map: Record<string, string> = { off: 'low', low: 'low', high: 'high', xhigh: 'high', max: 'high' };
+    body.reasoning_effort = map[reasoning] || 'high';
+  }
+  return body;
+}
+
+/** data URL 图片段 → Anthropic image block(非 data URL 的图片段直接丢弃,文本仍在) */
+function toAnthropicBlocks(content: any): any[] {
+  if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : [];
+  if (!Array.isArray(content)) {
+    const t = textOf(content);
+    return t ? [{ type: 'text', text: t }] : [];
+  }
+  const blocks: any[] = [];
+  for (const p of content) {
+    if (!p) continue;
+    if (p.type === 'text' && typeof p.text === 'string' && p.text) blocks.push({ type: 'text', text: p.text });
+    else if (p.type === 'image_url') {
+      const img = splitDataUrl(p.image_url?.url);
+      if (img) blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.data } });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Anthropic Messages 请求体。
+ * 与 OpenAI 的关键差异:
+ *  - 消息体是 content block 数组;tool_calls ↔ tool_use、tool ↔ tool_result(按 id 配对);
+ *  - **角色必须严格交替**:相邻同角色消息必须合并(否则 400);末轮工具结果整体进同一条 user;
+ *  - 系统提示走顶层 system 字段,不在 messages 里;
+ *  - max_tokens 必填。
+ * 不发送 extended thinking(那要求把带签名的 thinking block 原样回传,本项目的消息面不保存该签名),
+ * 因此推理等级对 Claude 不生效;上游若自行返回 thinking 增量,仍会被解析成思考通道展示。
+ */
+function buildAnthropicBody({ model, messages, tools, maxTokens }: {
+  model: string; messages: any[]; tools?: any[]; maxTokens: number;
+}): Record<string, any> {
+  const system: string[] = [];
+  const out: Array<{ role: 'user' | 'assistant'; content: any[] }> = [];
+  const push = (role: 'user' | 'assistant', blocks: any[]) => {
+    if (!blocks.length) return;
+    const last = out[out.length - 1];
+    if (last && last.role === role) last.content.push(...blocks); // 同角色相邻必须合并
+    else out.push({ role, content: blocks });
+  };
+  for (const m of messages) {
+    if (!m || typeof m !== 'object') continue;
+    if (m.role === 'system') { const t = textOf(m.content); if (t) system.push(t); continue; }
+    if (m.role === 'user') { push('user', toAnthropicBlocks(m.content)); continue; }
+    if (m.role === 'assistant') {
+      const blocks: any[] = [];
+      const t = textOf(m.content);
+      if (t) blocks.push({ type: 'text', text: t });
+      for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
+        const name = tc?.function?.name;
+        if (!name) continue;
+        blocks.push({ type: 'tool_use', id: tc.id || `call_${Math.random().toString(36).slice(2, 10)}`, name, input: parseArgsJson(tc.function?.arguments) });
+      }
+      push('assistant', blocks);
+      continue;
+    }
+    if (m.role === 'tool') {
+      push('user', [{
+        type: 'tool_result',
+        tool_use_id: m.tool_call_id || '',
+        // 空内容会被 Anthropic 判为非法 block,给一句可读占位
+        content: textOf(m.content) || '(无输出)'
+      }]);
+    }
+  }
+  // 首条必须是 user(压缩摘要可能让历史以 assistant 开头)
+  if (!out.length || out[0].role !== 'user') out.unshift({ role: 'user', content: [{ type: 'text', text: '(继续)' }] });
+  const body: Record<string, any> = {
+    model,
+    max_tokens: Number(maxTokens) > 0 ? Math.floor(Number(maxTokens)) : 8192,
+    stream: true,
+    messages: out
+  };
+  if (system.length) body.system = system.join('\n\n');
+  if (tools && tools.length) {
+    const decls = tools
+      .map((t) => t?.function)
+      .filter((f) => f && f.name)
+      .map((f) => ({ name: f.name, description: f.description || '', input_schema: f.parameters || { type: 'object', properties: {} } }));
+    if (decls.length) {
+      body.tools = decls;
+      body.tool_choice = { type: 'auto' };
+    }
+  }
+  return body;
+}
+
+/** Gemini Schema 只认 OpenAPI 子集:未知字段会直接 400,所以这里递归白名单化 */
+function toGeminiSchema(schema: any): any {
+  if (Array.isArray(schema)) return schema.map(toGeminiSchema);
+  if (!schema || typeof schema !== 'object') return schema;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === 'additionalProperties' || k === '$schema' || k === '$ref' || k === 'default' || k === 'examples' || k === 'strict' || k === 'allOf') continue;
+    if (k === 'type') {
+      // JSON Schema 的 type 数组(如 ['string','null'])要折成 Gemini 的 nullable
+      if (Array.isArray(v)) {
+        const types = v.filter((x) => x !== 'null');
+        if (types.length) out.type = types[0];
+        if (types.length !== v.length) out.nullable = true;
+      } else out.type = v;
+      continue;
+    }
+    if (k === 'properties' && v && typeof v === 'object') {
+      out.properties = Object.fromEntries(Object.entries(v as Record<string, any>).map(([pk, pv]) => [pk, toGeminiSchema(pv)]));
+      continue;
+    }
+    if (k === 'items') { out.items = toGeminiSchema(v); continue; }
+    if (k === 'anyOf' || k === 'oneOf') { out.anyOf = (v as any[]).map(toGeminiSchema); continue; }
+    if (['enum', 'required', 'description', 'format', 'nullable', 'minimum', 'maximum', 'minItems', 'maxItems', 'pattern', 'title', 'example', 'propertyOrdering'].includes(k)) {
+      out[k] = v;
+      continue;
+    }
+    // 其余未知键(x-* / const / …)一律丢弃
+  }
+  if (out.type === 'object' && !out.properties) out.properties = {};
+  return out;
+}
+
+/** Gemini content 的 user part(文本 + 内联图片;❗️不接受远端 URL 与 OpenAI 的 image_url 段) */
+function toGeminiParts(content: any): any[] {
+  if (typeof content === 'string') return [{ text: content || '(空消息)' }];
+  if (!Array.isArray(content)) return [{ text: textOf(content) || '(空消息)' }];
+  const parts: any[] = [];
+  for (const p of content) {
+    if (!p) continue;
+    if (p.type === 'text' && typeof p.text === 'string' && p.text) parts.push({ text: p.text });
+    else if (p.type === 'image_url') {
+      const img = splitDataUrl(p.image_url?.url);
+      if (img) parts.push({ inlineData: { mimeType: img.mime, data: img.data } });
+    }
+  }
+  return parts.length ? parts : [{ text: '(空消息)' }];
+}
+
+/**
+ * Gemini 原生请求体(generateContent 的 contents/parts 形态)。
+ *  - 系统提示走 systemInstruction;工具走 tools[].functionDeclarations + toolConfig.mode=AUTO;
+ *  - 工具结果回传为 user 轮的 functionResponse(必须带函数名,而内部 tool 消息只有 id → 这里按 id 反查);
+ *  - **思考签名回传**:2.5 系把签名挂在 thought part 上、3 系挂在 functionCall part 上,两种都必须原样带回,
+ *    否则下一次带工具调用的请求会被上游以「missing a thought_signature」400 拒收;
+ *  - 不发 thinkingConfig:2.5/3 默认就有思考,而 thinkingBudget=0 在 pro 系会被判非法(400)。
+ *    于是「推理等级」对 Gemini 不改变思考开关,只影响展示(getter 传给前端的思考增量照常解析)。
+ */
+function buildGeminiBody({ model, messages, tools, maxTokens }: {
+  model: string; messages: any[]; tools?: any[]; maxTokens: number;
+}): Record<string, any> {
+  const system: string[] = [];
+  const contents: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
+  const push = (role: 'user' | 'model', parts: any[]) => {
+    if (!parts.length) return;
+    const last = contents[contents.length - 1];
+    if (last && last.role === role) last.parts.push(...parts);
+    else contents.push({ role, parts });
+  };
+  const nameById = new Map<string, string>(); // tool_call_id → 函数名(functionResponse 需要)
+  for (const m of messages) {
+    if (!m || typeof m !== 'object') continue;
+    if (m.role === 'system') { const t = textOf(m.content); if (t) system.push(t); continue; }
+    if (m.role === 'user') { push('user', toGeminiParts(m.content)); continue; }
+    if (m.role === 'assistant') {
+      const calls = Array.isArray(m.tool_calls) ? m.tool_calls : [];
+      for (const tc of calls) if (tc?.id) nameById.set(tc.id, tc.function?.name || '');
+      const thinkText = typeof m.reasoning_content === 'string' ? m.reasoning_content : '';
+      const parts: any[] = [];
+      const sigOnThought = calls.find((tc: any) => tc?.thoughtSignature && tc.thoughtSignatureOnThought === true);
+      // 只回传"带签名的思考":上游要求的是签名本身,而 2.5 的签名挂在 thought part 上,
+      // 所以思考正文必须跟着它一起回去。没有签名的思考不需要回传(白增 token,且 3 系对
+      // 无签名的 thought part 更挑),此时签名会改挂到 functionCall part 上(见下)。
+      if (sigOnThought && thinkText) parts.push({ text: thinkText, thought: true, thoughtSignature: sigOnThought.thoughtSignature });
+      const text = textOf(m.content);
+      if (text) parts.push({ text });
+      for (const tc of calls) {
+        const name = tc?.function?.name;
+        if (!name) continue;
+        // 已经用 thought part 回传过的签名不再重复挂到 functionCall 上
+        const sig = tc.thoughtSignature && !(tc.thoughtSignatureOnThought === true && thinkText) ? tc.thoughtSignature : undefined;
+        parts.push({ functionCall: { name, args: parseArgsJson(tc.function?.arguments) }, ...(sig ? { thoughtSignature: sig } : {}) });
+      }
+      push('model', parts);
+      continue;
+    }
+    if (m.role === 'tool') {
+      push('user', [{
+        functionResponse: {
+          name: nameById.get(m.tool_call_id) || 'unknown_tool',
+          response: { result: textOf(m.content) }
+        }
+      }]);
+    }
+  }
+  if (!contents.length || contents[0].role !== 'user') contents.unshift({ role: 'user', parts: [{ text: '(继续)' }] });
+  const body: Record<string, any> = { contents };
+  if (system.length) body.systemInstruction = { parts: [{ text: system.join('\n\n') }] };
+  if (Number(maxTokens) > 0) body.generationConfig = { maxOutputTokens: Math.floor(Number(maxTokens)) };
+  if (tools && tools.length) {
+    const decls = tools
+      .map((t) => t?.function)
+      .filter((f) => f && f.name)
+      .map((f) => ({
+        name: f.name,
+        description: f.description || '',
+        parameters: toGeminiSchema(f.parameters || { type: 'object', properties: {} })
+      }));
+    if (decls.length) {
+      body.tools = [{ functionDeclarations: decls }];
+      body.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
+    }
+  }
+  return body;
+}
+
+// ---------------- 协议适配:流式解析 ----------------
+
+/** SSE 行泵:把响应流按行切出 data: 帧交给 onFrame;onFrame 返回 true = 收到结束帧、停止读取。
+ *  返回是否见过 data 帧 + 报文头部片段(非 SSE 响应时用于给出可读报错;onFrame 抛错原样上抛)。 */
+async function pumpSse(
+  stream: ReadableStream,
+  { signal, onActivity }: { signal?: AbortSignal; onActivity?: () => void },
+  onFrame: (data: string) => boolean
+): Promise<{ sawData: boolean; rawHead: string }> {
+  const reader = stream.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let rawHead = '';
+  let sawData = false;
+  try {
+    for (;;) {
+      if (signal?.aborted) throw new Error('已停止');
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunkText = dec.decode(value, { stream: true });
+      if (rawHead.length < 400) rawHead = (rawHead + chunkText).slice(0, 400);
+      onActivity?.(); // 收到任何字节(含 SSE 心跳注释)都重置静默看门狗
+      buf += chunkText;
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        sawData = true;
+        if (onFrame(line.slice(5).trim())) return { sawData, rawHead };
+      }
+    }
+  } catch (e) {
+    if (signal?.aborted) throw new Error('已停止');
+    throw e;
+  }
+  return { sawData, rawHead };
+}
+
+/** 流收尾的统一判定:一个 data 帧都没有 → 根本不是 SSE;有帧但没有结束标记 → 截断
+ *  (先重试一次,tolerateMissingEnd 时才接受并标记 truncated)。返回是否标记为截断。 */
+function assertStreamEnded(ended: boolean, { sawData, rawHead, tolerateMissingEnd }: { sawData: boolean; rawHead: string; tolerateMissingEnd: boolean }): boolean {
+  if (ended) return false;
+  if (!sawData) {
+    const snippet = (rawHead.trim() || '(空响应体)').replace(/\s+/g, ' ').slice(0, 300);
+    throw new Error(`LLM API 返回的不是 SSE 事件流,无法解析:${snippet}`);
+  }
+  if (!tolerateMissingEnd) throw new Error('LLM API 响应流被中断(未收到 finish_reason 或 [DONE])');
+  return true;
+}
+
+/** 把流中途上报的用量并入累计(只吸收有值的字段:message_delta 的 usage 只带 output_tokens) */
+function mergeUsageInto(target: any, patch: any): any {
+  if (!patch || typeof patch !== 'object') return target;
+  const out = { ...(target && typeof target === 'object' ? target : {}) };
+  for (const [k, v] of Object.entries(patch)) if (v !== null && v !== undefined) out[k] = v;
+  return out;
+}
+
+/** Anthropic 的 stop_reason → 内部口径(agent 只认 stop/length/tool_calls 这几个关键值) */
+const ANTHROPIC_STOP: Record<string, string> = {
+  end_turn: 'stop',
+  stop_sequence: 'stop',
+  max_tokens: 'length',
+  tool_use: 'tool_calls'
+};
+
+/** Anthropic Messages 流式解析(message_start、content_block_* 系列事件、message_delta、message_stop)。
+ *  用量在 message_start(input_tokens 等)与 message_delta(output_tokens)分两处上报,合并后归一。 */
+async function parseAnthropicSse(
+  stream: ReadableStream,
+  { signal, onDelta, onActivity, tolerateMissingEnd = false }: {
+    signal?: AbortSignal;
+    onDelta?: (d: { kind: string; text?: string; index?: number }) => void;
+    onActivity?: () => void;
+    tolerateMissingEnd?: boolean;
+  }
+): Promise<ChatResult> {
+  let content = '';
+  let reasoning = '';
+  let stopReason = '';
+  let usage: any = null;
+  let streamError: Error | null = null;
+  let firstTokenTime: number | null = null;
+  const markFirstToken = () => { if (firstTokenTime === null) firstTokenTime = Date.now(); };
+  const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+
+  const { sawData, rawHead } = await pumpSse(stream, { signal, onActivity }, (data) => {
+    let ev: any;
+    try { ev = JSON.parse(data); } catch { return false; } // 忽略无法解析的帧
+    switch (ev?.type) {
+      case 'message_start':
+        usage = mergeUsageInto(usage, ev.message?.usage);
+        return false;
+      case 'content_block_start': {
+        const block = ev.content_block || {};
+        if (block.type === 'tool_use') {
+          markFirstToken(); // 工具名到达即算"开始出字"(与 OpenAI 流的口径一致)
+          toolAcc.set(ev.index ?? 0, { id: block.id || '', name: block.name || '', args: '' });
+        }
+        return false;
+      }
+      case 'content_block_delta': {
+        const d = ev.delta || {};
+        if (d.type === 'text_delta' && d.text) {
+          markFirstToken();
+          content += d.text;
+          onDelta?.({ kind: 'text', text: d.text });
+        } else if (d.type === 'thinking_delta' && d.thinking) {
+          markFirstToken();
+          reasoning += d.thinking;
+          onDelta?.({ kind: 'reasoning', text: d.thinking });
+        } else if (d.type === 'input_json_delta' && typeof d.partial_json === 'string') {
+          const idx = ev.index ?? 0;
+          const acc = toolAcc.get(idx) || { id: '', name: '', args: '' };
+          acc.args += d.partial_json;
+          toolAcc.set(idx, acc);
+          onDelta?.({ kind: 'tool_args', index: idx, text: d.partial_json });
+        }
+        return false;
+      }
+      case 'message_delta':
+        if (ev.delta?.stop_reason) stopReason = String(ev.delta.stop_reason);
+        usage = mergeUsageInto(usage, ev.usage);
+        return false;
+      case 'message_stop':
+        return true;
+      case 'error':
+        streamError = new Error(`LLM API 返回错误:${JSON.stringify(ev.error ?? ev).slice(0, 400)}`);
+        return true;
+      default:
+        return false; // ping / content_block_stop 等无需处理
+    }
+  });
+  if (streamError) throw streamError;
+  const truncated = assertStreamEnded(!!stopReason, { sawData, rawHead, tolerateMissingEnd });
+  const toolCalls: ToolCallSpec[] = [...toolAcc.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, v]) => ({
+      id: v.id || `call_${Math.random().toString(36).slice(2, 10)}`,
+      name: v.name,
+      arguments: v.args || '{}'
+    }));
+  return {
+    content, toolCalls, reasoning,
+    finishReason: ANTHROPIC_STOP[stopReason] || stopReason,
+    usage: normalizeTokenUsage(usage),
+    ...(firstTokenTime !== null ? { firstTokenTime } : {}),
+    ...(truncated ? { truncated: true } : {})
+  };
+}
+
+/** Gemini 的用量口径 → normalizeTokenUsage 认得的 OpenAI 方言(思考 token 计入输出) */
+function geminiUsage(u: any): any {
+  const prompt = Number(u?.promptTokenCount) || 0;
+  const output = (Number(u?.candidatesTokenCount) || 0) + (Number(u?.thoughtsTokenCount) || 0);
+  const cached = Number(u?.cachedContentTokenCount) || 0;
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: output,
+    ...(cached > 0 ? { prompt_tokens_details: { cached_tokens: cached } } : {})
+  };
+}
+
+/** 完成的 JSON 文本判定:用于识别"参数被拆成 JSON 片段下发"的接入层 */
+function isCompleteJson(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  try { JSON.parse(t); return true; } catch { return false; }
+}
+
+/** JSON 文本 → 值;解析失败返回 null */
+function parseJsonLoose(s: string): any {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+/** Gemini 的 finishReason → 内部口径 */
+const GEMINI_FINISH: Record<string, string> = {
+  STOP: 'stop',
+  MAX_TOKENS: 'length',
+  UNEXPECTED_TOOL_CALL: 'tool_calls'
+};
+
+/**
+ * Gemini 原生流式解析(streamGenerateContent?alt=sse:每帧一个 GenerateContentResponse)。
+ *  - 结束标记不是 [DONE],而是候选里的 finishReason;usageMetadata 可能在其后单独一帧,读到流自然结束;
+ *  - 工具调用 part 的参数:**一个 part 就是一次完整调用**(Gemini 的 args 是结构化的,官方把"参数分片"
+ *    做成单独开关 partialArgs,本项目不启用);同一 functionCall id 重复出现时按对象合并,
+ *    另外对"args 被拆成 JSON 片段"的非标接入层做续写兜底;
+ *  - 思考签名按来源记录:thought part → thoughtSignatureOnThought=true,functionCall part → false。
+ */
+async function parseGeminiSse(
+  stream: ReadableStream,
+  { signal, onDelta, onActivity, tolerateMissingEnd = false }: {
+    signal?: AbortSignal;
+    onDelta?: (d: { kind: string; text?: string; index?: number }) => void;
+    onActivity?: () => void;
+    tolerateMissingEnd?: boolean;
+  }
+): Promise<ChatResult> {
+  let content = '';
+  let reasoning = '';
+  let finishReason = '';
+  let blockReason = '';
+  let usage: any = null;
+  let firstTokenTime: number | null = null;
+  const markFirstToken = () => { if (firstTokenTime === null) firstTokenTime = Date.now(); };
+  const calls: Array<{ id: string; name: string; args: string; thoughtSignature?: string; thoughtSignatureOnThought?: boolean }> = [];
+  let lastThoughtSignature = ''; // 2.5 系:签名在 thought part 上,要随其后的 functionCall 一起回传
+  let callSeq = 0;
+
+  const addFunctionCall = (name: string, args: any, ownSignature?: string, callId?: string) => {
+    if (!name) return;
+    const frag = typeof args === 'string' ? args : args == null ? '{}' : JSON.stringify(args);
+    // 归并规则:
+    //  1) 带 id 且已存在同 id 调用(Gemini 3)→ 参数按对象合并(后到的字段覆盖);
+    //  2) 无 id 且上一条同名调用的参数还不是合法 JSON(非标接入层把 args 拆成片段)→ 续写;
+    //  3) 其余情况(2.5 的常规形态:一个 part 一次完整调用)→ 新调用。
+    // 第 3 条很重要:同名的两个独立调用(如并行读两个文件)绝不能被按名字合并掉。
+    const sameId = callId ? calls.find((c) => c.id === callId) : undefined;
+    const last = calls[calls.length - 1];
+    if (sameId) {
+      const prev = parseJsonLoose(sameId.args);
+      const next = parseJsonLoose(frag);
+      sameId.args = prev && next && typeof prev === 'object' && typeof next === 'object'
+        ? JSON.stringify({ ...prev, ...next })
+        : (frag.startsWith(sameId.args) ? frag : sameId.args + frag);
+    } else if (!callId && last && last.name === name && !isCompleteJson(last.args)) {
+      last.args = frag.startsWith(last.args) ? frag : last.args + frag;
+    } else {
+      markFirstToken();
+      calls.push({ id: callId || `call_${callSeq++}_${Math.random().toString(36).slice(2, 8)}`, name, args: frag });
+    }
+    const cur = sameId || calls[calls.length - 1];
+    const sig = ownSignature || lastThoughtSignature;
+    if (sig && !cur.thoughtSignature) {
+      cur.thoughtSignature = sig;
+      cur.thoughtSignatureOnThought = !ownSignature;
+    }
+  };
+
+  const { sawData, rawHead } = await pumpSse(stream, { signal, onActivity }, (data) => {
+    let ev: any;
+    try { ev = JSON.parse(data); } catch { return false; }
+    if (ev?.error) throw new Error(`LLM API 返回错误:${String(ev.error?.message || JSON.stringify(ev.error)).slice(0, 400)}`);
+    if (ev?.promptFeedback?.blockReason) blockReason = String(ev.promptFeedback.blockReason);
+    const cand = Array.isArray(ev?.candidates) ? ev.candidates[0] : null;
+    for (const part of cand?.content?.parts || []) {
+      if (!part || typeof part !== 'object') continue;
+      // functionCall 自带的签名不能污染 lastThoughtSignature(否则会以"thought 来源"记错)
+      if (part.thoughtSignature && !part.functionCall) lastThoughtSignature = String(part.thoughtSignature);
+      if (typeof part.text === 'string' && part.text) {
+        if (part.thought === true) {
+          markFirstToken();
+          reasoning += part.text;
+          onDelta?.({ kind: 'reasoning', text: part.text });
+        } else {
+          markFirstToken();
+          content += part.text;
+          onDelta?.({ kind: 'text', text: part.text });
+        }
+      }
+      if (part.functionCall) addFunctionCall(part.functionCall.name, part.functionCall.args, part.thoughtSignature, part.functionCall.id);
+    }
+    if (cand?.finishReason) finishReason = String(cand.finishReason);
+    if (ev?.usageMetadata) usage = geminiUsage(ev.usageMetadata);
+    return false; // 不提前停止:usageMetadata 常在 finishReason 之后单独一帧
+  });
+  // 提示词被安全策略整体拦截:没有任何候选可用,重试不会变好,直接给可读原因
+  if (blockReason && !content && !reasoning && !calls.length) {
+    throw new Error(`Gemini 拒绝了该请求(promptFeedback.blockReason=${blockReason}),请调整输入内容后重试`);
+  }
+  const truncated = assertStreamEnded(!!finishReason, { sawData, rawHead, tolerateMissingEnd });
+  const toolCalls: ToolCallSpec[] = calls.map((c) => ({
+    id: c.id,
+    name: c.name,
+    arguments: c.args || '{}',
+    ...(c.thoughtSignature ? { thoughtSignature: c.thoughtSignature, thoughtSignatureOnThought: c.thoughtSignatureOnThought === true } : {})
+  }));
+  return {
+    content, toolCalls, reasoning,
+    finishReason: GEMINI_FINISH[finishReason] || finishReason,
+    usage: normalizeTokenUsage(usage),
+    ...(firstTokenTime !== null ? { firstTokenTime } : {}),
+    ...(truncated ? { truncated: true } : {})
+  };
 }
 
 async function parseSse(stream: ReadableStream, { signal, onDelta, onActivity, tolerateMissingEnd = false }: { signal?: AbortSignal; onDelta?: (d: { kind: string; text?: string; index?: number }) => void; onActivity?: () => void; tolerateMissingEnd?: boolean }): Promise<ChatResult> {

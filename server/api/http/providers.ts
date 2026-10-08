@@ -5,6 +5,7 @@ import { aiProviders, type AiProvider } from '../../store/ai-providers-store.ts'
 import { uiState } from '../../store/ui-state-store.ts';
 import { setImageToolConfig, imageToolSummary, IMAGE_QUALITIES, IMAGE_SIZE_OPTIONS } from '../../store/settings-store.ts';
 import { describeFetchError, outboundFetch } from '../../core/net.ts';
+import { authHeaders, modelsEndpoint, normalizeProtocol, parseModelList } from '../../agent/llm.ts';
 
 // modelConfig 白名单净化:每模型只保留 contextWindow/maxTokens(正数)与 multimodal/imageGen(布尔)
 function sanitizeModelConfig(mc: unknown): Record<string, any> | null {
@@ -28,23 +29,22 @@ export default async function registerProviders(app: FastifyInstance) {
   app.get('/api/providers', () => ({ userProviders: aiProviders.list() }));
 
   // 代理获取某端点的模型列表(浏览器直连外部 API 会被 CORS 拦截,故由服务端转发)
-  // OpenAI 兼容端点均为 GET {baseUrl}/models → { data: [{ id }] }
+  // 端点与鉴权头按协议给出:OpenAI 兼容 GET {base}/models(Bearer)、
+  // Anthropic GET {base}/v1/models(x-api-key)、Gemini GET {base}/v1beta/models(x-goog-api-key)。
+  // 三者的 URL 拼接 / 鉴权头 / 列表解析口径与对话链路共用(见 agent/llm.ts),避免两处走偏。
   app.post('/api/providers/fetch-models', async (request: FastifyRequest, reply: FastifyReply) => {
     const baseUrl = String((request.body as any)?.baseUrl || '').trim().replace(/\/+$/, '');
     const apiKey = String((request.body as any)?.apiKey || '').trim();
+    const protocol = normalizeProtocol((request.body as any)?.protocol);
     if (!/^https?:\/\//i.test(baseUrl)) return reply.code(400).send({ error: 'Base URL 需以 http:// 或 https:// 开头' });
     try {
-      const r = await outboundFetch(baseUrl + '/models', {
-        headers: apiKey ? { Authorization: 'Bearer ' + apiKey } : {},
+      const r = await outboundFetch(modelsEndpoint(protocol, baseUrl), {
+        headers: authHeaders(protocol, apiKey),
         signal: AbortSignal.timeout(15000)
       });
       if (!r.ok) return reply.code(502).send({ error: `提供商返回 HTTP ${r.status},请检查 Base URL 与 API Key` });
       const j: any = await r.json();
-      const raw = Array.isArray(j?.data) ? j.data.map((m: any) => m?.id)
-        : Array.isArray(j?.models) ? j.models.map((m: any) => m?.id ?? m)
-        : [];
-      const models = [...new Set(raw.map((m: any) => String(m || '').trim()).filter(Boolean))].sort();
-      return { models };
+      return { models: parseModelList(protocol, j) };
     } catch (e: any) {
       return reply.code(502).send({ error: '获取模型列表失败:' + describeFetchError(e) });
     }
@@ -60,6 +60,8 @@ export default async function registerProviders(app: FastifyInstance) {
       id: 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       name,
       baseUrl,
+      // 协议(openai | anthropic | gemini):归一后落盘,未知值按 openai 处理
+      protocol: normalizeProtocol(b.protocol),
       models: Array.isArray(b.models) ? b.models.map((m: any) => String(m)).filter(Boolean) : [],
       apiKey: String(b.apiKey || ''),
       // 多个 API Key(轮询用):apiKey 由 store 对齐为 apiKeys[0]
@@ -83,6 +85,7 @@ export default async function registerProviders(app: FastifyInstance) {
       patch.baseUrl = u;
     }
     if (Array.isArray(b.models)) patch.models = b.models.map((m: any) => String(m)).filter(Boolean);
+    if (b.protocol !== undefined) patch.protocol = normalizeProtocol(b.protocol);
     if (typeof b.apiKey === 'string') patch.apiKey = b.apiKey;
     // 多 Key 列表(权威):给了它就以它为准,apiKey 由 store 对齐为首项
     if (Array.isArray(b.apiKeys)) patch.apiKeys = b.apiKeys.map((k: any) => String(k ?? '').trim()).filter(Boolean);

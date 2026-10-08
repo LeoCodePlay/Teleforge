@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useFeedback } from '../../context/feedback';
 import type { ConnInfo, ServerStatus, SshProfileInfo } from '../../types';
+import { IconBack16, IconEditLine16, IconTrashOutline14 } from '../icons/icons';
 import './SshConnectModal.scss';
 
 const LS = (k: string, v: string) => localStorage.getItem('sshai.' + k) || v;
@@ -243,8 +244,8 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
                           </span>
                           <span className="ssh-item-sub">{p.username}@{p.host}:{p.port}{p.authType === 'key' ? ' · 私钥' : ''}{p.hasPassword ? '' : p.authType === 'password' ? ' · 未存密码' : ''}</span>
                         </button>
-                        <button className="sm" disabled={busy} onClick={() => openEdit(p)}>✎</button>
-                        <button className="sm" disabled={busy} onClick={() => deleteProfile(p)}>🗑</button>
+                        <button className="sm icon-btn" disabled={busy} data-tip="编辑该服务器" aria-label="编辑服务器" onClick={() => openEdit(p)}><IconEditLine16 size={13} /></button>
+                        <button className="sm danger icon-btn" disabled={busy} data-tip="删除该服务器" aria-label="删除服务器" onClick={() => deleteProfile(p)}><IconTrashOutline14 size={13} /></button>
                       </div>
                     ))}
                   </div>
@@ -306,7 +307,7 @@ export default function SshConnectModal({ status, onClose }: SshConnectModalProp
               {err && <div className="error" onClick={() => setErr('')}>✕ {err}</div>}
 
               <div className="row gap">
-                <button className="ghost" disabled={busy} onClick={backToList}>← 返回</button>
+                <button className="ghost icon-btn" disabled={busy} onClick={backToList}><IconBack16 size={13} />返回</button>
                 <button className="primary grow" disabled={busy || connecting} onClick={doConnect}>
                   {busy ? '连接中…' : (editId ? '保存并连接' : '连接')}
                 </button>

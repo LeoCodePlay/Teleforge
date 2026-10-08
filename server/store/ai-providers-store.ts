@@ -19,10 +19,16 @@ export interface KeyState {
   at?: number;
 }
 
+/** 提供方协议(与服务端 agent/llm.ts 的 LlmProtocol 一致):
+ *  openai = OpenAI 兼容(缺省),anthropic = Anthropic Messages,gemini = Google Gemini 原生 */
+export type AiProviderProtocol = 'openai' | 'anthropic' | 'gemini';
+
 export interface AiProvider {
   id: string;
   name: string;
   baseUrl: string;
+  /** 协议;旧配置缺省按 openai 处理 */
+  protocol?: AiProviderProtocol;
   /** 主 Key(兼容字段):始终镜像 apiKeys[0];只配一个 Key 时就只有它 */
   apiKey: string;
   /** 同一提供商的多个 API Key(轮询用):某个 Key 余额不足时按此顺序切换到下一个 */

@@ -147,10 +147,13 @@ button.primary:active:not(:disabled) { background: var(--btn-hover-b); }
 
 /* 危险按钮:与普通按钮**同一个底**、同一条描边,只靠文字色(与悬浮时的红 scrim)表达危险。
    之前它单独用 --glass-bg(比普通按钮暗 16),同一排操作按钮里两个底色并排,
-   看着像两种不同层级的控件 —— 这正是"配色怪"的来源之一。 */
+   看着像两种不同层级的控件 —— 这正是"配色怪"的来源之一。
+   危险文字色统一用 --red(与 .action-icon.danger 同一个令牌):此处原先用 --err-text,
+   它比 --red 多掺一档 text、更灰,于是文字删除按钮"偏淡"、图标删除按钮"偏鲜艳",
+   同一屏出现两种红。现全部收敛到 --red。 */
 button.danger {
   background: var(--fill-2);
-  border-color: var(--line); color: var(--err-text);
+  border-color: var(--line); color: var(--red);
 }
 button.danger:hover:not(:disabled) {
   border-color: var(--line-strong);
@@ -161,6 +164,8 @@ button.ghost:hover:not(:disabled) {
   background: var(--glass-bg-hover); border-color: var(--line);
 }
 button.ghost.sm, button.chip-btn { padding: 3px 9px; font-size: 12px; }
+/* 图标 + 文字的按钮:图标已是内联 SVG,交给按钮自己居中排版 —— 走行内基线的话图标会顶高一行 */
+button.icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
 button.link { background: transparent; border: none; color: var(--accent-2); padding: 4px 0; }
 button.link:hover:not(:disabled) {
   background: transparent; border: none; color: var(--accent);
@@ -280,11 +285,17 @@ button.action-icon { border-color: transparent; }
   background: var(--glass-bg-hover); color: var(--accent-2);
 }
 .ctxmenu button:disabled { opacity: .4; cursor: default; }
+/* 右键菜单里的危险项(删除会话/文件、关闭全部标签):静止即红。
+   菜单项本身透明、不套按钮底,若不显式给色会继承上面的 .ctxmenu button { color: --text },
+   在深色主题里就是一枚"白字删除"。 */
+.ctxmenu button.danger { color: var(--red); }
 .ctxmenu button.danger:hover:not(:disabled) { color: var(--red); background: var(--danger-soft); }
 .ctx-sep { height: 1px; background: var(--line-soft); margin: 3px 5px; }
-/* 图标列固定宽度,统一的文字起点(编辑器/文件管理器右键菜单共用) */
+/* 图标列固定宽度,统一的文字起点(编辑器/文件管理器右键菜单共用)。
+   图标已从 emoji 换成内联 SVG:用 inline-flex 让 18px 槽内垂直+水平都居中 */
 .ctxmenu .ctx-ico {
-  flex: none; width: 18px; text-align: center; margin-right: 2px;
+  flex: none; width: 18px; margin-right: 2px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 
 /* ---- 弹窗:压暗遮罩 + 实色面板 ---- */
@@ -507,28 +518,27 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 .provider-add .pa-icon { font-size: 15px; }
 .provider-empty { border: 1px dashed var(--line-dash); border-radius: var(--r-md); padding: 14px; text-align: center; color: var(--muted); font-size: 12px; }
 
-/* ---- 滚动条:原生隐藏 + 覆盖式悬浮滚动条(引擎见 scrollbar-ui.ts) ----
-   原生滚动条不参与布局,滚动条出现/消失不会引起页面宽度抖动;
-   滚动时由 JS 在容器边缘悬浮显示细窄拇指,停止 3s 后自动淡出。 */
+/* ============================================================
+   滚动条:全站唯一规格(要改粗细/配色只改这一处)
+   - 视觉拇指 4px、胶囊圆角、轨道透明;静止 --scroll-thumb、悬停 --scroll-thumb-hover
+     (色值唯一来自 theme/themes.ts 的派生,规则见 DESIGN_SYSTEM.md)
+   - 普通容器:原生条隐藏(不占布局),滚动时由引擎(scrollbar-ui.ts)在容器内边缘
+     离 2px 处悬浮画出同一枚拇指,停止 3s 淡出
+   - 原生例外(终端/文本域/表格/编辑器:需要真实占位与可拖拽的条):条宽 6px、
+     拇指可见宽同样 4px(1px 透明边框 + background-clip)、同一配色与圆角
+   ============================================================ */
+:root {
+  --scroll-size: 4px;    /* 视觉拇指粗细(覆盖式与原生例外取同一个值) */
+  --scroll-gap: 2px;     /* 覆盖式拇指离容器内边缘的间距 */
+  --scroll-bar: 6px;     /* 原生例外的滚动条占位宽 = 4px 拇指 + 左右各 1px 透明边 */
+  --scroll-gutter: 6px;  /* 内容侧留白 = 拇指 4px + 间距 2px(不让悬浮拇指压住内容) */
+}
+
+/* 1) 默认:原生条彻底隐藏(不参与布局,出现/消失不引起宽度抖动) */
 ::-webkit-scrollbar { width: 0; height: 0; background: transparent; }
 * { scrollbar-width: none; }
 
-/* 例外:终端 / 文本域 / 表格保留细窄原生滚动条,不打乱其内部指标 */
-.xterm-viewport::-webkit-scrollbar,
-textarea::-webkit-scrollbar,
-.md table::-webkit-scrollbar { width: 6px; height: 6px; }
-.xterm-viewport::-webkit-scrollbar-track,
-textarea::-webkit-scrollbar-track,
-.md table::-webkit-scrollbar-track { background: transparent; }
-.xterm-viewport::-webkit-scrollbar-thumb,
-textarea::-webkit-scrollbar-thumb,
-.md table::-webkit-scrollbar-thumb {
-  background: var(--scroll-thumb); border-radius: 3px;
-}
-.xterm-viewport, .md table { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb-x) transparent; }
-textarea { scrollbar-width: auto; }
-
-/* 自定义覆盖式滚动条拇指(scrollbar-ui.ts 动态创建) */
+/* 2) 覆盖式悬浮拇指(scrollbar-ui.ts 动态创建) */
 .ob-thumb {
   position: absolute;
   z-index: 45;
@@ -540,11 +550,46 @@ textarea { scrollbar-width: auto; }
   transition: opacity .18s ease;
   touch-action: none;
 }
-.ob-thumb.ob-v { top: 0; right: 2px; width: 4px; }
-.ob-thumb.ob-h { left: 0; bottom: 2px; height: 4px; }
+.ob-thumb.ob-v { top: 0; right: var(--scroll-gap); width: var(--scroll-size); }
+.ob-thumb.ob-h { left: 0; bottom: var(--scroll-gap); height: var(--scroll-size); }
 .ob-thumb.ob-on { opacity: 1; pointer-events: auto; }
 .ob-thumb:hover, body.ob-dragging .ob-thumb { background: var(--scroll-thumb-hover); }
 body.ob-dragging { cursor: grabbing; user-select: none; }
+
+/* 3) 原生例外:粗细/配色/圆角与覆盖式拇指逐项对齐。
+   这里必须写 scrollbar-width:auto —— Chromium 只在 auto 下才认 ::-webkit-scrollbar;
+   写成 thin 会切回平台滚动条(实测 10px 且忽略下面的拇指样式),那就又变成两套了。 */
+.xterm-viewport::-webkit-scrollbar,
+textarea::-webkit-scrollbar,
+.md table::-webkit-scrollbar,
+.fviewer .cm-scroller::-webkit-scrollbar { width: var(--scroll-bar); height: var(--scroll-bar); }
+.xterm-viewport::-webkit-scrollbar-track,
+textarea::-webkit-scrollbar-track,
+.md table::-webkit-scrollbar-track,
+.fviewer .cm-scroller::-webkit-scrollbar-track { background: transparent; }
+.xterm-viewport::-webkit-scrollbar-thumb,
+textarea::-webkit-scrollbar-thumb,
+.md table::-webkit-scrollbar-thumb,
+.fviewer .cm-scroller::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border: 1px solid transparent;   /* 6px 条里画出 4px 拇指,与覆盖式粗细一致 */
+  background-clip: padding-box;
+  border-radius: var(--r-pill);
+}
+.xterm-viewport::-webkit-scrollbar-thumb:hover,
+textarea::-webkit-scrollbar-thumb:hover,
+.md table::-webkit-scrollbar-thumb:hover,
+.fviewer .cm-scroller::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+.xterm-viewport, textarea, .md table, .fviewer .cm-scroller { scrollbar-width: auto; }
+
+/* Firefox 没有 ::-webkit-scrollbar,只能回落平台细条:
+   配色保持同一套(取"无悬停态"的 --scroll-thumb-x),无法做 6px 与悬停态 */
+@supports not selector(::-webkit-scrollbar) {
+  .xterm-viewport, textarea, .md table, .fviewer .cm-scroller {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb-x) transparent;
+  }
+}
 
 /* ============================================================
    移动端基础(断点与 App.scss 保持一致:<768 phone / 768-1279 tablet / ≥1280 desktop)

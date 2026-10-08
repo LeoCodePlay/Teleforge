@@ -172,7 +172,7 @@ export default function SkillsPanel({ connected }: { connected: boolean }) {
               ) : (
                 <>
                   <button className="sm" onClick={() => setModal({ skill: s })}>编辑</button>
-                  <button className="sm" disabled={!connected && !isLocal(s.source)} onClick={() => onDelete(s)}>删除</button>
+                  <button className="sm danger" disabled={!connected && !isLocal(s.source)} onClick={() => onDelete(s)}>删除</button>
                 </>
               )}
             </div>

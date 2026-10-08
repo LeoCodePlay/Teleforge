@@ -124,11 +124,19 @@ export interface KeyState {
  *  两个标记的语义不同(充值 vs 换 Key),但过滤口径一致 —— 统一走这里避免两处判断走偏。 */
 export const keyUnusable = (st?: KeyState): boolean => st?.exhausted === true || st?.invalid === true;
 
+/** 提供方协议:决定请求端点、鉴权头与请求/响应体的方言。
+ *  openai = OpenAI 兼容(/chat/completions,绝大多数网关与国产厂商都走它);
+ *  anthropic = Anthropic Messages(/v1/messages,Claude 官方及兼容该协议的网关);
+ *  gemini = Google Gemini 原生(generateContent/streamGenerateContent)。 */
+export type LlmProtocol = 'openai' | 'anthropic' | 'gemini';
+
 /** LLM 提供商(预置 + 用户自定义,userProviders 来自服务端配置文件) */
 export interface LlmProvider {
   id: string;
   name: string;
   baseUrl: string;
+  /** 该提供方使用的协议;缺省(旧配置)按 openai 处理 */
+  protocol?: LlmProtocol;
   models: string[];
   apiKey?: string;
   /** 多个 API Key(轮询用):某个 Key 余额不足时自动切换到下一个 */
@@ -145,6 +153,8 @@ export interface LlmProvider {
 export interface ProviderDraft {
   name: string;
   baseUrl: string;
+  /** 协议(见 LlmProtocol);表单总是显式给出 */
+  protocol: LlmProtocol;
   models: string[];
   apiKey: string;
   /** 多个 API Key(轮询用);apiKey 由服务端对齐为 apiKeys[0] */

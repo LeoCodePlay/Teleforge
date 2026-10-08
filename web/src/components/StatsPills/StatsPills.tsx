@@ -1,5 +1,5 @@
 // 对话统计的两个胶囊(照搬 deepseek-harness 的 StatsPills),铺在对话面板最底一行:
-//   ⏱ 1 轮 88 步 · 243 tok/s      🗄 13.2M tok · 缓存命中 98%
+//   ⟨秒表⟩ 1 轮 88 步 · 243 tok/s      ⟨数据仓⟩ 13.2M tok · 缓存命中 98%
 // 设计要点(每条都有理由,改前先读):
 //  - **始终占位显示**:两个胶囊从会话一开始就渲染(一步没跑显示 `0 轮 0 步`,
 //    没有计费显示 `0 tok`)—— 统计行的高度恒定,首批统计到齐时不会把输入区
@@ -14,6 +14,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { SessionStatsInfo, TokenUsageTotals } from '../../types';
+import { IconDatabase16, IconStopwatch16 } from '../icons/icons';
 import {
   formatCacheHitPercent, formatDuration, formatExactTokens, formatTokens, formatTokensPerSecond
 } from './tokenFormat';
@@ -43,7 +44,8 @@ function decodeSpeed(stats: SessionStatsInfo): string | null {
 /** 一个可点开的统计胶囊:点击在锚点旁弹出明细 */
 function Pill({ id, icon, label, title, ariaLabel, children }: {
   id: string;
-  icon: string;
+  /** 前导图标(项目的 16 号线性图标;统计行传 12 号尺寸) */
+  icon: React.ReactNode;
   label: React.ReactNode;
   title: string;
   ariaLabel: string;
@@ -136,13 +138,13 @@ export function ActivityPill({ stats }: { stats: SessionStatsInfo }) {
   if (!hasDetail) {
     return (
       <span className="stat-pill-anchor" data-stat="activity">
-        <span className="stat-pill static"><span className="stat-pill-icon" aria-hidden>⏱</span>
+        <span className="stat-pill static"><span className="stat-pill-icon" aria-hidden><IconStopwatch16 size={12} /></span>
           <span className="stat-pill-label">{label}</span></span>
       </span>
     );
   }
   return (
-    <Pill id="activity" icon="⏱" label={label} title="对话统计" ariaLabel={aria}>
+    <Pill id="activity" icon={<IconStopwatch16 size={12} />} label={label} title="对话统计" ariaLabel={aria}>
       <dl className="stat-dialog-details" data-session-stats-details>
         <Row label="模型耗时" value={stats.llmMs > 0 ? formatDuration(stats.llmMs) : null} />
         {/* 口径说明写进标签:工具是并行执行的,这是各次耗时之和,不是墙钟等待 */}
@@ -168,13 +170,13 @@ export function UsagePill({ usage }: { usage: TokenUsageTotals }) {
   if (billed === 0 && usage.outputTokens === 0) {
     return (
       <span className="stat-pill-anchor" data-stat="usage">
-        <span className="stat-pill static"><span className="stat-pill-icon" aria-hidden>🗄</span>
+        <span className="stat-pill static"><span className="stat-pill-icon" aria-hidden><IconDatabase16 size={12} /></span>
           <span className="stat-pill-label">{label}</span></span>
       </span>
     );
   }
   return (
-    <Pill id="usage" icon="🗄" label={label} title="Token 用量"
+    <Pill id="usage" icon={<IconDatabase16 size={12} />} label={label} title="Token 用量"
       ariaLabel={hitLabel === null ? `${total} tok` : `${total} tok · ${hitLabel}`}>
       <div className="stat-dialog-total">{formatExactTokens(billed + usage.outputTokens)} tok</div>
       <dl className="stat-dialog-details" data-session-stats-usage>
@@ -192,7 +194,7 @@ export function UsagePill({ usage }: { usage: TokenUsageTotals }) {
 
 /**
  * 单轮用量胶囊(照搬 dsh 的 TurnUsagePanel):挂在**每条回复**的操作栏末尾,形如
- *   🗄 用量 31.2M tok
+ *   ⟨数据仓⟩ 用量 31.2M tok
  * 点击展开「本轮用量」明细(缓存命中 / 输入(未命中) / 缓存读取 / 缓存写入 / 输出)。
  *
  * 与会话级 UsagePill 的区别只在口径:这里是**一轮**(该轮所有步 + 重试的多次尝试),
@@ -204,7 +206,7 @@ export function TurnUsagePill({ usage }: { usage: TokenUsageTotals }) {
   const hit = cacheHitText(usage);
   const total = formatTokens(billed + usage.outputTokens);
   return (
-    <Pill id="turn-usage" icon="🗄" label={`用量 ${total} tok`} title="本轮用量"
+    <Pill id="turn-usage" icon={<IconDatabase16 size={12} />} label={`用量 ${total} tok`} title="本轮用量"
       ariaLabel={hit === null ? `本轮用量 ${total} tok` : `本轮用量 ${total} tok · 缓存命中 ${hit}%`}>
       <div className="stat-dialog-total">{formatExactTokens(billed + usage.outputTokens)} tok</div>
       <dl className="stat-dialog-details" data-turn-usage-details>

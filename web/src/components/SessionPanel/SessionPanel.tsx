@@ -7,6 +7,9 @@ import { sessionDot, sessionDotClass, SESSION_DOT_TIP } from '../../utils/sessio
 import { useGroupReorder } from '../../hooks/useGroupReorder';
 import { orderGroups } from '../../utils/sessionGroupOrder';
 import { scrollMovesPanel } from '../../utils/scrollClose';
+import DirBrowser from '../DirBrowser/DirBrowser';
+import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
+import { IconCloud16, IconFolder16, IconSearchOutline16 } from '../icons/icons';
 import './SessionPanel.scss';
 
 interface SessionPanelProps {
@@ -22,8 +25,12 @@ interface SessionPanelProps {
   /** 当前作用域键(username@host:port 或 'local');用于识别其他服务器后台运行的会话 */
   scopeKey?: string | null;
   onNew: () => void;
-  /** 分组内「＋」:切到该分组工作区后新建会话(工作区参数二选一,未指定工作区组回落 onNew) */
-  onNewInWorkspace?: (ws: string | null, localWs: string | null) => void;
+  /**
+   * 分组内「＋」:切到该分组工作区后新建会话(工作区参数二选一,未指定工作区组回落 onNew)。
+   * side 标明点击发生在哪个分区:上层据此把**另一侧**工作区置为「不使用工作区」,
+   * 否则新会话会继承连接级残留的另一侧工作区,被归到对面分区去(见 App.newInWorkspace)。
+   */
+  onNewInWorkspace?: (ws: string | null, localWs: string | null, side: 'remote' | 'local') => void;
   /** 点击其他服务器正在运行的会话:切回该服务器并打开它 */
   onSwitchForeign?: (id: string, connKey: string) => void;
   onSwitch: (id: string) => void;
@@ -37,6 +44,19 @@ interface SessionPanelProps {
   onDeleteGroup?: (ids: string[], ws: string | null, local: boolean) => void;
   /** 分组菜单「在资源管理器打开」:仅本地工作区分组可用(path = 该分组的本地工作区目录) */
   onRevealGroup?: (path: string) => void;
+  /** 远程家目录(远程目录浏览弹窗的起点回落) */
+  remoteHome?: string | null;
+  /** 本机家目录(本地目录浏览弹窗的起点回落) */
+  localHome?: string | null;
+  /** 当前会话已绑定的工作区:作为对应目录浏览弹窗的起点 */
+  remoteWorkspace?: string | null;
+  localWorkspace?: string | null;
+  /**
+   * 分区「添加工作区」选定目录后:切到该工作区并新建一个对话(远程/本地两个动作分开,
+   * 因为「添加远程工作区」与「添加本地工作区」是两件事,选中后的绑定目标也不同)。
+   */
+  onAddRemoteWorkspace?: (path: string) => void;
+  onAddLocalWorkspace?: (path: string) => void;
 }
 
 // 三点菜单的预估尺寸(用于视口边界夹取/向上翻转;宽对齐 .ctxmenu 的 min-width 175px)
@@ -140,7 +160,7 @@ function SessionRow({ session: s, active, running, askWaiting, termRunning, onSw
       </span>
       <span className="s-meta">{fmtTime(s.updatedAt)}</span>
       <span className="s-actions" onClick={(e) => e.stopPropagation()}>
-        <button className="action-icon s-more" data-tip="更多操作" onClick={(e) => onMenu(e, s)}>⋮</button>
+        <button className="action-icon s-more" aria-label="更多操作" onClick={(e) => onMenu(e, s)}>⋮</button>
       </span>
     </div>
   );
@@ -159,7 +179,8 @@ interface GroupSortBinding {
 }
 interface WorkspaceGroupProps {
   label: string;
-  icon: string;
+  /** 分区图标(内联 SVG:远程=云 / 本地=文件夹),按分区固定,不随分组变 */
+  icon: React.ReactNode;
   sessions: Session[];
   expanded: boolean;
   activeId: string | null;
@@ -195,7 +216,8 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
           </svg>
           <span className="s-group-ico">{icon}</span>
         </span>
-        <span className="s-group-title" data-tip={label}>{label}</span>
+        {/* 工作区名已在标题里完整显示,只有被省略号截断时才弹完整路径,避免"显示什么就弹什么" */}
+        <span className="s-group-title" data-tip={label} data-tip-ellipsis>{label}</span>
         {/* 尾部只留一格:「运行状态点 + 任务数」与「在此工作区新建会话」按钮叠放在同一格交叉切换。
             悬停分组头时按钮旋入、计数淡出;移开则还原——按钮不再隐形常驻占位,右侧不会空出一片 */}
         <span className="s-group-tail" onClick={(e) => e.stopPropagation()}>
@@ -255,18 +277,98 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
   );
 }
 
-// 任务列表面板(原「历史会话」):按工作区把会话分组展示(参照 deepseek-harness 侧栏会话树)。
-// - 「远程任务列表」= 绑定了远程工作区的会话(按远程工作区分组);
-//   「本地任务列表」= 无远程工作区的会话(按本地工作区分组)——连接服务器时两列表分开显示,
-//   本地列表不隐藏;未连接时只有本地列表。
-// - 分组头可折叠(折叠状态存 localStorage);当前会话所在组自动展开。
+// 分区工具行(布局照 deepseek-harness 侧栏「工作区」那一行):标题 + 搜索 + 添加工作区。
+// 远程与本地各有一行,因为「添加远程工作区」「添加本地工作区」是两个不同的动作
+// (一个挑服务器上的目录、一个挑本机目录),挂在各自的标题上就不用先猜"现在加的是哪一侧"。
+// 搜索只搜本分区里的会话名称(与 dsh 的「搜索会话名称」同口径);展开时右上的添加按钮让位。
+interface SectionHeadProps {
+  /** 分区标题(远程工作区 / 本地工作区) */
+  label: string;
+  query: string;
+  onQuery: (v: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  addLabel: string;
+  onAdd: () => void;
+}
+
+function SectionHead({ label, query, onQuery, open, onOpenChange, addLabel, onAdd }: SectionHeadProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const close = () => { onQuery(''); onOpenChange(false); };
+  // 收起时顺手清空:留着上次的词,下次展开会突然只剩几条会话,像是列表丢了
+  const toggle = () => {
+    if (open) { close(); return; }
+    onOpenChange(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+  // 焦点离开整块搜索区就回到原样。判 relatedTarget 而不是直接收起:
+  // 点「✕」或放大镜时焦点是移到框内的按钮上,先收起会把这两个按钮从 DOM 里摘掉,
+  // 后续 click 就再也落不到它们身上(那两下点击就白点了)。
+  const onFocusOut = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!open) return;
+    if (searchRef.current?.contains(e.relatedTarget as Node | null)) return;
+    close();
+  };
+  return (
+    <div className="s-sec-head">
+      <span className="s-sec-label">{label}</span>
+      <div ref={searchRef} className={`s-search${open ? ' open' : ''}`} onBlur={onFocusOut}>
+        <button type="button" className="action-icon s-search-btn" aria-expanded={open}
+          aria-label={open ? '清空并收起搜索' : `搜索${label}里的会话名称`}
+          onClick={toggle}>
+          <IconSearchOutline16 size={open ? 12 : 14} />
+        </button>
+        <input ref={inputRef} className="s-search-input" type="text" value={query}
+          placeholder="搜索会话名称" tabIndex={open ? 0 : -1}
+          onChange={(e) => onQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Escape') close(); }} />
+        {open && (
+          <button type="button" className="action-icon s-search-clear" aria-label="清除搜索"
+            onClick={close}>
+            <svg width={10} height={10} viewBox="0 0 10 10" fill="none" aria-hidden>
+              <path d="M1.6 1.6l6.8 6.8M8.4 1.6l-6.8 6.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
+      <div className={`s-sec-actions${open ? ' hide' : ''}`}>
+        <button type="button" className="action-icon s-sec-add" aria-label={addLabel}
+          data-tip={addLabel} onClick={onAdd}>
+          {/* 文件夹 + 加号:与「在此工作区新建会话」的纯加号区分开(那是往已有工作区里加对话) */}
+          <svg width={15} height={15} viewBox="0 0 14 14" fill="none" aria-hidden>
+            <path d="M1.6 3.6c0-.5.4-.9.9-.9h2.2l1.1 1.2h5.7c.5 0 .9.4.9.9v5.7c0 .5-.4.9-.9.9H2.5c-.5 0-.9-.4-.9-.9V3.6Z"
+              stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+            <path d="M7 6.2v3.1M5.45 7.75h3.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// 会话面板:按工作区把会话分组展示(参照 deepseek-harness 侧栏会话树)。
+// - 「远程工作区」= 绑定了远程工作区的会话(按远程工作区分组);
+//   「本地工作区」= 无远程工作区的会话(按本地工作区分组)——连接服务器时两块分开显示,
+//   本地块不隐藏;未连接时只有本地块。
+// - 每个块的标题行同时是它的工具行(搜索 + 添加工作区,布局照 dsh 侧栏「工作区」那一行):
+//   搜索只过滤本块的会话名称;「添加工作区」挑目录后在该工作区开一个新对话。
+// - 分组头可折叠(折叠状态存 localStorage);当前会话所在组自动展开;搜索中一律展开。
 // - 分组内「＋」= 切到该工作区后新建会话;行尾「⋯」仍是重命名/删除。
 // - 其他服务器后台运行的会话保持跨服务器可见,点击切回原服务器。
 // - 工作区分组的顺序固定(按路径字典序,不随会话活跃时间抖动),可拖拽自定义:
 //   桌面按住分组头拖,触屏长按分组头弹菜单、再由「拖动排序」起拖;顺序存 localStorage,
 //   只有「会话行」按最近活跃排序。
 // - 分组头右键(桌面)/长按(触屏)弹分组菜单:删除分组 = 该组全部对话记录 + 该工作区历史记录。
-export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], termRunningIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete, onDeleteGroup, onRevealGroup }: SessionPanelProps) {
+export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], termRunningIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete, onDeleteGroup, onRevealGroup, remoteHome, localHome, remoteWorkspace, localWorkspace, onAddRemoteWorkspace, onAddLocalWorkspace }: SessionPanelProps) {
+  // 分区工具行的状态:每个分区各自的搜索词/展开态,以及各自的「添加工作区」目录弹窗。
+  // 分开存是刻意的:远程与本地两侧互不影响,收起远程的搜索不会把本地的词也清掉。
+  const [remoteQuery, setRemoteQuery] = useState('');
+  const [localQuery, setLocalQuery] = useState('');
+  const [remoteSearchOpen, setRemoteSearchOpen] = useState(false);
+  const [localSearchOpen, setLocalSearchOpen] = useState(false);
+  const [remotePickOpen, setRemotePickOpen] = useState(false);
+  const [localPickOpen, setLocalPickOpen] = useState(false);
   // 三点菜单:当前展开的会话 + 屏幕坐标(portal 到 body、fixed 定位,不被侧栏 overflow 裁剪)
   const [menu, setMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -360,6 +462,14 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     onLongPress: (key, sectionId, x, y) => openGroupMenuAt(x, y, groupMetaRef.current.get(key), key, sectionId)
   });
 
+  // 分区搜索:只按会话名称匹配(与 dsh 的「搜索会话名称」同口径)。空词 = 不过滤。
+  const filterByTitle = (list: Session[], query: string) => {
+    const k = query.trim().toLowerCase();
+    return k ? list.filter((s) => String(s.title || '').toLowerCase().includes(k)) : list;
+  };
+  const remoteSearching = !!remoteQuery.trim();
+  const localSearching = !!localQuery.trim();
+
   const groupSessions = (list: Session[], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string) => {
     const groups = new Map<string, Session[]>();
     for (const s of list) {
@@ -389,8 +499,9 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     for (const g of groups) if (!used.has(g[0])) out.push(g); // 拖拽中才出现的新分组补在末尾
     return out;
   };
-  const remoteGroups = withPreview(sortGroups(groupSessions(remoteSessions, (s) => s.workspace, remoteKey), remoteSection, (s) => s.workspace), remoteSection);
-  const localGroups = withPreview(sortGroups(groupSessions(localSessions, (s) => s.localWorkspace, localKey), localSection, (s) => s.localWorkspace), localSection);
+  // 搜索在分组之前生效:命中的会话照常按工作区归组,只是组内只剩命中的那几条
+  const remoteGroups = withPreview(sortGroups(groupSessions(filterByTitle(remoteSessions, remoteQuery), (s) => s.workspace, remoteKey), remoteSection, (s) => s.workspace), remoteSection);
+  const localGroups = withPreview(sortGroups(groupSessions(filterByTitle(localSessions, localQuery), (s) => s.localWorkspace, localKey), localSection, (s) => s.localWorkspace), localSection);
 
   // 分组元信息:显示名与「＋ 新建」的工作区参数都从组内首条会话派生(与 groupSessions 的分组依据一致)。
   // 「未指定工作区」与「不在工作区对话」哨兵虽是真值但都不是目录:它们不进工作区历史记录,
@@ -514,8 +625,6 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   };
   const cancelRename = () => setRename(null);
 
-  const totalVisible = mine.length;
-  const noTasks = totalVisible === 0;
   // 分组内有任务在跑:整组删除不可用(与服务端「运行中禁止删除会话」同一条约束)
   const groupBusy = !!groupMenu && groupMenu.ids.some((id) => busyIds.includes(id));
   // 「在资源管理器打开」不可用的原因(undefined = 可用):远程工作区在本机没有对应目录,
@@ -524,11 +633,12 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     : !groupMenu.local ? '远程工作区在本地没有对应目录,无法在资源管理器打开'
       : groupMenu.ws ? undefined : '该分组未绑定具体工作区目录';
 
-  // 渲染一组会话(共用分组头/行渲染);分组显示名与「＋ 新建」的工作区参数由 groupMeta 派生
-  const renderGroup = (groups: GroupMeta[], icon: string, newInGroup: (ws: string | null) => void) =>
+  // 渲染一组会话(共用分组头/行渲染);分组显示名与「＋ 新建」的工作区参数由 groupMeta 派生。
+  // searching = 该分区正在搜索:命中项可能散落在被收起的组里,一律强制展开,否则搜了也看不见。
+  const renderGroup = (groups: GroupMeta[], icon: React.ReactNode, newInGroup: (ws: string | null) => void, searching: boolean) =>
     groups.map((g) => (
       <WorkspaceGroup key={g.key} label={g.label} icon={icon} sessions={g.list}
-        expanded={isExpanded(g.key)}
+        expanded={searching || isExpanded(g.key)}
         activeId={activeId} busyIds={busyIds} askPendingIds={askPendingIds} termRunningIds={termRunningIds}
         sort={{
           groupKey: g.key,
@@ -553,25 +663,36 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
 
   return (
     <div className="panel s-panel">
-      <div className="panel-title row" style={{ justifyContent: 'space-between' }}>
-        <span>任务列表</span>
-        <button className="sm" onClick={() => onNew()}>＋ 新建</button>
-      </div>
-      {scopeLabel && <div className="s-scope">📡 {scopeLabel}</div>}
+      {/* 服务器标识只在连着的时候才有信息量:未连接时它就是「本地工作区」四个字,
+          和下方的本地分区标题重复,所以那会儿不渲染 */}
+      {inRemoteScope && scopeLabel && <div className="s-scope">📡 {scopeLabel}</div>}
       <div className={`s-list${drag ? ' reordering' : ''}`} ref={listRef}>
-        {noTasks && <div className="muted" style={{ fontSize: 12 }}>暂无任务,点「＋ 新建」开始</div>}
-        {remoteGroups.length > 0 && (
+        {/* 分区按「远程工作区 / 本地工作区」两块排:每块的标题行就是它的工具行(搜索 + 添加工作区),
+            添加时的目标因此一眼可辨。未连服务器时远程块不渲染 —— 那一侧的目录根本读不到。 */}
+        {inRemoteScope && (
           <div className="s-section">
-            <div className="s-section-title">远程任务列表</div>
-            {renderGroup(remoteMeta, '🖥', (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null); else onNew(); })}
+            <SectionHead label="远程工作区" query={remoteQuery} onQuery={setRemoteQuery}
+              open={remoteSearchOpen} onOpenChange={setRemoteSearchOpen}
+              addLabel="添加远程工作区,并在这里新建对话" onAdd={() => setRemotePickOpen(true)} />
+            {remoteGroups.length === 0 && (
+              <div className="s-sec-empty">
+                {remoteSearching ? '没有匹配的会话' : '还没有远程工作区,点右侧 ＋ 挑一个服务器上的目录'}
+              </div>
+            )}
+            {renderGroup(remoteMeta, <IconCloud16 size={14} />, (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null, 'remote'); else onNew(); }, remoteSearching)}
           </div>
         )}
-        {localGroups.length > 0 && (
-          <div className="s-section">
-            <div className="s-section-title">本地任务列表</div>
-            {renderGroup(localMeta, '📂', (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws); else onNew(); })}
-          </div>
-        )}
+        <div className="s-section">
+          <SectionHead label="本地工作区" query={localQuery} onQuery={setLocalQuery}
+            open={localSearchOpen} onOpenChange={setLocalSearchOpen}
+            addLabel="添加本地工作区,并在这里新建对话" onAdd={() => setLocalPickOpen(true)} />
+          {localGroups.length === 0 && (
+            <div className="s-sec-empty">
+              {localSearching ? '没有匹配的会话' : '还没有本地工作区,点右侧 ＋ 挑一个本机目录'}
+            </div>
+          )}
+          {renderGroup(localMeta, <IconFolder16 size={14} />, (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws, 'local'); else onNew(); }, localSearching)}
+        </div>
         {foreign.length > 0 && (
           <div className="s-foreign">
             <div className="s-foreign-title">其他服务器后台运行中</div>
@@ -590,6 +711,18 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
           </div>
         )}
       </div>
+
+      {/* 「添加工作区」的目录弹窗:远程挑服务器目录、本地挑本机目录,选定后交给上层切换工作区并开新对话 */}
+      {remotePickOpen && (
+        <DirBrowser initial={remoteWorkspace || remoteHome || '/'} home={remoteHome}
+          onClose={() => setRemotePickOpen(false)}
+          onPick={(p) => { setRemotePickOpen(false); onAddRemoteWorkspace?.(p); }} />
+      )}
+      {localPickOpen && (
+        <LocalDirBrowser initial={localWorkspace || localHome || undefined} home={localHome}
+          onClose={() => setLocalPickOpen(false)}
+          onPick={(p) => { setLocalPickOpen(false); onAddLocalWorkspace?.(p); }} />
+      )}
 
       {/* 三点下拉菜单:portal 到 body,与右键菜单同款悬浮厚玻璃 */}
       {menu && createPortal(

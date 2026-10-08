@@ -49,7 +49,7 @@
   .preview-chip { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; display: block; padding: 4px 8px; }
   .preview-chip-x { display: none; }
 }
-/* 标签条上「🕘 自动化任务」的小红点:有"到点却没跑"的任务时亮起(入口就在「⌨️ 终端」右边) */
+/* 标签条上「自动化任务」的小红点:有"到点却没跑"的任务时亮起(入口就在「终端」右边) */
 .btab-dot {
   position: absolute; top: -2px; right: -4px;
   width: 6px; height: 6px; border-radius: 50%;
@@ -117,7 +117,7 @@ body.splitting * { cursor: row-resize !important; }
 /* ---- 标签页条:浏览器式标签(左侧固定页:AI 编程助手/命令台;右侧文件页:可拖拽排序/关闭) ----
    固定段与滚动段分离:固定页永远显示;文件页多时只滚动文件段。
    滚动条用项目悬浮引擎(scrollbar-ui.ts):绝对定位悬浮,不占布局空间,标签条高度恒定;
-   原生滚动条彻底隐藏(不参与布局,高度绝不变化);悬浮拇指在下方覆写调细到 3px */
+   原生滚动条彻底隐藏(不参与布局,高度绝不变化);悬浮拇指走全站统一规格(见 styles.scss) */
 .tabstrip {
   display: flex; align-items: flex-end; gap: 2px;
   flex: none; padding: 8px 10px 0;
@@ -134,10 +134,6 @@ body.splitting * { cursor: row-resize !important; }
   scrollbar-width: none;               /* Firefox:隐藏原生滚动条 */
 }
 .tabstrip-scroll::-webkit-scrollbar { display: none; }  /* Chrome/Safari/Edge:隐藏原生滚动条 */
-/* 悬浮滚动条引擎的拇指在本区调细:3px 高、贴底,比默认 4px 更纤细;
-   拇指绝对定位悬浮于容器底缘,不占布局空间,滚动时才出现 */
-.tabstrip-scroll .ob-thumb.ob-h { height: 3px; bottom: 0; }
-.tabstrip-scroll .ob-thumb.ob-h:hover { height: 4px; }
 /* 「＋」手动打开浏览器预览:与浏览器「新建标签」同位置,固定在滚动段右侧,不随标签滚动
    同样要清掉全局 button 的 padding/阴影(border-box 下会吃掉内容盒) */
 .tabstrip-add {
@@ -168,7 +164,10 @@ body.splitting * { cursor: row-resize !important; }
   border-color: var(--accent-border);
 }
 .btab.pinned { color: var(--text); }
-.btab-icon { flex: none; font-size: 12px; }
+/* 图标槽:内联 SVG 与字形(文件标签的媒体类型字形)共用一格,flex 居中对齐
+   position:relative —— .btab-dot 的定位基准(此前没有定位祖先,红点会被甩到布局右上角) */
+.btab-icon { position: relative; flex: none; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+.btab-icon svg { display: block; }
 .btab-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btab-close {
   flex: none; display: flex; align-items: center; justify-content: center;

@@ -23,12 +23,24 @@ const pending = new Map<string, PendingEntry>(); // askId -> PendingEntry
 // 单次提问最长等待 10 分钟;超时自动取消(短于注册表兜底超时,保证先清理 pending 再报错)
 const ASK_TIMEOUT_MS = 600_000;
 
-// 规范化模型传入的题面:只保留前端渲染需要的字段(非法项静默丢弃)
+/** 题目 id 兜底:缺失就随机生成,与已用过的重名就加序号,保证批次内唯一 */
+function uniqueId(raw: string, used: Set<string>): string {
+  const base = raw || `q${Math.random().toString(36).slice(2, 7)}`;
+  let id = base;
+  for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
+  used.add(id);
+  return id;
+}
+
+// 规范化模型传入的题面:只保留前端渲染需要的字段(非法项静默丢弃)。
+// id 会随答案回显给模型,模型却可能给多道题同一个 id(或干脆不给):这里补成**批次内唯一**,
+// 否则按 id 归档的答案会把两题串成一道(第 1 题的选择跑到第 2 题上)。
 function normalizeQuestions(questions: any[]): any[] {
+  const usedIds = new Set<string>();
   return (Array.isArray(questions) ? questions : [])
     .filter((q) => q && typeof q.question === 'string' && q.question.trim())
     .map((q) => ({
-      id: String(q.id || `q${Math.random().toString(36).slice(2, 7)}`),
+      id: uniqueId(String(q.id ?? '').trim(), usedIds),
       question: String(q.question),
       ...(typeof q.header === 'string' && q.header.trim() ? { header: String(q.header) } : {}),
       // 长正文(如计划模式的计划审阅):前端以等宽正文渲染,上限 20000 字符防止刷屏

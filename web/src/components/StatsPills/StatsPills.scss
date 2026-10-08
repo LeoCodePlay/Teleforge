@@ -19,7 +19,8 @@
 /* 无可展开明细时退化为纯文本:不可点、不显示手型、也没有悬停底色 */
 .stat-pill.static { cursor: default; }
 .stat-pill.static:hover, .stat-pill.static:active { color: var(--muted); background: transparent; }
-.stat-pill-icon { font-size: 11px; line-height: 1; opacity: .85; }
+.stat-pill-icon { display: inline-flex; align-items: center; line-height: 1; opacity: .85; }
+.stat-pill-icon svg { display: block; }
 .stat-pill-label { display: inline-flex; align-items: center; gap: 5px; }
 .stat-sep { opacity: .5; }
 

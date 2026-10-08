@@ -43,7 +43,14 @@
   content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
   width: 2px; height: 15px; border-radius: 0 1px 1px 0; background: var(--accent);
 }
-.settings-menu button span { flex: none; }
+/* 图标槽:定宽 16px(原来放 emoji,字宽随平台漂移),让整列标签左缘严格对齐;
+   图标颜色比文字低一档,选中态跟着整行变强调色 */
+.settings-menu button span {
+  flex: none; width: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--muted);
+}
+.settings-menu button.on span { color: inherit; }
 .settings-menu .menu-cat { font-size: 11px; color: var(--muted); padding: 10px 12px 2px; letter-spacing: .5px; }
 .settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px; }
 

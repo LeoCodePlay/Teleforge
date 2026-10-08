@@ -11,6 +11,10 @@
 }
 .dirlink { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; overflow: hidden; padding: 6px 9px; border-radius: var(--r-sm); cursor: pointer; transition: background .15s; }
 .dirlink > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 弹窗列表行的行内图标(目录 = 文件夹 / 文件 = 文档,与工作区 chip 同一批 SVG):
+   行内元素,靠基线微调与文字对齐(-0.5px 是实测值:图标中心与文字行中心重合,行高不变)。
+   「上级 / 我的电脑 / 家目录」是按钮,走全局 button.icon-btn 的 flex 排版,不用这里 */
+.dirlink-ico { vertical-align: -0.5px; margin-right: 6px; }
 .dirlink:hover { background: var(--glass-bg-hover); }
 .dirlink.disabled { opacity: .6; cursor: default; }
 .spinner-inline { width: 12px; height: 12px; flex: none; border: 1.5px solid var(--accent); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }

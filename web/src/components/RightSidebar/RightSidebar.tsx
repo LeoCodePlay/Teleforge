@@ -160,7 +160,7 @@ export default function RightSidebar({ sid, request, collapsed = false, onToggle
             <>
               {chrome}
               {onToggleCollapse && (
-                <button type="button" className="rsb-collapse" data-tip="收起右侧栏"
+                <button type="button" className="rsb-collapse"
                   aria-label="收起右侧栏" onClick={onToggleCollapse}>›</button>
               )}
             </>
