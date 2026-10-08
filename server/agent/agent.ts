@@ -22,6 +22,9 @@ import { PERMISSION_MODE_META } from './permission.ts';
 import { registerTools, getEnvInfo, getLocalEnvInfo, refreshSkillsCatalog, skillsCatalogStale, getSkillsCatalog, renderSkillCatalog, getSkillFull } from './tools.ts';
 // 子代理的父侧指引:逐字照搬 harness 的 tool:<name> system prompt 段(见 subagent.ts)
 import { SUBAGENT_GUIDANCE } from './subagent.ts';
+// 子会话分支(把子智能体当成一个新的父对话克隆,见 forkChildSession)
+import { childSessionFor } from './subagent-runtime.ts';
+import { get as getSubagentRun } from '../store/subagent-store.ts';
 import { registerScheduleTools } from './schedule-tools.ts';
 import {
   GOAL_GUIDANCE, registerGoalTools, runGoalCommand, goalView, disarmGoal,
@@ -1204,6 +1207,67 @@ export class Agent {
     this._runtimes.set(s.id, newRuntime(cloned));
     this.sessionId = s.id;
     this._applySessionBinding(s.id); // 分支继承源会话的工作区绑定
+    this.emit('agent', { event: 'session_switched', id: s.id });
+    this.emit('agent', { event: 'sessions_changed' });
+    return s;
+  }
+
+  /**
+   * 在**子智能体会话**里分支:把这个子智能体当成一个新的父对话克隆出来。
+   *
+   * 为什么是"子代理自己的日志 + 一条普通新会话"(逐条对齐 dsh 的 `session-controller` fork):
+   * dsh 的分支动作用的就是**当前正在看的那个会话**的 id(`ui-chat/apply.ts` 的 `forkAt` →
+   * `ctx.sessions.fork({ sessionId, atSeq })`,`sessionId` 是视图所属会话,子代理视图里就是子代理),
+   * fork 出来的是一条 seed 了新日志的**普通会话**(`isSeeded: true`,不是子代理 Activation,
+   * 不受只读工具白名单约束)—— 所以在子会话里点「在新对话中分支」,得到的就是"这个子智能体
+   * 变成一个新父对话继续聊",而不是去分支它的父会话。
+   *
+   * 与 {@link forkSession} 的差别只有来源与继承项:
+   * - 事件来自子代理的运行记录(`childSessionFor`:常驻用内存那份,否则按记录重建);
+   * - 工作区/连接继承**派发它的父会话**(子代理本来就是按那套绑定跑的);
+   * - 新会话是普通会话:全量工具、按该会话当前模型,不带任何"子代理"身份。
+   *
+   * @param runId 子代理 id(sa_…)
+   * @param turnIndex 消息面下标(>=0 时截断到该条;缺省 -1 从尾部整体克隆)
+   */
+  forkChildSession(runId: string, turnIndex = -1) {
+    const id = String(runId || '');
+    const child = childSessionFor(id);
+    if (!child || child.events.length === 0) throw new Error('这个子智能体会话没有可分支的对话');
+    const events: any = child.events;
+    let cut = events.length;
+    if (turnIndex >= 0) {
+      const at = cutAtTurn(events, turnIndex);
+      if (at < 0) throw new Error('分支点无效:目标消息不在该子智能体会话中');
+      cut = at;
+    }
+    // 与 forkSession 同一套收尾处理:把切点之后只剩的结构收尾(step/end、turn/end)一并纳入,
+    // 分支日志在原会话的轮边界上完全一致,不靠自愈补收尾
+    let tail = cut;
+    while (tail < events.length && events[tail].type === 'step/end') tail++;
+    if (tail < events.length && events[tail].type === 'turn/end') cut = tail + 1;
+    const log = events.slice(0, cut);
+    const rec = getSubagentRun(id);
+    const parentSid = rec?.sid ? String(rec.sid) : '';
+    const parentMeta = parentSid ? sessions.list().find((s) => s.id === parentSid) : undefined;
+    // 标题:子代理的任务名（记录里的 description）;没记就退回"子智能体",同样去掉旧的 (分支) 后缀
+    const srcTitle = String(rec?.description || '').trim().replace(/\s+/g, ' ') || '子智能体';
+    const base = srcTitle.replace(/\s*\(分支(\d+)?\)\s*$/, '').trim() || '子智能体';
+    const taken = new Set(sessions.list().map((s) => s.title));
+    let title = `${base} (分支)`;
+    for (let n = 2; taken.has(title); n++) title = `${base} (分支${n})`;
+    // 工作区/连接继承父会话(子代理就是按父会话的绑定跑的)
+    const s = sessions.create(title, parentMeta?.connKey ?? this.sessionConnKey(), {
+      workspace: parentMeta?.workspace ?? null,
+      localWorkspace: parentMeta?.localWorkspace ?? null
+    });
+    // forkCut:切点常落在某轮中间(点在用户消息上、点在某步中途),这份切片尾部本就未闭合;
+    // 标记为分支切片后自愈只静默补 turn/end,不再把它当成"进程生成中途被杀"。
+    const cloned = new Session(log.map((e: any) => ({ type: e.type, data: e.data, time: e.time })), { forkCut: true });
+    sessions.saveEvents(s.id, cloned.events);
+    this._runtimes.set(s.id, newRuntime(cloned));
+    this.sessionId = s.id;
+    this._applySessionBinding(s.id);
     this.emit('agent', { event: 'session_switched', id: s.id });
     this.emit('agent', { event: 'sessions_changed' });
     return s;

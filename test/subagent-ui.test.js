@@ -384,6 +384,40 @@ try {
   check('对话里有子代理的工具行与结论',
     (await pane.locator('[data-tool="get_local_info"]').count()) > 0 && paneText.includes('结论:目录可读'), paneText.slice(-120));
   check('输入卡是父会话那一个(可继续发消息)', (await pane.locator('.composer-box textarea').count()) === 1);
+
+  // ---- 子会话里「在新对话中分支」:把这个子智能体当成一个新的父对话克隆 ----
+  // dsh: 分支动作作用于"当前正在看的那个会话"(`ui-chat/apply.ts` 的 forkAt → sessions.fork({sessionId})),
+  // 子代理视图里 sessionId 就是子代理;产出的是 seed 了那份日志的普通会话。所以这里断言:
+  // 分支按钮在子会话里可用 → 点击后退出子会话视图 → 主对话区是一条**普通的新会话**,
+  // 内容来自子代理自己的对话(任务/工具/结论都在),父子会话都还在列表里。
+  console.log('\n[子会话里分支 = 把子智能体当成新的父对话]');
+  {
+    const branch = pane.locator('[aria-label="在新对话中分支"]').first();
+    await branch.waitFor({ timeout: 15000 });
+    check('子会话里能找到「在新对话中分支」(与父会话同一个操作栏)', await branch.isVisible());
+    const sessionsBefore = await page.locator('.session-item').count();
+    await branch.click();
+    // 分支成功后会退出子会话视图(新会话是普通会话,在主对话区打开)
+    await page.waitForFunction(() => document.querySelectorAll('.subagent-pane').length === 0, null, { timeout: 15000 });
+    check('分支后退出子会话视图(新会话在主对话区)', (await page.locator('.subagent-pane').count()) === 0);
+    await page.waitForTimeout(600);
+    const sessionsAfter = await page.locator('.session-item').count();
+    check('会话列表里多出一条分支会话', sessionsAfter === sessionsBefore + 1, `${sessionsBefore} → ${sessionsAfter}`);
+    check('新会话标题带(分支)', (await page.locator('.session-item .s-title').first().innerText()).includes('(分支)'),
+      await page.locator('.session-item .s-title').first().innerText());
+    const mainWrap = page.locator('.agent-slot:not(.hide) .chatwrap').first();
+    const mainText = await mainWrap.innerText();
+    check('新会话带着子代理那一段对话(任务与边界)',
+      mainText.includes('任务目标') && mainText.includes('边界(必须遵守)'), mainText.slice(0, 160));
+    check('新会话里子代理的结论也在', mainText.includes('结论:目录可读'), mainText.slice(-120));
+    check('新会话是普通父会话(父会话专属控件回来了:工作区 chip / 附件按钮)',
+      (await page.locator('.agent-slot:not(.hide) .composer-add').count()) > 0
+      && (await page.locator('.agent-slot:not(.hide) .ws-chip').count()) > 0,
+      JSON.stringify({
+        add: await page.locator('.agent-slot:not(.hide) .composer-add').count(),
+        chip: await page.locator('.agent-slot:not(.hide) .ws-chip').count()
+      }));
+  }
 } catch (e) {
   fail++;
   console.log(`  ✗ 用例异常:${e?.message || e}`);

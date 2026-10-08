@@ -130,17 +130,18 @@ function readableOn(color: string, lightest: string, darkest: string): string {
   return contrastRatio(color, lightest) >= contrastRatio(color, darkest) ? lightest : darkest;
 }
 
-/** HSL 色相旋转:把颜色绕色轮转动 deg 度(保持饱和度/明度,用于派生警告色等) */
-function hueShift(color: string, deg: number): string {
+/** HSL 色相旋转:把颜色绕色轮转动 deg 度(保持饱和度/明度);传入 lightness 时把明度
+    夹到该值(色相与饱和度保留)—— 用于浅色主题里把过亮的语义色压到可读。 */
+function hueShift(color: string, deg: number, lightness?: number): string {
   const [r0, g0, b0] = parseColor(color).map((v) => v / 255) as RGB;
   const max = Math.max(r0, g0, b0);
   const min = Math.min(r0, g0, b0);
-  const l = (max + min) / 2;
+  const l0 = (max + min) / 2;
   const d = max - min;
   let h = 0;
   let s = 0;
   if (d !== 0) {
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    s = l0 > 0.5 ? d / (2 - max - min) : d / (max + min);
     if (max === r0) h = ((g0 - b0) / d) % 6;
     else if (max === g0) h = (b0 - r0) / d + 2;
     else h = (r0 - g0) / d + 4;
@@ -148,6 +149,7 @@ function hueShift(color: string, deg: number): string {
     if (h < 0) h += 360;
   }
   h = (h + deg + 360) % 360;
+  const l = lightness === undefined ? l0 : clamp(lightness, 0, 1);
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
   const m = l - c / 2;
@@ -186,6 +188,13 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
 
   /* 警告色 = 危险色旋转色相(红 → 琥珀),保证只由 6 色派生 */
   const warn = hueShift(t.danger, 44);
+  /* 警告色在本项目里既当描边/填充底,也当**前景文字**用(.badge.warn / .chip.warn /
+     状态摘要等 40+ 处)。红→琥珀的色相旋转会把明度抬得很高,浅色主题里落在白底上实测
+     只有 2.39:1(远低于 WCAG AA)——和 --red / --green 一样必须按方向校准,只是它们
+     压的是明度而非混色(琥珀混黑会发灰,保留色相/饱和度只压明度才还是"琥珀")。
+     深色主题下原色在暗底上对比足够,保持不动。
+     注意 --warn-bg / --warn-border 仍取旋转后的原色(低透明填充,不参与文字对比)。 */
+  const warnText = dark ? warn : hueShift(warn, 0, 0.31);
   /* 上下文分项用的第二强调色 = 强调色旋转色相,与主色同族但不撞色 */
   const alt = hueShift(t.accent, 58);
 
@@ -208,9 +217,9 @@ function deriveThemeVars(t: ThemeColors): Record<string, string> {
     '--green': mix(t.success, t.text, dark ? 0.08 : 0.12),
     '--red-raw': t.danger,
     '--green-raw': t.success,
-    '--warn': warn,
-    '--amber': warn,
-    '--amber-bright': warn,
+    '--warn': warnText,
+    '--amber': warnText,
+    '--amber-bright': warnText,
 
     /* ---- 表面:三级抬升 + 一级内嵌,全部不透明实色 ---- */
     '--surface-2': dark ? tint(0.05) : sink(0.34),

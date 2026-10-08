@@ -152,13 +152,17 @@ function ThemePreview({ t, badge }: { t: CustomThemeDraft; badge?: string }) {
       <span className="tp-meta">
         <span className="tp-name" style={{ color: t.text }}>{t.name || '未命名主题'}</span>
         {/* 16 进制色值读数是给人看的次要信息,不能压在 3.4:1 —— 用与全站 --muted
-            同一档的插值比例,保证在任意主题的 bg 上都过 AA */}
-        <span className="tp-desc" style={{ color: mix(t.surface, t.text, 0.55) }}>
+            同一档的插值比例,保证在任意主题的 bg 上都过 AA。
+            注意基底必须是 **t.bg**(预览条真正的底色),按 t.surface 混色会算错:
+            浅色主题里 bg 比 surface 暗一档,同样的比例落上去只有 3.45:1。 */}
+        <span className="tp-desc" style={{ color: mix(t.bg, t.text, 0.65) }}>
           {t.bg} · {t.accent}
         </span>
       </span>
-      {/* 状态徽标只靠文字色表达语义:inline 的 borderColor 会重新引入彩色描边 */}
-      {badge && <span className="badge ok" style={{ color: t.success }}>{badge}</span>}
+      {/* 状态徽标只靠文字色表达语义:inline 的 borderColor 会重新引入彩色描边。
+          文字色与全站 --green 同款校准(往 text 压深/提亮),直接取品牌原色会在浅色主题里
+          掉到 4.19:1;预览条展示的就是当前激活主题,所以这里必须还原成应用后的真实读数。 */}
+      {badge && <span className="badge ok" style={{ color: mix(t.success, t.text, dark ? 0.08 : 0.12) }}>{badge}</span>}
     </div>
   );
 }

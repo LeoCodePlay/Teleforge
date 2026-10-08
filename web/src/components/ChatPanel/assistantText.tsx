@@ -1,9 +1,11 @@
 // 助手正文/思考段的渲染原子:markdown 解析(marked + DOMPurify)+ 折叠 thinking 块 +
 // 按 text 引用 memo。对话区与「子代理回看面板」共用同一套渲染 —— 子代理的对话因此
 // 和正常对话长得一模一样(同一气泡、同一工具行、同一思考行),只是不能发送。
-import React, { memo } from 'react';
+import React, { memo, useEffect, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { writeClipboard } from '../../dsh/ui-primitives/clipboard.ts';
+import { IconCheck16, IconCopy16 } from '../icons/icons';
 import { ReasoningRow } from '../ReasoningRow/ReasoningRow';
 
 // 完整 Markdown 解析(marked + DOMPurify):
@@ -36,6 +38,41 @@ function renderAssistantContent(content = '') {
   );
 }
 
+// 围栏代码块:语言条 + 复制按钮 + 代码体。
+// 复制取的是剥掉围栏与语言标注后的原文(与显示一致),不会把 ``` 或语言名带进剪贴板。
+const FencedCode = memo(function FencedCode({ lang, code }: { lang: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timerRef.current !== null) clearTimeout(timerRef.current); }, []);
+  const onCopy = () => {
+    if (copied) return;
+    void writeClipboard(code).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      timerRef.current = setTimeout(() => { timerRef.current = null; setCopied(false); }, 1200);
+    });
+  };
+  return (
+    <div className="md-code">
+      <div className="md-code-bar">
+        <span className="md-code-lang">{lang}</span>
+        <button type="button" className="md-code-copy action-icon" aria-label="复制代码"
+          data-tip={copied ? '已复制' : '复制代码'} onClick={onCopy}>
+          {copied ? <IconCheck16 size={14} /> : <IconCopy16 size={14} />}
+        </button>
+      </div>
+      <pre><code>{code}</code></pre>
+    </div>
+  );
+});
+
+// 拆出单个围栏的「语言标注 + 代码体」:首行(` ```lang `)是信息串,不参与显示与复制。
+function parseFence(part: string): { lang: string; code: string } {
+  const m = /^```([^\n]*)\r?\n?([\s\S]*?)```$/.exec(part);
+  if (!m) return { lang: '', code: part.slice(3, Math.max(3, part.length - 3)) };
+  return { lang: (m[1] || '').trim(), code: m[2].replace(/\n$/, '') };
+}
+
 // 文本段 memo:按 text 引用判定,未变化的历史段整体跳过重渲染(含 markdown 解析)。
 // 流式增量每次赋值新字符串,正在流的段仍正常更新。
 export const AssistantText = memo(function AssistantText({ text }: { text: string }) {
@@ -43,8 +80,8 @@ export const AssistantText = memo(function AssistantText({ text }: { text: strin
   const parts = text.split(/(```[\s\S]*?```)/g);
   parts.forEach((part, i) => {
     if (part.startsWith('```')) {
-      const code = part.slice(3, part.length - 3);
-      spans.push(<pre key={i}><code>{code}</code></pre>);
+      const { lang, code } = parseFence(part);
+      spans.push(<FencedCode key={i} lang={lang} code={code} />);
     } else if (part.trim()) {
       spans.push(<div key={i} className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(part) }} />);
     }

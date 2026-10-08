@@ -237,8 +237,12 @@ export function registerAgent(rpc: RpcModule) {
   rpc.register('session_fork', async (msg, { reply, emitStatus }) => {
     // 原 ws.js session_fork case(248-254)逐字复制
     // 从当前活跃会话创建分支(at 为 turns 索引,截断到该条消息为止;
-    // 缺省 -1 从尾部整体克隆)并切换;分支继承源会话的工作区绑定
-    const forked = agent.forkSession(typeof msg.at === 'number' && msg.at >= 0 ? msg.at : -1);
+    // 缺省 -1 从尾部整体克隆)并切换;分支继承源会话的工作区绑定。
+    // `sid` 是子智能体会话(sa_…)时:**把那个子智能体当成一个新的父对话来分支**
+    // (dsh: 分支动作作用于"当前正在看的会话",子代理视图里就是子代理自己),见 forkChildSession
+    const at = typeof msg.at === 'number' && msg.at >= 0 ? msg.at : -1;
+    const fromChild = isChildId(msg?.sid) ? String(msg.sid) : '';
+    const forked = fromChild ? agent.forkChildSession(fromChild, at) : agent.forkSession(at);
     emitStatus();
     reply({ type: 'sessions', sessions: agent.listVisible(), active: agent.sessionId, created: forked });
   });

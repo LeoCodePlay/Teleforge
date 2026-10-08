@@ -567,6 +567,13 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
   "父会话不在线也能收到"),载不回来就与 dsh 的"父代理不在现场直接 return"一样丢掉。
   实时用 `steer_message` 事件把通知行插进本轮;刷新后由 `projectEvents` 的 `inline` 标记投影出同一形态
   (轮内通知行:折叠行带 `source.summary` 一行账,不说"触发本轮")。
+- **在子智能体会话里「在新对话中分支」= 把这个子智能体当成一个新的父对话克隆**(dsh 的 fork 语义):
+  dsh 的分支动作作用于**当前正在看的那个会话**(`ui-chat/apply.ts` 的 `forkAt` → `ctx.sessions.fork({ sessionId, atSeq })`,
+  `sessionId` 是视图所属会话;子代理视图里它就是子代理),fork 出来的是一条 seed 了那份日志的
+  **普通会话**(`isSeeded: true`,不是子代理 Activation、不受只读工具白名单约束)。
+  我们对应:`Agent.forkChildSession(runId, at)` 从子代理的运行记录(`childSessionFor`)克隆事件,
+  工作区/连接继承**派发它的父会话**,产出的新会话是全量工具的普通会话(标题 = 子代理任务名 +「(分支)」);
+  `session_fork { at, sid: 'sa_…' }` 走这条路径,前端在子会话里点击后退出子会话视图、在主对话区打开新会话。
 - 前端:**子会话直接用父会话的对话系统** —— 同一个 `ChatPanel`,只是 `sid` 换成了派发记录 id(`sa_…`)、
   打开 `childMode`。服务端按 sid 前缀把 `get_history` / `speak` / `stop_agent` / `queue_steer` /
   `queue_remove` 分流到子代理运行时(harness 的形态:子代理本来就是一个会话),所以子会话的回合折叠行、

@@ -5,7 +5,7 @@
 //   3) 可续聊/可暂停:send_message 继续派活,interrupt_agent 只停当前这一轮(排队保留),
 //      list_agents 看 running / inactive。
 // 说明:ESM 静态 import 先于代码执行,故用顶层 await 在导入 agent 前设置 DATA_DIR
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), 'sshai-sub-bg-'));
@@ -501,6 +501,83 @@ async function main() {
     check('这条通知同样带着 dsh 的 source(前端渲染成「触发本轮的通知」)',
       rows[1]?.source?.form === 'notice' && rows[1]?.source?.senderSessionId === 'sa_next',
       JSON.stringify(rows[1]?.source));
+  }
+
+  // ---- 10. 子智能体会话里分支:把这个子智能体当成一个新的**父对话**克隆(dsh 的 fork 语义)----
+  //
+  // dsh: 分支动作作用于"当前正在看的那个会话"(`ui-chat/apply.ts` 的 forkAt → sessions.fork({sessionId})),
+  // 在子代理视图里 sessionId 就是子代理;产出的是 seed 了那份日志的**普通会话**
+  // (`isSeeded: true`,不是子代理 Activation、不受只读白名单约束)。所以这里断言:
+  // 新会话是普通顶层会话、内容来自子代理自己的日志、并且能干子代理干不了的写操作。
+  {
+    const { projectEvents } = await import('../server/agent/agent.ts');
+    const sid = 's_forkchild';
+    const llm = {
+      isMock: false,
+      async chat({ messages }) {
+        if (!messages.some((m) => m.role === 'system' && String(m.content).includes('你是一个子代理'))) {
+          return { content: '（父会话的假模型,本用例不用）', toolCalls: [] };
+        }
+        return { content: '结论:工作区里有 note.txt。', toolCalls: [] };
+      }
+    };
+    const started = await toolRegistry.execute({
+      name: 'subagent', args: JSON.stringify(BRIEF),
+      invokeCtx: { sid, llm, registry: toolRegistry, emit: () => {}, agent: { submit: () => {} } }
+    });
+    const runId = started.meta.subagent.runId;
+    check('(前置)子代理跑完停在可继续状态',
+      await waitFor(() => saStore.get(runId)?.status === 'idle'), String(saStore.get(runId)?.status));
+
+    const a = new Agent({ emit: () => {} });
+    a.setPermissionMode('full-access');
+    a.configureLlm({ baseUrl: 'http://x', apiKey: 'k', model: 'fake' });
+    a.createSession('父会话');
+    const forked = a.forkChildSession(runId);
+    check('分支产出一条新的普通会话(出现在会话列表里)',
+      !!forked?.id && a.listVisible().some((s) => s.id === forked.id), JSON.stringify(a.listVisible().map((s) => s.title)));
+    check('分支后活跃会话就是它(可以直接接着聊)',
+      a.sessionId === forked.id && a.getSessionId() === forked.id);
+    check('标题来自子代理的任务名 + (分支)',
+      /看目录/.test(forked.title) && /\(分支\)$/.test(forked.title), forked.title);
+
+    const evs = a._runtimes.get(forked.id).session.events;
+    const turns = projectEvents(evs);
+    check('新会话带着子代理自己的对话(任务 brief + 结论都在)',
+      JSON.stringify(turns).includes('列出工作区目录') && JSON.stringify(turns).includes('结论:工作区里有 note.txt'),
+      turns.map((t) => t.role).join(','));
+    check('它照常被投影成一段普通对话(user/assistant 行)',
+      turns.some((t) => t.role === 'user') && turns.some((t) => t.role === 'assistant'),
+      turns.map((t) => t.role).join(','));
+    check('分支是独立的:改新会话不影响子代理记录',
+      saStore.get(runId)?.messages?.length > 0 && evs !== rt.childSessionFor(runId).events);
+
+    // "新的父对话"的实质:它能干子代理干不了的写操作(子代理是只读白名单)
+    const writeLlm = {
+      isMock: false,
+      async chat({ messages }) {
+        const already = messages.some((m) => m.role === 'tool');
+        if (already) return { content: '写完了。', toolCalls: [] };
+        return { content: '', toolCalls: [{ id: 'w1', name: 'write_local_file', arguments: JSON.stringify({ path: 'forked.txt', content: 'from fork' }) }] };
+      }
+    };
+    a.llm = writeLlm;
+    a._llmBySid.set(forked.id, writeLlm);
+    a._runtimes.get(forked.id).localWorkspace = root;
+    await a.submit(forked.id, '在新会话里写个文件');
+    const wrote = await waitFor(() => existsSync(path.join(root, 'forked.txt')), 8000);
+    const lastRows = a.getHistory().filter((t) => t.role === 'tool' || t.role === 'assistant').slice(-3);
+    check('新会话是全量工具的普通会话(能写文件,子代理只读做不到)', wrote,
+      JSON.stringify(lastRows).slice(0, 300));
+
+    // 截断分支:at=0 只保留第一条消息面之前的内容
+    const cut0 = a.forkChildSession(runId, 0);
+    const cut0Events = a._runtimes.get(cut0.id).session.events;
+    check('at 截断分支:只克隆到那条消息为止',
+      cut0Events.length < evs.length && cut0Events.every((e) => e.type !== 'assistant/message'), String(cut0Events.length));
+    let bad = '';
+    try { a.forkChildSession('sa_nope'); } catch (e) { bad = e.message; }
+    check('没有可分支对话的子代理如实报错', /没有可分支的对话/.test(bad), bad);
   }
 
   rt.disposeAll();

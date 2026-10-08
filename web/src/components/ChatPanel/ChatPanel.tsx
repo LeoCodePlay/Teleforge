@@ -2955,7 +2955,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             点击瞬时回底并恢复吸附。挂在 chat-scroll(定位宿主)内,贴对话区右下角 */}
         {showJump && (
           <button type="button" className="jump-bottom" onClick={scrollToBottomNow} aria-label="回到底部">
-            <IconChevronDownOutline14 size={16} />
+            <IconChevronDownOutline14 size={20} />
           </button>
         )}
       </div>

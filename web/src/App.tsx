@@ -459,11 +459,20 @@ export default function App() {
       .catch((e) => toast.error(`切换会话失败: ${(e as Error).message}`));
   };
   // 在新对话中分支:克隆当前会话为新会话并切换。at 为 turns 索引时截断到该条消息
-  // (用于从任意历史消息处分支),缺省 -1 从尾部整体克隆
-  const forkSession = (at = -1) => {
+  // (用于从任意历史消息处分支),缺省 -1 从尾部整体克隆。
+  // fromSid 是**子智能体会话**(sa_…)时:把这个子智能体当成一个新的父对话克隆
+  // (dsh: 分支动作作用于"当前正在看的会话"—— 在子会话里点分支,种子里是子代理的日志),
+  // 所以分支完成后要退出子会话视图,主对话区显示这条新的普通会话。
+  const forkSession = (at = -1, fromSid?: string | null) => {
     bumpOp();
     pendingNewRef.current = false;
-    api.request('session_fork', { at }, 8000).then(refreshSessions).catch(() => {});
+    const child = fromSid && /^sa_[0-9a-z]+$/.test(String(fromSid)) ? String(fromSid) : '';
+    api.request('session_fork', { at, ...(child ? { sid: child } : {}) }, 8000)
+      .then((r: any) => {
+        if (child) setSubagentRunId(null); // 退子会话视图:新会话是普通会话,在主对话区打开
+        return refreshSessions(r);
+      })
+      .catch((e) => toast.error(`分支失败: ${(e as Error).message}`));
   };
   const renameSession = (id: string, title: string) => api.request('session_rename', { id, title }, 8000).then(refreshSessions).catch(() => {});
   // 新会话草稿态发送首条消息:ChatPanel 创建服务端会话成功后回调,把会话列入历史列表并激活
@@ -1470,7 +1479,7 @@ export default function App() {
                     className="subagent-pane"
                     style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
                   >
-                    {chatPanel({ sid: subagentRunId, busy: false, childMode: true, onFork: undefined })}
+                    {chatPanel({ sid: subagentRunId, busy: false, childMode: true, onFork: (at) => forkSession(at, subagentRunId) })}
                   </div>
                 )}
               </div>
@@ -1558,7 +1567,7 @@ export default function App() {
             }
             // 子智能体会话:与主对话区**同一个 ChatPanel**(同一套对话系统),所以两处看起来完全一致
             if (tab.kind === 'subagent') {
-              return chatPanel({ sid: tab.contentId, busy: false, childMode: true, onFork: undefined });
+              return chatPanel({ sid: tab.contentId, busy: false, childMode: true, onFork: (at) => forkSession(at, tab.contentId) });
             }
             // 终端:直接用主区那个 ConsolePanel(远程 + 本地两个终端,各自独立 WS 会话),
             // 右栏里降级成**窄容器模式**(隐掉右侧那条 200px 列表,改用工具栏的「⌨ 终端 ▾」切换)。
