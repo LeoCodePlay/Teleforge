@@ -10,6 +10,9 @@ web/dist-preview/
 server-trace.log*
 # tsc 输出转储(排查类型错误时的临时快照,不入库;磁盘上保留)
 _tsc_*.txt
+# 根目录其它临时转储与一次性诊断脚本(_a.txt / _commit_msg.txt / _check-b.cjs 之类)
+/_*.txt
+/_*.cjs
 
 # 本地工具目录(不入库)
 .superpowers/
@@ -37,6 +40,9 @@ server/data/
 
 # 生图工具的默认输出目录(运行时产物,不入库)
 generated-images/
+
+# Playwright 探针截图(output/ 是构建/调试产物目录,不入库)
+output/playwright/
 
 # 扩展打包产物(scripts/build-extension.mjs 生成,发布时作为 GitHub Release 附件,不入库)
 output/teleforge-auto-*.zip

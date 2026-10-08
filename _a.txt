@@ -1,2 +1,0 @@
-web/src/components/RightSidebar/FilesPanelHost.tsx(100,16): error TS18047: 'cache.current' is possibly 'null'.
-web/src/components/RightSidebar/FilesPanelHost.tsx(162,6): error TS2741: Property 'SessionProvider' is missing in type '{ t: TranslateNS<"sidebarFiles">; renderSlot: () => null; refresh: (tabId: TabId) => void; setAutoRefresh: (tabId: TabId, enabled: boolean) => void; start: (tabId: TabId, root: string, signal: AbortSignal) => void; ... 6 more ...; actions: BakedActions<...>; }' but required in type '{ SessionProvider: SessionProviderComponent; }'.
