@@ -29,7 +29,7 @@ import { useVisualViewportInset } from './hooks/useVisualViewport';
 import { LEFT_SIDEBAR_MAX_RATIO, LEFT_SIDEBAR_MIN, sidebarMaxWidth } from './utils/layout';
 import { useLlm } from './context/llm-context';
 import { useFeedback } from './context/feedback';
-import { IconAiChat16, IconBrowser16, IconSchedule16, IconSidebar16, IconTerminal16 } from './components/icons/icons';
+import { IconAiChat16, IconBrowser16, IconClose16, IconCloseOthers16, IconPin16, IconSchedule16, IconSidebar16, IconTerminal16, IconTrashOutline14 } from './components/icons/icons';
 import './App.scss';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -1459,23 +1459,23 @@ export default function App() {
               onContextMenu={(e) => e.preventDefault()}
             >
               {tabMenu.tab.kind === 'file' && (tabMenu.tab.pinnedFile ? (
-                <button onClick={() => togglePinTab(tabMenu.tab.id)}><span className="ctx-ico">📌</span>取消置顶</button>
+                <button onClick={() => togglePinTab(tabMenu.tab.id)}><span className="ctx-ico"><IconPin16 size={14} /></span>取消置顶</button>
               ) : (
                 <button
                   disabled={pinnedFileCount >= TAB_PIN_LIMIT}
                   data-tip={pinnedFileCount >= TAB_PIN_LIMIT ? `最多置顶 ${TAB_PIN_LIMIT} 个标签` : '置顶后固定在顶部,不随标签滚动'}
                   onClick={() => togglePinTab(tabMenu.tab.id)}
                 >
-                  <span className="ctx-ico">📌</span>置顶标签
+                  <span className="ctx-ico"><IconPin16 size={14} /></span>置顶标签
                 </button>
               ))}
               {tabMenu.tab.kind === 'file' && <div className="ctx-sep" />}
-              <button onClick={() => { closeTab(tabMenu.tab.id); setTabMenu(null); }}><span className="ctx-ico">✕</span>关闭当前标签</button>
+              <button onClick={() => { closeTab(tabMenu.tab.id); setTabMenu(null); }}><span className="ctx-ico"><IconClose16 size={14} /></span>关闭当前标签</button>
               <button
                 disabled={tabs.filter((t) => (t.kind === 'file' || t.kind === 'browser') && t.id !== tabMenu.tab.id).length === 0}
                 onClick={() => void closeOtherTabs(tabMenu.tab.id)}
-              ><span className="ctx-ico">🗂</span>关闭其它标签</button>
-              <button className="danger" onClick={() => void closeAllTabs()}><span className="ctx-ico">🗑</span>关闭全部标签</button>
+              ><span className="ctx-ico"><IconCloseOthers16 size={14} /></span>关闭其它标签</button>
+              <button className="danger" onClick={() => void closeAllTabs()}><span className="ctx-ico"><IconTrashOutline14 size={14} /></span>关闭全部标签</button>
             </div>,
             document.body
           )}

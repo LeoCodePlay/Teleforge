@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="Teleforge 双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="#5b8cff" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="#5b8cff" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="#5b8cff" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="#e7eaf0" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="#3fb26f"/></svg>

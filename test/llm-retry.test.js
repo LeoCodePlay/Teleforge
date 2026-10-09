@@ -431,6 +431,23 @@ seen = [];
   check('看门狗错误说明「没有收到任何数据」', /没有收到任何数据/.test(String(retries[0]?.error || '')), String(retries[0]?.error));
 }
 
+// 12) 连续失败累加,恢复输出再断流则建立新阶段(总请求预算仍保留)。
+script = [
+  ...Array.from({ length: 6 }, () => ({ type: 'status', code: 503, body: 'down' })),
+  { type: 'partial', text: '恢复输出后再次断流' },
+  { type: 'status', code: 503, body: 'down again' },
+  { type: 'ok', text: '最终恢复' }
+];
+seen = [];
+{
+  const { res, retries } = await run(mkClient());
+  check('恢复前连续失败计数1到6,恢复后从1重新累加', retries.map((r) => r.retry).join(',') === '1,2,3,4,5,6,1,2');
+  check('恢复前共用同一分组', new Set(retries.slice(0, 6).map((r) => r.retryGroup)).size === 1 && !!retries[0].retryGroup);
+  check('恢复后产生新分组并保留回滚语义', retries[6].retryGroup !== retries[5].retryGroup && retries[6].discard === true);
+  check('新分组连续失败保持标识', retries[6].retryGroup === retries[7].retryGroup);
+  check('最终恢复成功', res?.content === '最终恢复' && seen.length === 9);
+}
+
 console.warn = realWarn;
 check('重试过程有可诊断日志', warns.some((w) => /\[llm\]/.test(w)));
 

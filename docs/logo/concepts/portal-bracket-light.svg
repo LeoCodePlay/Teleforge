@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="Teleforge 隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="#0969da" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="#0969da" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="#1f2328" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="#1f2328" stroke-width="5"/>
+  </g></svg>

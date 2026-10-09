@@ -295,8 +295,18 @@ interface SectionHeadProps {
 function SectionHead({ label, query, onQuery, open, onOpenChange, addLabel, onAdd }: SectionHeadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
-  const close = () => { onQuery(''); onOpenChange(false); };
-  // 收起时顺手清空:留着上次的词,下次展开会突然只剩几条会话,像是列表丢了
+  // 自己触发的 blur 标记:close() 里主动交还焦点会同步派发一次 blur,不挡一下就会再收起一遍
+  const selfBlurRef = useRef(false);
+  // 收起时顺手清空:留着上次的词,下次展开会突然只剩几条会话,像是列表丢了。
+  // 收起后输入框仍留在 DOM 里(只是 opacity:0),焦点要是还挂在上面,后续键入会被一个
+  // 看不见的框吞掉(甚至连搜索词都被它悄悄改掉),所以先交还焦点再收。
+  const close = () => {
+    selfBlurRef.current = true;
+    inputRef.current?.blur();
+    selfBlurRef.current = false;
+    onQuery('');
+    onOpenChange(false);
+  };
   const toggle = () => {
     if (open) { close(); return; }
     onOpenChange(true);
@@ -305,8 +315,10 @@ function SectionHead({ label, query, onQuery, open, onOpenChange, addLabel, onAd
   // 焦点离开整块搜索区就回到原样。判 relatedTarget 而不是直接收起:
   // 点「✕」或放大镜时焦点是移到框内的按钮上,先收起会把这两个按钮从 DOM 里摘掉,
   // 后续 click 就再也落不到它们身上(那两下点击就白点了)。
+  // 点搜索结果不会走到这里:那一下的 mousedown 被按下时挡掉了默认的焦点转移(见 SessionPanel
+  // 的 keepSearchFocus),所以输入框不失焦、搜索不提前收起,收起改由这一次点击自己触发。
   const onFocusOut = (e: React.FocusEvent<HTMLDivElement>) => {
-    if (!open) return;
+    if (!open || selfBlurRef.current) return;
     if (searchRef.current?.contains(e.relatedTarget as Node | null)) return;
     close();
   };
@@ -469,6 +481,20 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   };
   const remoteSearching = !!remoteQuery.trim();
   const localSearching = !!localQuery.trim();
+
+  // 搜索展开时,按在**本分区**的会话行上不让输入框失焦(mousedown 的默认行为就是把焦点挪走)。
+  // 不挡的话,失焦→收起发生在按住的那一刻:过滤结果先一步换位(未命中的会话重新插回上面)、
+  // 分组也可能折叠回去,抬起时的 click 落到别的元素上,注册在会话行上的 onClick 就永远不触发——
+  // 用户看到的是「点了什么反应都没有,只有搜索框缩回去了」。
+  // 挡住之后这一次点击照常走完,收起改由点击本身触发(见 renderGroup 的 onSwitch 包装)。
+  // 只挡本分区自己的搜索结果:点别处(别的分区、别的会话)时照旧靠失焦收起。
+  const keepSearchFocus = (e: React.MouseEvent) => {
+    const row = (e.target as HTMLElement | null)?.closest?.('.session-item');
+    if (!row) return;
+    const sectionId = row.closest('[data-section-id]')?.getAttribute('data-section-id');
+    const open = sectionId === remoteSection ? remoteSearchOpen : sectionId === localSection ? localSearchOpen : false;
+    if (open) e.preventDefault();
+  };
 
   const groupSessions = (list: Session[], wsOf: (s: Session) => string | null | undefined, keyOf: (ws: string) => string) => {
     const groups = new Map<string, Session[]>();
@@ -635,7 +661,9 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
 
   // 渲染一组会话(共用分组头/行渲染);分组显示名与「＋ 新建」的工作区参数由 groupMeta 派生。
   // searching = 该分区正在搜索:命中项可能散落在被收起的组里,一律强制展开,否则搜了也看不见。
-  const renderGroup = (groups: GroupMeta[], icon: React.ReactNode, newInGroup: (ws: string | null) => void, searching: boolean) =>
+  // resetSearch = 点中本分区的会话行后收起本分区的搜索:这一下点击既然命中了结果,就该像
+  // 原来那样「点到即退出搜索态」——只是收起必须挂在点击上,不能在按下的那一刻自己发生(见 keepSearchFocus)。
+  const renderGroup = (groups: GroupMeta[], icon: React.ReactNode, newInGroup: (ws: string | null) => void, searching: boolean, resetSearch: () => void) =>
     groups.map((g) => (
       <WorkspaceGroup key={g.key} label={g.label} icon={icon} sessions={g.list}
         expanded={searching || isExpanded(g.key)}
@@ -656,7 +684,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
         }}
         onToggle={() => saveCollapsed(g.key, isExpanded(g.key))}
         onNewInGroup={() => newInGroup(g.newWs)}
-        onSwitch={onSwitch}
+        onSwitch={(id) => { onSwitch(id); resetSearch(); }}
         onMenu={openMenu}
         onMenuAt={openMenuAt} />
     ));
@@ -666,7 +694,7 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
       {/* 服务器标识只在连着的时候才有信息量:未连接时它就是「本地工作区」四个字,
           和下方的本地分区标题重复,所以那会儿不渲染 */}
       {inRemoteScope && scopeLabel && <div className="s-scope">📡 {scopeLabel}</div>}
-      <div className={`s-list${drag ? ' reordering' : ''}`} ref={listRef}>
+      <div className={`s-list${drag ? ' reordering' : ''}`} ref={listRef} onMouseDownCapture={keepSearchFocus}>
         {/* 分区按「远程工作区 / 本地工作区」两块排:每块的标题行就是它的工具行(搜索 + 添加工作区),
             添加时的目标因此一眼可辨。未连服务器时远程块不渲染 —— 那一侧的目录根本读不到。 */}
         {inRemoteScope && (
@@ -679,7 +707,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
                 {remoteSearching ? '没有匹配的会话' : '还没有远程工作区,点右侧 ＋ 挑一个服务器上的目录'}
               </div>
             )}
-            {renderGroup(remoteMeta, <IconCloud16 size={14} />, (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null, 'remote'); else onNew(); }, remoteSearching)}
+            {renderGroup(remoteMeta, <IconCloud16 size={14} />, (ws) => { if (onNewInWorkspace) onNewInWorkspace(ws, null, 'remote'); else onNew(); }, remoteSearching,
+              () => { setRemoteQuery(''); setRemoteSearchOpen(false); })}
           </div>
         )}
         <div className="s-section">
@@ -691,7 +720,8 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
               {localSearching ? '没有匹配的会话' : '还没有本地工作区,点右侧 ＋ 挑一个本机目录'}
             </div>
           )}
-          {renderGroup(localMeta, <IconFolder16 size={14} />, (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws, 'local'); else onNew(); }, localSearching)}
+          {renderGroup(localMeta, <IconFolder16 size={14} />, (lws) => { if (onNewInWorkspace) onNewInWorkspace(null, lws, 'local'); else onNew(); }, localSearching,
+            () => { setLocalQuery(''); setLocalSearchOpen(false); })}
         </div>
         {foreign.length > 0 && (
           <div className="s-foreign">

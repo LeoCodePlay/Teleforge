@@ -1,6 +1,6 @@
 {
   "name": "teleforge-workspace-nav-icons",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "project": "Teleforge(远程 SSH AI 编程工具)",
   "sourceOfTruth": "web/src/components/icons/icons.tsx",
   "preview": "docs/design/icons/icon-preview.html",
@@ -460,13 +460,36 @@
         "web/src/components/DirBrowser/LocalDirBrowser.tsx(选择本地工作区:💻 我的电脑、🏠 家目录、不可点的 📄 文件行)",
         "web/src/components/DirBrowser/DirBrowser.tsx(选择远程工作区:远程侧家目录原来挂 📁、不可点的 📄 文件行)"
       ]
+    },
+    {
+      "id": "i-pin-16",
+      "component": "IconPin16",
+      "meaning": "标签右键菜单 · 置顶 / 取消置顶(按钉 = 钉在标签条前端,不随滚动)",
+      "category": "tabMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/App.tsx(标签条 .ctxmenu:置顶标签 / 取消置顶)"]
+    },
+    {
+      "id": "i-close-others-16",
+      "component": "IconCloseOthers16",
+      "meaning": "标签右键菜单 · 关闭其它标签(两片错位标签页 + 前片内一枚叉 = 除这个之外的一并关掉)",
+      "category": "tabMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/App.tsx(标签条 .ctxmenu:关闭其它标签)"]
+    },
+    {
+      "id": "reused-tabmenu",
+      "component": "IconClose16 / IconTrashOutline14(既有,未新增)",
+      "meaning": "标签右键菜单 · 关闭当前标签(叉,与「退出多选」同一枚)/ 关闭全部标签(垃圾桶,与文件菜单「删除」同一枚)",
+      "category": "tabMenu",
+      "sizes": [14],
+      "usedIn": ["web/src/App.tsx(标签条 .ctxmenu:关闭当前标签 / 关闭全部标签)"]
     }
   ],
   "notMigrated": [
     "web/src/components/ConsolePanel/ConsolePanel.tsx:终端列表的 🌐/💻 归属标记已换成 SVG(见 terminalList 分类);工具栏的「⌨ 终端 (n)」切换按钮与列表项的删除「✕」仍是字形,本次未动",
     "文件列表里未被右键的普通文件行仍是 📄、软链行仍是 🔗(列表列图标只换了文件夹);要整列统一可再补",
     "DirBrowser / LocalDirBrowser 的文件行已随本轮收敛到 IconFile16(见 dirBrowser 分类)",
-    "web/src/App.tsx:标签右键菜单仍是 📌 / ✕ / 🗂 / 🗑 四个字形(同样挂在 .ctx-ico 槽里),本次未动",
     "文件标签(tabIcon)按媒体类型仍用 🖼️/📄 字形:它是内容类型标记,不是导航图标",
     "FileViewer 的「⬇ 下载」是正文里的文字链接(不是按钮),本次未动",
     "CodeEditor 右键菜单的文本类动作已换成 SVG(见 editorMenu);CodeMirror 原生搜索面板(Ctrl+F)里的按钮仍是其自带字形,不在本次范围",
@@ -474,7 +497,7 @@
   ],
   "qualityGates": {
     "typecheck": "npx tsc --noEmit 通过",
-    "geometry": "preview 页用 getBBox() 实测(含 0.8 描边外扩):IconStopwatch16 留白 [2.1,1.6,2.1,1.3]、IconDatabase16 [2.7,1.8,2.7,1.8]、IconEditLine16 [2.4,1.5,2.6,1.7]、IconBack16 [2.4,3.8,2,3.8]、IconUndo16 [2.4,2.7,2.3,2.6]、IconRedo16 [2.3,2.7,2.4,2.6]、IconCut16 [2.7,2,2.7,1.4]、IconSelectAll16 [1.8,1.8,1.8,1.8]、IconSave16 [2,2,2,2],全部落在 1.2~2.8 网格单位内且不裁切;中心 cx/cy 均在 8±0.3(返回箭头本身扁,纵向留白自然偏大)",
+    "geometry": "preview 页用 getBBox() 实测(含 0.8 描边外扩):IconStopwatch16 留白 [2.1,1.6,2.1,1.3]、IconDatabase16 [2.7,1.8,2.7,1.8]、IconEditLine16 [2.4,1.5,2.6,1.7]、IconBack16 [2.4,3.8,2,3.8]、IconUndo16 [2.4,2.7,2.3,2.6]、IconRedo16 [2.3,2.7,2.4,2.6]、IconCut16 [2.7,2,2.7,1.4]、IconSelectAll16 [1.8,1.8,1.8,1.8]、IconSave16 [2,2,2,2]、IconPin16 [2.6,1.8,2.6,1.8]、IconCloseOthers16 [1.8,1.4,2.2,2],全部落在 1.2~2.8 网格单位内且不裁切;中心 cx/cy 均在 8±0.3(返回箭头本身扁、关闭其它那张前片偏左下,纵向留白自然偏大)",
     "color": "全部 currentColor,深/浅色主题随文字色自动切换(见 preview 的暗/亮对照)"
   }
 }

@@ -2,7 +2,7 @@
 
 > 本次重新设计的范围:**远程工作区 / 本地工作区**(含「不绑目录」与下拉项)+ **顶部三枚固定标签:AI 编程助手 / 终端 / 自动化任务**(顺带把同一条标签条上的「浏览器预览」也换成 SVG,免得一条标签条 emoji 与 SVG 混排)。
 >
-> 后续按同一套规范补充的设计:**对话统计胶囊**(轮/步 + 解码速度、token 用量)、**SSH 连接列表的「编辑」**、**SSH 表单的「返回」**、**文件编辑器右键菜单**(撤销 / 重做 / 剪切 / 全选 / 保存)、**终端列表的本机 / 远端归属标记**、**目录浏览弹窗的快捷入口与文件行**。
+> 后续按同一套规范补充的设计:**对话统计胶囊**(轮/步 + 解码速度、token 用量)、**SSH 连接列表的「编辑」**、**SSH 表单的「返回」**、**文件编辑器右键菜单**(撤销 / 重做 / 剪切 / 全选 / 保存)、**终端列表的本机 / 远端归属标记**、**目录浏览弹窗的快捷入口与文件行**、**顶部标签条右键菜单**(置顶 / 关闭当前 / 关闭其它 / 关闭全部)。
 
 ## 1. 为什么要重做
 
@@ -97,6 +97,17 @@
 
 > 编辑器菜单原来用的是 `↺ ↻ ✂ 📋 📥 ☑ 💾 📄 🏷` 九个字符字形:同一个「复制」在文件列表是 `IconCopy16`、在编辑器里是 📋,两处并排看就是两套语言。现在只补编辑器独有的五个动作,其余四个直接复用 —— 菜单图标列的 18px 定宽槽(`.ctxmenu .ctx-ico`)本来就已按 SVG 居中做好。
 
+顶部标签条(TabStrip)右键菜单 —— 与文件 / 编辑器菜单共用 `.ctxmenu` 与 18px `.ctx-ico` 槽:
+
+| 菜单项 | 组件 | 形状 |
+| --- | --- | --- |
+| 置顶标签 / 取消置顶 | `IconPin16` | 按钉(钉帽 + 收拢的针身 + 针尖);钉住 = 固定在标签条前端、不随滚动 |
+| 关闭当前标签 | `IconClose16` | 复用「退出多选」那枚叉(全站关闭只此一枚) |
+| 关闭其它标签 | `IconCloseOthers16` | 两片错位标签页 + 前片内一枚叉(除这个之外的一并关掉) |
+| 关闭全部标签 | `IconTrashOutline14` | 复用文件菜单的垃圾桶(清空全部;原来就是 🗑) |
+
+> 标签条右键菜单原来是 `📌 ✕ 🗂 🗑`:同一条标签条上的固定标签(AI 助手 / 终端 / 自动化任务 / 浏览器预览)早已是 SVG,隔壁的文件与编辑器菜单也早已是 SVG,只剩这里还是字形。四枚里两枚复用既有成员,只新增「置顶」与「关闭其它」。
+
 工具栏 / 输入区 / 顶栏 / SSH 面板:
 
 | 位置 | 组件 | 形状 |
@@ -136,7 +147,7 @@
 | `FileManager.tsx`、`LocalFileManager.tsx`、`DirBrowser.tsx`、`LocalDirBrowser.tsx`、`ChatPanel.tsx`、`App.tsx`、`SshConnectModal.tsx` | 工具栏/输入区/顶栏/SSH 面板:⬆ 上级 / ↻ / ⬆ 上传 / ⬇ 传到本地 / ✎ 编辑 / 🗑 删除 / ➤ 发送 / ⏹ 停止 / ▤ 右侧栏 → 上表那套;新增 `button.icon-btn`(图标+文字按钮交给按钮自己居中排版) |
 | `App.scss` / `ChatPanel.scss` / `BottomBar.scss` / `fm.scss` / `dirbrowser.scss` / `SettingsPanel.scss` | 图标槽改 flex 居中;`.btab-icon` 补 `position: relative`;目录行图标 `vertical-align: -0.5px`(实测值,图标中心与文字行中心重合);设置菜单图标槽定宽 16px(原来 emoji 字宽不齐,标签左缘会错位) |
 
-后续补充的三处:
+后续补充的几处:
 
 | 文件 | 改动 |
 | --- | --- |
@@ -145,6 +156,7 @@
 | `web/src/components/FileViewer/CodeEditor.tsx` | 编辑器右键菜单九项的 `↺ ↻ ✂ 📋 📥 ☑ 💾 📄 🏷` → 五个新动作 `IconUndo16 / IconRedo16 / IconCut16 / IconSelectAll16 / IconSave16`(14 号)+ 四个复用(`IconCopy16 / IconPaste16 / IconLink16 / IconTag16`);`.ctxmenu .ctx-ico` 已是 18px 的 flex 槽,样式无需改动 |
 | `web/src/components/ConsolePanel/ConsolePanel.tsx` / `ConsolePanel.scss` | 终端列表名前的 `🌐 / 💻`(桌面列表与手机下拉两处)→ `IconCloud16` / `IconDesktop16`(13 号);`.term-list-name` 改为 flex 容器,名字单独包 `.term-mode-text` 承担 overflow ellipsis(整格挂 ellipsis 会把图标一起截掉) |
 | `web/src/components/DirBrowser/DirBrowser.tsx` / `LocalDirBrowser.tsx` / `dirbrowser.scss` | 弹窗快捷入口与文件行:`💻 我的电脑` → `IconDesktop16`、`🏠 家目录` / 远程侧的 `📁 家目录` → `IconHome16`、不可点的 `📄 文件行` → `IconFile16`(13 号);两个入口按钮改用全局 `button.icon-btn`(flex 排版),文件行补上目录行同款 `<span>` 以便名字超长时截断 |
+| `web/src/App.tsx` | 标签条右键菜单的 `📌 ✕ 🗂 🗑` → `IconPin16`(新增)/ `IconClose16` / `IconCloseOthers16`(新增)/ `IconTrashOutline14`,统一 14 号并复用既有 `.ctx-ico` 槽(样式零改动);`关闭全部标签` 的垃圾桶随 `.danger` 走 `--red` |
 
 > **顺带修掉的一个 bug**:`.btab-dot`(自动化任务「到点没跑」的小红点)是 `position:absolute`,但 `.btab-icon` 没有定位,真正生效的定位祖先是外层 `.layout` —— 红点其实被甩到了主区右上角。现在给 `.btab-icon` 加了 `position: relative`,红点回到「自动化任务」图标上。
 

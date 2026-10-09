@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 80" width="500" height="160" role="img" aria-label="Teleforge">
+  <g transform="translate(8 8)"><g transform="translate(2.783 2.783) scale(0.9130)">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="#5b8cff" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="#5b8cff" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="#e7eaf0" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="#e7eaf0" stroke-width="5"/>
+  </g></g></g>
+  <text x="80" y="54" font-family="'Segoe UI Variable Display','Segoe UI',-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" font-size="38" font-weight="600" letter-spacing="-0.9" fill="#e7eaf0">Teleforge</text>
+</svg>

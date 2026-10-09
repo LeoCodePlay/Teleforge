@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 80" width="500" height="160" role="img" aria-label="Teleforge">
+  <g transform="translate(8 8)"><g transform="translate(2.783 2.783) scale(0.9130)">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="#0969da" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#1f2328"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="#1a7f37"/></g></g>
+  <text x="80" y="54" font-family="'Segoe UI Variable Display','Segoe UI',-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif" font-size="38" font-weight="600" letter-spacing="-0.9" fill="#1f2328">Teleforge</text>
+</svg>

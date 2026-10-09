@@ -416,6 +416,7 @@ export function projectEvents(events) {
         role: 'notice', content: '', time: ev.time,
         retry: {
           retry: Number(d.retry) || 1,
+          ...(typeof d.retryGroup === 'string' ? { retryGroup: d.retryGroup } : {}),
           maxRetries: Number(d.maxRetries) || 1,
           delayMs: Number(d.delayMs) || 0,
           error: String(d.error || '网络错误'),
@@ -2443,6 +2444,7 @@ export class Agent {
               // 不进模型上下文(见 session.ts 的 llm/retry 说明)。
               session.append('llm/retry', {
                 retry: r.retry, maxRetries: r.maxRetries, delayMs: r.delayMs,
+                ...(r.retryGroup ? { retryGroup: r.retryGroup } : {}),
                 error: r.error, discard: r.discard === true, state: 'started',
                 // 'switch' = 换 Key(立即重发):前端显示「已切换 API Key」而不是「等待重试」
                 ...(r.kind === 'switch' ? { kind: 'switch' } : {})

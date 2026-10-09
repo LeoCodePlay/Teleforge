@@ -1,0 +1,201 @@
+{
+  "name": "Teleforge",
+  "kind": "logo-system",
+  "version": "0.1.0",
+  "generatedBy": "docs/logo/build-logos.mjs",
+  "product": "SSH 远程 ↔ 本地互通的 AI 编程工具",
+  "grid": {
+    "viewBox": "0 0 64 64",
+    "opticalBox": "46×46 居中于 (32,32),含描边",
+    "strokeWidth": [
+      5,
+      5.5,
+      6
+    ],
+    "strokeLinecap": "round",
+    "strokeLinejoin": "round",
+    "cornerRadius": 14
+  },
+  "palette": {
+    "dark": {
+      "bg": "#0d0f13",
+      "fg": "#e7eaf0",
+      "accent": "#5b8cff",
+      "green": "#3fb26f"
+    },
+    "light": {
+      "bg": "#f6f8fa",
+      "fg": "#1f2328",
+      "accent": "#0969da",
+      "green": "#1a7f37"
+    },
+    "rule": "标体只用实色(不叠渐变/阴影),渐变仅用于应用图标底板"
+  },
+  "concepts": [
+    {
+      "id": "dual-arrow-t",
+      "name": "双向 T",
+      "nameEn": "Dual-Arrow T",
+      "tag": "推荐主案",
+      "metaphor": "首字母 T 的骨架:顶部一条双向箭头 = 远程 ↔ 本地 双向同步;竖杆是 SSH 隧道;下端一颗绿点 = 连接保持的活口。",
+      "best": "桌面端图标 / 网页 favicon / 主视觉",
+      "pros": [
+        "唯一的字母骨架,缩到 16px 仍是清晰的字母形",
+        "命中产品核心:远程与本地一套工具",
+        "单色场景只换两色即可用"
+      ],
+      "cons": [
+        "元素稍多,极小尺寸(16px)下箭头会糊成短线"
+      ],
+      "tech": "svg",
+      "files": {
+        "markDark": "docs/logo/concepts/dual-arrow-t.svg",
+        "markLight": "docs/logo/concepts/dual-arrow-t-light.svg",
+        "tile": "docs/logo/tiles/dual-arrow-t-tile.svg",
+        "lockup": "docs/logo/lockups/dual-arrow-t-lockup.svg",
+        "lockupLight": "docs/logo/lockups/dual-arrow-t-lockup-light.svg"
+      },
+      "spriteId": "logo-dual-arrow-t",
+      "minSize": 16
+    },
+    {
+      "id": "portal-bracket",
+      "name": "隧道门",
+      "nameEn": "Portal Bracket",
+      "tag": "终端感最强",
+      "metaphor": "一对括号 = 本地与远程两台机器;门内一个 >_ 提示符 = AI 在门那侧真实执行命令。",
+      "best": "导航栏 / 图标系统 / 命令行入口",
+      "pros": [
+        "开发者一眼认得出是终端 / SSH 语境",
+        "方括号外轮廓硬朗,和实色界面很搭"
+      ],
+      "cons": [
+        "等于「终端图标」的常见做法,辨识度靠配色和圆角撑"
+      ],
+      "tech": "svg",
+      "files": {
+        "markDark": "docs/logo/concepts/portal-bracket.svg",
+        "markLight": "docs/logo/concepts/portal-bracket-light.svg",
+        "tile": "docs/logo/tiles/portal-bracket-tile.svg",
+        "lockup": "docs/logo/lockups/portal-bracket-lockup.svg",
+        "lockupLight": "docs/logo/lockups/portal-bracket-lockup-light.svg"
+      },
+      "spriteId": "logo-portal-bracket",
+      "minSize": 16
+    },
+    {
+      "id": "key-flame",
+      "name": "密钥熔炉",
+      "nameEn": "Key Flame",
+      "tag": "叙事最完整",
+      "metaphor": "钥匙 = SSH 私钥认证;钥匙柄是一簇熔炉火 = Forge(锻造)。合起来是「用密钥点着火」。",
+      "best": "启动页 / 关于页 / 品牌插画",
+      "pros": [
+        "把「安全接入 + 锻造」两层意思都装进一个形状",
+        "轮廓修长,适合做竖版启动页 / 加载动画"
+      ],
+      "cons": [
+        "火苗+齿纹细节多,24px 以下齿纹会基本消失"
+      ],
+      "tech": "svg",
+      "files": {
+        "markDark": "docs/logo/concepts/key-flame.svg",
+        "markLight": "docs/logo/concepts/key-flame-light.svg",
+        "tile": "docs/logo/tiles/key-flame-tile.svg",
+        "lockup": "docs/logo/lockups/key-flame-lockup.svg",
+        "lockupLight": "docs/logo/lockups/key-flame-lockup-light.svg"
+      },
+      "spriteId": "logo-key-flame",
+      "minSize": 16
+    },
+    {
+      "id": "node-orbit",
+      "name": "远程节点",
+      "nameEn": "Node Orbit",
+      "tag": "最抽象",
+      "metaphor": "实心圆 = 你面前的本地;环绕的弧 = 网络路径;弧上留出的缺口里坐着绿点 = 已经连上的远程服务器(连接保持)。",
+      "best": "图标系统 / 状态指示 / 动效场景(轨道可转)",
+      "pros": [
+        "三笔构成,缩到 16px 依然稳",
+        "缺口 + 绿点把「已连接」讲清楚,天然适合做状态指示",
+        "留白大,好排进各种界面"
+      ],
+      "cons": [
+        "偏抽象,单看不像编程工具,需要配字标"
+      ],
+      "tech": "svg (动效场景可交 Canvas)",
+      "files": {
+        "markDark": "docs/logo/concepts/node-orbit.svg",
+        "markLight": "docs/logo/concepts/node-orbit-light.svg",
+        "tile": "docs/logo/tiles/node-orbit-tile.svg",
+        "lockup": "docs/logo/lockups/node-orbit-lockup.svg",
+        "lockupLight": "docs/logo/lockups/node-orbit-lockup-light.svg"
+      },
+      "spriteId": "logo-node-orbit",
+      "minSize": 16
+    },
+    {
+      "id": "bridged-rings",
+      "name": "双环互通",
+      "nameEn": "Bridged Rings",
+      "tag": "主张最直白",
+      "metaphor": "实线环 = 本地,虚线环 = 远程,两环相交 = 远程与本地共用同一套界面与工具。",
+      "best": "favicon / 白皮书与文档头图 / 双色场景",
+      "pros": [
+        "图形极简,任何尺寸都成立",
+        "蓝(本地)+ 绿(远程)双色即品牌记忆点"
+      ],
+      "cons": [
+        "两圆相交是常见结构,需要靠虚实线区分开"
+      ],
+      "tech": "svg",
+      "files": {
+        "markDark": "docs/logo/concepts/bridged-rings.svg",
+        "markLight": "docs/logo/concepts/bridged-rings-light.svg",
+        "tile": "docs/logo/tiles/bridged-rings-tile.svg",
+        "lockup": "docs/logo/lockups/bridged-rings-lockup.svg",
+        "lockupLight": "docs/logo/lockups/bridged-rings-lockup-light.svg"
+      },
+      "spriteId": "logo-bridged-rings",
+      "minSize": 16
+    },
+    {
+      "id": "forge-spark",
+      "name": "锻造火花",
+      "nameEn": "Forge Spark",
+      "tag": "最小记号",
+      "metaphor": "锻造溅出的一点火花 = AI 这把工具,下面一根终端光标 = 命令正在执行。",
+      "best": "favicon / 加载态 / 与字标并排的小尺寸位",
+      "pros": [
+        "只有两笔,16px 依旧锐利,做 favicon 最保险",
+        "对称构图,放哪都不歪"
+      ],
+      "cons": [
+        "四角星被不少 AI 产品用过,单色时容易撞脸"
+      ],
+      "tech": "svg",
+      "files": {
+        "markDark": "docs/logo/concepts/forge-spark.svg",
+        "markLight": "docs/logo/concepts/forge-spark-light.svg",
+        "tile": "docs/logo/tiles/forge-spark-tile.svg",
+        "lockup": "docs/logo/lockups/forge-spark-lockup.svg",
+        "lockupLight": "docs/logo/lockups/forge-spark-lockup-light.svg"
+      },
+      "spriteId": "logo-forge-spark",
+      "minSize": 16
+    }
+  ],
+  "recommendation": {
+    "primary": "dual-arrow-t",
+    "alternates": [
+      "forge-spark",
+      "portal-bracket"
+    ],
+    "reason": "主案同时承载「T 字标」与「远程↔本地双向」两层语义,16px 仍是清晰字形;forge-spark 作为 favicon 兜底,portal-bracket 用于终端语境。"
+  },
+  "techNotes": [
+    "静态图标/界面控件一律 SVG:sprite 里换色只需 --tf-accent / currentColor,体积远小于位图。",
+    "需要「轨道转动 / 链路脉冲 / 逐帧重绘」等动效时交给 Canvas,见 canvas.icon.demo.js;它绘制的是同一套几何常量,和 SVG 不会走形。",
+    "桌面端打包图标由 SVG 导出 PNG 后交给 `npm run desktop:icon`(tauri icon)生成各平台尺寸,不要直接提交矢量进 icons 目录。"
+  ]
+}

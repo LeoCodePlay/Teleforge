@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Teleforge LOGO 方案预览(6 版)</title>
+<style>
+  /* 看板两个记号:① 深/浅底色是「使用场景」,每张卡片里都成对出现,不受看板主题影响;
+     ② 看板自身的深/浅主题只置于 .page 上,切换时不动场景面板。 */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page-bg, #0b0d11); color: var(--page-fg, #e7eaf0);
+    font-family: 'Segoe UI Variable Display','Segoe UI',-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif; font-size: 14px; line-height: 1.6;
+  }
+  body.light { color-scheme: light; --page-bg: #f2f4f7; --page-fg: #1f2328; --page-line: #d8dee7; --page-card: #ffffff; --page-mut: #5c6570; }
+  body.dark { color-scheme: dark; --page-line: #232a36; --page-card: #12151b; --page-mut: #98a2b3; }
+  /* 场景面板只认这三组色,标体几何全部走 var() —— 一份几何两种底色自动正确 */
+  .ctx-dark { --c-bg: #0d0f13; --c-fg: #e7eaf0; --c-accent: #5b8cff; --c-green: #3fb26f; background: #0d0f13; color: #e7eaf0; }
+  .ctx-light { --c-bg: #ffffff; --c-fg: #1f2328; --c-accent: #0969da; --c-green: #1a7f37; background: #ffffff; color: #1f2328; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 24px 80px; }
+  .top { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; margin-bottom: 8px; }
+  .brandline { display: flex; align-items: center; gap: 14px; }
+  .brandline h1 { font-size: 26px; margin: 0; letter-spacing: -0.4px; }
+  .brandline .sub { color: var(--page-mut, #98a2b3); font-size: 13px; margin: 2px 0 0; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+    border: 1px solid var(--page-line, #232a36); color: var(--page-mut, #98a2b3); }
+  .toggle { display: flex; gap: 6px; }
+  .toggle button { padding: 7px 14px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px;
+    background: transparent; color: inherit; border: 1px solid var(--page-line, #232a36); }
+  .toggle button[aria-pressed="true"] { background: var(--c-accent, #5b8cff); border-color: transparent; color: #fff; }
+
+  .lede { color: var(--page-mut, #98a2b3); max-width: 78ch; margin: 10px 0 22px; }
+
+  .palette { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 26px; }
+  .sw { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 8px; border-radius: 10px;
+    border: 1px solid var(--page-line, #232a36); font-size: 12px; }
+  .sw i { width: 16px; height: 16px; border-radius: 5px; display: inline-block; }
+
+  .overview { border: 1px solid var(--page-line, #232a36); border-radius: 14px; padding: 18px; margin-bottom: 30px; }
+  .overview h2 { font-size: 14px; margin: 0 0 14px; letter-spacing: .4px; color: var(--page-mut, #98a2b3); font-weight: 600; }
+  .strip { display: flex; gap: 22px; flex-wrap: wrap; }
+  .strip .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 12px; }
+  .strip .cell span { color: var(--page-mut, #98a2b3); }
+  .pick { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; padding: 8px 14px; border-radius: 10px;
+    background: color-mix(in srgb, #5b8cff 16%, transparent); border: 1px solid #5b8cff55; font-size: 13px; }
+
+  .card { border: 1px solid var(--page-line, #232a36); border-radius: 16px; padding: 20px; margin-bottom: 24px;
+    background: var(--page-card, #12151b); }
+  .card-hd { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+  .idx { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--page-mut, #98a2b3);
+    border: 1px solid var(--page-line, #232a36); border-radius: 8px; padding: 4px 9px; }
+  .card-hd h3 { margin: 0; font-size: 17px; display: flex; align-items: baseline; gap: 10px; }
+  .card-hd .en { font-size: 12px; font-weight: 400; color: var(--page-mut, #98a2b3); letter-spacing: .3px; }
+  .meta { margin: 2px 0 0; font-size: 12.5px; color: var(--page-mut, #98a2b3); }
+  .copy { margin-left: auto; padding: 7px 13px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 12.5px;
+    background: transparent; color: inherit; border: 1px solid var(--page-line, #232a36); }
+  .copy:hover { border-color: var(--c-accent, #5b8cff); }
+
+  .stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 12px; }
+  .stage { position: relative; border-radius: 12px; padding: 26px 16px 18px; display: flex;
+    align-items: center; justify-content: center; min-height: 176px; border: 1px solid var(--page-line, #232a36); }
+  .stage.wide { grid-column: span 2; }
+  .stage-tag { position: absolute; top: 8px; left: 12px; font-size: 11px; opacity: .62; letter-spacing: .2px; }
+  .tile { border-radius: 22px; padding: 6px; display: flex;
+    background: linear-gradient(180deg, #1e2533, #0b0d11); border: 1px solid #ffffff14; }
+  .sizes { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  .lockup { display: flex; align-items: center; gap: 10px; }
+  .lockup b { font-size: 21px; font-weight: 600; letter-spacing: -0.5px; }
+
+  .notes { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 16px; margin-top: 18px; }
+  @media (max-width: 860px) { .notes { grid-template-columns: 1fr; } .stage.wide { grid-column: span 1; } }
+  .metaphor { margin: 0; font-size: 13px; color: var(--page-mut, #98a2b3); }
+  .pros, .cons { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--page-mut, #98a2b3); }
+  .pros li { color: #3fb26f; }
+  .cons li { color: #e3a343; }
+
+  .mock { margin-top: 34px; border: 1px solid var(--page-line, #232a36); border-radius: 14px; overflow: hidden; }
+  .mock .bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #0d0f13; color: #e7eaf0; }
+  .mock .bar b { font-size: 14px; font-weight: 600; }
+  .mock .bar .dot { width: 7px; height: 7px; border-radius: 999px; background: #3fb26f; }
+  .mock .bar small { margin-left: auto; color: #98a2b3; font-size: 12px; }
+  .mock .body { padding: 16px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; color: #9aa4b2; background: #12151b; }
+
+  footer { margin-top: 34px; color: var(--page-mut, #98a2b3); font-size: 12.5px; }
+  footer pre { background: var(--page-card, #12151b); border: 1px solid var(--page-line, #232a36);
+    border-radius: 10px; padding: 14px; overflow-x: auto; font-size: 12px; line-height: 1.7; }
+  footer code { font-family: ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body class="dark">
+<div class="wrap">
+
+  <div class="top">
+    <div class="brandline">
+      <svg class="mark" viewBox="0 0 64 64" width="52" height="52" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg>
+      <div>
+        <h1>Teleforge LOGO 方案</h1>
+        <p class="sub">6 个版本 · 同一套几何规则(64 网格 / 光学方框 46 / 描边 5–6 / 全圆角端点)· 深底与浅底成对给出</p>
+      </div>
+    </div>
+    <div class="toggle">
+      <button id="btn-dark" aria-pressed="true" type="button">深色看板</button>
+      <button id="btn-light" aria-pressed="false" type="button">浅色看板</button>
+    </div>
+  </div>
+
+  <p class="lede">
+    产品是「SSH 远程 ↔ 本地互通的 AI 编程工具」,所以每个方案都在讲同一件事:两端之间有一条保持住的连接,
+    并且 AI 在那头真实干活。选型只看两点——<b>16px 还认不认得出</b>,以及<b>和实色界面放一起像不像一家人</b>。
+    六个方案(连描边算)都收敛在 64 网格里同一个 <b>46×46 光学方框</b>、居中于 (32,32),并排与缩小时视觉重量一致。
+  </p>
+
+  <div class="palette">
+    <span class="sw"><i style="background:#0d0f13"></i>底 #0d0f13</span>
+    <span class="sw"><i style="background:#16191f"></i>面 #16191f</span>
+    <span class="sw"><i style="background:#e7eaf0"></i>标体 #e7eaf0</span>
+    <span class="sw"><i style="background:#5b8cff"></i>主色 #5b8cff</span>
+    <span class="sw"><i style="background:#3fb26f"></i>连接 #3fb26f</span>
+  </div>
+
+  <div class="overview">
+    <h2>一眼对比(48px)</h2>
+    <div class="strip ctx-dark">
+      <div class="cell"><svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><span>01 双向 T</span></div>
+      <div class="cell"><svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg><span>02 隧道门</span></div>
+      <div class="cell"><svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg><span>03 密钥熔炉</span></div>
+      <div class="cell"><svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><span>04 远程节点</span></div>
+      <div class="cell"><svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>05 双环互通</span></div>
+      <div class="cell"><svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg><span>06 锻造火花</span></div>
+    </div>
+    <div class="pick">推荐主案:<b>01 双向 T</b> —— 有字母骨架、有双向语义,16px 仍成立;主案同时承载「T 字标」与「远程↔本地双向」两层语义,16px 仍是清晰字形;forge-spark 作为 favicon 兜底,portal-bracket 用于终端语境。</div>
+  </div>
+
+  
+  <section class="card" id="dual-arrow-t">
+    <header class="card-hd">
+      <div class="idx">01</div>
+      <div class="ttl">
+        <h3>双向 T<span class="en">Dual-Arrow T</span></h3>
+        <p class="meta">推荐主案 · 主要用途:桌面端图标 / 网页 favicon / 主视觉</p>
+      </div>
+      <button class="copy" data-slug="dual-arrow-t" type="button">复制 SVG</button>
+    </header>
+
+    <div class="stages">
+      <div class="stage ctx-dark">
+        <span class="stage-tag">深色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg>
+      </div>
+      <div class="stage ctx-light">
+        <span class="stage-tag">浅色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg>
+      </div>
+      <div class="stage ctx-tile">
+        <span class="stage-tag">应用图标</span>
+        <div class="tile ctx-dark"><svg class="mark" viewBox="0 0 64 64" width="80" height="80" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg></div>
+      </div>
+      <div class="stage ctx-dark">
+        <span class="stage-tag">小尺寸 48 / 32 / 24 / 16</span>
+        <div class="sizes">
+          <svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="32" height="32" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="24" height="24" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg>
+        </div>
+      </div>
+      <div class="stage ctx-dark wide">
+        <span class="stage-tag">横版组合(标 + 字标)</span>
+        <div class="lockup"><svg class="mark" viewBox="0 0 64 64" width="40" height="40" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><b>Teleforge</b></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <p class="metaphor">首字母 T 的骨架:顶部一条双向箭头 = 远程 ↔ 本地 双向同步;竖杆是 SSH 隧道;下端一颗绿点 = 连接保持的活口。</p>
+      <ul class="pros"><li>唯一的字母骨架,缩到 16px 仍是清晰的字母形</li><li>命中产品核心:远程与本地一套工具</li><li>单色场景只换两色即可用</li></ul>
+      <ul class="cons"><li>元素稍多,极小尺寸(16px)下箭头会糊成短线</li></ul>
+    </div>
+  </section>
+
+  <section class="card" id="portal-bracket">
+    <header class="card-hd">
+      <div class="idx">02</div>
+      <div class="ttl">
+        <h3>隧道门<span class="en">Portal Bracket</span></h3>
+        <p class="meta">终端感最强 · 主要用途:导航栏 / 图标系统 / 命令行入口</p>
+      </div>
+      <button class="copy" data-slug="portal-bracket" type="button">复制 SVG</button>
+    </header>
+
+    <div class="stages">
+      <div class="stage ctx-dark">
+        <span class="stage-tag">深色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg>
+      </div>
+      <div class="stage ctx-light">
+        <span class="stage-tag">浅色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg>
+      </div>
+      <div class="stage ctx-tile">
+        <span class="stage-tag">应用图标</span>
+        <div class="tile ctx-dark"><svg class="mark" viewBox="0 0 64 64" width="80" height="80" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg></div>
+      </div>
+      <div class="stage ctx-dark">
+        <span class="stage-tag">小尺寸 48 / 32 / 24 / 16</span>
+        <div class="sizes">
+          <svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg><svg class="mark" viewBox="0 0 64 64" width="32" height="32" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg><svg class="mark" viewBox="0 0 64 64" width="24" height="24" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg>
+        </div>
+      </div>
+      <div class="stage ctx-dark wide">
+        <span class="stage-tag">横版组合(标 + 字标)</span>
+        <div class="lockup"><svg class="mark" viewBox="0 0 64 64" width="40" height="40" aria-label="隧道门">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="var(--c-fg, #e7eaf0)" stroke-width="5"/>
+  </g></svg><b>Teleforge</b></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <p class="metaphor">一对括号 = 本地与远程两台机器;门内一个 >_ 提示符 = AI 在门那侧真实执行命令。</p>
+      <ul class="pros"><li>开发者一眼认得出是终端 / SSH 语境</li><li>方括号外轮廓硬朗,和实色界面很搭</li></ul>
+      <ul class="cons"><li>等于「终端图标」的常见做法,辨识度靠配色和圆角撑</li></ul>
+    </div>
+  </section>
+
+  <section class="card" id="key-flame">
+    <header class="card-hd">
+      <div class="idx">03</div>
+      <div class="ttl">
+        <h3>密钥熔炉<span class="en">Key Flame</span></h3>
+        <p class="meta">叙事最完整 · 主要用途:启动页 / 关于页 / 品牌插画</p>
+      </div>
+      <button class="copy" data-slug="key-flame" type="button">复制 SVG</button>
+    </header>
+
+    <div class="stages">
+      <div class="stage ctx-dark">
+        <span class="stage-tag">深色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg>
+      </div>
+      <div class="stage ctx-light">
+        <span class="stage-tag">浅色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg>
+      </div>
+      <div class="stage ctx-tile">
+        <span class="stage-tag">应用图标</span>
+        <div class="tile ctx-dark"><svg class="mark" viewBox="0 0 64 64" width="80" height="80" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg></div>
+      </div>
+      <div class="stage ctx-dark">
+        <span class="stage-tag">小尺寸 48 / 32 / 24 / 16</span>
+        <div class="sizes">
+          <svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg><svg class="mark" viewBox="0 0 64 64" width="32" height="32" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg><svg class="mark" viewBox="0 0 64 64" width="24" height="24" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg>
+        </div>
+      </div>
+      <div class="stage ctx-dark wide">
+        <span class="stage-tag">横版组合(标 + 字标)</span>
+        <div class="lockup"><svg class="mark" viewBox="0 0 64 64" width="40" height="40" aria-label="密钥熔炉">
+  <path fill-rule="evenodd" fill="var(--c-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="var(--c-fg, #e7eaf0)" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></svg><b>Teleforge</b></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <p class="metaphor">钥匙 = SSH 私钥认证;钥匙柄是一簇熔炉火 = Forge(锻造)。合起来是「用密钥点着火」。</p>
+      <ul class="pros"><li>把「安全接入 + 锻造」两层意思都装进一个形状</li><li>轮廓修长,适合做竖版启动页 / 加载动画</li></ul>
+      <ul class="cons"><li>火苗+齿纹细节多,24px 以下齿纹会基本消失</li></ul>
+    </div>
+  </section>
+
+  <section class="card" id="node-orbit">
+    <header class="card-hd">
+      <div class="idx">04</div>
+      <div class="ttl">
+        <h3>远程节点<span class="en">Node Orbit</span></h3>
+        <p class="meta">最抽象 · 主要用途:图标系统 / 状态指示 / 动效场景(轨道可转)</p>
+      </div>
+      <button class="copy" data-slug="node-orbit" type="button">复制 SVG</button>
+    </header>
+
+    <div class="stages">
+      <div class="stage ctx-dark">
+        <span class="stage-tag">深色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg>
+      </div>
+      <div class="stage ctx-light">
+        <span class="stage-tag">浅色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg>
+      </div>
+      <div class="stage ctx-tile">
+        <span class="stage-tag">应用图标</span>
+        <div class="tile ctx-dark"><svg class="mark" viewBox="0 0 64 64" width="80" height="80" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg></div>
+      </div>
+      <div class="stage ctx-dark">
+        <span class="stage-tag">小尺寸 48 / 32 / 24 / 16</span>
+        <div class="sizes">
+          <svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="32" height="32" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="24" height="24" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg>
+        </div>
+      </div>
+      <div class="stage ctx-dark wide">
+        <span class="stage-tag">横版组合(标 + 字标)</span>
+        <div class="lockup"><svg class="mark" viewBox="0 0 64 64" width="40" height="40" aria-label="远程节点">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="var(--c-fg, #e7eaf0)"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><b>Teleforge</b></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <p class="metaphor">实心圆 = 你面前的本地;环绕的弧 = 网络路径;弧上留出的缺口里坐着绿点 = 已经连上的远程服务器(连接保持)。</p>
+      <ul class="pros"><li>三笔构成,缩到 16px 依然稳</li><li>缺口 + 绿点把「已连接」讲清楚,天然适合做状态指示</li><li>留白大,好排进各种界面</li></ul>
+      <ul class="cons"><li>偏抽象,单看不像编程工具,需要配字标</li></ul>
+    </div>
+  </section>
+
+  <section class="card" id="bridged-rings">
+    <header class="card-hd">
+      <div class="idx">05</div>
+      <div class="ttl">
+        <h3>双环互通<span class="en">Bridged Rings</span></h3>
+        <p class="meta">主张最直白 · 主要用途:favicon / 白皮书与文档头图 / 双色场景</p>
+      </div>
+      <button class="copy" data-slug="bridged-rings" type="button">复制 SVG</button>
+    </header>
+
+    <div class="stages">
+      <div class="stage ctx-dark">
+        <span class="stage-tag">深色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="stage ctx-light">
+        <span class="stage-tag">浅色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="stage ctx-tile">
+        <span class="stage-tag">应用图标</span>
+        <div class="tile ctx-dark"><svg class="mark" viewBox="0 0 64 64" width="80" height="80" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      </div>
+      <div class="stage ctx-dark">
+        <span class="stage-tag">小尺寸 48 / 32 / 24 / 16</span>
+        <div class="sizes">
+          <svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="mark" viewBox="0 0 64 64" width="32" height="32" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="mark" viewBox="0 0 64 64" width="24" height="24" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+      <div class="stage ctx-dark wide">
+        <span class="stage-tag">横版组合(标 + 字标)</span>
+        <div class="lockup"><svg class="mark" viewBox="0 0 64 64" width="40" height="40" aria-label="双环互通">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--c-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--c-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Teleforge</b></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <p class="metaphor">实线环 = 本地,虚线环 = 远程,两环相交 = 远程与本地共用同一套界面与工具。</p>
+      <ul class="pros"><li>图形极简,任何尺寸都成立</li><li>蓝(本地)+ 绿(远程)双色即品牌记忆点</li></ul>
+      <ul class="cons"><li>两圆相交是常见结构,需要靠虚实线区分开</li></ul>
+    </div>
+  </section>
+
+  <section class="card" id="forge-spark">
+    <header class="card-hd">
+      <div class="idx">06</div>
+      <div class="ttl">
+        <h3>锻造火花<span class="en">Forge Spark</span></h3>
+        <p class="meta">最小记号 · 主要用途:favicon / 加载态 / 与字标并排的小尺寸位</p>
+      </div>
+      <button class="copy" data-slug="forge-spark" type="button">复制 SVG</button>
+    </header>
+
+    <div class="stages">
+      <div class="stage ctx-dark">
+        <span class="stage-tag">深色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg>
+      </div>
+      <div class="stage ctx-light">
+        <span class="stage-tag">浅色底</span>
+        <svg class="mark" viewBox="0 0 64 64" width="132" height="132" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg>
+      </div>
+      <div class="stage ctx-tile">
+        <span class="stage-tag">应用图标</span>
+        <div class="tile ctx-dark"><svg class="mark" viewBox="0 0 64 64" width="80" height="80" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg></div>
+      </div>
+      <div class="stage ctx-dark">
+        <span class="stage-tag">小尺寸 48 / 32 / 24 / 16</span>
+        <div class="sizes">
+          <svg class="mark" viewBox="0 0 64 64" width="48" height="48" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="32" height="32" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="24" height="24" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg>
+        </div>
+      </div>
+      <div class="stage ctx-dark wide">
+        <span class="stage-tag">横版组合(标 + 字标)</span>
+        <div class="lockup"><svg class="mark" viewBox="0 0 64 64" width="40" height="40" aria-label="锻造火花">
+  <path fill="var(--c-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--c-green, #3fb26f)"/></svg><b>Teleforge</b></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <p class="metaphor">锻造溅出的一点火花 = AI 这把工具,下面一根终端光标 = 命令正在执行。</p>
+      <ul class="pros"><li>只有两笔,16px 依旧锐利,做 favicon 最保险</li><li>对称构图,放哪都不歪</li></ul>
+      <ul class="cons"><li>四角星被不少 AI 产品用过,单色时容易撞脸</li></ul>
+    </div>
+  </section>
+
+  <div class="mock">
+    <div class="bar"><svg class="mark" viewBox="0 0 64 64" width="22" height="22" aria-label="双向 T">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--c-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="var(--c-fg, #e7eaf0)" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--c-green, #3fb26f)"/></svg><b>Teleforge</b><span class="dot"></span><small>已连接 · ssh://prod-web-01</small></div>
+    <div class="body">$ npm run dev<br>$ AI Agent 在远程工作区读写文件、执行命令…</div>
+  </div>
+
+  <footer>
+    <p>产物清单(全部由 <code>build-logos.mjs</code> 生成,改几何只需改这一处):</p>
+    <pre>docs/logo/
+├─ index.html                ← 本预览看板(离线可开)
+├─ build-logos.mjs           ← 几何与调色板的单一事实源
+├─ icon.sprite.svg           ← 6 个 symbol,页面里 &lt;use&gt; 复用
+├─ icon.manifest.json        ← 方案清单 / 技术建议
+├─ icon.spec.md              ← 图标系统规范(尺寸、描边、命名、用法)
+├─ canvas.icon.demo.js       ← Canvas 绘制 + 动效起步模板
+├─ concepts/                 ← 裸标(透明底,含 -light 浅底版)
+├─ tiles/                    ← 圆角方形应用图标
+└─ lockups/                  ← 横版标 + 字标组合</pre>
+    <p>导出 PNG(桌面端图标走 Tauri 自己的流程):<br>
+      <code>npx sharp-cli -i docs/logo/tiles/dual-arrow-t-tile.svg -o /tmp/tile-1024.png resize 1024 1024</code><br>
+      或直接 <code>npm run desktop:icon</code>(会读 <code>web/public/logo.png</code>)—— 选定方案后我再把成品同步到 <code>web/public/</code> 与 <code>src-tauri/icons/</code>。</p>
+  </footer>
+</div>
+
+<script>
+  var body = document.body;
+  var bd = document.getElementById('btn-dark'), bl = document.getElementById('btn-light');
+  function setTheme(light) {
+    body.classList.toggle('light', light);
+    body.classList.toggle('dark', !light);
+    bd.setAttribute('aria-pressed', String(!light));
+    bl.setAttribute('aria-pressed', String(light));
+  }
+  bd.onclick = function () { setTheme(false); };
+  bl.onclick = function () { setTheme(true); };
+
+  // 复制某个方案在深色底下的裸标 SVG 源码,方便直接贴进代码库
+  Array.prototype.forEach.call(document.querySelectorAll('.copy'), function (btn) {
+    btn.onclick = function () {
+      var card = btn.closest('.card');
+      var svg = card.querySelector('.ctx-dark .mark');
+      var src = '<?xml version="1.0" encoding="UTF-8"?>\n' + svg.outerHTML.replace(/class="mark" /, '');
+      var done = function () { btn.textContent = '已复制'; setTimeout(function () { btn.textContent = '复制 SVG'; }, 1200); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(src).then(done, done);
+      } else { done(); }
+    };
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="Teleforge 双向 T 应用图标">
+  <defs>
+    <linearGradient id="tile-dual-arrow-t" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e2533"/>
+      <stop offset="1" stop-color="#0b0d11"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#tile-dual-arrow-t)"/>
+  <rect x="0.6" y="0.6" width="62.8" height="62.8" rx="13.4" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.2"/>
+  <g transform="translate(4.174 4.174) scale(0.8696)">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="#5b8cff" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="#5b8cff" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="#5b8cff" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="#e7eaf0" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="#3fb26f"/></g>
+</svg>

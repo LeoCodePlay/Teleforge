@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="Teleforge 密钥熔炉 应用图标">
+  <defs>
+    <linearGradient id="tile-key-flame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e2533"/>
+      <stop offset="1" stop-color="#0b0d11"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#tile-key-flame)"/>
+  <rect x="0.6" y="0.6" width="62.8" height="62.8" rx="13.4" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.2"/>
+  <g transform="translate(4.174 4.174) scale(0.8696)">
+  <path fill-rule="evenodd" fill="#5b8cff" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#e7eaf0" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></g>
+</svg>

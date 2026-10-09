@@ -6,6 +6,7 @@
 // (parseXxxSse);chat() 本身只关心重试 / 换 Key / 结束语义,对协议无感。
 // 生图模型(imageGen)另走 /images/generations 与 /images/edits 两个非流式端点(仅 OpenAI 协议)。
 // model 设为 'mock' 时进入本地联调模式(无需 API Key,可跑通完整 Agent 循环)
+import { randomUUID } from 'node:crypto';
 import type { LlmMessage } from './session.ts';
 import { describeFetchError, outboundFetch } from '../core/net.ts';
 
@@ -183,6 +184,8 @@ export interface ImageInput {
 
 /** 一次请求失败进入重试的信息(供上层把「重试第几次」推到前端,对齐 harness llm-retry 的 retry 事件语义) */
 export interface RetryInfo {
+  /** 连续失败阶段标识;收到有效增量后,下一次失败使用新标识 */
+  retryGroup?: string;
   /** 当前第几次重试(从 1 起) */
   retry: number;
   /** 最大重试次数 */
@@ -319,9 +322,21 @@ export class LlmClient {
     const badKeys: string[] = [];
     let idleFired = false;   // 本次尝试是否因长期收不到任何数据被看门狗掐断
     let startedAt = Date.now(); // 仅用于在最终错误里报告「整轮已耗时」;换 Key 时会重置
+    let retryGroup: string | undefined;
+    let consecutiveRetries = 0;
     const trackedDelta = (d: { kind: string; text?: string; index?: number }) => {
-      if (d.text) emittedChars += d.text.length;
+      if (d.text) {
+        emittedChars += d.text.length;
+        // 输出恢复结束当前失败阶段;不重置请求总预算,避免反复断流造成无限重试。
+        retryGroup = undefined;
+        consecutiveRetries = 0;
+      }
       onDelta?.(d);
+    };
+    const emitRetry = (info: RetryInfo) => {
+      retryGroup ??= randomUUID();
+      if (info.kind !== 'switch') consecutiveRetries++;
+      onRetry?.({ ...info, retryGroup, ...(info.kind === 'switch' ? {} : { retry: consecutiveRetries }) });
     };
     // 当前活跃 Key 被判定不可用(余额不足 / 鉴权失败)时的统一处理:标记它 + 换下一个候选 Key。
     // 两条失败路径共用(HTTP 非 2xx;以及网关把错误包在 200 + JSON 里的流解析失败):
@@ -351,7 +366,7 @@ export class LlmClient {
           : `API Key ${failedKey.slice(0, 8)}… 鉴权失败(网关拒绝该 Key),已切换到第 ${keyIdx + 1}/${keyList.length} 个可用 Key`
       };
       lastErr = new LlmRequestError(lastFailure.text, { retryable: true, status });
-      onRetry?.({ retry: keyIdx, maxRetries: keyList.length, delayMs: 0, error: lastFailure.text, kind: 'switch' });
+      emitRetry({ retry: keyIdx, maxRetries: keyList.length, delayMs: 0, error: lastFailure.text, kind: 'switch' });
       console.warn(`[llm] ${this.model} API Key ${kind === 'balance' ? '余额不足' : '鉴权失败'},切换到第 ${keyIdx + 1}/${keyList.length} 个 Key`);
       return true;
     };
@@ -373,7 +388,7 @@ export class LlmClient {
           `[llm] ${this.model} 请求失败(${lastFailure.text.slice(0, 200)}),${(delayMs / 1000).toFixed(1)}s 后重试`
           + `(第 ${attempt} 次重试,上限 ${LLM_RETRY.MAX_ATTEMPTS} 次)`
         );
-        onRetry?.({
+        emitRetry({
           retry: attempt,
           maxRetries: LLM_RETRY.MAX_ATTEMPTS,
           delayMs,

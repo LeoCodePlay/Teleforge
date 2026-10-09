@@ -142,6 +142,7 @@ export interface SessionEventDataMap {
    */
   'llm/retry': {
     retry: number; maxRetries: number; delayMs: number;
+    retryGroup?: string;
     error?: string; discard?: boolean;
     /** 该次重试最终的状态:started=已开始重试 / cancelled=被停止或彻底失败 */
     state?: 'started' | 'cancelled';

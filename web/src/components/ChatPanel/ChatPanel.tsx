@@ -47,6 +47,8 @@ import { AttachRail, MessageAttachments, Lightbox, classifyKind } from '../Attac
 import type { ComposerAttachment, LightboxSrc } from '../Attachments/Attachments';
 import type { AttachmentInfo } from '../../types';
 import type { GoalInfo } from '../../types';
+import type { PresentedFile } from '../../types';
+import { resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path';
 import './ChatPanel.scss';
 
 // 新会话(尚未创建服务端会话)的前端占位 sid:用于"草稿式"新建——
@@ -354,9 +356,7 @@ function attachTurnFileChanges(msgs: ChatMessage[], lastIdx: number) {
 // 一次 run 的多轮 assistant/tool 在渲染上合并为一条回复,按「思考 / 文本 / 连续工具组」实际发生顺序分段
 function turnsToMessages(turns: any[]): ChatMessage[] {
   const out: ChatMessage[] = [];
-  // 本轮(最后一条 user 消息之后)已落下的重试行下标。同一轮里重复的重试(同一原因 /
-  // 断线补发 / 每个 step 都先撞到无余额的 Key)只占一行:第一次出现的位置就是失败发生的
-  // 真实位置,后续原地更新计数与原因,不再堆成多行、也不再因此把回复拆成多段。
+  // 当前连续失败阶段的重试行下标:恢复 assistant 输出或分组变化后不再覆盖旧记录。
   let lastRetryOutIdx = -1;
   // 记录每个 turns 下标对应到 out 里的投影下标:服务端原位投影后,压缩标记行的
   // compaction.retainedFrom 是 turns 下标(保留区首条消息面在 turns 里的位置)。
@@ -421,6 +421,7 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
     }
     if (t.role === 'assistant') {
       const calls = t.tool_calls_json ? JSON.parse(t.tool_calls_json) : (t.tool_calls || []);
+      if (t.content || t.reasoning_content || calls.length || t.attachments?.length) lastRetryOutIdx = -1;
       const tools: ToolCallInfo[] = (Array.isArray(calls) ? calls : [])
         .filter((c: any) => c && c.id && c.function?.name)
         .map((c: any): ToolCallInfo => {
@@ -472,11 +473,13 @@ function turnsToMessages(turns: any[]): ChatMessage[] {
     if (t.role === 'notice') {
       // 提示行(⚠ 中断原因 / 截断披露)与重试记录:服务端已把它们作为「显示面」事件持久化,
       // 这里必须原样渲染 —— 它们不进模型上下文,但要留在对话里发生的位置上。
-      // 重试记录在日志里是「一次一条」:同一轮里重复的重试合并到首次出现的那一行(见
-      // lastRetryOutIdx),原地更新计数与失败原因。这样重试行落在失败发生的真实位置,
-      // 且一次重试只显示一次;序号回到 1 且换了轮(遇到新的 user 消息)才另起一行。
+      // 日志中每次重试各占一条,只有连续失败阶段内的记录原地合并。
+      // retryGroup 也能区分曾恢复输出但半成品已回滚、没有 assistant 落盘的情况。
       if (t.retry) {
-        if (lastRetryOutIdx >= 0 && out[lastRetryOutIdx]?.retry) {
+        const previousRetry = lastRetryOutIdx >= 0 ? out[lastRetryOutIdx]?.retry : undefined;
+        const sameGroup = previousRetry && (!t.retry.retryGroup || !previousRetry.retryGroup
+          || t.retry.retryGroup === previousRetry.retryGroup);
+        if (sameGroup) {
           out[lastRetryOutIdx] = {
             ...out[lastRetryOutIdx], content: '', retry: t.retry, time: t.time, forkTail: ti
           };
@@ -953,6 +956,24 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 多模态开关(设置 → AI 配置 → 模型「多模态」)决定能否添加/发送图片。
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [lightbox, setLightbox] = useState<LightboxSrc | null>(null);
+
+  /**
+   * 成果物卡「打开文件」:通道选择 + 路径补全。
+   *
+   * 通道:服务端在 present 落盘时就判定了归属侧(meta.local),优先用它 ——
+   * 相对路径靠前缀是猜不出来的;旧会话的历史数据没有该字段,才回落到
+   * "路径落在本机工作区就是本机,否则远程"的推断。
+   * 补全:相对路径必须按该侧工作区补成绝对路径 —— 本机媒体预览走 `/api/media`
+   * (那条接口只认绝对路径,相对路径会落到服务进程的 cwd 上,表现为"图片明明在却
+   * 报媒体加载失败"),远程走 SFTP 同理。
+   */
+  const openDeliverable = (f: PresentedFile, aside: boolean) => {
+    const base = connected ? workspace : localWorkspace;
+    const isLocal = f.local ?? (!!localWorkspace && (!connected || !!base && f.path.startsWith(localWorkspace)));
+    const full = resolveWorkspacePath((isLocal ? localWorkspace : base) ?? undefined, f.path);
+    if (isLocal) (aside ? onOpenLocalFileAside : onOpenLocalFile)?.(full);
+    else (aside ? onOpenFileAside : onOpenFile)?.(full);
+  };
   // 当前会话是否有生图请求在途:把"正在生成图片"并入对话流末尾那条统一的运行状态行
   // (不再在气泡内单独占一行)。image_job 置位,image_done / 轮次收尾时清位回到
   // 「Agent 正在运行…」。生图是非流式的数十秒等待,这行让"仍在跑"始终可见。
@@ -1545,8 +1566,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             // 位置:把「失败发生的那一刻」当分界点 —— 当前回复气泡在失败点收尾,重试行紧跟其后,
             // 之后重新生成的内容流进一个新气泡。提示行因此夹在前后内容之间,而不是永远贴在整轮
             // 回复的最下面(与刷新后 turnsToMessages 的投影同一口径)。
-            // 一次失败的重试全程只占一行:同一轮里的重复重试(同一原因 / 断线补发 / 每个 step 都
-            // 先撞到无余额的 Key)原地更新计数(1/10 → 2/10),不堆叠成多行、也不重复拆气泡。
+            // 连续失败期间只占一行,原地更新计数;恢复输出后的下一次失败另起一行。
             // m.discard=true 表示这次失败前已经流出过内容:重试会重发这一步,必须先把它整段回滚,
             // 否则重试成功后的正文会和这段半成品拼在一起重复。
             // m.persisted=true:服务端已落库(占一个消息面下标),本地分支点计数器同步 +1。
@@ -1563,9 +1583,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                 }
               }
               // 落点规则见 utils/compactionOrder 的 applyRetryNotice(首次重试在失败点拆开,
-              // 同轮重复重试原地更新;已收尾的陈旧事件只落一行)
+              // 连续失败原地更新,恢复后再次失败另起一行;陈旧事件不拆已收尾气泡)
               return applyRetryNotice(c, {
                 retry: Number(m.retry) || 1,
+                ...(typeof m.retryGroup === 'string' ? { retryGroup: m.retryGroup } : {}),
                 maxRetries: Number(m.maxRetries) || 10,
                 // 不再把 0 顶成 2000:换 Key(delayMs=0)是立即重发,显示「等待 2 秒」会误导
                 // (历史回放走 projectEvents,那里本来也是 `|| 0`,两条路径口径要一致)
@@ -2974,17 +2995,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                     <DeliverablesCard
                       files={m.deliverables}
                       cwd={connected ? workspace : localWorkspace}
-                      onOpen={(p) => {
-                        // 路径落在本地工作区就走本机打开,否则走远程;两侧都拿不到 cwd 时默认远程
-                        const base = connected ? workspace : localWorkspace;
-                        const isLocal = !!localWorkspace && (!connected || !!base && p.startsWith(localWorkspace));
-                        (isLocal ? onOpenLocalFile : onOpenFile)?.(p);
-                      }}
-                      onOpenAside={(p) => {
-                        const base = connected ? workspace : localWorkspace;
-                        const isLocal = !!localWorkspace && (!connected || !!base && p.startsWith(localWorkspace));
-                        (isLocal ? onOpenLocalFileAside : onOpenFileAside)?.(p);
-                      }}
+                      onOpen={(f) => openDeliverable(f, false)}
+                      onOpenAside={(f) => openDeliverable(f, true)}
                     />
                   )}
                   {/* 文件变更汇总卡:仅在本条回复结束(streaming=false)后展示「N 个文件已更改」(点击展开列表);

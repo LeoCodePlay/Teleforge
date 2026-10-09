@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true">
+  <!-- 双向 T / Dual-Arrow T -->
+  <symbol id="logo-dual-arrow-t" viewBox="0 0 64 64">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 21.5 H42" stroke="var(--tf-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M20 14.5 L13 21.5 L20 28.5" stroke="var(--tf-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M44 14.5 L51 21.5 L44 28.5" stroke="var(--tf-accent, #5b8cff)" stroke-width="6"/>
+    <path d="M32 21.5 V40" stroke="currentColor" stroke-width="6"/>
+  </g>
+  <circle cx="32" cy="47" r="5.5" fill="var(--tf-green, #3fb26f)"/></symbol>
+  <!-- 隧道门 / Portal Bracket -->
+  <symbol id="logo-portal-bracket" viewBox="0 0 64 64">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11 H17.5 A5.5 5.5 0 0 0 12 16.5 V47.5 A5.5 5.5 0 0 0 17.5 52.5 H22" stroke="var(--tf-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M42 11 H46.5 A5.5 5.5 0 0 1 52 16.5 V47.5 A5.5 5.5 0 0 1 46.5 52.5 H42" stroke="var(--tf-accent, #5b8cff)" stroke-width="5"/>
+    <path d="M26 25 L34 32 L26 39" stroke="currentColor" stroke-width="5"/>
+    <path d="M38.5 39 H45.5" stroke="currentColor" stroke-width="5"/>
+  </g></symbol>
+  <!-- 密钥熔炉 / Key Flame -->
+  <symbol id="logo-key-flame" viewBox="0 0 64 64">
+  <path fill-rule="evenodd" fill="var(--tf-accent, #5b8cff)" d="M32 10 C36 17 44 21 44 29 A12 12 0 0 1 20 29 C20 21 28 17 32 10 Z M32 20 C34 24 37 26 37 29 A5 5 0 0 1 27 29 C27 26 30 24 32 20 Z"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor" stroke-width="5.5">
+    <path d="M32 39 V52"/>
+    <path d="M32 43.5 H43.5"/>
+    <path d="M32 51 H38.5"/>
+  </g></symbol>
+  <!-- 远程节点 / Node Orbit -->
+  <symbol id="logo-node-orbit" viewBox="0 0 64 64">
+  <path d="M51.02 25.82 A20 20 0 1 1 38.84 13.21" fill="none" stroke="var(--tf-accent, #5b8cff)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="currentColor"/>
+  <circle cx="46.39" cy="18.11" r="5.5" fill="var(--tf-green, #3fb26f)"/></symbol>
+  <!-- 双环互通 / Bridged Rings -->
+  <symbol id="logo-bridged-rings" viewBox="0 0 64 64">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="var(--tf-accent, #5b8cff)" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="var(--tf-green, #3fb26f)" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <!-- 锻造火花 / Forge Spark -->
+  <symbol id="logo-forge-spark" viewBox="0 0 64 64">
+  <path fill="var(--tf-accent, #5b8cff)" d="M32 9 C34.5 19 36.5 21 48 24.5 C36.5 28 34.5 30 32 40 C29.5 30 27.5 28 16 24.5 C27.5 21 29.5 19 32 9 Z"/>
+  <rect x="23" y="48.5" width="18" height="6.5" rx="3.25" fill="var(--tf-green, #3fb26f)"/></symbol>
+</svg>

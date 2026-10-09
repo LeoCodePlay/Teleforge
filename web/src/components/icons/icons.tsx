@@ -737,3 +737,29 @@ export function IconSave16(props: IconProps) {
     </svg>
   );
 }
+
+// ---- 标签条右键菜单 ----
+// 「关闭当前标签」直接复用 IconClose16(叉)、「关闭全部标签」复用文件菜单那枚
+// IconTrashOutline14(🗑 的线性版,全站删除/清空同一个形状);这里只补两个
+// 专属动作:置顶、关闭其它标签。
+
+/** 置顶标签:按钉(钉帽 + 收拢的针身 + 针尖),即标签「钉在标签条前端、不随滚动」。 */
+export function IconPin16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M5.2 2.6h5.6v3.1l1.8 2.6H3.4l1.8-2.6Z" />
+      <path d="M8 8.3v5.1" />
+    </svg>
+  );
+}
+
+/** 关闭其它标签:两片错位标签页 + 前片内一枚叉 = 除这个之外的一并关掉。 */
+export function IconCloseOthers16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M6.2 2.2h4.8a2 2 0 0 1 2 2v4.8" />
+      <rect x="2.6" y="5.6" width="7.6" height="7.6" rx="1.8" />
+      <path d="M5.1 8.1 7.7 10.7M7.7 8.1 5.1 10.7" />
+    </svg>
+  );
+}

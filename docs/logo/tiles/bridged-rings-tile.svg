@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="Teleforge 双环互通 应用图标">
+  <defs>
+    <linearGradient id="tile-bridged-rings" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e2533"/>
+      <stop offset="1" stop-color="#0b0d11"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#tile-bridged-rings)"/>
+  <rect x="0.6" y="0.6" width="62.8" height="62.8" rx="13.4" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.2"/>
+  <g transform="translate(4.174 4.174) scale(0.8696)">
+  <circle cx="24.5" cy="32" r="12.5" fill="none" stroke="#5b8cff" stroke-width="5"/>
+  <circle cx="39.5" cy="32" r="12.5" fill="none" stroke="#3fb26f" stroke-width="5" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round"/></g>
+</svg>

@@ -342,8 +342,13 @@ export interface AttachmentInfo {
  * 只带路径与说明,**不复制内容**:内容仍在原路径,用户打开的是当前文件。
  */
 export interface PresentedFile {
-  /** 文件路径(相对工作区或绝对路径) */
+  /** 文件路径(服务端已解析成绝对路径;旧会话的历史数据可能还是工作区相对路径) */
   path: string;
+  /**
+   * 服务端判定的归属侧:true=本机文件,false=远程文件。
+   * 旧会话的历史数据没有这个字段,前端回落到"路径落在本机工作区就是本机"的推断。
+   */
+  local?: boolean;
   /** 给用户看的一句话说明:这是什么、拿来做什么 */
   description?: string;
 }
@@ -407,6 +412,8 @@ export interface ChatMessage {
   /** 模型请求失败进入重试的提示消息(role=notice):同一失败重试时原地更新不堆叠。
       渲染为 harness 风格的单行折叠状态行(等待重试实时倒计时 + 可展开的失败详情) */
   retry?: {
+    /** 连续失败阶段标识,用于实时更新和历史回放一致分组 */
+    retryGroup?: string;
     /** 当前第几次重试(从 1 起) */
     retry: number;
     /** 最大重试次数 */

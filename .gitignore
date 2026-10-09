@@ -49,5 +49,6 @@ generated-images/
 # Playwright 探针截图(output/ 是构建/调试产物目录,不入库)
 output/playwright/
 
-# 扩展打包产物(scripts/build-extension.mjs 生成,发布时作为 GitHub Release 附件,不入库)
-output/teleforge-auto-*.zip
+# logo 制作产物与扩展打包产物(生成脚本、中间 PNG、旧图标备份、发布用 zip;一律不入库)
+# 成品图标已落到 src-tauri/icons/ 与 web/public/logo*.png,设计源在 docs/logo/
+output/

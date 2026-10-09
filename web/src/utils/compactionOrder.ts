@@ -56,6 +56,8 @@ export function tailAssistantIndex(msgs: CompactionRowCarrier[]): number {
 
 /** 一次「模型请求失败进入重试」事件在消息流里的落点信息 */
 export interface RetryNoticeInput {
+  /** 连续失败阶段的标识;恢复输出后再次失败会生成新标识 */
+  retryGroup?: string;
   /** 当前第几次重试(从 1 起) */
   retry: number;
   /** 最大重试次数 */
@@ -79,8 +81,8 @@ export interface RetryNoticeOptions {
 
 /**
  * 把重试提示行落到**失败发生的那一刻**。规则:
- *  - 同一轮(最后一条 user 之后)已经有重试行 → 原地更新计数与失败原因,不拆气泡、不新增行
- *    (同一原因的重试 / 断线补发 / 每个 step 都先撞到无余额的 Key,都只占一行);
+ *  - 同一连续失败阶段已有重试行 → 原地更新计数与失败原因;
+ *  - 恢复输出后再次失败 → 保留旧记录,当前流式气泡在失败点收尾,插入新重试行和新气泡;
  *  - 本轮首次重试 → 当前流式气泡在失败点收尾,插入重试行,再起一个新的流式气泡,
  *    重试成功后接上来的增量因此落在提示行**下面**,历史回放(turnsToMessages)同一口径;
  *  - 本轮已收尾 → 只追加一行记录,不拆历史气泡。
@@ -94,12 +96,20 @@ export function applyRetryNotice(
 ): ChatMessage[] {
   const payload = { ...input, discard: input.discard === true, state: 'scheduled' as const };
   const c = [...msgs];
-  // 本轮已有重试行:原地更新,不拆气泡
+  // 分组标识支持半成品已回滚与断线补发;旧事件则按恢复输出的位置划分。
   const rowIdx = ((): number => {
+    let resumed = false;
     for (let i = c.length - 1; i >= 0; i--) {
-      // 轮次分界只认真正的用户消息(压缩标记行 / 命令卡的 role 也是 'user',不算新一轮)
       if (isRealUserRow(c[i])) break;
-      if (c[i]?.role === 'notice' && c[i].retry) return i;
+      const msg = c[i];
+      if (msg.role === 'assistant' && ((msg.segments || []).length || (msg.attachments || []).length)) resumed = true;
+      if (msg.role === 'notice' && msg.retry) {
+        if (input.retryGroup && msg.retry.retryGroup) {
+          if (input.retryGroup === msg.retry.retryGroup) return i;
+          continue;
+        }
+        return !resumed && msg.retry.state !== 'started' ? i : -1;
+      }
     }
     return -1;
   })();

@@ -41,26 +41,37 @@ const LOCAL_SKILL_PREFIX = 'local://';
 const DELIVERABLE_MAX_FILES = 6;
 
 /**
- * 校验一个路径是否是**已存在的普通文件**,返回命中的那一侧('remote' / 'local'),都不命中返回 null。
+ * 校验一个路径是否是**已存在的普通文件**,返回命中的那一侧('remote' / 'local')与它的**绝对路径**,
+ * 都不命中返回 null。
  *
  * 为什么要两侧都试:present 的路径可能来自远程工作区,也可能是本机工作区,
  * 而模型只给一个字符串。与其逼模型多填一个 location 参数(它会填错),不如这里探测。
  * 先本机后远程:本机 statSync 是本地调用,失败代价极低;远程要过一次 SFTP 往返。
  *
+ * 为什么必须在这里把相对路径解析成绝对:卡片会把路径原样交给「打开文件」——
+ * 本机读盘走 `/api/media` 的 `fs.stat`、远程走 SFTP,两侧都只认绝对路径(媒体接口没有
+ * "工作区"概念,相对路径会落到服务进程的 cwd 上)。只校验不解析,用户点开就是
+ * 「媒体加载失败,文件可能不存在或编码不受支持」——文件明明在,却谁都打不开。
+ *
  * 目录/符号链接会被拒绝(与 dsh 一致):成果物应该是"一个能直接打开给你看的文件",
  * 给个目录会让用户点开一张什么也没有的卡片。
  */
-async function probeExistingFile(p: string): Promise<'local' | 'remote' | null> {
+async function probeExistingFile(p: string): Promise<{ where: 'local' | 'remote'; abs: string } | null> {
   // 本机
   try {
     const abs = resolveInLocalWorkspace(p);
-    if (fs.statSync(abs).isFile()) return 'local';
+    if (fs.statSync(abs).isFile()) return { where: 'local', abs };
   } catch { /* 不在本地工作区或不存在:继续试远程 */ }
-  // 远程
-  try {
-    const st = await ssh.stat(p);
-    if (st && st.isFile()) return 'remote';
-  } catch { /* 未连接 / SFTP 未就绪:当作不存在 */ }
+  // 远程:相对路径优先按远程工作区补全(与本机侧同一条纪律),补不上再退回原样交给 SFTP ——
+  // SFTP 的相对路径是相对远端家目录的,历史上确实有模型这么用,不能因为补全而丢掉这类交付。
+  const absRemote = path.isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p);
+  const cands = absRemote || !ssh.workspace ? [p] : [joinRemote(ssh.workspace, p), p];
+  for (const cand of cands) {
+    try {
+      const st = await ssh.stat(cand);
+      if (st && st.isFile()) return { where: 'remote', abs: cand };
+    } catch { /* 未连接 / SFTP 未就绪:当作不存在 */ }
+  }
   return null;
 }
 
@@ -651,22 +662,25 @@ const toolDefs: ToolDef[] = [
       if (raw.length > DELIVERABLE_MAX_FILES) {
         throw new Error(`present: 单次最多 ${DELIVERABLE_MAX_FILES} 个成果物(收到 ${raw.length} 个),请挑最重要的几个`);
       }
-      const out: Array<{ path: string; description?: string }> = [];
+      const out: Array<{ path: string; local: boolean; description?: string }> = [];
       const seen = new Set<string>();
       for (const it of raw) {
         const p = String(it?.path || '').trim();
         if (!p) throw new Error('present: path 必须是非空字符串');
-        if (seen.has(p)) continue; // 同一路径重复声明:去重而不是报错(模型偶尔会重复)
         const desc = String(it?.description || '').trim();
-        // 存在性校验:先本机、再远程。校验不过就**报错**而不是照收 ——
+        // 存在性校验 + 解析成绝对路径:先本机、再远程。校验不过就**报错**而不是照收 ——
         // 让模型当场发现路径写错(而不是给用户一张点开就失败的空卡片)。
-        const where = await probeExistingFile(p);
-        if (!where) {
+        const hit = await probeExistingFile(p);
+        if (!hit) {
           throw new Error(`present: 文件不存在或不是普通文件:${p}`
             + '(远程请给工作区内的路径或绝对路径;本机请给本地路径)');
         }
-        seen.add(p);
-        out.push({ path: p, ...(desc ? { description: desc } : {}) });
+        // 同一路径重复声明:去重而不是报错(模型偶尔会重复);相对/绝对写法算同一条,所以解析后再判重
+        if (seen.has(hit.abs)) continue;
+        seen.add(hit.abs);
+        // local 侧随路径一起下发:卡片据此直接选对「本机/远程」通道,不必再靠路径前缀猜
+        // (相对路径根本猜不出来);path 一定是绝对路径,媒体预览与 SFTP 才拿得到文件。
+        out.push({ path: hit.abs, local: hit.where === 'local', ...(desc ? { description: desc } : {}) });
       }
       session.append('deliverable/presented', { files: out });
       emit?.('agent', { event: 'deliverable', files: out, sid });

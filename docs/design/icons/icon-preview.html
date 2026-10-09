@@ -255,6 +255,15 @@
     <path d="M5.4 2.8v3.4h5.2V2.8" />
     <path d="M4.8 13.2v-3.6h6.4v3.6" />
   </symbol>
+  <symbol id="i-pin-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5.2 2.6h5.6v3.1l1.8 2.6H3.4l1.8-2.6Z" />
+    <path d="M8 8.3v5.1" />
+  </symbol>
+  <symbol id="i-close-others-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6.2 2.2h4.8a2 2 0 0 1 2 2v4.8" />
+    <rect x="2.6" y="5.6" width="7.6" height="7.6" rx="1.8" />
+    <path d="M5.1 8.1 7.7 10.7M7.7 8.1 5.1 10.7" />
+  </symbol>
 </svg>
 
 <h2>图标一览 · 尺寸递进(12 / 14 / 20 / 32)</h2>
@@ -323,6 +332,17 @@
     <div class="sep"></div>
     <button><span><svg width="14" height="14"><use href="#i-file-16" /></svg></span>新建文件</button>
     <button><span><svg width="14" height="14"><use href="#i-folder-16" /></svg></span>新建文件夹</button>
+  </div>
+</div>
+
+<h2>实际落位 · 标签条右键菜单(置顶 / 关闭当前 / 关闭其它 / 关闭全部)</h2>
+<div class="row">
+  <div class="cmenu">
+    <button><span><svg width="14" height="14"><use href="#i-pin-16" /></svg></span>置顶标签</button>
+    <div class="sep"></div>
+    <button><span><svg width="14" height="14"><use href="#i-close-16" /></svg></span>关闭当前标签</button>
+    <button><span><svg width="14" height="14"><use href="#i-close-others-16" /></svg></span>关闭其它标签</button>
+    <button class="danger"><span><svg width="14" height="14"><use href="#i-trash-14" /></svg></span>关闭全部标签</button>
   </div>
 </div>
 
@@ -483,6 +503,8 @@
     ['i-cut-16', 'IconCut16', '编辑器菜单 · 剪切'],
     ['i-select-all-16', 'IconSelectAll16', '编辑器菜单 · 全选'],
     ['i-save-16', 'IconSave16', '编辑器菜单 · 保存'],
+    ['i-pin-16', 'IconPin16', '标签菜单 · 置顶 / 取消置顶'],
+    ['i-close-others-16', 'IconCloseOthers16', '标签菜单 · 关闭其它标签'],
   ];
   const grid = document.getElementById('grid');
   const lightRow = document.getElementById('lightRow');

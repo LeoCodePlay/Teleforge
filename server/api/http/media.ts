@@ -3,8 +3,10 @@
 // 支持 Range 请求(视频/音频拖动进度条必需);download=1 时改为附件下载
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { sshManager as ssh } from '../../core/ssh-manager.ts';
+import { joinRemote, sshManager as ssh } from '../../core/ssh-manager.ts';
+import { localFs } from '../../core/local-fs.ts';
 
 const MIME: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
@@ -23,9 +25,17 @@ export function mediaMime(name: string): string | null {
 export default async function registerMedia(app: FastifyInstance) {
   app.get('/api/media', async (request: FastifyRequest, reply: FastifyReply) => {
     const q = (request.query || {}) as any;
-    const p = String(q.path || '');
     const isLocal = q.local === '1' || q.local === 'true';
-    if (!p) return reply.code(400).send('缺少 path');
+    const raw = String(q.path || '');
+    if (!raw) return reply.code(400).send('缺少 path');
+    // 相对路径按**该侧的工作区**补全:媒体接口自己只知道进程 cwd,而调用方(成果物卡等)
+    // 给的是工作区相对路径 —— 直接 stat 会落到 cwd 上,表现为"文件明明在,图片却打不开"。
+    // 绝对路径一律原样透传(POSIX / Windows 盘符 / UNC 都算绝对)。
+    const p = path.isAbsolute(raw)
+      ? raw
+      : (isLocal
+        ? (localFs.workspace ? path.resolve(localFs.workspace, raw) : raw)
+        : (ssh.workspace ? joinRemote(ssh.workspace, raw) : raw));
     const mime = mediaMime(p);
     if (!mime) return reply.code(400).send('不支持的媒体格式');
     try {

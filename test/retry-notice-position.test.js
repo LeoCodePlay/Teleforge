@@ -1,11 +1,11 @@
 // 重试提示行落点单测(前端纯函数 applyRetryNotice):
 // 用户诉求 —— 重试行要落在**失败发生的那一刻**,不要一直贴在整轮回复的最下面;
-// 且同一轮里重复的重试(同一原因 / 每个 step 都先撞到无余额的 Key)只显示一行。
+// 且连续失败阶段内的重试只显示一行,恢复输出后再次失败独立显示。
 //
 // 规则:
 //   - 本轮首次重试:当前流式气泡在失败点收尾 → 重试行 → 新的流式气泡(后续增量落在下面);
-//   - 同一轮重复重试:原地更新计数/原因,不拆气泡、不新增行;
-//   - 新一轮(user 消息之后)才另起一行;
+//   - 未恢复输出时重复重试:原地更新计数/原因,不拆气泡、不新增行;
+//   - 恢复输出后再次失败或新一轮(user 消息之后):另起一行;
 //   - 本轮已收尾(turnClosed)的陈旧重试事件只追加一行,不拆历史气泡。
 import { applyRetryNotice, tailAssistantIndex } from '../web/src/utils/compactionOrder.ts';
 
@@ -135,6 +135,34 @@ console.log('== 重试提示行落点 ==');
   const row = out.find((m) => m.retry);
   check('kind=switch 透传到重试行', row?.retry?.kind === 'switch', JSON.stringify(row?.retry));
   check('换 Key 的 delayMs 保持 0(不伪造等待)', row?.retry?.delayMs === 0, String(row?.retry?.delayMs));
+}
+
+// 10) 恢复正文/思考/工具输出后再失败:旧记录固定,新记录落在恢复内容后。
+for (const segment of [
+  { kind: 'text', text: '恢复后的正文' },
+  { kind: 'reasoning', text: '恢复后的思考' },
+  { kind: 'tools', tools: [{ tool: 'read_local_file' }] }
+]) {
+  let msgs = [{ role: 'user', content: '问' }, { role: 'assistant', streaming: true, segments: [] }];
+  msgs = applyRetryNotice(msgs, retryInput(6, '第一次失败'), { turnClosed: false, forkFaceIdx: 6 });
+  msgs[1].retry.state = 'started';
+  msgs[2].segments = [segment];
+  msgs = applyRetryNotice(msgs, retryInput(1, '再次失败'), { turnClosed: false, forkFaceIdx: 8 });
+  check(`${segment.kind}:恢复后另起重试行`, shape(msgs) === 'user | retry(6) | asst | retry(1) | asst*', shape(msgs));
+  check(`${segment.kind}:旧计数和失败原因不被覆盖`, msgs[1].retry.retry === 6 && msgs[1].retry.error === '第一次失败');
+  msgs = applyRetryNotice(msgs, retryInput(2, '再次失败仍未恢复'), { turnClosed: false, forkFaceIdx: 9 });
+  check(`${segment.kind}:新阶段连续失败只更新新行`, shape(msgs) === 'user | retry(6) | asst | retry(2) | asst*', shape(msgs));
+}
+
+// 11) 半成品已回滚:分组标识仍然区分恢复前后的失败阶段。
+{
+  let msgs = [{ role: 'user', content: '问' }, { role: 'assistant', streaming: true, segments: [] }];
+  msgs = applyRetryNotice(msgs, { ...retryInput(6), retryGroup: 'first' }, { turnClosed: false, forkFaceIdx: 6 });
+  msgs[1].retry.state = 'started';
+  msgs = applyRetryNotice(msgs, { ...retryInput(1), retryGroup: 'second', discard: true }, { turnClosed: false, forkFaceIdx: 7 });
+  check('回滚后不同失败阶段仍保留两条记录', shape(msgs) === 'user | retry(6) | retry(1) | asst*', shape(msgs));
+  msgs = applyRetryNotice(msgs, { ...retryInput(2), retryGroup: 'second' }, { turnClosed: false, forkFaceIdx: 8 });
+  check('同分组连续失败原地累加', shape(msgs) === 'user | retry(6) | retry(2) | asst*', shape(msgs));
 }
 
 console.log(`\n${fail === 0 ? '✓' : '✗'} 重试提示行落点:${pass} 通过 / ${fail} 失败`);

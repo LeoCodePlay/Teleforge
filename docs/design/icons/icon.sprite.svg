@@ -280,4 +280,21 @@
     <path d="M5.4 2.8v3.4h5.2V2.8" />
     <path d="M4.8 13.2v-3.6h6.4v3.6" />
   </symbol>
+
+  <!-- ---- 标签条右键菜单 ----
+       「关闭当前标签」复用既有 i-close-16(叉),「关闭全部标签」复用既有 i-trash-14,
+       不在这里重复定义。 -->
+
+  <!-- 置顶标签:按钉 -->
+  <symbol id="i-pin-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5.2 2.6h5.6v3.1l1.8 2.6H3.4l1.8-2.6Z" />
+    <path d="M8 8.3v5.1" />
+  </symbol>
+
+  <!-- 关闭其它标签:两片错位标签页 + 前片内一枚叉 -->
+  <symbol id="i-close-others-16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6.2 2.2h4.8a2 2 0 0 1 2 2v4.8" />
+    <rect x="2.6" y="5.6" width="7.6" height="7.6" rx="1.8" />
+    <path d="M5.1 8.1 7.7 10.7M7.7 8.1 5.1 10.7" />
+  </symbol>
 </svg>

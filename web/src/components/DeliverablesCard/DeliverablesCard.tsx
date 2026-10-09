@@ -37,10 +37,13 @@ export default function DeliverablesCard({ files, cwd, onOpen, onOpenAside }: {
   files: PresentedFile[];
   /** 当前工作目录:用于把绝对路径显示成相对路径(拿不到就显示原路径) */
   cwd?: string | null;
-  /** 打开文件:远程走 handleOpenFile,本机走 handleOpenLocalFile(由调用方决定) */
-  onOpen?: (path: string) => void;
+  /**
+   * 打开文件:**整条声明**交给调用方 —— 服务端在 `local` 里记了归属侧(本机/远程),
+   * 调用方据此直接选通道,不必再靠路径前缀猜(相对路径根本猜不出来)。
+   */
+  onOpen?: (file: PresentedFile) => void;
   /** 在**右侧栏**打开(对照阅读用;未提供则该入口不出现) */
-  onOpenAside?: (path: string) => void;
+  onOpenAside?: (file: PresentedFile) => void;
 }) {
   if (!files.length) return null;
 
@@ -66,7 +69,7 @@ export default function DeliverablesCard({ files, cwd, onOpen, onOpenAside }: {
             <li key={f.path} className={onOpenAside ? 'has-aside' : undefined}>
               {/* 整行可点:与「文件已更改」卡一致,点开走文件查看 */}
               <button type="button" className="deliverables-row" data-deliverable={f.path}
-                data-tip={f.path} onClick={() => onOpen?.(f.path)}>
+                data-tip={f.path} onClick={() => onOpen?.(f)}>
                 <span className="deliverables-ico" aria-hidden><IconEye16 size={15} /></span>
                 <span className="deliverables-name">{name}</span>
                 {/* 说明是模型写的人话;没有就不占位(而不是拿文件名凑数) */}
@@ -80,7 +83,7 @@ export default function DeliverablesCard({ files, cwd, onOpen, onOpenAside }: {
               {onOpenAside && (
                 <button type="button" className="deliverables-aside" data-deliverable-aside={f.path}
                   data-tip={`在右侧栏打开 ${f.path}`} aria-label={`在右侧栏打开 ${f.path}`}
-                  onClick={() => onOpenAside(f.path)}>侧栏</button>
+                  onClick={() => onOpenAside(f)}>侧栏</button>
               )}
             </li>
           );

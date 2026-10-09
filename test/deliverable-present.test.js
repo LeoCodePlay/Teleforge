@@ -70,6 +70,31 @@ console.log('\n[二] 正常交付');
   check('广播了 deliverable 实时事件', emitted.some((e) => e.payload?.event === 'deliverable' && e.payload?.files?.length === 2));
 }
 
+console.log('\n[二·补] 交付路径必须落成绝对路径 + 标注归属侧');
+{
+  // 回归:模型给的常常是工作区相对路径(如 output/xxx/logo.png)。卡片会把这串路径
+  // 原样交给「打开文件」:本机媒体预览走 /api/media 的 fs.stat(只认绝对路径,相对会落到
+  // 服务进程 cwd 上)、远程走 SFTP 同理 —— 存相对路径的话,用户点开就是
+  // 「媒体加载失败,文件可能不存在或编码不受支持」,而文件其实好端端地在工作区里。
+  const { ctx, events } = fakeCtx();
+  await present.run({ files: [{ path: '报告.md', description: '相对路径' }] }, ctx);
+  const f = events[0]?.data?.files?.[0];
+  check('相对路径被解析成工作区下的绝对路径', f?.path === path.join(ws, '报告.md'), JSON.stringify(f));
+  check('标注为本机侧(local=true)', f?.local === true, JSON.stringify(f));
+}
+{
+  // 相对/绝对两种写法指向同一个文件:按解析后的绝对路径去重,不能出两条
+  const { ctx, events } = fakeCtx();
+  await present.run({ files: [{ path: 'data.csv' }, { path: path.join(ws, 'data.csv') }] }, ctx);
+  check('同一文件的不同写法仍只出一条', events[0]?.data?.files?.length === 1, JSON.stringify(events[0]?.data?.files));
+}
+{
+  // 绝对路径也必须带上归属侧(卡片据此直接选通道,不再靠路径前缀猜)
+  const { ctx, events } = fakeCtx();
+  await present.run({ files: [{ path: path.join(ws, 'data.csv') }] }, ctx);
+  check('绝对路径同样标注 local=true', events[0]?.data?.files?.[0]?.local === true, JSON.stringify(events[0]?.data?.files));
+}
+
 console.log('\n[三] 校验:坏输入必须报错,而不是照收');
 {
   const bad = async (args, why) => {
