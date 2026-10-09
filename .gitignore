@@ -5,6 +5,11 @@ node_modules/
 web/dist/
 web/dist-preview/
 
+# 官网(独立 SSR 站点,不参与桌面端打包)的构建缓存与产物
+website/.next/
+website/out/
+website/tsconfig.tsbuildinfo
+
 # 日志与调试
 *.log
 server-trace.log*

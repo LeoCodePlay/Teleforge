@@ -1,0 +1,506 @@
+/* =========================================================================
+   Teleforge 官网 —— 基础层
+   设计方向:开发者工具落地页(SSR),深色技术语境 + 单一强调色
+   令牌:一套 CSS 变量驱动明暗双主题;整页只有一个主题,不分区翻转
+   ========================================================================= */
+
+/* ---------------------------------------------------------------- tokens */
+:root {
+  /* 品牌强调色来自 logo(brand-kit-v3:accent #5B8CFF)——全站唯一强调色 */
+  --brand: #5b8cff;
+
+  /* 中性色(深色为默认:开发者工具的常态语境) */
+  --bg: #0b0d10;
+  --bg-2: #0e1116;
+  --surface: #13161b;
+  --surface-2: #181c22;
+  --surface-3: #1f242c;
+
+  --text: #e9ecf2;
+  --text-2: #a8aeba;
+  --text-3: #7f8796;
+
+  --line: rgba(233, 236, 242, 0.09);
+  --line-2: rgba(233, 236, 242, 0.16);
+
+  /* 强调色的两种用法:填充用 --accent,文字/链接用 --accent-text(保证 AA) */
+  --accent: var(--brand);
+  --accent-text: #93b3ff;
+  --accent-ink: #06101f;
+  --accent-soft: rgba(91, 140, 255, 0.14);
+  --accent-line: rgba(91, 140, 255, 0.32);
+
+  /* 语义色只表达真实状态(连接成功 / 危险操作档位) */
+  --ok: #3fb26f;
+  --danger: #ef5f5f;
+  /* 语义色的"文字形态":深色主题直接用原色即可过 AA,浅色主题需要压深 */
+  --ok-text: #3fb26f;
+  --danger-text: #ef5f5f;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 18px 40px -22px rgba(0, 0, 0, 0.75);
+  --shadow-3: 0 40px 90px -40px rgba(0, 0, 0, 0.85);
+
+  /* 形状系统:容器 16 / 控件 10 / 胶囊 999 —— 全站只用这三档 */
+  --r-lg: 16px;
+  --r-sm: 10px;
+  --r-pill: 999px;
+
+  --wrap: 1240px;
+  --nav-h: 68px;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* z 轴分层:nav 40 < 浮层 50 < 颗粒 60 */
+  --z-nav: 40;
+  --z-float: 50;
+  --z-grain: 60;
+
+  --font-sans: var(--font-geist), "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei",
+    "Source Han Sans SC", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), "JetBrains Mono", "SFMono-Regular", Consolas,
+    "Liberation Mono", Menlo, monospace;
+}
+
+:root[data-theme='light'] {
+  --bg: #f6f7f9;
+  --bg-2: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f2f4f7;
+  --surface-3: #e8ebf0;
+
+  --text: #0f1319;
+  --text-2: #4c5462;
+  --text-3: #616a79;
+
+  --line: rgba(15, 19, 25, 0.1);
+  --line-2: rgba(15, 19, 25, 0.18);
+
+  --accent-text: #2a55c8;
+  --accent-soft: rgba(91, 140, 255, 0.12);
+  --accent-line: rgba(91, 140, 255, 0.4);
+
+  --ok-text: #1c7a48;
+  --danger-text: #c02a2a;
+
+  --shadow-1: 0 1px 2px rgba(15, 19, 25, 0.06);
+  --shadow-2: 0 18px 40px -24px rgba(15, 19, 25, 0.22);
+  --shadow-3: 0 40px 90px -44px rgba(15, 19, 25, 0.28);
+}
+
+/* 未显式选主题时跟随系统(内联脚本会在首帧前写入 data-theme,这里只是兜底) */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #f6f7f9;
+    --bg-2: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f2f4f7;
+    --surface-3: #e8ebf0;
+    --text: #0f1319;
+    --text-2: #4c5462;
+    --text-3: #616a79;
+    --line: rgba(15, 19, 25, 0.1);
+    --line-2: rgba(15, 19, 25, 0.18);
+    --accent-text: #2a55c8;
+    --ok-text: #1c7a48;
+    --danger-text: #c02a2a;
+    --shadow-2: 0 18px 40px -24px rgba(15, 19, 25, 0.22);
+    --shadow-3: 0 40px 90px -44px rgba(15, 19, 25, 0.28);
+  }
+}
+
+/* ------------------------------------------------------------------ base */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--nav-h) + 24px);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.62;
+  letter-spacing: -0.005em;
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 620;
+  letter-spacing: -0.032em;
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--brand) 40%, transparent);
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* 颗粒:只挂在固定不滚动的伪元素上,避免滚动重绘 */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-grain);
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+:root[data-theme='light'] body::after {
+  opacity: 0.05;
+  mix-blend-mode: multiply;
+}
+
+/* ------------------------------------------------------------ primitives */
+.wrap {
+  width: 100%;
+  max-width: var(--wrap);
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+.section {
+  position: relative;
+  padding-block: clamp(72px, 9vw, 136px);
+}
+
+.section--tight {
+  padding-block: clamp(56px, 7vw, 96px);
+}
+
+.hairline {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+}
+
+/* 小标签(eyebrow):整页最多 3 处,见 §14 自检 */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.display {
+  font-size: clamp(30px, 4.6vw, 54px);
+  line-height: 1.08;
+  letter-spacing: -0.038em;
+}
+
+.h2 {
+  font-size: clamp(25px, 3.1vw, 38px);
+  line-height: 1.14;
+  letter-spacing: -0.032em;
+}
+
+.h3 {
+  font-size: clamp(18px, 1.6vw, 21px);
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  color: var(--text-2);
+  font-size: clamp(15px, 1.15vw, 17px);
+  line-height: 1.72;
+  max-width: 62ch;
+}
+
+.muted {
+  color: var(--text-3);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+
+.accent {
+  color: var(--accent-text);
+}
+
+/* 强调 = 同族加粗 + 强调色,不混入第二种字体族 */
+.ink {
+  color: var(--accent-text);
+  font-weight: 640;
+}
+
+/* ---------------------------------------------------------------- button */
+.btn {
+  --btn-bg: transparent;
+  --btn-fg: var(--text);
+  --btn-line: var(--line-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  height: 46px;
+  padding-inline: 20px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--btn-line);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 560;
+  letter-spacing: -0.012em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.18s var(--ease), background 0.18s var(--ease-soft),
+    border-color 0.18s var(--ease-soft), color 0.18s var(--ease-soft);
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(1px) scale(0.985);
+}
+
+/* 主按钮:亮底 + 深色字,对比度 ~8.5:1(不用白字压亮蓝) */
+.btn--primary {
+  --btn-bg: var(--accent);
+  --btn-fg: var(--accent-ink);
+  --btn-line: transparent;
+  font-weight: 620;
+}
+
+.btn--primary:hover {
+  --btn-bg: color-mix(in srgb, var(--accent) 88%, #ffffff);
+}
+
+.btn--ghost:hover {
+  --btn-bg: var(--surface-2);
+  --btn-line: var(--line-2);
+}
+
+.btn--sm {
+  height: 36px;
+  padding-inline: 15px;
+  font-size: 13px;
+}
+
+.btn__ico {
+  display: block;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  opacity: 0.85;
+}
+
+/* ------------------------------------------------------------------ card */
+.card {
+  position: relative;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.card--pad {
+  padding: clamp(20px, 2.2vw, 28px);
+}
+
+.card--raise {
+  box-shadow: var(--shadow-2);
+}
+
+.card__title {
+  font-size: 17.5px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.card__body {
+  margin-top: 9px;
+  color: var(--text-2);
+  font-size: 14.5px;
+  line-height: 1.7;
+}
+
+/* 截图外框:模拟应用窗口的实色 chrome(不是"假 UI",只是外框) */
+.frame {
+  position: relative;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+}
+
+.frame__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding-inline: 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.frame__dots {
+  display: flex;
+  gap: 6px;
+}
+
+.frame__dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--line-2);
+}
+
+.frame__addr {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding-inline: 12px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.frame__shot {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--bg);
+}
+
+.frame__cap {
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+/* 状态点只在表达真实状态时出现(连接状态) */
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+
+/* ------------------------------------------------------------------ misc */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding-inline: 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 滚动条:统一、克制 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 999px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+/* 动效:全站统一在 reduced-motion 下退化为静态 */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
