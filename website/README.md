@@ -2,6 +2,8 @@
 
 这是 Teleforge 的产品官网,单独放在 `website/`,**与桌面端打包完全无关**。
 
+线上地址:**https://leocodeplay.github.io/Teleforge/**
+
 ## 为什么不会被打包进桌面端
 
 桌面端的资源打包脚本 `scripts/build.mjs` 只往 `src-tauri/resources/` 里放四样东西:
@@ -25,27 +27,60 @@ extension/**   Teleforge Auto 扩展
 ## 技术选型
 
 - **Next.js 15 App Router + React 19**:页面默认是 Server Component,除几个动效岛之外
-  全部在服务端渲染成 HTML(可以直接 `curl` 看到完整文案,关掉 JS 也能读到全部内容)。
-  由于没有任何动态数据,`next build` 会把它预渲染成静态 HTML,首屏更快。
-- **动效**:`motion`(`motion/react`)只在 `'use client'` 的叶子组件里使用,
+  全部在服务端渲染成 HTML。构建时用 `output: 'export'` 把整站预渲染成 `out/` 下的静态文件
+  (GitHub Pages 只能托管静态文件),所以**关掉 JS 也能读到全部文案**。
+- **动效**:`motion`(`motion/react`)只在标注 `'use client'` 的叶子组件里使用,
   并且只动 `transform` / `opacity`;所有滚动动效都走 `useScroll` 的进度值,
   没有一处 `window.addEventListener('scroll')`。reduced-motion 下全部退化为静态。
 - **样式**:手写 CSS + CSS 变量(没有引入 UI 框架),令牌集中在
   `app/globals.css` 的 `:root` / `:root[data-theme='light']` 两块里。
-- **字体**:`next/font/google` 自托管 Geist 与 Geist Mono(构建时下载,不引外链);
-  中文走系统字体栈(PingFang SC / 微软雅黑 / Noto Sans SC …),不额外下载 CJK 字体。
+- **字体**:`next/font/google` 自托管 Geist 与 Geist Mono(构建时下载并落到
+  `_next/static/media/`,页面不引第三方字体外链);中文走系统字体栈
+  (PingFang SC / 微软雅黑 / Noto Sans SC …),不额外下载 CJK 字体。
 - **图标**:`@radix-ui/react-icons`,没有手写 SVG 图标路径。
+- **部署子路径**:站点挂在 `/Teleforge/` 下,构建时由 `NEXT_PUBLIC_BASE_PATH` 注入。
+  Next 只会自动改写自己产出的 `/_next/**`,JSX 里手写的 `/shots/x.webp`
+  必须过一遍 `lib/asset.ts` 的 `asset()`,否则线上会 404。
 
 ## 开发 / 构建
 
 ```bash
 cd website
 npm install
-npm run dev        # http://localhost:3100
-npm run build      # 生产构建(SSR / 预渲染)
-npm start          # 跑生产构建
+npm run dev        # http://localhost:3100,开发服务器(逐请求 SSR + 热更新)
 npm run typecheck
 ```
+
+预览「和线上完全一致」的产物(静态导出 + 子路径):
+
+```bash
+# macOS / Linux
+NEXT_PUBLIC_BASE_PATH=/Teleforge npm run build
+NEXT_PUBLIC_BASE_PATH=/Teleforge npm start   # http://localhost:3100/Teleforge/
+
+# Windows(cmd)
+set NEXT_PUBLIC_BASE_PATH=/Teleforge&& npm run build
+set NEXT_PUBLIC_BASE_PATH=/Teleforge&& npm start
+```
+
+不带 `NEXT_PUBLIC_BASE_PATH` 构建时站点在根路径上,`npm run build && npm start`
+即可在 `http://localhost:3100/` 看到。
+
+## 部署到 GitHub Pages
+
+由 `.github/workflows/website.yml` 负责:推 `main` 且改动落在 `website/**` 或该工作流时,
+自动 `npm ci && typecheck && next build`,把 `out/` 作为 Pages 产物发布。
+也可以在 Actions 页面手动 `Run workflow`。
+
+工作流里的两个细节:
+
+- **子路径自动推导**:项目页是 `https://<owner>.github.io/<repo>/`,所以
+  `NEXT_PUBLIC_BASE_PATH=/<repo>` 由仓库名算出;若仓库本身叫 `<owner>.github.io`(用户页),
+  则自动不加前缀。
+- **Pages 未开启时不发红**:工作流会先用 API 探一次 Pages 是否已开启,
+  未开启就只构建、上传 artifact 并给一条 warning(fork 出来的仓库不会因为没开 Pages 而失败)。
+  开启路径:仓库 **Settings → Pages → Build and deployment → Source** 选
+  **GitHub Actions**(这一步只有仓库管理员能做)。当前仓库已经开启。
 
 ## 截图
 
