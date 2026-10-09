@@ -26,9 +26,9 @@ jobs:
     outputs:
       pages_ready: ${{ steps.availability.outputs.enabled }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -81,7 +81,7 @@ jobs:
           echo "产物文件数:$(find out -type f | wc -l)"
 
       - name: 上传产物(始终上传,便于排查)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: website-out
           path: website/out
@@ -89,7 +89,7 @@ jobs:
 
       - name: 上传 Pages 产物
         if: steps.availability.outputs.enabled == 'true'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: website/out
 
@@ -102,4 +102,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
