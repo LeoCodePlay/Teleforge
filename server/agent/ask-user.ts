@@ -42,6 +42,10 @@ function normalizeQuestions(questions: any[]): any[] {
     .map((q) => ({
       id: uniqueId(String(q.id ?? '').trim(), usedIds),
       question: String(q.question),
+      // 题面语义标记:'approval' = 权限 guard 的写/命令变更前确认。前端据此渲染
+      // harness 式审批卡(只有「拒绝 / 允许一次」,不给自定义回答输入),而不是通用提问卡。
+      // 白名单放行,避免任意 kind 漏到前端。
+      ...(q.kind === 'approval' ? { kind: 'approval' } : {}),
       ...(typeof q.header === 'string' && q.header.trim() ? { header: String(q.header) } : {}),
       // 长正文(如计划模式的计划审阅):前端以等宽正文渲染,上限 20000 字符防止刷屏
       ...(typeof q.detail === 'string' && q.detail.trim() ? { detail: String(q.detail).slice(0, 20000) } : {}),

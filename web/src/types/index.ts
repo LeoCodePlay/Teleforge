@@ -492,6 +492,8 @@ export interface AskQuestion {
   id: string;
   question: string;
   header?: string;
+  /** 题面语义标记:'approval' = 权限审批(前端只渲染拒绝/允许一次,不给自定义回答) */
+  kind?: 'approval';
   /** 长正文(如计划模式 exit_plan_mode 的完整计划):面板以等宽正文渲染 */
   detail?: string;
   options?: AskOption[];

@@ -272,4 +272,36 @@ function fillConversation(session, groups) {
     && once[markerIdx].compaction.retainedFrom < markerIdx,
     JSON.stringify(once[markerIdx]?.compaction));
 }
+// ---- 11: 压缩期间的会话状态可查询,且手动/自动可区分 ----
+// 前端切走再切回时靠 get_history 的 compacting/compactingManual 把**原来那条**运行态记录恢复
+// 回来:手动 /compact 是命令卡,自动压缩是运行行。过去只有 boolean 的 compacting,手动压缩会被
+// 补成一条"上下文压缩"运行行(或因为标志没置上而什么都补不回来)——用户看到"我的压缩记录没了"。
+{
+  const a = fakeAgent();
+  const sid = a.createSession('压缩中状态').id;
+  const session = a._runtimes.get(sid).session;
+  fillConversation(session, 3);
+  store.saveEvents(sid, session.events);
+
+  check('压缩前:不在压缩中', a.isCompacting(sid) === false && a.isCompactingManual(sid) === false);
+  const origChat = a.llm.chat;
+  let during = null;
+  a.llm = {
+    ...a.llm,
+    async chat(o) {
+      // 摘要生成是一次真实 LLM 往返:此刻正是"页面显示正在压缩"的那段时间
+      during = { run: a.isCompacting(sid), manual: a.isCompactingManual(sid) };
+      return origChat.call(this, o);
+    }
+  };
+  const r = await a.compactNow(sid);
+  check('手动压缩:摘要生成期间 isCompacting=true(切回会话能补回运行态)', during?.run === true, JSON.stringify(during));
+  check('手动压缩:isCompactingManual=true(前端据此恢复 /compact 命令卡,而不是补自动压缩运行行)',
+    during?.manual === true, JSON.stringify(during));
+  check('手动压缩结束:两个状态都复位(不会以"压缩中"永久拦住删除/fork/切换)',
+    a.isCompacting(sid) === false && a.isCompactingManual(sid) === false,
+    `run=${a.isCompacting(sid)} manual=${a.isCompactingManual(sid)}`);
+  check('手动压缩本身仍正常完成', r.compacted === true && r.dropCount > 0);
+  check('压缩状态只认目标会话', a.isCompacting('s_not_exist') === false && a.isCompactingManual('s_not_exist') === false);
+}
 finish();

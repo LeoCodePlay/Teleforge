@@ -1,7 +1,8 @@
 // 全局设置持久化(与会话存储分开,作用域为整台服务器/工作区,而非单个会话):
-// - defaultPermissionMode:默认访问权限模式。用户任意会话里 permission_set 的档位会
-//   同步到这里,新会话继承该默认值(见 agent.ts 的 getPermissionMode / permission.ts 的
-//   foldPermissionMode fallback)。
+// - defaultPermissionMode:新会话的默认访问权限模式。用户任意会话里 permission_set 的档位
+//   会同步到这里(计划模式除外),**新建**会话在创建时把它播种成自己的一条 permission/mode
+//   事件(见 agent.ts 的 _pinDefaultPermission)。它只影响之后新建的会话,不会回溯改变已有
+//   会话 —— 模式是会话级状态(见 permission.ts 的 foldPermissionMode 注释)。
 // - imageTool:「生图工具」独立配置(url/key/model + 默认质量与尺寸)。它与对话所用的
 //   LLM 提供商完全解耦 —— 对话可以是任意文本模型,生图另指一个图像端点。
 // - 落盘 data/settings.json(测试可注入 DATA_DIR 隔离目录),原子写防损坏(见 store/atomic-write.ts)。

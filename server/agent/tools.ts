@@ -2143,17 +2143,28 @@ async function detectSearchEngine() {
     const check = (cmd: string) => ssh.exec(cmd, { timeout: 8000 })
       .then((r: any) => r.code === 0 && r.stdout.trim().length > 0)
       .catch(() => false);
-    const which = (bin: string) => (win ? `where ${bin}` : `command -v ${bin}`);
-    if (await check(which('rg'))) return { kind: 'rg', bin: 'rg' };
-    if (!win) {
-      if (await check(which('grep'))) return { kind: 'grep', bin: 'grep' };
-      if (await check(which('python3'))) return { kind: 'python', bin: 'python3' };
-      if (await check(which('python'))) return { kind: 'python', bin: 'python' };
-      if (await check(which('busybox'))) return { kind: 'busybox', bin: 'busybox' };
+    // 两套探测命令(Windows 的 where / 类 Unix 的 command -v)都备着:平台判定来自连接时的
+    // uname 探测,在个别服务器上可能失败(Linux 被判成 win32),只用平台对应那一套会得出
+    // 「一个搜索工具都没有」的错误结论,整条搜索链路随之不可用。
+    const posixCmd: Record<string, string> = {
+      rg: 'command -v rg', grep: 'command -v grep', python3: 'command -v python3',
+      python: 'command -v python', busybox: 'command -v busybox', findstr: 'command -v findstr'
+    };
+    const winCmd: Record<string, string> = { rg: 'where rg', findstr: 'where findstr' };
+    const kindOf = (bin: string) => (bin === 'python3' || bin === 'python' ? 'python' : bin);
+    const locate = async (bins: string[], cmds: Record<string, string>) => {
+      for (const bin of bins) {
+        if (cmds[bin] && await check(cmds[bin])) return { kind: kindOf(bin), bin };
+      }
       return null;
-    }
-    if (await check(which('findstr'))) return { kind: 'findstr', bin: 'findstr' };
-    return null;
+    };
+    // 顺序即优先级:rg 最优,其次 grep / python3 / python / busybox;findstr 为 Windows 原生
+    const POSIX_ORDER = ['rg', 'grep', 'python3', 'python', 'busybox'];
+    const WIN_ORDER = ['rg', 'findstr'];
+    const primary = win ? await locate(WIN_ORDER, winCmd) : await locate(POSIX_ORDER, posixCmd);
+    if (primary) return primary;
+    // 平台判定那一套全落空:换另一套 shell 的命令再兜底一次(平台误判时的救场路径)
+    return win ? await locate(POSIX_ORDER, posixCmd) : await locate(['findstr'], winCmd);
   })();
   engineProbe = probe;
   try { engineCache = await probe; return engineCache; }
@@ -2219,7 +2230,6 @@ export function ensureSearchTools({ force = false } = {}) {
 
 async function doEnsureSearchTools() {
   if (!ssh.connected) return { ok: false, reason: 'not-connected' };
-  if (ssh.platform === 'win32') return { ok: true, platform: 'win32', installed: [] }; // findstr 原生存在,无需安装
   const log = (level: string, message: string) => { try { ssh.emit('log', level, `[环境自检] ${message}`); } catch {} };
   const targetKey = ensureConnKey(); // 连接中途被切换时停止安装,避免装到别的服务器上
 
@@ -2230,17 +2240,37 @@ async function doEnsureSearchTools() {
       return r.code === 0 && r.stdout.trim().length > 0;
     } catch { return false; }
   };
-  const which = (bin: string) => `command -v ${bin}`;
-
-  const present: Record<string, boolean> = {};
-  for (const bin of ['rg', 'grep', 'python3', 'python', 'busybox']) present[bin] = await probe(which(bin));
+  // 两套探测命令都备着:平台判定来自连接时的 uname 探测,在个别服务器上可能失败(把 Linux 判成
+  // win32),此时只认 `where` 会把明明有 grep/python3 的 Linux 当成没工具,连自动安装这条退路
+  // 也一并跳过(旧实现在 win32 分支直接 return ok),搜索就彻底没有可用引擎了。
+  // 先按平台对应的一套走完,全落空再用另一套兜底:正常服务器不多花往返,平台误判时也能救回来。
+  const posixWhich: Record<string, string> = {
+    rg: 'command -v rg', grep: 'command -v grep', python3: 'command -v python3',
+    python: 'command -v python', busybox: 'command -v busybox'
+  };
+  const winWhich: Record<string, string> = { rg: 'where rg', findstr: 'where findstr' };
+  const scan = async (which: Record<string, string>) => {
+    const found: Record<string, boolean> = {};
+    for (const [bin, cmd] of Object.entries(which)) found[bin] = await probe(cmd);
+    return found;
+  };
+  const win = ssh.platform === 'win32';
+  let present = await scan(win ? winWhich : posixWhich);
+  if (!Object.values(present).some(Boolean)) {
+    present = { ...present, ...await scan(win ? posixWhich : winWhich) };
+  }
   log('info', `搜索工具: rg=${present.rg ? '✓' : '—'} grep=${present.grep ? '✓' : '—'} python=${present.python3 || present.python ? '✓' : '—'} busybox=${present.busybox ? '✓' : '—'}`);
-  // 已有任一可用搜索工具(rg 最优,其次 grep/python/busybox)即满足搜索链路,无需安装。
+  // 已有任一可用搜索工具(rg 最优,其次 grep/python/busybox;Windows 原生 findstr)即满足搜索链路,无需安装。
   // 同时刷新探测缓存:否则首次探测失败的 null 会被永久缓存,即使远程其实有工具,
   // search_code 兜底调用本函数也因"未安装任何东西"不清缓存,导致一直误报"未找到搜索工具"。
-  if (present.rg || present.grep || present.python3 || present.python || present.busybox) {
+  if (present.rg || present.grep || present.python3 || present.python || present.busybox || present.findstr) {
     clearSearchEngine();
     return { ok: true, installed: [] };
+  }
+  // 已确认 findstr 也没有:Windows 服务器上跑不了 posix 包管理器,不做安装尝试(仅记录,不影响连接)
+  if (ssh.platform === 'win32') {
+    log('warn', '未探测到任何搜索工具(rg/grep/python/busybox/findstr)');
+    return { ok: false, reason: 'win32-no-tool' };
   }
 
   // 权限:root 直接装;非 root 需免密 sudo(-n 不交互,避免安装卡在密码输入)

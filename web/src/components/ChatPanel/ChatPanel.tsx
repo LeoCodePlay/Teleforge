@@ -822,6 +822,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   const [suppressIn, setSuppressIn] = useState(true);
   // 会话历史缓存:切回已加载过的会话时秒开(零网络),后台静默刷新保持最新
   const histCache = useRef(new Map<string, { msgs: ChatMessage[]; todos: TodoItem[] }>());
+  // 正在压缩的会话(sid -> 这次压缩的样子):压缩的运行态反馈都不落盘 —— 手动 /compact 是前端
+  // 命令卡,自动压缩是实时事件 compaction_start 插的运行行。切走时历史整表替换会把它们抹掉,
+  // 切回后必须按这张表恢复成**原来那条记录**(不能让用户"我点的压缩记录不见了")。
+  // manual=true 记着手动压缩的命令卡(含原 cmdId:恢复后异步完成仍能原地改写它)。
+  const compactingRef = useRef(new Map<string, { manual: boolean; cmdId?: number; cmdText?: string }>());
   // 模型提问挂起(ask_user_question):未作答前锁定输入框与停止按钮
   const [askPending, setAskPending] = useState(false);
   // 启动检查期(刷新后 AskPanel 拉取挂起提问期间):期间输入区先不渲染,
@@ -994,6 +999,22 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   };
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // 「发送中」:speak 是 fire-and-forget,而服务端在真正开轮之前还要先做几件慢事——
+  // @引用的图片要用 SFTP 从远端读回字节存进附件库、新会话要先 session_create。
+  // 这段时间里消息既不在屏幕上也没有任何提示,用户会以为点了发送没反应。
+  // 400ms 内就被受理的(纯文字消息)不显示,免得正常发送闪一下提示;超过才显示。
+  const [sending, setSending] = useState(false);
+  // 发送中的文案:@引用的图片最慢(要读远端字节),单独给一句更准确的说明
+  const [sendingTip, setSendingTip] = useState('发送中…');
+  const sendingShowRef = useRef<number | null>(null); // 延迟显示计时器(400ms)
+  const sendingMaxRef = useRef<number | null>(null);  // 兜底计时器(服务端既无事件也无回执)
+  const sendingSidRef = useRef<string | null>(null);  // 「发送中」归属的会话:切到别的会话才收掉提示
+  /** 收掉「发送中」提示与两个计时器(服务端已受理 / 已拒绝 / 兜底超时) */
+  const endSending = useCallback(() => {
+    if (sendingShowRef.current !== null) { window.clearTimeout(sendingShowRef.current); sendingShowRef.current = null; }
+    if (sendingMaxRef.current !== null) { window.clearTimeout(sendingMaxRef.current); sendingMaxRef.current = null; }
+    setSending(false);
+  }, []);
   const attSeqRef = useRef(0); // 附件本地 key 自增
   const addWrapRef = useRef<HTMLDivElement>(null); // "+"按钮与菜单容器(外部点击关闭菜单)
   const imgInputRef = useRef<HTMLInputElement>(null);   // 图片选择(accept=image/*)
@@ -1153,8 +1174,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             if (childMode) refreshChildInfo();
             if (m.status !== 'running') {
               setSessionImgJob(activeRef.current, null); // 会话已空闲:在途生图标记必须一并清掉(兜底,防状态行卡死)
+              // 会话空闲 ≠ 没在压缩:压缩只占服务端的 rt.compacting、不驱动轮次(busy=false,status
+              // 就是 idle)。该会话此刻若正在压缩,运行行/命令卡是当前事实,不能被当成陈旧状态摘掉
+              // ——否则任何一次 idle status 事件都会让「正在压缩…」凭空消失。
+              const compactingNow = compactingRef.current.has(String(activeRef.current ?? ''));
               push((msgs) => {
-                const c = dropStaleCompaction([...msgs]);
+                const c = compactingNow ? [...msgs] : dropStaleCompaction([...msgs]);
                 // 本轮还挂着「等待重试」的行(重试行可能夹在回复气泡之间,不再是列表末尾):
                 // 这一步失败后正在退避等待重发,本轮并没有结束。此时不能解除流式,否则渲染层
                 // 会立刻把「已修改文件」卡与复制/分支按钮当成收尾产物显示出来(用户明确要求:
@@ -1176,10 +1201,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             break;
           case 'queue_update':
             // 待执行队列整表快照(新增排队/立即执行/删除/自动派发都会触发)
+            endSending(); // 消息已被服务端受理并进入待执行队列:发送中的提示到此为止
             setQueue(Array.isArray(m.queue) ? m.queue : []);
             break;
           case 'start':
             hasLive.current = true;
+            endSending(); // 本轮已开轮:用户消息与回复行马上落到屏幕上
             // 本轮的用户消息/app 回复行马上要追加到屏幕上:内容已是本会话的。
             // 这行的另一个用处:切会话时历史回载还在路上就来了 start(hasLive 会挡掉回载),
             // 屏幕上是"上一会话残留 + 本会话新轮"的混合,但**最后一条真实 user 消息**是本轮的,
@@ -1430,6 +1457,7 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'error':
+            endSending(); // 这一轮已经失败收场:发送中的提示不能再挂着
             setAgentState('error'); turnClosedRef.current = true; setErrorMsg(m.message); setSessionImgJob(activeRef.current, null);
             push((msgs) => {
               const c = dropEmptyRetryBubble([...msgs]);
@@ -1493,23 +1521,30 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               return c;
             });
             break;
-          case 'compaction_start':
+          case 'compaction_start': {
             // 自动压缩开始(超水位/爆窗恢复要走摘要):摘要是一次真实的 LLM 请求,可能十几秒
             // 到几十秒。先在对话流里落一行运行态「正在把早期对话压缩为摘要…」,等 done 原地改写,
             // 而不是让界面在这段静默里什么都不显示。同一次压缩只保留一条运行行(重复 start 幂等);
             // 插入在流式 assistant 气泡之前:compaction/done 事件在日志里先于 assistant/message,
             // 服务端原位投影后标记行排在回复之前;这里保持一致,刷新/切回后位置不变。
+            // 同时把这个会话登记为"压缩中":切走再切回时按它恢复运行行,idle status 事件也不会误摘。
+            const ckSid = String(m.sid || activeRef.current || '');
+            compactingRef.current.set(ckSid, { manual: m.manual === true });
+            const runRow = { role: 'user' as const, content: '', compaction: { running: true, manual: m.manual === true } };
             push((msgs) => {
               if (msgs.some((x) => x.compaction?.running)) return msgs;
               const c = [...msgs];
               const li = tailAssistantIndex(c);
-              if (li >= 0) c.splice(li, 0, { role: 'user' as const, content: '', compaction: { running: true } });
-              else c.push({ role: 'user' as const, content: '', compaction: { running: true } });
+              if (li >= 0) c.splice(li, 0, runRow);
+              else c.push(runRow);
               return c;
             });
             scrollToBottomNow();
             break;
+          }
           case 'compaction_done':
+            // 压缩结束:撤销"压缩中"登记(运行行紧接着原地改写为完成态,不再是未结状态)
+            compactingRef.current.delete(String(m.sid || activeRef.current || ''));
             // 自动压缩完成:把上面那行运行态原地改写为「上下文压缩」完成态(条数 + 可展开摘要),
             // 不新增一行。从未收到 start(断线漏事件、切走再切回)时回退为追加到末尾。运行中不做
             // 整表重拉,避免打断正在流式的输出;刷新/切回会话后由 compaction/done 事件投影同款行。
@@ -1538,6 +1573,8 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             scrollToBottomNow();
             break;
           case 'compaction_failed':
+            // 压缩结束(没换来摘要):撤销"压缩中"登记,失败态由下面原地改写
+            compactingRef.current.delete(String(m.sid || activeRef.current || ''));
             // m.persisted=true:服务端已把这条失败行落盘(占一个消息面下标),本地分支点计数器同步 +1
             if (m.persisted === true) forkTurnRef.current += 1;
             // 压缩未完成(摘要生成失败 / 无收益 / 为空):服务端**没有**裁剪任何历史。
@@ -1598,7 +1635,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             });
             break;
           case 'history_compacted':
-            // 手动压缩完成(/compact):后端已把早期消息替换为 compaction/done 摘要事件,
+            // 手动压缩完成(/compact):服务端已把早期消息替换为 compaction/done 摘要事件。
+            // 这次压缩到此结束,撤销"压缩中"登记(那份运行态命令卡不再需要恢复);压缩本身的
+            // 持久披露交给重拉历史后的压缩标记行(CompactionRow),不能再补一条运行中的记录。
+            compactingRef.current.delete(String(m.sid || activeRef.current || ''));
             // 这里整体重拉历史——被压缩的早期消息从视图中消失,压缩摘要以折叠标记行呈现
             // (样式参照 harness:CompactionItem 的标记行,而非用户气泡)。
             // 命令卡是纯前端消息(不持久化),整表替换会把它连同「已压缩 N 条早期消息…」
@@ -1622,7 +1662,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
             }
             break;
         }
-      })
+      }),
+      // 服务端在受理前直接拒绝(未选工作区 / LLM 未配置等)只走 ws 层 error,不会有任何 agent 事件;
+      // 不在这里收掉提示,「发送中」会一直挂到兜底超时
+      api.on('server_error', () => endSending())
     ];
     return () => subs.forEach((off) => off());
   }, []);
@@ -1709,6 +1752,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
     // null 表示没有生图在途——状态行回到「Agent 正在运行…」,不沿用上一个会话的文案
     setSessionImgJob(target, target && target !== NEW_SESSION_ID ? imgJobsRef.current.get(target) ?? null : null);
     setQueue([]); // 切会话先复位队列,避免串到上一会话;真实队列随 get_history 返回
+    // 在途的「发送中」属于上一个会话:切到别的会话就收掉。刚由草稿态发送创建出来的这个会话是例外
+    // (target 会从占位符变成真实 sid,此刻消息仍在读远端引用图片/等服务端受理,提示得留着)
+    if (target !== sendingSidRef.current) endSending();
     setGoal(null); // 目标随会话走:切走先清空,防止把上一个会话的目标条画到新会话上
     clearAttachments(); // 草稿附件不跨会话携带(纯内存,发送时才随消息上行)
 
@@ -1752,15 +1798,41 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
         // 目标状态随历史一起回填:目标是持久状态,切走再切回必须显示同一条(与服务端 goal_changed 同一口径)
         setGoal(r.goal === undefined ? null : (r.goal as GoalInfo | null));
         const msgs = turnsToMessages(r.turns || []);
-        // 该会话此刻正在生成压缩摘要:compaction_start 只是实时事件、不落盘,切走再切回时历史
-        // 整表重载会把那行「正在压缩…」丢掉,看起来像"压缩记录不见了"。服务端随 get_history
-        // 如实回报 compacting,这里按与 compaction_start 完全相同的口径把运行行补回来(插在流式
-        // assistant 之前,位置保持一致);完成/失败时由 compaction_done / compaction_failed 原地改写。
-        if (r.compacting === true && !msgs.some((x) => x.compaction?.running)) {
-          const li0 = tailAssistantIndex(msgs);
-          const runRow = { role: 'user' as const, content: '', compaction: { running: true } };
-          if (li0 >= 0) msgs.splice(li0, 0, runRow);
-          else msgs.push(runRow);
+        // 该会话此刻正在压缩:压缩的运行态反馈**都不落盘** —— 手动 /compact 是前端命令卡,
+        // 自动压缩是实时事件 compaction_start 插的运行行。切走再切回时历史整表重载会把它们抹掉,
+        // 看起来像"我正在压缩的记录不见了"(直到完成才又冒出完成态标记行)。服务端随 get_history
+        // 如实回报 compacting / compactingManual,这里按**同一种记录**恢复,而不是一律补成
+        // 自动压缩的运行行(那会把用户点的 /compact 显示成"上下文压缩",同样算记录丢了):
+        //   手动 → 原样的运行态命令卡(沿用原 cmdId,异步完成后仍能原地改写它);
+        //   自动 → 「上下文压缩」运行行,完成/失败时由 compaction_done / _failed 原地改写。
+        const pending = compactingRef.current.get(target ?? '');
+        let compacting = pending;
+        if (r.compacting === true) {
+          compacting = { ...pending, manual: r.compactingManual === true || pending?.manual === true };
+          compactingRef.current.set(target ?? '', compacting);
+        }
+        if (compacting) {
+          if (compacting.manual) {
+            const cid = compacting.cmdId ?? ++cmdSeqRef.current;
+            const text = compacting.cmdText || '正在压缩当前会话上下文…';
+            if (!msgs.some((x) => x.cmdId === cid)) {
+              msgs.push({ role: 'command', cmdId: cid, command: { name: 'compact', state: 'running', text } });
+            }
+            compactingRef.current.set(target ?? '', { manual: true, cmdId: cid, cmdText: text });
+          } else if (!msgs.some((x) => x.compaction?.running)) {
+            const li0 = tailAssistantIndex(msgs);
+            const runRow = { role: 'user' as const, content: '', compaction: { running: true, manual: false } };
+            if (li0 >= 0) msgs.splice(li0, 0, runRow);
+            else msgs.push(runRow);
+          }
+        } else {
+          // 压缩已经不在进行(服务端答"不在压缩",本地也没有待恢复的命令卡):历史里若还带着
+          // 会话缓存快照里的运行态命令卡(切走时那一下的画面),一并清掉 —— 否则切回后会停在
+          // 一个早已结束的「正在压缩…」上,同样是"记录和事实不符"。
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const m = msgs[i];
+            if (m?.command?.name === 'compact' && m.command.state === 'running') msgs.splice(i, 1);
+          }
         }
         // 切回一个仍在运行中的会话:末条回复标记为流式中,继续接收后续增量事件。
         // 历史末尾不是 assistant(本轮模型尚未流出任何内容/纯工具调用步骤)时补一个
@@ -2366,6 +2438,16 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       return;
     }
     const { text, refs } = composeMentionText(input);
+    // 从这里开始到服务端受理,界面必须给出「发送中」:中间可能夹着远端读图与新会话创建两段等
+    // (见 sending 的注释)。@引用的图片要先把字节读回服务端,文案单独区分,免得用户误以为是模型慢
+    setSendingTip(refs.some((r) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(r.path)) ? '正在读取引用的图片…' : '发送中…');
+    sendingSidRef.current = sid ?? null; // 本次发送归属的会话(草稿态先记占位符,创建后改记真实 sid)
+    if (sendingShowRef.current !== null) window.clearTimeout(sendingShowRef.current);
+    if (sendingMaxRef.current !== null) window.clearTimeout(sendingMaxRef.current);
+    // 400ms 内受理的不闪提示;超过则显示,并由 120s 兜底:服务端既不发事件也不回执
+    // (如 WS 刚好断线)时,提示不能永久挂着
+    sendingShowRef.current = window.setTimeout(() => { sendingShowRef.current = null; setSending(true); }, 400);
+    sendingMaxRef.current = window.setTimeout(() => { sendingMaxRef.current = null; setSending(false); }, 120000);
     let realSid: string | null = sid == null || sid === NEW_SESSION_ID ? null : sid;
     // 新会话草稿态(sid 为占位符或尚未加载):先真正创建服务端会话(此时才列入历史会话列表),
     // 创建失败则保留输入与草稿,不发送
@@ -2374,10 +2456,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
       try {
         created = await api.request('session_create', { transferFrom: draftSid || undefined }, 8000);
         realSid = created.active ?? null;
+        sendingSidRef.current = realSid; // 提示改挂到真实会话上:随后 sid 变化触发的那次切换不算"切走"
         activeRef.current = realSid; // 立即更新事件路由,不等 App 侧 state 同步
         skipHistoryOnceRef.current = true; // 跳过随后 sid 变化触发的历史回载(消息由事件流渲染)
         onSessionCreated?.(created); // App 刷新会话列表并激活新会话
       } catch (e) {
+        endSending(); // 没发出去:立即收掉「发送中」(输入与草稿都还在,用户可重试)
         toast.error(`新建会话失败: ${(e as Error).message}`);
         return;
       }
@@ -2482,7 +2566,12 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           pushCmd('compact', { state: 'error', text: '当前会话还没有内容,无法压缩;请先发一条消息' });
           return true;
         }
-        const id = pushCmd('compact', { state: 'running', text: '正在压缩当前会话上下文…' });
+        const cmdText = '正在压缩当前会话上下文…';
+        const id = pushCmd('compact', { state: 'running', text: cmdText });
+        // 记下"这个会话正在手动压缩 + 命令卡长什么样":命令卡是纯前端状态,压缩期间切走再切回时
+        // 历史整表重载会把它抹掉。前端据此按原 cmdId 把运行态命令卡照原样恢复(见历史载入),
+        // 用户切回来看到的还是他刚点的那条记录,而不是"凭空冒出/消失了一张卡"。
+        compactingRef.current.set(String(sid), { manual: true, cmdId: id, cmdText });
         try {
           const r = await api.request('compact_now', { sid: sidArg(sid) }, 120000);
           // 压缩成功时服务端先广播 history_compacted → 前端重拉历史,持久「压缩标记行」
@@ -2494,6 +2583,10 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           // 压缩失败(如摘要生成失败/shrink 校验不通过):会话原样保留,
           // 命令卡显示失败原因(对齐 harness ManualCompactionError 的呈现)
           patchCmd(id, { state: 'error', text: (e as Error).message || '压缩失败,会话历史保持不变' });
+        } finally {
+          // 压缩到此结束(RPC 返回或抛错都算):撤销"压缩中"登记 —— 之后切回会话不再恢复运行态
+          // 命令卡。成功由持久压缩标记行披露,失败由上面 patchCmd 的失败态就地披露。
+          compactingRef.current.delete(String(sid));
         }
         return true;
       }
@@ -3287,7 +3380,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               <PermissionSelect value={permMode} disabled={switching}
                 onChange={changePermMode} anchorRef={composerBoxRef} />
             )}
-            <span className="muted composer-tip">{compact ? '点右侧发送按钮 · 换行直接回车' : 'Enter 发送 · Shift+Enter 换行'}</span>
+            {/* 发送中优先于快捷键提示:这段时间可能在读远端引用的图片或创建新会话,
+                不给提示用户会以为点了发送没反应(见 sending 的注释) */}
+            <span className={`muted composer-tip${sending ? ' sending' : ''}`} aria-live="polite">
+              {sending
+                ? <><span className="send-spin" aria-hidden />{sendingTip}</>
+                : (compact ? '点右侧发送按钮 · 换行直接回车' : 'Enter 发送 · Shift+Enter 换行')}
+            </span>
             </div>
             <ContextMeter messages={messages} input={composedInput}
               contextWindow={llm.effModelContext?.contextWindow || 0} usage={ctxUsage} />
@@ -3297,7 +3396,13 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
               ? <button className="send-btn stop" onClick={stop} aria-label="停止当前任务"><IconStop16 size={15} /></button>
               : <button className="send-btn"
                   aria-label={working ? 'Agent 工作中,发送后进入队列等待执行' : '发送'}
-                  disabled={!canSend || (!input.trim() && attachments.length === 0)} onClick={send}><IconSend16 size={15} /></button>}
+                  disabled={!canSend || (!input.trim() && attachments.length === 0)} onClick={send}>
+                  {/* 已经发出、还在等服务端受理时(输入框已清空)按钮转圈;用户又打了新内容就恢复发送图标,
+                      这样发送中的提示不会挡住下一条消息 */}
+                  {sending && !input.trim() && attachments.length === 0
+                    ? <span className="send-spin" aria-label={sendingTip} />
+                    : <IconSend16 size={15} />}
+                </button>}
           </div>
         </div>
         )}

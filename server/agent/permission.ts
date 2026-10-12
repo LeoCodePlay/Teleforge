@@ -9,12 +9,13 @@
 //   折叠规则与 foldTodos 同构:取最后一次 mode 事件的值,无记录回落默认 confirm。
 // - 执行面在工具注册表的 pre-execute guard 落地(只能拒绝不能放行):
 //   只读/交互类工具永不拦截;写类与命令类工具按模式走 拒绝 / 审批 / 放行 三条路径。
-//   审批复用 ask-user 通道(askUserQuestion 阻塞等待):题面经前端 AskPanel 展示,
-//   作答"允许"放行、"拒绝"返回结构化错误结果,取消/超时/停止的清理路径全部复用。
+//   审批复用 ask-user 通道(askUserQuestion 阻塞等待)传题面,但题面带 kind='approval' 标记:
+//   前端 AskPanel 据此渲染专用审批卡(照搬 harness ui-approval 的 ApprovalPanel——一条
+//   「等待审批」状态条 + 请求正文 + 右侧「拒绝 / 允许一次」两个动作,没有自定义回答输入)。
+//   作答"允许一次"放行、"拒绝"返回结构化错误结果,取消/超时/停止的清理路径全部复用。
 import { askUserQuestion } from './ask-user.ts';
 import type { Session } from './session.ts';
 import { DEFAULT_TOOL_ACCESS, type ToolAccess, type ToolDef, type ToolRegistry } from './registry.ts';
-import { getDefaultPermissionMode } from '../store/settings-store.ts';
 
 export type PermissionMode = 'confirm' | 'auto-edit' | 'plan' | 'full-access';
 
@@ -24,6 +25,14 @@ export type { ToolAccess };
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'confirm';
 
 export const PERMISSION_MODES: readonly PermissionMode[] = ['confirm', 'auto-edit', 'plan', 'full-access'];
+
+// ---- 审批题面的契约(与前端 AskPanel 的字面量一一对应,改一处必须同步另一处) ----
+/** 题面语义标记:前端见 kind='approval' 即渲染专用审批卡(无自定义回答输入) */
+export const APPROVAL_QUESTION_KIND = 'approval';
+/** 批准本次操作(harness ui-approval 的 allowOnce 中文对应) */
+export const APPROVAL_ALLOW_LABEL = '允许一次';
+/** 拒绝本次操作(harness ui-approval 的 reject 中文对应) */
+export const APPROVAL_REJECT_LABEL = '拒绝';
 
 /** 客户端渲染用的展示信息(与 harness PresetOption 的 name/description 对齐) */
 export const PERMISSION_MODE_META: Record<PermissionMode, { name: string; description: string }> = {
@@ -39,9 +48,13 @@ export function isPermissionMode(v: unknown): v is PermissionMode {
 
 /**
  * 折叠事件日志得到当前权限模式(参照 harness effectivePermissionPreset 的倒序扫描):
- * 取最后一次 'permission/mode' 事件的值;历史里没有(旧会话/清空过)回落
- * fallback——默认传全局默认模式(settings-store,新会话与清空历史的会话都继承),
- * 无全局设置(首次启动/旧数据)才回落 DEFAULT_PERMISSION_MODE。
+ * 取最后一次 'permission/mode' 事件的值;历史里没有(旧会话/清空过)回落 fallback。
+ *
+ * fallback 默认是 DEFAULT_PERMISSION_MODE('confirm'),**不是**全局默认设置:
+ * 模式是会话级状态,新会话/清空历史后的会话在创建时就把当时的默认档位播种成一条
+ * permission/mode 事件(agent.ts 的 _pinDefaultPermission,对齐 harness
+ * permission-presets 的 pinInitialPermission)。把全局默认当实时 fallback 会让
+ * "会话 B 切档位"回溯改变所有还没有自己 mode 事件的会话,即跨会话串档。
  */
 export function foldPermissionMode(events: Array<{ type: string; data?: any }>, fallback: unknown = DEFAULT_PERMISSION_MODE): PermissionMode {
   for (let i = (events || []).length - 1; i >= 0; i--) {
@@ -158,7 +171,7 @@ export async function permissionGuard(name: string, args: any, ctx?: any, def?: 
   if (access === 'meta' || access === 'read') return undefined; // 只读/协调工具永不拦
   const session: Session | undefined = ctx?.session;
   if (!session) return undefined; // 无会话上下文(理论不发生):fail-open 交由其它守卫兜底
-  const mode = foldPermissionMode(session.events, getDefaultPermissionMode());
+  const mode = foldPermissionMode(session.events);
 
   if (mode === 'full-access') return undefined;
   if (mode === 'plan') {
@@ -179,16 +192,18 @@ export async function permissionGuard(name: string, args: any, ctx?: any, def?: 
       emit: ctx.emit,
       questions: [{
         id: 'permission',
+        // 专用审批卡(harness ApprovalPanel 同款):前端只渲染「拒绝 / 允许一次」,不给自定义回答
+        kind: APPROVAL_QUESTION_KIND,
         header: `${opName}确认`,
         question: `AI 请求${opName}:${summary}${mode === 'auto-edit' ? '(自动编辑模式:文件编辑已放行,命令仍需确认)' : ''}`,
         options: [
-          { label: '允许', description: '批准本次操作,继续执行' },
-          { label: '拒绝', description: '本次操作不执行,AI 将收到拒绝结果并调整方案' }
+          { label: APPROVAL_REJECT_LABEL, description: '本次操作不执行,AI 将收到拒绝结果并调整方案' },
+          { label: APPROVAL_ALLOW_LABEL, description: '批准本次操作,继续执行' }
         ]
       }]
     });
     const picked = answers?.[0]?.selected?.[0];
-    if (picked === '允许') return undefined;
+    if (picked === APPROVAL_ALLOW_LABEL) return undefined;
     return `用户拒绝了本次${opName}(工具未执行)。请尊重用户决定:不要换参数重试同一操作,调整方案或向用户说明影响后再继续。`;
   } catch (e: any) {
     // 用户取消/超时/停止:与"拒绝"同语义,工具不执行

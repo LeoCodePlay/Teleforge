@@ -57,6 +57,7 @@ function childHistoryReply(runId: string) {
     usage: foldTokenUsage(events),
     stats: foldSessionStats(events),
     compacting: false,
+    compactingManual: false,
     goal: null,
     // 子代理视图的附加信息(父会话不需要):派发记录 id / 是否还能继续 / 所属父会话
     subagent: rec ? { runId, sid: rec.sid ?? null, mode: rec.mode ?? 'continuable', resident: isResident(runId) } : null
@@ -131,6 +132,10 @@ export function registerAgent(rpc: RpcModule) {
       // 该会话此刻是否在生成压缩摘要:实时事件 compaction_start 不落盘,切回会话时靠这个标志
       // 把对话流里的「正在压缩…」运行行补回来(见 ChatPanel 历史载入)
       compacting: agent.isCompacting(sid),
+      // 这次压缩是手动 /compact 还是自动超水位:前端按同一口径恢复运行态记录(手动=命令卡,
+      // 自动=「上下文压缩」运行行)。手动压缩的实时反馈只有前端命令卡,不落盘,切走再切回
+      // 若只回报 compacting=true 就会把它显示成一条自动压缩运行行,用户看到"我点的记录不见了"。
+      compactingManual: agent.isCompactingManual(sid),
       // 当前长期目标(移植自 harness goals 投影):无目标为 null,前端据此渲染输入卡上方的目标条
       goal: agent.getGoal(sid) ?? null
     });
@@ -194,8 +199,9 @@ export function registerAgent(rpc: RpcModule) {
   rpc.register('session_create', async (msg, { reply, emitStatus }) => {
     // 原 ws.js session_create case(228-233)逐字复制
     // 多会话并行:新建/切换不影响其他会话的运行
-    // permissionMode:新会话生效的访问权限模式(=全局默认,见 settings-store),
-    // 前端草稿态据此对齐权限选择器,避免"用户设了完全访问、新会话却显示变更前确认"
+    // permissionMode:新会话生效的访问权限模式 —— 创建时已把当时的全局默认档位播种成
+    // 该会话自己的 permission/mode 事件(见 agent.ts _pinDefaultPermission),前端据此对齐
+    // 权限选择器,避免"用户设了完全访问、新会话却显示变更前确认"。此后该会话与全局默认脱钩。
     const s = agent.createSession(msg.title);
     // "新会话草稿"里已经打开的预览浏览器继承给这个真实会话(前端传草稿 id d_…)。
     // 没有这一步,草稿期开的预览会变成没人认领的孤儿:新会话无权操作它,用户得手动重开。

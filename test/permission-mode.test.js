@@ -77,9 +77,13 @@ const run = (name, session) => registry.execute({
   await new Promise((res) => setTimeout(res, 20)); // 等守卫走到审批挂起点
   const askEvt = listPendingAsks();
   assert.equal(askEvt.length, 2, 'confirm: 写/命令各挂起一条审批');
+  // 审批题面必须带 kind='approval':前端据此渲染"只有拒绝/允许一次"的专用审批卡
+  // (没有自定义回答输入),而不是带"其它"输入框的通用提问卡
+  assert.equal(askEvt[0].questions[0].kind, 'approval', 'confirm: 审批题面带 kind=approval 标记');
+  assert.equal(askEvt[0].questions[0].options?.[1]?.label, '允许一次', 'confirm: 允许动作 label 对齐 harness(允许一次)');
 
-  // 作答"允许"放行
-  for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许'] }]);
+  // 作答"允许一次"放行
+  for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许一次'] }]);
   const r3 = await pendingWrite;
   assert.equal(r3.isError, false, 'confirm: 审批允许后写入放行');
   await pendingCmd; // 同批已作答允许
@@ -107,7 +111,7 @@ const run = (name, session) => registry.execute({
   const r8 = await run('write_file', sAuto);
   assert.equal(r8.isError, false, 'auto-edit: 写文件放行');
   const p9 = run('run_command', sAuto);
-  setTimeout(() => { for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许'] }]); }, 10);
+  setTimeout(() => { for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许一次'] }]); }, 10);
   const r9 = await p9;
   assert.equal(r9.isError, false, 'auto-edit: 命令审批允许后放行');
   assert.equal(listPendingAsks().length, 0);
@@ -133,7 +137,7 @@ const run = (name, session) => registry.execute({
   await new Promise((res) => setTimeout(res, 20));
   const askList = listPendingAsks();
   assert.equal(askList.length, 1, 'confirm: 未声明 access 的工具必须挂起审批');
-  for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许'] }]);
+  for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许一次'] }]);
   assert.equal((await pendingUnknown).isError, false, 'confirm: 审批允许后放行');
 
   // plan 模式下:未声明 access 的工具必须直接拒绝(只读放行、未知按写拒绝)
@@ -142,6 +146,28 @@ const run = (name, session) => registry.execute({
   assert.equal(rUnknownPlan.isError, true, 'plan: 未声明 access 的工具必须被拒绝');
   assert.match(rUnknownPlan.content, /计划模式/);
   assert.equal(listPendingAsks().length, 0, 'plan: 不发审批直接拒绝');
+
+  // ---- 跨会话隔离回归:全局默认档位只能给"新会话"播种,绝不能当成已有会话的实时 fallback ----
+  // 历史事故:foldPermissionMode 的 fallback 传了全局默认设置,而 permission_set 又会把
+  // 当前会话选的档位同步成全局默认。于是"会话 B 切计划模式"会让所有还没有自己 mode 事件的
+  // 会话 A 跟着变成只读 —— 表现为跨会话串档。以下断言锁死:无 mode 事件 = 会话级默认 confirm,
+  // 与全局默认设置无关。
+  const { setDefaultPermissionMode, getDefaultPermissionMode } = await import('../server/store/settings-store.ts');
+  setDefaultPermissionMode('full-access');
+  assert.equal(getDefaultPermissionMode(), 'full-access', '全局默认已设为完全访问');
+  assert.equal(foldPermissionMode([]), 'confirm', '无 mode 事件回落会话级默认 confirm,不吃全局默认');
+  assert.equal(
+    foldPermissionMode([{ type: 'permission/mode', data: { mode: 'plan' } }]),
+    'plan',
+    '有 mode 事件时只认自己日志里的值'
+  );
+  // 全局默认是完全访问时,一个没有任何 mode 事件的会话仍必须走审批(而不是被静默放行)
+  const sNoEvent = makeSession();
+  const pendingNoEvent = run('write_file', sNoEvent);
+  await new Promise((res) => setTimeout(res, 20));
+  assert.equal(listPendingAsks().length, 1, '全局默认=完全访问时,无 mode 事件的会话仍必须审批');
+  for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许一次'] }]);
+  assert.equal((await pendingNoEvent).isError, false, '审批放行后写入成功');
 
   console.log('permission-mode.test.js 全部通过');
   process.exit(0);

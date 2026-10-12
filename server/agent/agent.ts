@@ -227,6 +227,10 @@ function newRuntime(session) {
     // 手动压缩(/compact)是否在生成摘要:与 busy 分开记账——压缩不驱动轮次、前端也不该显示
     // "生成中",但它同样不能被切走释放(见 switchSession)、不能并发开轮(见 submit)。
     compacting: false,
+    // 本次压缩是不是用户手动触发的 /compact(与自动超水位压缩区分):两者的运行态反馈不同 ——
+    // 手动压缩在对话流里是一条「正在压缩当前会话上下文…」命令卡,自动压缩是「上下文压缩」运行行。
+    // 切走再切回时前端要按这个标志恢复成同一种记录(见 get_history 的 compactingManual)。
+    compactingManual: false,
     signal: null,  // 该会话当前轮的 AbortController
     inbox: [],     // next-turn 输入队列(followup,空闲时逐条开新轮)
     steer: [],     // next-step 注入队列(运行中补充指令,下一步生效)
@@ -847,8 +851,9 @@ export class Agent {
   _restore() {
     try {
       const mine = sessions.list(this._connKey);
-      const target = mine.find((s) => s.id === sessions.getActive()) || mine[0]
-        || sessions.create('新会话', this.sessionConnKey(), this._captureBinding());
+      const existing = mine.find((s) => s.id === sessions.getActive()) || mine[0];
+      const target = existing || sessions.create('新会话', this.sessionConnKey(), this._captureBinding());
+      if (!existing) this._pinDefaultPermission(target.id); // 本作用域一个会话都没有:刚建的空会话播种默认权限
       this.sessionId = target.id;
       this._runtimes.set(target.id, newRuntime(this._loadHealed(target.id)));
       sessions.setActive(target.id);
@@ -981,14 +986,41 @@ export class Agent {
   }
 
   // ---- 访问权限模式(变更前确认/自动编辑/计划模式/完全访问,见 permission.ts) ----
-  // 模式持久化在会话事件日志('permission/mode' 事件):运行中会话直接追加并落盘,
-  // 不在内存的会话(切走后释放)从磁盘载入-追加-保存;切换即广播 permission_changed。
-  // 全局默认模式(settings-store)兜底:会话日志里没有 mode 事件(新建/清空过历史)
-  // 时,新会话直接继承用户最近一次设置的档位——设置为完全访问后,所有新会话都是完全访问。
+  // 模式持久化在**该会话自己的**事件日志('permission/mode' 事件),是会话级状态:
+  // 运行中会话直接追加并落盘,不在内存的会话(切走后释放)从磁盘载入-追加-保存;
+  // 切换即广播 permission_changed。折叠只读本会话日志,fallback 固定 DEFAULT_PERMISSION_MODE。
+  //
+  // 全局默认模式(settings-store)只用于**给新会话播种**:新建/清空历史后的空会话在创建时
+  // 就把当时的默认档位钉成一条 permission/mode 事件(见 _pinDefaultPermission,对齐 harness
+  // permission-presets 的 pinInitialPermission)。一旦钉入,该会话就与全局默认脱钩。
+  //
+  // 历史教训:曾把全局默认当成"日志里没有 mode 事件时的实时 fallback"。于是会话 B 一切档位
+  // (permission_set 同时改全局默认),所有还没有自己 mode 事件的会话(A)就跟着变了 ——
+  // 表现为"B 切计划模式,A 也变成只读"。所以默认值只能播种,不能当 fallback。
   getPermissionMode(id = this.sessionId): PermissionMode {
     if (id == null) return this.getDefaultPermissionMode();
     const rt = this._runtimes.get(id);
-    return foldPermissionMode(rt ? rt.session.events : sessions.loadEvents(id), this.getDefaultPermissionMode());
+    return foldPermissionMode(rt ? rt.session.events : sessions.loadEvents(id));
+  }
+
+  /**
+   * 把一个**空会话**的日志钉上"此刻的全局默认档位"(对齐 harness pinInitialPermission)。
+   * 只在会话刚创建/刚清空历史时调用:此时日志里没有任何用户意图,用默认值播种是安全的;
+   * 已有 permission/mode 事件的会话直接跳过,绝不覆盖会话自身的意图。
+   * @param id - 会话 id
+   * @param rt - 该会话的内存运行时(省略时走磁盘:新建后被 _loadHealed 再载入的路径)
+   */
+  _pinDefaultPermission(id: string, rt?: any): void {
+    try {
+      const events = rt ? rt.session.events : sessions.loadEvents(id);
+      if (events.some((e: any) => e?.type === 'permission/mode')) return;
+      const mode = this.getDefaultPermissionMode();
+      if (rt) rt.session.append('permission/mode', { mode });
+      else events.push({ seq: events.length, time: Date.now(), type: 'permission/mode', data: { mode } });
+      sessions.saveEvents(id, rt ? rt.session.events : events);
+    } catch (e: any) {
+      console.warn('[agent] 播种会话默认权限失败:', e?.message || e);
+    }
   }
 
   /** 全局默认访问权限模式(settings-store 持久化,新会话继承;未设置回落 confirm) */
@@ -1009,27 +1041,28 @@ export class Agent {
       sessions.saveEvents(id, events);
     }
     // 用户设置的档位同时持久化为全局默认:新建会话即继承该模式。
-    // 例外:计划模式的进入/退出（/计划 与 exit_plan_mode）不写全局默认——
-    // 计划模式是"这个会话此刻的工作方式",不是"以后所有新会话的默认权限"。
-    if (opts.globalDefault !== false && isPermissionMode(mode)) storeSetDefaultMode(mode);
+    // 例外:计划模式**从不**写全局默认 —— 计划模式是"这个会话此刻的工作方式",
+    // 不是"以后所有新会话的默认权限"(与 /计划 的 globalDefault:false 同一取向;
+    // 否则用选择器切一次计划模式,之后每个新会话都从只读开始)。
+    if (opts.globalDefault !== false && isPermissionMode(mode) && mode !== 'plan') storeSetDefaultMode(mode);
     this.emit('agent', { event: 'permission_changed', mode, sid: id });
     return mode;
   }
 
   // ---- 计划模式(移植自 harness plan/plan-mode;状态即权限档位 'plan')----
 
-  /** 该会话此刻是否处于计划模式(折叠日志的最后一个 permission/mode 值) */
+  /** 该会话此刻是否处于计划模式(折叠日志的最后一个 permission/mode 值;无记录不在计划模式) */
   isPlanMode(id = this.sessionId): boolean {
     if (id == null) return false;
     const rt = this._runtimes.get(id);
-    return foldPlanActive(rt ? rt.session.events : sessions.loadEvents(id), this.getDefaultPermissionMode());
+    return foldPlanActive(rt ? rt.session.events : sessions.loadEvents(id));
   }
 
-  /** 退出计划模式:回到进入前的档位(日志里最后一次非 plan 档位;没有则全局默认) */
+  /** 退出计划模式:回到进入前的档位(日志里最后一次非 plan 档位;没有则默认 confirm) */
   exitPlanMode(id = this.sessionId, session = id != null ? this._runtimes.get(id)?.session : null): PermissionMode {
     if (id == null) throw new Error('当前没有可操作的会话');
     const events = session ? session.events : sessions.loadEvents(id);
-    const target = modeBeforePlan(events, this.getDefaultPermissionMode());
+    const target = modeBeforePlan(events);
     return this.setPermissionMode(target === 'plan' ? DEFAULT_PERMISSION_MODE : target, id, { globalDefault: false });
   }
 
@@ -1298,6 +1331,7 @@ export class Agent {
     const mine = this.listSessions();
     if (mine.some((s) => s.id === this.sessionId)) return;
     const target = mine[0] || sessions.create('新会话', this.sessionConnKey(), this._captureBinding());
+    if (!mine.length) this._pinDefaultPermission(target.id); // 刚建的空会话:播种默认权限
     let rt = this._runtimes.get(target.id);
     if (!rt) rt = newRuntime(this._loadHealed(target.id));
     this._runtimes.set(target.id, rt);
@@ -1322,6 +1356,7 @@ export class Agent {
     rt.localWorkspace = s.localWorkspace ?? null;
     rt.connKey = s.connKey ?? null;
     this._runtimes.set(s.id, rt);
+    this._pinDefaultPermission(s.id, rt); // 新会话播下当时的默认档位,此后只认自己的日志
     this.sessionId = s.id;
     this.emit('agent', { event: 'session_switched', id: s.id });
     return s;
@@ -1473,8 +1508,12 @@ export class Agent {
     if (rt?.busy) throw new Error('会话正在运行,请先停止或等待完成');
     if (rt?.compacting) throw new Error('会话正在压缩,请等待完成');
     if (id != null) {
-      this._runtimes.set(id, newRuntime(new Session()));
+      const rt2 = newRuntime(new Session());
+      this._runtimes.set(id, rt2);
       sessions.saveEvents(id, []);
+      // 清空历史后重新播种默认档位(与新建会话同一口径):清历史不该把会话的权限档位也清没,
+      // 但也不该沿用被清掉日志里的旧意图 —— 回到"此刻的全局默认"。
+      this._pinDefaultPermission(id, rt2);
     }
     this.emit('agent', { event: 'history_cleared' });
     this.emit('agent', { event: 'sessions_changed' });
@@ -1574,12 +1613,13 @@ export class Agent {
     // 线上「压缩完切会话再切回,压缩记录不见了、模型上下文也没被压缩」);
     // submit 同时把新消息排队,避免压缩读日志时另有轮次往日志尾部追加事件。
     // 结束/失败都在 finally 复位,并把压缩期间排队的消息派发出去。
-    if (rt) rt.compacting = true;
+    if (rt) { rt.compacting = true; rt.compactingManual = true; }
     try {
       return await this._compactNowInner(id, rt);
     } finally {
       if (rt) {
         rt.compacting = false;
+        rt.compactingManual = false;
         // 压缩期间排队的消息必须在此刻派发:除了 rt.pending,还要看 rt.inbox —— 用户点
         // 「立即执行」时消息会先被移进 inbox,只认 pending 就会把它漏掉。漏掉的后果是前端
         // 队列面板已清空(看起来"发出去了")、驱动却从未启动:agent 一直"运行中"、毫无输出。
@@ -1809,6 +1849,14 @@ export class Agent {
   isCompacting(sid) {
     if (sid == null) return false;
     return this._runtimes.get(String(sid))?.compacting === true;
+  }
+
+  /** 该会话正在生成的那次压缩是不是用户手动触发的 /compact(true)/ 自动超水位压缩(false)。
+   *  切回会话时前端据此恢复成同一种运行态记录:手动压缩恢复「正在压缩当前会话上下文…」命令卡,
+   *  自动压缩补一行「上下文压缩」运行行 —— 不区分就会把用户点的 /compact 显示成自动压缩。 */
+  isCompactingManual(sid) {
+    if (sid == null) return false;
+    return this._runtimes.get(String(sid))?.compactingManual === true;
   }
 
   /**
@@ -2339,7 +2387,7 @@ export class Agent {
           // 正在压缩的 runtime;② 切回该会话时 get_history 能如实回答「此刻在压缩」,前端据此把
           // 「正在压缩…」那行补回来 —— 它原本只由实时事件 compaction_start 插入、不落盘,
           // 切走再切回历史整表重载就会让它凭空消失(直到完成才又冒出「上下文压缩」行)。
-          if (rt) rt.compacting = true;
+          if (rt) { rt.compacting = true; rt.compactingManual = false; }
           let c;
           try {
             c = await compactHistory({
@@ -2361,7 +2409,7 @@ export class Agent {
           } finally {
             // 无论压缩成功/只折叠/失败/被中断,压缩都已结束:必须复位,否则该会话会被
             // 永久当成「压缩中」(删除、fork、切换都会一直被拦)。
-            if (rt) rt.compacting = false;
+            if (rt) { rt.compacting = false; rt.compactingManual = false; }
           }
           if (c.compacted) {
             const dropSeqs = trace.slice(0, c.dropCount).map((t) => t.seq);
@@ -2473,7 +2521,7 @@ export class Agent {
             // 爆窗恢复的摘要压缩同样要调 LLM:与常规自动压缩同一口径置 rt.compacting ——
             // 否则用户切走再切回时 get_history 会答「不在压缩」,那行「正在压缩…」就凭空消失
             // (只能等完成/失败才又冒出来),看起来像"压缩记录不见了"。
-            if (rt) rt.compacting = true;
+            if (rt) { rt.compacting = true; rt.compactingManual = false; }
             let c;
             try {
               c = await compactHistory({
@@ -2492,7 +2540,7 @@ export class Agent {
                 }
               });
             } finally {
-              if (rt) rt.compacting = false;
+              if (rt) { rt.compacting = false; rt.compactingManual = false; }
             }
             if (c.compacted) {
               const dropSeqs = trace.slice(0, c.dropCount).map((t: any) => t.seq);

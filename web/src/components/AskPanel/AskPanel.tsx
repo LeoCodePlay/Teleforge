@@ -14,6 +14,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { AskAnswerItem, AskQuestion, AskRequest } from '../../types';
 import { IconArrowLeft16, IconArrowRight16, IconCheck16, IconClose16, IconPencil16 } from '../icons/icons';
+import { StateDot } from '../StateDot/StateDot';
 import './AskPanel.scss';
 
 interface AskPanelProps {
@@ -37,6 +38,12 @@ const NO_DRAFTS: Record<number, AskDraft> = {};
 
 /** 自动跳题后的冷却窗口:挡住同一次连点 / 重复回车落到下一题同一位置的选项上 */
 const ADVANCE_COOLDOWN_MS = 260;
+
+// 权限审批题面(kind='approval')的动作契约:与服务端 permission.ts 的
+// APPROVAL_ALLOW_LABEL / APPROVAL_REJECT_LABEL 字面对齐,改一处必须同步另一处。
+const APPROVAL_KIND = 'approval';
+const APPROVAL_ALLOW_LABEL = '允许一次';
+const APPROVAL_REJECT_LABEL = '拒绝';
 
 /**
  * 拆出选项 label 末尾的「(推荐)/(recommended)」后缀做角标展示。
@@ -252,6 +259,31 @@ export default function AskPanel({ sid, onPendingChange, onBootChange }: AskPane
 
   const isFirst = idx === 0;
   const isLast = idx === total - 1;
+
+  // 权限审批(写文件/编辑/删除/执行命令的变更前确认):照搬 harness ui-approval 的
+  // ApprovalPanel —— 一条「等待审批」状态条 + 请求正文 + 右侧「拒绝 / 允许一次」两个动作。
+  // 没有选项行、没有自定义回答输入、没有翻题/取消 —— 审批只有"批/拒"两种结局。
+  if (q.kind === APPROVAL_KIND) {
+    return (
+      <div className="ask-panel ask-approval" role="dialog" aria-modal="false" aria-labelledby={`ask-title-${active.askId}-${idx}`}>
+        <div className="ask-approval-strip">
+          <StateDot state="warning" size={10} />
+          <span>等待审批</span>
+        </div>
+        <div className="ask-approval-body" ref={bodyRef} tabIndex={-1}>
+          <div className="ask-approval-headline" id={`ask-title-${active.askId}-${idx}`}>{q.question}</div>
+        </div>
+        <div className="ask-approval-actions">
+          <button type="button" className="ghost ask-approval-reject" onClick={() => choose(APPROVAL_REJECT_LABEL)}>
+            {APPROVAL_REJECT_LABEL}
+          </button>
+          <button type="button" className="primary ask-approval-allow" onClick={() => choose(APPROVAL_ALLOW_LABEL)}>
+            {APPROVAL_ALLOW_LABEL}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="ask-panel" role="dialog" aria-modal="false" aria-labelledby={`ask-title-${active.askId}-${idx}`}>

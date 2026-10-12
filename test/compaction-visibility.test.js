@@ -31,6 +31,8 @@ ssh.listDir = async () => ([{ name: 'README.md', type: 'file', size: 10, mtime: 
 function makeAgent({ summaryFails = false } = {}) {
   const events = [];
   const seen = [];
+  // 摘要请求进行中的会话压缩状态(用于断言"自动压缩不冒充手动压缩")
+  const seenCompacting = [];
   const agent = new Agent({
     emit: (e, p) => {
       events.push([e, p]);
@@ -55,6 +57,7 @@ function makeAgent({ summaryFails = false } = {}) {
       const isSummary = (messages || []).some((m) => String(m.content || '').includes('checkpoint') || String(m.content || '').includes('压缩'));
       if (isSummary) {
         if (summaryFails) throw new Error('上游摘要失败');
+        seenCompacting.push({ run: agent.isCompacting(agent.sessionId), manual: agent.isCompactingManual(agent.sessionId) });
         return { content: '【摘要】早期对话已概括。', toolCalls: [] };
       }
       return { content: '收到。', toolCalls: [] };
@@ -65,7 +68,7 @@ function makeAgent({ summaryFails = false } = {}) {
     session.append('user/message', { content: `历史问题 ${i}:${'甲'.repeat(1200)}`, source: 'user' });
     session.append('assistant/message', { message: { content: `历史回答 ${i}` } });
   }
-  return { agent, events, seen };
+  return { agent, events, seen, seenCompacting };
 }
 
 const evNames = (events) => events.filter(([e, p]) => e === 'agent' && p && p.event).map(([, p]) => p.event);
@@ -74,7 +77,7 @@ async function main() {
   // ---- 场景 1:自动摘要压缩的 start/done 成对、有序,且 done 时检查点已落盘 ----
   console.log('\n[场景 1] 超水位自动压缩:先 start 后 done,done 广播时检查点已落盘');
   {
-    const { agent, events, seen } = makeAgent();
+    const { agent, events, seen, seenCompacting } = makeAgent();
     await agent.run('这是本轮的新问题');
     const names = evNames(events);
     const iStart = names.indexOf('compaction_start');
@@ -87,6 +90,12 @@ async function main() {
     check('done 广播时检查点已落盘', seen.find((s) => s.event === 'compaction_done')?.diskHasCheckpoint === true);
     const done = seen.find((s) => s.event === 'compaction_done');
     check('done 携带被压缩条数', done && Number(done.dropCount) > 0, `dropCount=${done && done.dropCount}`);
+    // 自动压缩必须如实标成"自动":前端切回会话时才能补「上下文压缩」运行行,
+    // 而不是把自动压缩显示成用户手动点的 /compact(反向同理,见 compaction-persistence 用例)
+    check('摘要生成期间:自动压缩 isCompacting=true 且 isCompactingManual=false',
+      seenCompacting.some((s) => s.run === true && s.manual === false)
+      && !seenCompacting.some((s) => s.manual === true),
+      JSON.stringify(seenCompacting));
     const sid = agent.sessionId;
     const disk = sessions.loadEvents(sid);
     check('磁盘日志里有 compaction/done 检查点', disk.some((ev) => ev.type === 'compaction/done' && typeof ev.data?.dropThroughSeq === 'number'));

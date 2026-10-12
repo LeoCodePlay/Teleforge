@@ -66,7 +66,7 @@ const probeSet = (set) => (cmd) => {
     probeSet(new Set()),
     (cmd) => (/^id -u/.test(cmd) ? { code: 1, stdout: '', stderr: '' } : undefined),
     (cmd) => (/^sudo -n true/.test(cmd) ? { code: 1, stdout: '', stderr: '' } : undefined),
-    (cmd) => { installLog.push(cmd); return { code: 0, stdout: '', stderr: '' }; }
+    (cmd) => { if (/install/.test(cmd)) { installLog.push(cmd); return { code: 0, stdout: '', stderr: '' }; } return { code: 1, stdout: '', stderr: '' }; }
   ]);
   const r = await ensureSearchTools({ force: true });
   check('无权限时不安装并返回原因', r.ok === false && r.reason === 'no-permission' && installLog.length === 0, JSON.stringify(r));
@@ -92,14 +92,42 @@ const probeSet = (set) => (cmd) => {
   check('TTL 内命中缓存不重复安装', r.ok === true && (r.installed || []).includes('rg') && installLog.filter((c) => /install/.test(c)).length === 1, JSON.stringify(r));
 }
 
-// ---- 场景 7:win32 平台(如 Windows 服务器)→ 直接返回,无需安装(findstr 原生存在) ----
+// ---- 场景 7:win32 平台(如 Windows 服务器)→ 探测到原生 findstr,无需安装 ----
 {
   ssh.hostInfo = { host: 'srv6', port: 22, username: 'u' };
   ssh.platform = 'win32';
-  let called = 0;
-  ssh.execBackground = async () => { called++; return { code: 0, stdout: '', stderr: '' }; };
+  const installs = [];
+  ssh.execBackground = async (cmd) => {
+    if (/^where findstr$/.test(cmd.trim())) return { code: 0, stdout: 'C:\\Windows\\System32\\findstr.exe\n', stderr: '' };
+    if (/install/.test(cmd)) { installs.push(cmd); return { code: 0, stdout: '', stderr: '' }; }
+    return { code: 1, stdout: '', stderr: '' };
+  };
   const r = await ensureSearchTools({ force: true });
-  check('win32 平台不探测不安装', r.ok === true && called === 0 && (r.installed || []).length === 0, JSON.stringify(r));
+  check('win32 有 findstr 时不安装', r.ok === true && installs.length === 0 && (r.installed || []).length === 0, JSON.stringify(r));
+}
+
+// ---- 场景 8:win32 且 findstr 也没有 → 不做 posix 安装尝试 ----
+{
+  ssh.hostInfo = { host: 'srv7', port: 22, username: 'u' };
+  ssh.platform = 'win32';
+  const installs = [];
+  ssh.execBackground = async (cmd) => { if (/install/.test(cmd)) installs.push(cmd); return { code: 1, stdout: '', stderr: '' }; };
+  const r = await ensureSearchTools({ force: true });
+  check('win32 无任何工具时不尝试安装', r.ok === false && r.reason === 'win32-no-tool' && installs.length === 0, JSON.stringify(r));
+}
+
+// ---- 场景 9:平台被误判成 win32、远程其实是 Linux 且有 grep → 交叉探测救场 ----
+{
+  ssh.hostInfo = { host: 'srv8', port: 22, username: 'u' };
+  ssh.platform = 'win32';
+  const installs = [];
+  ssh.execBackground = async (cmd) => {
+    if (/^command -v grep$/.test(cmd.trim())) return { code: 0, stdout: '/usr/bin/grep\n', stderr: '' };
+    if (/install/.test(cmd)) { installs.push(cmd); return { code: 0, stdout: '', stderr: '' }; }
+    return { code: 1, stdout: '', stderr: '' };
+  };
+  const r = await ensureSearchTools({ force: true });
+  check('平台误判 win32 时交叉探测到 grep', r.ok === true && (r.installed || []).length === 0 && installs.length === 0, JSON.stringify(r));
 }
 
 console.log(`\n==== 结果: ${pass} 通过, ${fail} 失败 ====`);

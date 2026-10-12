@@ -524,6 +524,16 @@
 /* 左下角分组:"+"附件菜单 + 权限模式 + 发送提示,作为一体与右侧(仪表/发送)两端分布 */
 .composer-foot-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .composer-tip { font-size: 11px; }
+/* 「发送中」提示:文案会随阶段变(读远端引用图 / 等服务端受理),转圈让"在等"这件事持续可见 */
+.composer-tip.sending { display: inline-flex; align-items: center; color: var(--accent-2); }
+.send-spin {
+  display: inline-block; width: 11px; height: 11px; margin-right: 5px; flex: none;
+  border-radius: 50%; border: 2px solid var(--glass-border); border-top-color: var(--accent-2);
+  animation: send-spin 0.8s linear infinite;
+}
+@keyframes send-spin { to { transform: rotate(360deg); } }
+/* 发送按钮里的转圈:底色是 accent,取按钮文字色作描边才看得见 */
+.send-btn .send-spin { width: 14px; height: 14px; margin: 0; border-color: transparent; border-top-color: currentColor; }
 /* 对话统计行(面板最底一行,工作区/模型行之下):整行只有统计胶囊,水平居中显示。
    无边框、无底板 —— 悬停反馈交给胶囊自身的背景色,点击胶囊在其上方弹出明细。
    min-height 取胶囊高度:这一行与两个胶囊始终渲染(无数据时是 `0 轮 0 步`/`0 tok` 占位),

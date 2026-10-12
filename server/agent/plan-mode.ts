@@ -16,7 +16,6 @@ import type { Session } from './session.ts';
 import type { ToolDef, ToolRegistry } from './registry.ts';
 import { askUserQuestion } from './ask-user.ts';
 import { DEFAULT_PERMISSION_MODE, foldPermissionMode, isPermissionMode, type PermissionMode } from './permission.ts';
-import { getDefaultPermissionMode as storeDefault } from '../store/settings-store.ts';
 import * as sessions from '../store/session-store.ts';
 
 /** 模型侧退出工具名(harness EXIT_PLAN_MODE;非计划模式下也保持注册,工具清单不随切换抖动) */
@@ -68,9 +67,9 @@ export type LeavePlanMode = (ctx: { session: Session; sid?: string | null; emit?
  */
 export function leavePlanMode(ctx: { session: Session; sid?: string | null; emit?: (event: string, payload: any) => void }): PermissionMode {
   const { session, sid, emit } = ctx;
-  const stored = storeDefault();
-  const fallback: PermissionMode = isPermissionMode(stored) ? stored : DEFAULT_PERMISSION_MODE;
-  const target = modeBeforePlan(session.events, fallback);
+  // 回到进入前的档位:取日志里最后一次非 plan 的档位;日志里没有(旧会话)则回落
+  // DEFAULT_PERMISSION_MODE,而不是全局默认 —— 后者会把"别的会话改的档位"串进本会话。
+  const target = modeBeforePlan(session.events);
   const mode: PermissionMode = target === 'plan' ? DEFAULT_PERMISSION_MODE : target;
   session.append('permission/mode', { mode });
   if (sid) {

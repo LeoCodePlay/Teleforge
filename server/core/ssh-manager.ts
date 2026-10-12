@@ -43,6 +43,10 @@ export interface ExecOptions {
   // true 时绕过 execQueue 串行队列,直接走 ssh2 多路 exec 通道并行执行
   // (agent 并行工具调用用;命令台/RPC 等外部命令保持默认串行)
   concurrent?: boolean;
+  // 连接建立期间的内部探测专用:此时 status 还是 connecting,但命令通道已经可用。
+  // 不放开这个口子的话,平台/家目录探测会被 connected 守卫拒绝(见 _execRaw),
+  // 于是 uname 拿不到输出、Linux 被误判成 win32。外部命令一律保持默认 false。
+  internal?: boolean;
 }
 
 export interface ExecResult {
@@ -212,15 +216,20 @@ export class SshConnection extends EventEmitter {
   }
 
   async _probe(): Promise<void> {
-    // 探测远程平台与家目录
-    const r = await this._execRaw('uname -s', { timeout: 6000 });
-    if (r.code === 0 && r.stdout.trim()) {
+    // 探测远程平台与家目录。两条命令都走 internal:本方法在 'ready' 之后、
+    // status 置为 connected 之前执行,不走 internal 会被 _execRaw 的 connected 守卫拒绝,
+    // uname 拿不到输出就会把 Linux 判成 win32(搜索工具探测、引号、删目录随之全走 Windows 分支)。
+    const r = await this._execRaw('uname -s', { timeout: 6000, internal: true });
+    // 平台判定以 stdout 是否有内核名为准,不看退出码:部分服务器/受限 shell 不回 exit-status,
+    // 按 code===0 判定会把这类 Linux 同样误判成 win32。Windows 上没有 uname,stdout 恒为空。
+    if (String(r.stdout || '').trim()) {
       this.platform = 'posix';
-      const h = await this._execRaw('echo "$HOME"', { timeout: 6000 });
-      this.home = h.code === 0 && h.stdout.trim() ? h.stdout.trim() : null;
+      const h = await this._execRaw('echo "$HOME"', { timeout: 6000, internal: true });
+      // 同理只看输出:$HOME 为空(未设置)即视为无家目录,不依赖退出码
+      this.home = String(h.stdout || '').trim() || null;
     } else {
       this.platform = 'win32';
-      const h = await this._execRaw('echo %USERPROFILE%', { timeout: 6000 });
+      const h = await this._execRaw('echo %USERPROFILE%', { timeout: 6000, internal: true });
       this.home = h.code === 0 && h.stdout.trim() ? h.stdout.trim() : null;
     }
     this.emit('log', 'info', `远程平台: ${this.platform}${this.home ? `, 家目录: ${this.home}` : ''}`);
@@ -307,9 +316,11 @@ export class SshConnection extends EventEmitter {
     return true;
   }
 
-  _execRaw(cmd: string, { runId, timeout = EXEC.DEFAULT_TIMEOUT_MS, onOut, onErr, maxOutput = EXEC.MAX_OUTPUT_CHARS }: ExecOptions = {}): Promise<ExecResult> {
+  _execRaw(cmd: string, { runId, timeout = EXEC.DEFAULT_TIMEOUT_MS, onOut, onErr, maxOutput = EXEC.MAX_OUTPUT_CHARS, internal = false }: ExecOptions = {}): Promise<ExecResult> {
     return new Promise<ExecResult>((resolve, reject) => {
-      if (!this.connected || !this.client) return reject(new Error('SSH 未连接'));
+      // internal 供连接建立期间的平台/家目录探测使用:此时 status 尚未置为 connected,
+      // 只要命令通道(this.client)在就允许执行,否则探测必被拒、平台判定必然出错。
+      if (!this.client || (!this.connected && !internal)) return reject(new Error('SSH 未连接'));
       const t = Math.min(timeout, EXEC.MAX_TIMEOUT_MS);
       let stdout = '', stderr = '';
       let timedOut = false;

@@ -166,6 +166,39 @@
 }
 .ask-custom::placeholder { color: var(--muted); }
 
+/* ---- 审批卡(kind='approval'):照搬 harness ui-approval 的 ApprovalPanel ----
+   一条 warning 状态条(状态点 + 「等待审批」)+ 请求正文 + 右侧「拒绝 / 允许一次」两个动作。
+   它**不渲染**选项行、自定义回答输入、翻题与取消 —— 审批没有"其它"这种中间态。 */
+.ask-panel.ask-approval { border-color: var(--warn-border); }
+
+.ask-approval-strip {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px;
+  background: var(--warn-bg); color: var(--amber);
+  font-size: 13px; line-height: 18px; font-weight: 600;
+}
+
+.ask-approval-body {
+  flex: 1 1 auto; min-height: 0; max-height: 46vh;
+  padding: 12px 16px 0; overflow-y: auto; overscroll-behavior: contain;
+  outline: none;
+}
+
+.ask-approval-headline {
+  color: var(--text); font-size: 15px; line-height: 1.6; font-weight: 500;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.ask-approval-actions {
+  flex: none; display: flex; justify-content: flex-end; gap: 8px;
+  padding: 14px 16px;
+}
+/* 拒绝按钮悬浮转错误红(harness ApprovalPanel 的 .reject:hover 同款反馈) */
+.ask-approval-reject:hover:not(:disabled) {
+  background: var(--err-bg); color: var(--err-text); border-color: transparent;
+}
+.ask-approval-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* -- 底部:取消在左,校验提示居中,翻题/提交在右 -- */
 .ask-foot {
   flex: none; display: flex; align-items: center; gap: 10px;
