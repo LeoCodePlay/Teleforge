@@ -19,7 +19,6 @@
 //     需要动的手由它在结论里写给主代理;
 //   - 子代理不能派孙代理(白名单不含 subagent/send_message/interrupt_agent/list_agents);
 //   - 进程重启后常驻 Activation 消失:磁盘上仍能回看完整对话,但不能再续聊(如实报错,不假装)。
-import { AGENT } from '../config.ts';
 import { Session, foldSessionStats, foldTokenUsage, type MessageSource } from './session.ts';
 import { sshManager as ssh, runWithWorkspaceBinding } from '../core/ssh-manager.ts';
 import { runWithLocalWorkspaceBinding } from '../core/local-fs.ts';
@@ -79,6 +78,12 @@ interface Child {
   steerPending: number;
   /** 活跃时长折叠状态(见 timingOf:只累计真正在跑的回合,闲置不计) */
   timing?: ChildTiming;
+  /**
+   * 本段(residency epoch)在会话事件里的起点下标。
+   * 一次"被唤醒 → 跑空收件箱 → 停下"= 一段(dsh 的 Activation epoch:`boundary = session.seq`)。
+   * 结算通知里的「它的收尾消息」只看这一段产出的内容,不用上一段的老结论顶上。
+   */
+  epochStart: number;
   busy: boolean;
   signal: AbortController | null;
   draining: Promise<void> | null;
@@ -297,13 +302,32 @@ function resolveSettledOnce(c: Child, s: SubagentSettlement) {
   try { c.resolveSettled(s); } catch { /* 没有等待者(后台派发) */ }
 }
 
-/** 结论正文:最后一次非空 assistant 文本,超长截断(与旧口径一致) */
+/** 收尾正文:子代理**最后一次**非空 assistant 文本,原样(不截断)。
+ *  dsh 把子代理的收尾内容原样带回父级(`createSettlementMessage` 只对一句话账做
+ *  `boundContextSummary`,收尾正文逐块透传)—— 这里**不能**自作主张截断:
+ *  截掉的那半截正是父代理要看的结论。 */
 function settlementText(c: Child): string {
-  const finalText = c.lastText.trim() || '(子代理没有产出文字结论)';
-  const cap = AGENT.SUBAGENT.RESULT_MAX_CHARS;
-  return finalText.length > cap
-    ? `${finalText.slice(0, cap)}\n\n…[子代理结论过长,已截断展示 ${finalText.length} 字符]…`
-    : finalText;
+  return c.lastText.trim() || '(子代理没有产出文字结论)';
+}
+
+/**
+ * 某一段(epoch)里最后一条非空 assistant 文本;没有就返回空串。
+ *
+ * 逐条对齐 dsh 的 epoch 口径(packages/subagent/subagent/src/lifecycle.ts 的 capture):
+ *   `boundary = child.session.seq`(本段起点)→ `own = snapshotEvents(boundary)`
+ *   → `output = finalAssistantOutput(own)`(本段里最后一条非空 assistant 消息,没有则 undefined)。
+ * 一次"被唤醒 → 跑空收件箱 → 停下"就是一段;所以通知里的「它的收尾消息」只能是**这一段**
+ * 产出的东西 —— 否则一条"被停止、这一段什么都没输出"的通知会去引用上一段的老结论,
+ * 父代理会以为它又交付了一次。
+ */
+function closingTextOf(events: any[], from: number): string {
+  for (let i = events.length - 1; i >= from; i--) {
+    const e = events[i];
+    if (e?.type !== 'assistant/message') continue;
+    const t = String(e.data?.message?.content ?? '').trim();
+    if (t) return t;
+  }
+  return '';
 }
 
 /**
@@ -341,12 +365,12 @@ function settlementSummary(runId: string, status: 'done' | 'error' | 'stopped'):
  */
 function deliverNotice(c: Child, status: 'done' | 'error' | 'stopped', note: string | null) {
   if (!c.notifyParent) return;
-  const cap = AGENT.SUBAGENT.NOTICE_MAX_CHARS;
   const summary = settlementSummary(c.runId, status);
-  const closing = status === 'done' && !c.lastText.trim() ? '' : settlementText(c);
-  let text = `${summary}${note ? `(${note})` : ''}\n\n`
+  // 收尾消息 = **这一段(epoch)自己产出的**最后一条非空 assistant 文本;本段没产出就如实写明
+  // (dsh: `It left no closing message.` / 中文同义句)。正文**不截断**。
+  const closing = closingTextOf(c.session.events, c.epochStart);
+  const text = `${summary}${note ? `(${note})` : ''}\n\n`
     + (closing ? `它的收尾消息:\n${closing}` : '它没有留下任何收尾消息。');
-  if (text.length > cap) text = `${text.slice(0, cap)}\n…[通知过长,已截断]…`;
   try {
     c.notifyParent(text, {
       kind: 'subagent-settled',
@@ -397,6 +421,7 @@ export function startSubagent(o: StartSubagentOptions): { runId: string; settled
     runId, mode, parentSid: o.sid ?? null, description, provider,
     session, llm: o.llm, registry, emit: o.emit, notifyParent: o.notifyParent,
     inbox: [], steerPending: 0,
+    epochStart: 0,
     busy: false, signal: null, draining: null, disposed: false,
     steps: 0, toolCalls: 0, promptTokens: 0, completionTokens: 0, lastText: '',
     stopReason: null, startedAt: Date.now(),
@@ -436,6 +461,9 @@ function kick(child: Child) {
 /** driver 主循环:逐条消费收件箱,每条跑完整的一轮(Turn) */
 async function drive(child: Child) {
   child.busy = true;
+  // 一次 drive = 一段(residency epoch):从这一刻起新产生的内容才算"这一段的产出",
+  // 结算通知里的收尾消息只从这里取(见 closingTextOf / deliverNotice)
+  child.epochStart = child.session.events.length;
   publish(child, 'running');
   notify(child);
   let fatal: { status: 'error' | 'stopped'; note: string } | null = null;
@@ -882,6 +910,8 @@ function coldResume(rec: SubagentRun, deps: ResumeDeps): Child {
     emit: deps.emit,
     notifyParent: deps.notifyParent,
     inbox: [], steerPending: 0,
+    // 冷恢复:这一段从"恢复出来的日志末尾"开始 —— 之前那段的老结论不能算这一段的产出
+    epochStart: session.events.length,
     busy: false, signal: null, draining: null, disposed: false,
     steps: rec.steps || 0, toolCalls: rec.toolCalls || 0,
     promptTokens: rec.promptTokens || 0, completionTokens: rec.completionTokens || 0,

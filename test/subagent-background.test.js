@@ -530,10 +530,13 @@ async function main() {
       await waitFor(() => saStore.get(runId)?.status === 'idle'), String(saStore.get(runId)?.status));
 
     const a = new Agent({ emit: () => {} });
+    // 先建会话再设档位:setPermissionMode 的缺省 id 是"当前活跃会话",控件下错了会话
+    // 会让后面的写文件落到 confirm 档 → 弹审批 → 测试卡死(这一条踩过)
+    a.createSession('父会话');
     a.setPermissionMode('full-access');
     a.configureLlm({ baseUrl: 'http://x', apiKey: 'k', model: 'fake' });
-    a.createSession('父会话');
     const forked = a.forkChildSession(runId);
+    a.setPermissionMode('full-access', forked.id); // 分支日志来自子代理,不含父会话的权限事件
     check('分支产出一条新的普通会话(出现在会话列表里)',
       !!forked?.id && a.listVisible().some((s) => s.id === forked.id), JSON.stringify(a.listVisible().map((s) => s.title)));
     check('分支后活跃会话就是它(可以直接接着聊)',
@@ -657,6 +660,68 @@ async function main() {
       JSON.stringify({ status: saStore.get(run2)?.status, done: saStore.get(run2)?.lastTurnCompleted }));
     check('暂停后也没有"开着的那一轮"(计时器同样停住)',
       saStore.get(run2)?.activeSince == null, JSON.stringify({ activeSince: saStore.get(run2)?.activeSince }));
+  }
+
+  // ---- 12. 结算通知:正文**不截断**,收尾消息只看**本段(epoch)**产出的内容 ----
+  //
+  // 用户报的:'…[通知过长,已截断]…'。dsh 的 createSettlementMessage 只对那一句话账做
+  // boundContextSummary,子代理的收尾正文是逐块原样带回来的;而且收尾正文取的是**本段**
+  // (Activation epoch)的产出(lifecycle.ts 的 capture:boundary = session.seq → finalAssistantOutput(own)),
+  // 本段没有产出就写 It left no closing message.
+  {
+    const send = (runId, text) => rt.sendMessage(runId, text, { from: 'human' }); // 常驻:用 dispatch 时绑定的 llm
+    const notices = [];
+    const scripted = ['第一段的结论:目录可读。', null, '第三段的结论:又看了一眼。'];
+    let calls = 0;
+    const llm = {
+      isMock: false,
+      async chat({ signal }) {
+        calls += 1;
+        const t = scripted[calls - 1];
+        if (t == null) await waitGate(new Promise(() => { /* 一直等到被停止 */ }), signal);
+        return { content: t ?? '', toolCalls: [] };
+      }
+    };
+    const started = rt.startSubagent({
+      sid: 's_notice', llm, registry: toolRegistry, emit: () => {},
+      notifyParent: (text) => notices.push(text),
+      description: '通知正文', objective: BRIEF.objective, scope: BRIEF.scope
+    });
+    const runId = started.runId;
+    check('(前置)第一段跑完并投出第一条通知',
+      await waitFor(() => notices.length === 1), JSON.stringify(notices));
+    check('第一段的通知带着它的结论', /它的收尾消息:\n第一段的结论:目录可读。/.test(notices[0] || ''), notices[0]);
+
+    // 第二段:这一轮不产出任何 assistant 文本,然后被暂停 → 不能回引第一段的老结论
+    send(runId, '这一轮什么都不产出');
+    check('(前置)第二段跑起来了', await waitFor(() => saStore.get(runId)?.status === 'running', 5000));
+    rt.interruptChild(runId, '测试暂停');
+    check('(前置)第二段收尾并投出第二条通知', await waitFor(() => notices.length === 2, 8000), JSON.stringify(notices));
+    check('本段没产出就如实写"没有留下任何收尾消息"(不回引上一段的老结论)',
+      /它没有留下任何收尾消息。/.test(notices[1] || '') && !/第一段的结论/.test(notices[1] || ''), notices[1]);
+
+    // 第三段:产出新结论 → 通知里是新结论,不是旧的
+    send(runId, '再来一段');
+    check('(前置)第三段收尾并投出第三条通知', await waitFor(() => notices.length === 3, 8000), JSON.stringify(notices));
+    check('下一段的通知只带本段的结论', /它的收尾消息:\n第三段的结论:又看了一眼。/.test(notices[2] || '')
+      && !/第一段的结论/.test(notices[2] || ''), notices[2]);
+
+    // 超长收尾消息:原样带回,一个字都不能少(不再有 …[通知过长,已截断]…)
+    const HUGE = `${'A'.repeat(20000)}→ 结论尾部标记:END-OF-REPORT`;
+    const longNotices = [];
+    const started2 = rt.startSubagent({
+      sid: 's_notice_long', llm: { isMock: false, async chat() { return { content: HUGE, toolCalls: [] }; } },
+      registry: toolRegistry, emit: () => {}, notifyParent: (text) => longNotices.push(text),
+      description: '超长结论', objective: BRIEF.objective, scope: BRIEF.scope
+    });
+    const longId = started2.runId;
+    check('(前置)超长结论的子代理跑完并投出通知',
+      await waitFor(() => longNotices.length === 1, 8000), JSON.stringify(longNotices.map((t) => t.length)));
+    const msg = longNotices[0] || '';
+    check('超长收尾消息原样带回(一个字都不少)',
+      msg.includes('END-OF-REPORT') && msg.includes(HUGE), `len=${msg.length}`);
+    check('通知正文不带任何"已截断"标记', !/已截断/.test(msg), msg.slice(-120));
+    void saStore.get(longId);
   }
 
   rt.disposeAll();

@@ -567,6 +567,13 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
   "父会话不在线也能收到"),载不回来就与 dsh 的"父代理不在现场直接 return"一样丢掉。
   实时用 `steer_message` 事件把通知行插进本轮;刷新后由 `projectEvents` 的 `inline` 标记投影出同一形态
   (轮内通知行:折叠行带 `source.summary` 一行账,不说"触发本轮")。
+- **结算通知不截断、收尾消息只看"本段"**:dsh 的 `createSettlementMessage` 只对那一句话账做
+  `boundContextSummary`,子代理的收尾正文是**逐块原样**带回来的;而且收尾正文取的是**本段**
+  (Activation epoch)的产出 —— `lifecycle.ts` 的 `capture(child)` 先记 `boundary = child.session.seq`,
+  再 `finalAssistantOutput(snapshotEvents(boundary))`,本段没有产出就写 `It left no closing message.`。
+  我们对应:去掉通知正文与回传结论的长度上限(曾把父代理要看的那半截结论截掉),并给每个
+  `Child` 记 `epochStart`(一次 `drive` = 一段),通知里的「它的收尾消息」只从这一段取 ——
+  否则一条"被停止、这一段什么都没输出"的通知会去引用上一段的老结论,看起来像它又交付了一次。
 - **子会话的运行态进"会话快照"**(`busySessions`):前端父会话的运行态一直是靠服务端 status 快照
   (`busySessions`)算的,但子代理的运行态以前只走带 sid 的实时事件 —— 于是**切走再切回子会话**时那
   个视图是新挂载的,既没有「运行中」状态行、也没有可以按的暂停按钮,内容却在默默往外流。现在
