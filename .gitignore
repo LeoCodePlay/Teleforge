@@ -52,3 +52,6 @@ output/playwright/
 # logo 制作产物与扩展打包产物(生成脚本、中间 PNG、旧图标备份、发布用 zip;一律不入库)
 # 成品图标已落到 src-tauri/icons/ 与 web/public/logo*.png,设计源在 docs/logo/
 output/
+
+# 宣传片工程(Remotion 项目:依赖 1GB、成品 mp4、音频素材与渲染验证截图;整体不入库)
+teleforge-promo/

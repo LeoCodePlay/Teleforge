@@ -25,6 +25,7 @@ import { isTauri } from './utils/desktop';
 import { getUpdateInfo, openExternal } from './utils/updater';
 import { useIsPhone, useIsTablet, useIsDesktop } from './hooks/useMediaQuery';
 import { scrollMovesPanel } from './utils/scrollClose';
+import { localWorkspaceLocked, remoteWorkspaceLocked } from './utils/sessionLock';
 import { useVisualViewportInset } from './hooks/useVisualViewport';
 import { LEFT_SIDEBAR_MAX_RATIO, LEFT_SIDEBAR_MIN, sidebarMaxWidth } from './utils/layout';
 import { useLlm } from './context/llm-context';
@@ -730,10 +731,14 @@ export default function App() {
     ? sessions.find((s) => s.id === activeSessionId) : undefined;
   const activeTouched = activeSessionId != null && activeSessionId !== NEW_SESSION_ID && touchedSessions.has(activeSessionId);
   const activeHasMsg = ((activeMeta?.msgCount ?? 0) > 0) || activeTouched;
-  const remoteLocked = !!activeMeta && activeHasMsg;
-  // 两侧锁定各自独立判断:本地侧只看 localWorkspace,绝不引用远程字段。
-  // 否则远程选「整台服务器」(workspace 为空)会把本地侧误判为未锁定,两侧边界失守。
-  const localLocked = !!activeMeta && activeHasMsg && !activeMeta.localWorkspace;
+  // 锁定口径与服务端裁决完全对齐(见 utils/sessionLock):远程侧只看"已开始对话";
+  // 本地侧看"这个会话是不是**本地会话**"——没占用具体远程目录的会话(没选远程工作区,
+  // 或选了「不使用远程工作区(整台服务器)」的全盘会话)开始对话后才锁本地工作区;
+  // 远程会话的本地工作区是辅助,始终可改。
+  // 这里**不能**按"会话自己有没有 localWorkspace"判断:正常的本地会话 localWorkspace 非空,
+  // 那样会把它判成未锁定(chip 不置灰、点开还能选),与服务端拒绝的结果自相矛盾。
+  const remoteLocked = remoteWorkspaceLocked(activeMeta, activeHasMsg);
+  const localLocked = localWorkspaceLocked(activeMeta, activeHasMsg);
 
   // ---- 右栏:会话 id + 终端入口 ----
   // 右栏里原来的「文件树」面板已下架(主区已有「远程文件 / 本地文件」两条完整链路,重复了),

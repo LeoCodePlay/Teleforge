@@ -142,6 +142,12 @@ export function setupWs(httpServer: Server) {
   const emitStatus = () => {
     const activeId = ssh.activeId;
     const active = activeId ? ssh.conns.get(activeId) || null : null;
+    // 本地工作区取「全局(非作用域)」值:本函数可能在某个会话的运行作用域内被调用
+    // (子代理 notify 的 agent status 事件就在父轮作用域内),读作用域感知的 localFs.workspace
+    // 会把那个后台会话的本地工作区广播成"当前本地工作区",前端 chip 跳到别的分组。
+    // 与上面远程侧取 ssh.activeId/conns(而非 ssh.active)同一条理由。
+    const globalLocalWs = localFs.globalWorkspace();
+    const globalLocalNoWs = localFs.globalNoWorkspace();
     send({
       type: 'status',
       status: active?.status || 'disconnected',
@@ -154,8 +160,8 @@ export function setupWs(httpServer: Server) {
       // 「不在工作区对话」(全盘模式)标记:远程取真实活动连接,与上一行同理不用 ALS 门面
       noWorkspace: active?.noWorkspace ?? false,
       ...ssh.snapshot(), // { activeConn, conns: [...] }
-      localWorkspace: localFs.workspace,
-      localNoWorkspace: localFs.noWorkspace,
+      localWorkspace: globalLocalWs,
+      localNoWorkspace: globalLocalNoWs,
       localHome: localFs.home,
       agentBusy: agent.busyNow,
       // 运行中的会话 id:父会话 + **子智能体会话**(sa_…)。

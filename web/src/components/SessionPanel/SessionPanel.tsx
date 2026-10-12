@@ -6,6 +6,7 @@ import { useLongPress } from '../../hooks/useLongPress';
 import { sessionDot, sessionDotClass, SESSION_DOT_TIP } from '../../utils/sessionDot';
 import { useGroupReorder } from '../../hooks/useGroupReorder';
 import { orderGroups } from '../../utils/sessionGroupOrder';
+import { usesRemoteWorkspace } from '../../utils/sessionLock';
 import { scrollMovesPanel } from '../../utils/scrollClose';
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
@@ -101,9 +102,10 @@ const UNGROUPED_LABEL = '未指定工作区';
 // 「不在工作区对话」在服务端把会话绑定值存成哨兵字符串 NO_WORKSPACE(边界=整台服务器),
 // 它是真值但不是目录:这类会话正是「连着 SSH 却没选远程工作区、只在本地干活」的那批,
 // 按 SessionPanel 下方的分流需求必须归本地任务列表,所以判据不能只看真值。
+// 规则本体在 utils/sessionLock(与工作区锁定、服务端 usesRemoteWorkspace 同一份口径);
 // 写成类型谓词是为了让 TS 在调用处把 workspace 收窄成 string。
 function hasRemoteWorkspace(s: Session): s is Session & { workspace: string } {
-  return !!s.workspace && s.workspace !== NO_WORKSPACE;
+  return usesRemoteWorkspace(s);
 }
 
 // 会话行时间格式化(模块级,SessionRow 复用)

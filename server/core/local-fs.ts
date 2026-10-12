@@ -66,6 +66,18 @@ export class LocalFs {
     this._noWorkspace = v;
     if (v) this._workspace = null; // 进入全盘模式即清空本地工作区
   }
+  /**
+   * 全局(非作用域)本地工作区状态 —— 供 ws 层上报 status 快照用。
+   *
+   * `workspace` / `noWorkspace` 两个 getter 是**会话作用域感知**的:agent 会话一轮运行期间它们
+   * 返回的是该会话自己绑定的本地工作区。上报"当前界面看到的本地工作区"时不能读它们 ——
+   * 后台会话在自己作用域里触发的 emitStatus(子代理 notify 的 agent status 事件,见
+   * subagent-runtime.notify)会把**那个会话的**本地工作区广播成"当前本地工作区",
+   * 前端输入框下方的本地工作区 chip 就会跳到别的分组。与 ssh-manager 的 emitStatus 必须取
+   * `ssh.activeId` / `ssh.conns`(而不是作用域回调的 `ssh.active`)完全同一条理由。
+   */
+  globalWorkspace(): string | null { return this._workspace; }
+  globalNoWorkspace(): boolean { return this._noWorkspace; }
   get home() { return os.homedir(); }
   // 各本地终端会话的启动 cwd:重命名目录报 EBUSY 时,若占用者可能是自家终端(停在该目录内),可给出针对性提示
   readonly localTermCwds = new Set<string>();
