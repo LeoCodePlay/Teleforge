@@ -37,7 +37,7 @@ import GoalBar from '../GoalBar/GoalBar';
 import { LoadedSkillsRow } from './LoadedSkillsRow';
 import { matchSlashCommand } from '../../utils/slashCommand';
 import { atTokenAt, displayMentionText, restoreMentionInput, serializeMention, splitMentions } from '../../utils/mentionRefs';
-import { mergeTrailingCommandCards } from '../../utils/commandCard';
+import { mergeHistoryKeepingLiveTurn } from '../../utils/liveTurn';
 import { tailAssistantIndex, applyRetryNotice, isRealUserRow } from '../../utils/compactionOrder';
 import { mergeAttachments, mergeDeliverables } from '../../utils/mergeAttachments';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
@@ -1654,8 +1654,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                   forkTurnRef.current = (h.turns || []).length; // 分支点/删除索引重新对齐压缩后的 turns
                   lastIterRef.current = 0;
                   setSuppressIn(true); // 整表替换:抑制入场动画,压缩瞬间画面保持静止
-                  // 函数式更新读取最新 messages:命令卡上可能已落下 ok 态(先 patch 后重拉的时序)
-                  setMessages((cur) => mergeTrailingCommandCards(msgs, cur));
+                  // 函数式更新读取最新 messages:命令卡上可能已落下 ok 态(先 patch 后重拉的时序);
+                  // 同时保住本轮正在流式的回复气泡 —— 压缩一结束,服务端就把压缩期间排队的消息
+                  // 派发了出去(start 已到、模型还没输出):重拉回来的历史里还没有本轮 assistant 行,
+                  // 整表替换会把流式气泡抹掉,之后所有增量都会找不到落点被静默丢弃(见 liveTurn.ts)。
+                  setMessages((cur) => mergeHistoryKeepingLiveTurn(msgs, cur, { turnClosed: turnClosedRef.current }));
                   setTodos(Array.isArray(h.todos) ? h.todos : []);
                 })
                 .catch(() => { /* 拉取失败保留当前视图,下次会话切换时会重新载入 */ });
