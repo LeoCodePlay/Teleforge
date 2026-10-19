@@ -18,6 +18,9 @@ _tsc_*.txt
 # 根目录其它临时转储与一次性诊断脚本(_a.txt / _commit_msg.txt / _check-b.cjs 之类)
 /_*.txt
 /_*.cjs
+# 根目录一次性诊断脚本(asar 解包检查 / i18n 扫描之类)
+/asar_*.cjs
+/scan_*.py
 
 # 本地工具目录(不入库)
 .superpowers/

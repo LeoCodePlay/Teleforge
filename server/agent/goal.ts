@@ -320,7 +320,11 @@ export function applyGoalEvent(state: GoalFoldState, event: any): void {
     applyGoalChange(state, change);
     return;
   }
-  if (event?.type === 'user/message' && event.data?.source === 'goal') {
+  // 目标续跑轮的归属:source 是 dsh 形状的 { kind:'goal', form:'notice', … }(老日志里是字符串
+  // 'goal'),goalId/revision/round 三个字段放在事件数据上(harness 的 GoalMessageSource 把 round
+  // 一起放进 source;这里的折叠只看事件数据,两种形态都收)。
+  // 不 import session.ts 的 sourceKind:本模块已被它通过类型引用,值引用会形成循环。
+  if (event?.type === 'user/message' && goalSourceKind(event.data?.source) === 'goal') {
     const source = event.data;
     if (typeof source.goalId !== 'string' || source.goalId.length === 0
       || !Number.isSafeInteger(source.revision) || source.revision < 1
@@ -335,6 +339,13 @@ export function applyGoalEvent(state: GoalFoldState, event: any): void {
     }
     state.roundsStarted = source.round;
   }
+}
+
+/** 折叠用:取 user/message 来源的 kind(字符串来源就是它本身;对象来源取 .kind) */
+function goalSourceKind(source: unknown): string {
+  if (!source) return '';
+  if (typeof source === 'string') return source;
+  return String((source as { kind?: unknown }).kind ?? '');
 }
 
 /** 从整份会话日志折叠出持久目标状态 */
@@ -649,6 +660,22 @@ export interface GoalCommandResult {
   goal?: GoalView | null;
   /** 该动作是否放行附件(成功 create/edit 时才把附件作为参考消息投递) */
   attachmentsAccepted?: boolean;
+  /**
+   * 该动作是否让目标变成"active + armed"(成功 create/edit 出 active 目标、resume 重新授权)。
+   *
+   * 调用方据此补一次续跑调度:命令路径不产生模型轮次,而调度只挂在轮次收尾(_drain 末尾)上,
+   * 所以在**空闲**会话里用它建目标不会触发第 1 轮 —— 必须由命令自己把空闲接回调度
+   * (harness 的 goal/changed 分支也是先 requestDrive,再交给 drive() 决定排不排)。
+   */
+  schedule?: boolean;
+  /**
+   * 该动作是否**停止目标执行**(`/目标 pause` 成功)。调用方据此中止正在跑的那一轮
+   * (harness goal-round-driver:goal/changed 的 pause 分支会 cancel({kind:'user'}))。
+   *
+   * 只标"人侧 pause 命令":edit 落到已完成目标上重新 create、resume、clear 都不适用
+   * ——它们的语义不是"现在停手",中止当前轮会打断用户自己的正常对话。
+   */
+  paused?: boolean;
 }
 
 /** 执行一条 /目标 指令:所有变更走同一套 CAS 语义(harness executeGoalCommand) */
@@ -677,7 +704,7 @@ export function runGoalCommand(session: Session, rawInput: string, hasAttachment
         }
         createGoal(session, { objective: command.objective });
         const view = goalView(session);
-        return withGoal({ kind: 'success', text: renderGoal('已创建目标', view as GoalView), attachmentsAccepted: true });
+        return withGoal({ kind: 'success', text: renderGoal('已创建目标', view as GoalView), attachmentsAccepted: true, schedule: true });
       }
       case 'edit': {
         if (current === undefined) {
@@ -686,7 +713,7 @@ export function runGoalCommand(session: Session, rawInput: string, hasAttachment
         if (current.phase === 'complete') {
           createGoal(session, { objective: command.objective });
           const view = goalView(session);
-          return withGoal({ kind: 'success', text: renderGoal('已创建目标', view as GoalView), attachmentsAccepted: true });
+          return withGoal({ kind: 'success', text: renderGoal('已创建目标', view as GoalView), attachmentsAccepted: true, schedule: true });
         }
         editGoal(session, goalRefOf(current), { objective: command.objective });
         const view = goalView(session);
@@ -696,13 +723,13 @@ export function runGoalCommand(session: Session, rawInput: string, hasAttachment
         if (current === undefined) return { kind: 'error', text: `当前没有目标,/目标 pause 需要先有一个目标。${GOAL_USAGE}`, goal: null };
         pauseGoal(session, goalRefOf(current));
         const view = goalView(session);
-        return withGoal({ kind: 'success', text: renderGoal('已暂停目标', view as GoalView) });
+        return withGoal({ kind: 'success', text: renderGoal('已暂停目标', view as GoalView), paused: true });
       }
       case 'resume': {
         if (current === undefined) return { kind: 'error', text: `当前没有目标,/目标 resume 需要先有一个目标。${GOAL_USAGE}`, goal: null };
         resumeGoal(session, goalRefOf(current));
         const view = goalView(session);
-        return withGoal({ kind: 'success', text: renderGoal('已恢复目标', view as GoalView) });
+        return withGoal({ kind: 'success', text: renderGoal('已恢复目标', view as GoalView), schedule: true });
       }
       case 'clear': {
         if (current === undefined) return { kind: 'success', text: '没有可清除的目标。', goal: null };

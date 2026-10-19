@@ -5,12 +5,17 @@
 //   - 本卡片是模型声明的**交付意图**:"这几个是给你用的最终产物",每个还带一句人话说明。
 //   合成一张会丢掉"哪个是给我用的"这个信息 —— 那恰恰是用户唯一关心的。
 //
-// 只显示路径与说明,**不复制内容**:点击打开的就是那个路径上的**当前**文件。
+// 只显示路径与说明,**不复制内容**:点击文件名打开的就是那个路径上的**当前**文件。
 // 因此卡片永远不会显示"过期副本";代价是文件被删掉后点击会失败(失败由打开逻辑自己提示)。
-import React from 'react';
+// 行内与「文件已更改」卡一致:点**文件名**打开文件,点**路径**复制完整路径(原地短暂显示「已复制」)。
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { PresentedFile } from '../../types';
 import { IconEye16 } from '../icons/icons';
+import { writeClipboard } from '../../dsh/ui-primitives/clipboard.ts';
 import './DeliverablesCard.scss';
+
+/** 「已复制」提示的停留时长(ms):够看清,又不至于让路径一直不可读 */
+const COPY_FEEDBACK_MS = 1200;
 
 // 只取路径最后一段(文件名),兼容 / 与 \ 分隔;根路径原样返回
 function baseName(p: string): string {
@@ -45,6 +50,24 @@ export default function DeliverablesCard({ files, cwd, onOpen, onOpenAside }: {
   /** 在**右侧栏**打开(对照阅读用;未提供则该入口不出现) */
   onOpenAside?: (file: PresentedFile) => void;
 }) {
+  // 「已复制」只标在刚点过的那一行:记录路径,复制成功后才亮,过一会儿自动熄灭
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const copyTimer = useRef<number | null>(null);
+  const copyPath = useCallback((path: string) => {
+    void writeClipboard(path).then((ok) => {
+      if (!ok) return;
+      setCopiedPath(path);
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => {
+        setCopiedPath(null);
+        copyTimer.current = null;
+      }, COPY_FEEDBACK_MS);
+    });
+  }, []);
+  // 组件卸载(如切换会话)时清掉计时器,避免迟到的 setState
+  useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+  }, []);
   if (!files.length) return null;
 
   // 显示用路径:在 cwd 之下就截成相对路径(与「文件已更改」卡口径一致),否则原样显示
@@ -65,20 +88,34 @@ export default function DeliverablesCard({ files, cwd, onOpen, onOpenAside }: {
           const name = baseName(f.path) || f.path;
           const kind = kindLabel(name);
           const shown = shownPath(f.path);
+          const copied = copiedPath === f.path;
           return (
             <li key={f.path} className={onOpenAside ? 'has-aside' : undefined}>
-              {/* 整行可点:与「文件已更改」卡一致,点开走文件查看 */}
-              <button type="button" className="deliverables-row" data-deliverable={f.path}
-                data-tip={f.path} onClick={() => onOpen?.(f)}>
+              {/* 主行不再是整行按钮:文件名 = 打开文件,路径 = 复制完整路径 */}
+              <div className="deliverables-row" data-deliverable={f.path}>
                 <span className="deliverables-ico" aria-hidden><IconEye16 size={15} /></span>
-                <span className="deliverables-name">{name}</span>
+                {onOpen ? (
+                  <button type="button" className="deliverables-name deliverables-open"
+                    data-open-file={f.path} data-tip={`点击打开 ${f.path}`}
+                    aria-label={`打开 ${f.path}`} onClick={() => onOpen(f)}>
+                    {name}
+                  </button>
+                ) : (
+                  <span className="deliverables-name" data-tip={f.path}>{name}</span>
+                )}
                 {/* 说明是模型写的人话;没有就不占位(而不是拿文件名凑数) */}
                 {f.description && <span className="deliverables-desc">{f.description}</span>}
                 <span className="deliverables-gap" />
                 {kind && <span className="deliverables-kind">{kind}</span>}
-                {/* 相对路径帮助区分同名文件;完整路径在 title 里 */}
-                <span className="deliverables-path" data-tip={f.path}>{shown}</span>
-              </button>
+                {/* 相对路径帮助区分同名文件;悬停提示与复制内容都是完整路径 */}
+                <button type="button" className={`deliverables-path${copied ? ' copied' : ''}`}
+                  data-copy-path={f.path}
+                  data-tip={copied ? '已复制到剪贴板' : `点击复制路径:${f.path}`}
+                  aria-label={`复制路径 ${f.path}`}
+                  onClick={() => copyPath(f.path)}>
+                  {copied ? '已复制' : shown}
+                </button>
+              </div>
               {/* 次要入口:侧栏对照阅读。默认隐藏,悬停/聚焦才出现 */}
               {onOpenAside && (
                 <button type="button" className="deliverables-aside" data-deliverable-aside={f.path}

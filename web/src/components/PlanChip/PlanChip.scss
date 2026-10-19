@@ -1,0 +1,45 @@
+/* 「计划」chip:几何与相邻的模式控件一致(移植自 harness PlanModeControl.module.css)。
+   配色映射到本项目的 token:计划态用强调色底 + 强调色文字,悬停加深一点点。 */
+.plan-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.plan-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 34px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--accent-fill);
+  color: var(--accent-2);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.plan-chip:hover:not(:disabled) { background: var(--accent-fill-strong, var(--glass-bg-hover)); }
+.plan-chip:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.plan-chip:disabled { opacity: .6; cursor: default; }
+
+/* 一个 14px 图标位:静止=计划图,悬停/聚焦=圆圈叉(示意"这一下是关掉") */
+.plan-chip-glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+
+.plan-chip-error {
+  color: var(--red);
+  font-size: 12px;
+  line-height: 18px;
+}

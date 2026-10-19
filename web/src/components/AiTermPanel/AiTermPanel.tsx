@@ -19,6 +19,7 @@ import { useIsPhone } from '../../hooks/useMediaQuery';
 import { StateDot } from '../StateDot/StateDot';
 import { IconApiOutline14 } from '../icons/icons';
 import type { AiTermInfo } from '../../types';
+import { readTermInventory } from '../../utils/termInventory';
 import '@xterm/xterm/css/xterm.css';
 import './AiTermPanel.scss';
 
@@ -179,14 +180,15 @@ export default function AiTermPanel({ active, embedded = false, onCounts, sid }:
     for (const id of [...logs.current.keys()]) if (!alive.has(id)) logs.current.delete(id);
   }, [disposeXterm, mine]);
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (refresh = false) => {
     try {
-      const r = await api.request('ai_term_list', {}, 10000, 'ai_term_list');
-      const list: AiTermInfo[] = Array.isArray(r?.terms) ? r.terms : [];
+      // 清单走共享缓存(utils/termInventory):会话状态点与面板共用同一次 ai_term_list,
+      // 打开面板不再重复请求;只有断线重连/显式刷新才真的重取。
+      const list: AiTermInfo[] = await readTermInventory(refresh);
       if (!mountedRef.current) return;
       applyTerms(list);
       // 历史日志:拉取并回放到已创建的 xterm(挂载后新产生的输出由事件累积)
-      await Promise.all(list.map(async (t) => {
+      await Promise.all(list.filter((t) => !sid || t.sid === sid).map(async (t) => {
         try {
           const lr = await api.request('ai_term_log', { id: t.id }, 10000, 'ai_term_log');
           if (!mountedRef.current) return;
@@ -197,7 +199,7 @@ export default function AiTermPanel({ active, embedded = false, onCounts, sid }:
     } catch {
       /* 列表拉取失败(服务端未起/断线):WS 重连后会自动重试,不打断界面 */
     }
-  }, [applyTerms, hydrate]);
+  }, [applyTerms, hydrate, sid]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -247,7 +249,7 @@ export default function AiTermPanel({ active, embedded = false, onCounts, sid }:
     const offOpen = api.on('open', () => {
       for (const id of [...xterms.current.keys()]) disposeXterm(id);
       logs.current.clear();
-      void fetchAll();
+      void fetchAll(true);
     });
     return () => { mountedRef.current = false; offTerm(); offOpen(); };
   }, [appendLog, disposeXterm, fetchAll, hydrate, sid]);

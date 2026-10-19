@@ -30,7 +30,10 @@ import {
   GOAL_GUIDANCE, registerGoalTools, runGoalCommand, goalView, disarmGoal,
   renderGoalRoundPrompt, pauseGoal, blockGoal, type GoalView
 } from './goal.ts';
-import { PLAN_POLICY_TEXT, exitPlanModeTool, isPlanMode as foldPlanActive, modeBeforePlan } from './plan-mode.ts';
+import {
+  EXIT_PLAN_MODE, exitPlanModeTool, setPlanMode, leavePlanModeSilent, applyPlanBoundary, planModeView,
+  planModeActive, planPolicySection, recordPlanHeader, type PlanModeHost, type PlanSetOutcome
+} from './plan-mode.ts';
 
 import { localFs, runWithLocalWorkspaceBinding } from '../core/local-fs.ts';
 import { renderPromptInjectSection } from './prompt-inject.ts';
@@ -60,10 +63,40 @@ registerPermissionGuard(registry);
 // 会话级持久目标(移植自 harness package goals + tool-goal):get_goal / create_goal / update_goal。
 // 与 schedule 工具同样需要宿主上下文(session/sid/emit),因此在这里注册而不是 tools.ts 内。
 registerGoalTools(registry);
+/**
+ * 计划模式的宿主回调(harness PlanModeController 里由 service 自己做的事):
+ * 落盘 + 广播 + 补"用户切换了模式"的通知。注册在 agent 单例之前,所以回调体里延迟取 agent。
+ */
+const planModeHost: PlanModeHost = {
+  changed(session, sid, active) {
+    try { if (sid) sessions.saveEvents(String(sid), session.events); } catch { /* 落盘失败不阻塞 */ }
+    agent.emit('agent', { event: 'plan_mode_changed', active, sid: sid ?? null });
+  },
+  narrate(session, sid, active) {
+    // harness narration:模型上一次请求时被告知的模式与现在不同,补一条通知 ——
+    // 否则界面切了模式、模型还以为自己在原来的模式里(它只看对话历史)。
+    // 落成一条 source.form='notice' 的用户消息:前端渲染通知行,模型也能在历史里看到。
+    const text = active
+      ? 'The user switched this session to plan mode.'
+      : 'The user switched this session back to the default mode.';
+    session.append('user/message', {
+      content: text,
+      display: text,
+      source: { kind: 'plan-mode', form: 'notice', summary: text }
+    });
+    try { if (sid) sessions.saveEvents(String(sid), session.events); } catch { /* 落盘失败不阻塞 */ }
+    agent.emit('agent', { event: 'plan_mode_notice', text, sid: sid ?? null });
+  },
+  leave(session, sid) {
+    // 批准 = 静默退出(不补通知):模型自己发起、自己知道的变化,不冒充"用户切换了模式"。
+    // 与 dsh 一致,这只是把选择挂上(回合开着 → pending),真正落盘在下一个 step 边界。
+    leavePlanModeSilent(session, sid, planModeHost);
+  }
+};
 // 计划模式的退出工具(移植自 harness plan/plan-mode):把完成的计划交用户审阅,批准即退出计划模式。
-// 退出动作只依赖调用上下文里的 session/sid/emit(见 plan-mode.ts 的 leavePlanMode),
-// 因此注册期不需要回指 Agent 单例 —— 任何 Agent 实例(含测试)拿到的会话都能正确退出。
-registry.register(exitPlanModeTool());
+// 退出/通知都要落盘+广播,所以注册期就把宿主回调绑上;注册发生在 agent 单例创建之前,
+// 回调体里用延迟引用(执行时再取 agent),不会踩到未初始化的单例。
+registry.register(exitPlanModeTool(planModeHost));
 // 供 ws 层列出/开关工具插件(设置 → 工具插件)
 export { registry as toolRegistry };
 // 「检测到可预览地址」事件去重:同一会话只对同一个地址提醒一次,避免命令重复打印时刷屏
@@ -395,8 +428,10 @@ export function projectEvents(events) {
         ...(d.source && typeof d.source === 'object'
           ? { source: d.source, ...(sawAssistantInTurn ? { inline: true } : {}) }
           : {}),
-        // 目标续跑轮(移植自 harness GoalMessageSource):前端把这条用户消息渲染成「目标第 N 轮」
-        ...(d.source === 'goal' && Number.isFinite(Number(d.round))
+        // 目标续跑轮(移植自 harness GoalMessageSource):source 是 { kind:'goal', form:'notice' }
+        // (老日志是字符串 'goal'),round/revision 放在事件数据上。这里补出前端渲染用的 goalRound,
+        // 通知行的标题/时间由 source 的 notice 形态决定(见 TurnTriggerRow)。
+        ...((sourceKind(d.source) === 'goal') && Number.isFinite(Number(d.round))
           ? { goalRound: { round: Number(d.round), revision: Number(d.revision) || undefined } }
           : {}),
         // 附件元数据随历史回放,前端渲染缩略图/文件 chip
@@ -985,7 +1020,7 @@ export class Agent {
     return foldSessionStats(events);
   }
 
-  // ---- 访问权限模式(变更前确认/自动编辑/计划模式/完全访问,见 permission.ts) ----
+  // ---- 访问权限模式(变更前确认/自动编辑/完全访问;计划模式已改为独立状态机,见 plan-mode.ts) ----
   // 模式持久化在**该会话自己的**事件日志('permission/mode' 事件),是会话级状态:
   // 运行中会话直接追加并落盘,不在内存的会话(切走后释放)从磁盘载入-追加-保存;
   // 切换即广播 permission_changed。折叠只读本会话日志,fallback 固定 DEFAULT_PERMISSION_MODE。
@@ -1041,75 +1076,133 @@ export class Agent {
       sessions.saveEvents(id, events);
     }
     // 用户设置的档位同时持久化为全局默认:新建会话即继承该模式。
-    // 例外:计划模式**从不**写全局默认 —— 计划模式是"这个会话此刻的工作方式",
-    // 不是"以后所有新会话的默认权限"(与 /计划 的 globalDefault:false 同一取向;
-    // 否则用选择器切一次计划模式,之后每个新会话都从只读开始)。
+    // 例外:老会话日志里遗留的 'plan'(计划模式已改为独立状态机,不再是权限档位)——
+    // 它不是"以后所有新会话的默认权限",不写全局默认,免得新会话莫名从只读口径开始。
     if (opts.globalDefault !== false && isPermissionMode(mode) && mode !== 'plan') storeSetDefaultMode(mode);
     this.emit('agent', { event: 'permission_changed', mode, sid: id });
     return mode;
   }
 
-  // ---- 计划模式(移植自 harness plan/plan-mode;状态即权限档位 'plan')----
+  // ---- 计划模式(移植自 harness packages/plan/plan-mode;独立状态机,与权限档位无关)----
 
-  /** 该会话此刻是否处于计划模式(折叠日志的最后一个 permission/mode 值;无记录不在计划模式) */
+  /**
+   * 该会话此刻是否处于计划模式:折叠日志里最后一条 `plan/mode`。
+   *
+   * 与 dsh 一致:**只影响给模型的提示段,不影响工具目录**(guidance 与 enforcement 是两根轴)。
+   */
   isPlanMode(id = this.sessionId): boolean {
     if (id == null) return false;
     const rt = this._runtimes.get(id);
-    return foldPlanActive(rt ? rt.session.events : sessions.loadEvents(id));
+    return planModeActive(rt ? rt.session : this._sessionForPlan(id));
   }
 
-  /** 退出计划模式:回到进入前的档位(日志里最后一次非 plan 档位;没有则默认 confirm) */
-  exitPlanMode(id = this.sessionId, session = id != null ? this._runtimes.get(id)?.session : null): PermissionMode {
-    if (id == null) throw new Error('当前没有可操作的会话');
-    const events = session ? session.events : sessions.loadEvents(id);
-    const target = modeBeforePlan(events);
-    return this.setPermissionMode(target === 'plan' ? DEFAULT_PERMISSION_MODE : target, id, { globalDefault: false });
+  /** 取会话对象(内存优先;不在内存时用只读壳,写操作请先 ensureRuntime) */
+  _sessionForPlan(id: string): Session {
+    const rt = this._runtimes.get(id);
+    if (rt) return rt.session;
+    return new Session(sessions.loadEvents(id));
+  }
+
+  /** 计划模式视图(active + 可选 pending):前端 chip 与 `/plan` 回执都用它 */
+  getPlanMode(id = this.sessionId): { active: boolean; pending?: boolean } {
+    if (id == null) return { active: false };
+    return planModeView(this._sessionForPlan(id));
   }
 
   /**
-   * 执行一条 /计划 指令(移植自 harness PlanModeController 的命令处理):
-   *   /计划              → 进入计划模式
-   *   /计划 off          → 退出计划模式(回到进入前的档位)
-   *   /计划 <消息>       → 进入计划模式,并把该消息作为本轮请求提交(附件随消息一起)
-   * 计划模式下写/执行类工具由权限 guard 直接拒绝(见 permission.ts),提示段见 _buildRuntimeContext。
+   * 选择计划模式开关(harness PlanModeController.set):
+   * 回合开着 → queued(pending 到下一个 step 边界);回合空闲 → 当场落盘。
+   * 返回 `committed` / `queued` / `cancelled` / `noop`,由 `/plan` 命令翻成 dsh 的回执文案。
+   */
+  setPlanActive(active: boolean, id = this.sessionId): PlanSetOutcome {
+    if (id == null) throw new Error('当前没有可操作的会话');
+    const rt = this._runtimes.get(id);
+    if (!rt) return 'noop';
+    return setPlanMode(rt.session, id, active, planModeHost);
+  }
+
+  /** 退出计划模式(批准/`/plan off` 的收口):等价于 setPlanActive(false) */
+  exitPlanMode(id = this.sessionId): PlanSetOutcome {
+    return this.setPlanActive(false, id);
+  }
+
+  /**
+   * 执行一条 `/计划`(`/plan`)指令 —— 逐字对齐 harness PlanModeController 的命令处理:
+   *   `/plan`          → 进入计划模式
+   *   `/plan off`      → 退出;带附件直接报错(必须在模式变更前拒绝)
+   *   `/plan <消息>`   → 进入计划模式,并把该消息作为本轮请求送达(附件随消息一起)
    */
   planCommand(rawInput: string, id = this.sessionId, attachments: any[] | null = null): {
-    kind: 'success' | 'error'; text: string; mode: PermissionMode;
+    kind: 'success' | 'error'; text: string; active: boolean; pending?: boolean;
   } {
     if (id == null) throw new Error('当前没有可操作的会话');
     const message = String(rawInput ?? '').trim();
     const atts = resolveAttachments(attachments);
-    // 附件判定按调用方给的原始清单:未知 id 一律按"有附件"处理(fail-closed),
-    // 与 harness "/plan off 不接受附件" 的语义一致(必须在模式变更前拒绝)
+    // 附件判定按调用方给的原始清单:未知 id 也按"有附件"处理(fail-closed),
+    // 与 dsh 的 "Attachments cannot accompany /plan off." 同一取向(模式变更前就拒绝)
     const hasAtts = Array.isArray(attachments) && attachments.length > 0;
+
+    const view = () => {
+      const v = this.getPlanMode(id);
+      return { active: v.active, ...(v.pending === undefined ? {} : { pending: v.pending }) };
+    };
+
     if (message === 'off') {
-      if (hasAtts) {
-        return { kind: 'error', text: '附件不能与 /计划 off 一起使用,请先移除附件。', mode: this.getPermissionMode(id) };
+      if (hasAtts) return { kind: 'error', text: 'Attachments cannot accompany /plan off.', ...view() };
+      switch (this.setPlanActive(false, id)) {
+        case 'committed': return { kind: 'success', text: 'Plan mode off.', ...view() };
+        case 'queued': return { kind: 'success', text: 'Leaving plan mode (applies from the next step).', ...view() };
+        case 'cancelled': return { kind: 'success', text: 'Plan mode entry cancelled.', ...view() };
+        default:
+          // 退出意图还挂在 pending 上时,重复 /plan off 仍回"下一步生效"的说法;
+          // 真正没开计划模式的会话才读作幂等(dsh 同分支)
+          return {
+            kind: 'success',
+            text: this.isPlanMode(id) || this.getPlanMode(id).pending !== undefined
+              ? 'Leaving plan mode (applies from the next step).'
+              : 'Plan mode is already inactive.',
+            ...view()
+          };
       }
-      if (!this.isPlanMode(id)) {
-        return { kind: 'success', text: '当前不在计划模式。', mode: this.getPermissionMode(id) };
-      }
-      const mode = this.exitPlanMode(id);
-      return { kind: 'success', text: '已退出计划模式。', mode };
     }
-    const was = this.getPermissionMode(id);
-    if (!this.isPlanMode(id)) this.setPermissionMode('plan', id, { globalDefault: false });
+
+    const outcome = this.setPlanActive(true, id);
     if (message !== '' || atts.length > 0) {
-      // 与 harness 的 agent.steer 同义:该消息成为计划指引下的下一次请求(这里直接开轮/排队)
+      // 与 dsh 的 agent.steer 同义:该消息成为计划指引下的下一次请求(这里开轮或排队)
       try {
         Promise.resolve(this.submit(id, message, { attachments: atts.length ? atts : null }))
           .catch((e) => this.emit('agent', { event: 'error', message: (e as Error).message, sid: id }));
       } catch (e) {
-        return { kind: 'error', text: `已进入计划模式,但消息未能提交:${(e as Error).message}`, mode: 'plan' };
+        return { kind: 'error', text: `Plan mode on, but the message could not be submitted: ${(e as Error).message}`, ...view() };
       }
     }
     return {
       kind: 'success',
-      mode: 'plan',
-      text: was === 'plan'
-        ? '已在计划模式下。用 /计划 off 退出。'
-        : '已进入计划模式。AI 只做调研并给出计划,写/执行类操作会被拒绝;用 /计划 off 退出。'
+      text: outcome === 'committed'
+        ? 'Plan mode on. Use /plan off to leave.'
+        : 'Entering plan mode (applies from the next step). Use /plan off to leave.',
+      ...view()
     };
+  }
+
+  /**
+   * 该会话是否处于计划模式(服务端权威口径)。
+   *
+   * `/计划` 命令、`exit_plan_mode` 工具、模型请求的提示段都走这里 ——
+   * 状态是日志里最后一条 `plan/mode`(见 plan-mode.ts),不是权限档位。
+   */
+  planModeActive(id = this.sessionId): boolean {
+    return this.isPlanMode(id);
+  }
+
+  /** 测试钩子:手动跑一次 step 边界(生产路径由 _runTurnInner 在每个请求前调用) */
+  _applyPlanBoundaryForTest(session: Session, sid: string): void {
+    applyPlanBoundary(session, sid, planModeHost);
+  }
+
+  /** 测试钩子:模拟"上一轮请求已把某个模式告诉模型"(harness activeAtLastHeader) */
+  _notePlanHeaderForTest(session: Session, active: boolean): void {
+    recordPlanHeader(session, active);
   }
 
   // ---- 会话级持久目标(移植自 harness packages/goal/*)----
@@ -1144,6 +1237,17 @@ export class Agent {
     const hasAtts = Array.isArray(attachments) && attachments.length > 0;
     const result = runGoalCommand(rt.session, String(rawInput ?? ''), hasAtts);
     this._afterGoalChange(id, rt.session);
+    // 暂停 = 停止目标执行:中止这一轮,否则模型在当前轮里还会继续动手/自己把目标恢复
+    // (与 harness goal-round-driver 的 goal/changed 分支同语义:change.operation==='pause'
+    // 且该会话正在跑、又不是目标轮自己发起的改状态时,cancel({kind:'user'}, {keepInbox:true})。
+    // 模型的 update_goal 暂停走自己的轮次、不在这里 —— 那条路径不经过 goalCommand)。
+    // 放在广播之后:前端先收到 pause 状态,再收到本轮被中止的收尾。
+    if (result.kind === 'success' && result.paused === true) this.stop(id);
+    // 命令路径不产生模型轮次,而续跑调度只挂在轮次收尾(_drain 末尾):空闲会话里 /目标 <描述>
+    // 建完目标后必须在这里补一次调度,否则目标停在"进行中 0/256、没有第 1 轮"(harness 的
+    // goal/changed 分支同样是"改完就 requestDrive",由 drive() 的闸门决定到底排不排)。
+    // 忙碌/有排队输入/未授权/超预算时 _scheduleGoalRound 自己会拒绝,这里无需额外判条件。
+    if (result.kind === 'success' && result.schedule) this._scheduleGoalRound(id, rt);
     if (result.kind === 'success' && result.attachmentsAccepted && atts.length > 0) {
       // harness:附件随目标描述一起提交为一条普通 user 消息,后续目标轮从会话历史里读到它
       Promise.resolve(this.submit(id, '目标描述附带的参考附件。', { attachments: atts }))
@@ -1181,7 +1285,11 @@ export class Agent {
     rt.goalScheduling = true;
     try {
       this.submit(id, prompt, {
-        source: 'goal',
+        // 目标续跑不是"用户打的字":给它 dsh 的形状 kind='goal' + form='notice',
+        // 前端因此画成"继续执行目标"通知卡片(可展开看模型可见正文),而不是用户气泡
+        // (harness 的 GoalMessageSource 就是 { kind:'goal', goalId, revision, round };
+        //  这边的投影额外需要 form='notice' 才走通知行渲染,见 ChatPanel 的 trigger 分支)。
+        source: { kind: 'goal', form: 'notice', summary: `第 ${round}/${view.maxGoalRounds} 轮` },
         display: `🎯 目标第 ${round}/${view.maxGoalRounds} 轮`,
         goalRound: { goalId: view.id, revision: view.revision, round }
       });
@@ -2270,7 +2378,9 @@ export class Agent {
       ...(atts.length ? { attachments: atts } : {}),
       // 通知类来源随实时事件下发:前端据此把这条"新一轮的触发"渲染成通知行(而不是用户气泡),
       // 与刷新后从事件日志投影出来的形态一致(见 dsh 的 MessageSource.form='notice')
-      ...(typeof turnSource === 'object' ? { source: turnSource } : {})
+      ...(typeof turnSource === 'object' ? { source: turnSource } : {}),
+      // 目标续跑轮的轮号随实时事件下发(通知卡片/折叠行要显示"第 N/M 轮")
+      ...(goalRound ? { goalRound } : {})
     });
     // 手动调用技能(输入中的 /技能名 命中)会注入正文;单独发一个标记事件,
     // 前端据此展示"已加载技能"折叠行(模型主动调用则走 skill 工具,另行显示 tool_call 卡片)
@@ -2341,6 +2451,11 @@ export class Agent {
           try { await refreshSkillsCatalog(); } catch { /* 扫描失败不阻塞本轮 */ }
         }
 
+        // 计划模式的 step 边界(harness PlanModeController.onBoundary):把用户选择期间攒下的
+        // pending 落成 plan/mode —— 必须早于下面的运行时上下文快照,否则"这一轮已进入计划模式"
+        // 这个事实要等到下一轮才让模型看见(指引段与状态自相矛盾)。
+        if (useTools) applyPlanBoundary(session, runSessionId, planModeHost);
+
         // 运行时上下文快照(对齐 harness runtime-context 投影):工作区/技能目录/环境探测
         // 等动态信息不进 system prompt,而是作为 user 消息进入历史;文本变化才追加新快照。
         // system 因此保持逐字节稳定,提供方/网关的前缀缓存不会中途失效。
@@ -2351,6 +2466,9 @@ export class Agent {
           session.append('user/message', { content: contextText, source: 'runtime', display: '⚙ 运行时上下文已更新' });
           rt.lastContextText = contextText;
         }
+        // 记下"这一轮请求头部描述的计划模式"(harness activeAtLastHeader):与用户之后新选的
+        // 模式不同时,planModeHost.narrate 会补一条"用户切换了模式"的通知
+        recordPlanHeader(session, planModeActive(session));
 
         stepsUsed = step;
         this.emit('agent', { event: 'iteration', iter: step, sid: runSessionId });
@@ -3093,13 +3211,16 @@ export class Agent {
     const ws = ssh.workspace ? ssh.workspace : (ssh.noWorkspace ? WHOLE_REMOTE : '(未设置,请提示用户在界面中选择工作区)');
     const lws = localFs.workspace ? localFs.workspace : (localFs.noWorkspace ? WHOLE_LOCAL : '(未设置,请提示用户在界面中选择本地工作区)');
     const sections: string[] = [];
-    // 权限模式说明(用户在输入框左下角切换):计划模式收紧为只读,确认/自动编辑下
-    // 部分操作会先请求用户批准(拒绝时收到的工具结果会说明原因)
-    sections.push(`权限模式: ${PERMISSION_MODE_META[mode].name} — ${PERMISSION_MODE_META[mode].description}${mode === 'plan' ? '。请把实施计划完整呈现给用户,不要尝试调用会被拒绝的工具。' : mode === 'confirm' ? '请求被拒绝时不要重试同一操作,调整方案或向用户说明影响。' : ''}`);
-    // 计划模式策略段(移植自 harness plan-mode 的 plan:policy 提示段):
-    // harness 把它做成 system prompt 的 section;teleforge 的 system 必须逐字节稳定(前缀缓存),
-    // 因此走"变化才追加"的 runtime_context 快照 —— 进入/退出计划模式各追加一次,语义一致。
-    if (mode === 'plan') sections.push(PLAN_POLICY_TEXT);
+    // 权限模式说明(用户在输入框左下角切换):确认/自动编辑下部分操作会先请求用户批准
+    // (拒绝时收到的工具结果会说明原因)。计划模式**不在这里** —— 它是与权限正交的独立状态,
+    // 提示段见下面的 plan:policy(与 dsh 的 "guidance and enforcement are separate axes" 一致)。
+    sections.push(`权限模式: ${PERMISSION_MODE_META[mode].name} — ${PERMISSION_MODE_META[mode].description}${mode === 'confirm' ? '请求被拒绝时不要重试同一操作,调整方案或向用户说明影响。' : ''}`);
+    // 计划模式策略段(移植自 harness plan-mode 的 plan:policy section):仅当该会话的
+    // plan/mode 生效时注入。harness 把它做成 system prompt 的 section;teleforge 的 system
+    // 必须逐字节稳定(前缀缓存),因此走"变化才追加"的 runtime_context 快照 —— 进出计划模式
+    // 各追加一次,语义一致。
+    const planPolicy = planPolicySection(sid != null ? this._sessionForPlan(sid).events : null);
+    if (planPolicy) sections.push(planPolicy);
     // 工作区说明:本地模式下只讲本机工作区,不提"可操作远程"
     if (localMode) {
       sections.push(`本地平台: ${process.platform}`, `本地工作区: ${lws}`);

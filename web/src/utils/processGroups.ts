@@ -10,6 +10,9 @@
 //   - 独立节点(user / steering / turn-trigger / model-retry / turn-error / 截断 / turn-tail)→ 关组;
 //   - **有正文的回复 → 先关组再生效**(dsh: `if (reply(node)) { flush(true); ... }`),
 //     所以"正文之前的工具活动"归一组,"正文之后的"另起一组 —— 这是最容易被忽略、也最影响观感的一条;
+//     ⚠ 这里的"正文"按 dsh 的口径必须 `text.trim() !== ''`(hasAssistantReplyContent /
+//     blockIsVisible):纯空白的回复(模型常在两次工具调用之间只吐一个 "\n\n")既不算正文、
+//     也不渲染,**不能关组** —— 否则整轮工具活动会被切成"一人一组";
 //   - 其余(工具调用、思考)累积进当前组。
 //
 // ## 折叠策略(对齐 dsh 的 stepGrouping / foldCompletedTurns)
@@ -387,6 +390,11 @@ export function planGroups(
   let current: Extract<ProcessUnit, { kind: 'group' }> | null = null;
   segments.forEach((seg, i) => {
     if (seg.kind === 'text') {
+      // 纯空白的"正文"**不算正文**:dsh 判定正文用的是 `text.trim() !== ''`
+      // (contract/assistant-content 的 hasAssistantReplyContent、assistant 的 blockIsVisible),
+      // 空白块既不构成 reply、也不渲染。所以它既不能关组、也不产出渲染单元 ——
+      // 否则模型在两次工具调用之间吐一个 "\n\n",整轮工具活动就被切成"一人一组"。
+      if (String(seg.text ?? '').trim() === '') return;
       current = null; // 正文冲刷当前组
       units.push({ kind: 'text', index: i });
       return;

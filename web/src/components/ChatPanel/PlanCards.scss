@@ -1,0 +1,114 @@
+/* 计划卡片与计划全文面板(数值取自 harness PlanPreview.module.css):
+   卡片高 60px、圆角 xl、0.5px 边框、图标位 40×40;标题 13px/500 单行省略;
+   描述 10px 三级色;右侧「打开」是 12px 带边框胶囊。 */
+
+.plan-cards { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+
+.plan-card {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  height: 60px;
+  padding: 8px 10px;
+  margin: 0;
+  border: 0.5px solid var(--line);
+  border-radius: var(--r-lg, 12px);
+  background: var(--glass-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.plan-card:hover { background: var(--glass-bg-hover); }
+.plan-card:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+
+.plan-card-icon {
+  box-sizing: border-box;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0.5px solid var(--line);
+  border-radius: var(--r-md, 8px);
+  background: var(--glass-bg);
+  color: var(--accent-2);
+}
+
+.plan-card-details { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.plan-card-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 500; line-height: 20px;
+}
+.plan-card-desc {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 10px; line-height: 16px;
+}
+.plan-card-open {
+  box-sizing: border-box;
+  display: inline-flex; flex: none; align-items: center;
+  height: 28px; padding: 4px 8px;
+  border: 0.5px solid var(--line-strong, var(--line));
+  border-radius: var(--r-sm);
+  background: var(--glass-bg);
+  font-size: 12px; line-height: 18px;
+}
+
+/* ---- 计划全文面板 ---- */
+.plan-preview-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: stretch; justify-content: flex-end;
+  background: rgba(0, 0, 0, .32);
+}
+.plan-preview {
+  display: flex; flex-direction: column;
+  width: min(560px, 92vw); height: 100%;
+  background: var(--bg-elev, var(--bg));
+  border-left: 0.5px solid var(--line);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, .28);
+}
+.plan-preview-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; border-bottom: 0.5px solid var(--line);
+}
+.plan-preview-icon { display: inline-flex; color: var(--accent-2); }
+.plan-preview-title {
+  flex: 1; min-width: 0; margin: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px; font-weight: 600;
+}
+.plan-preview-close {
+  flex: none; width: 26px; height: 26px; padding: 0;
+  background: transparent; border: none; border-radius: var(--r-sm);
+  color: var(--muted); cursor: pointer; font-size: 13px;
+}
+.plan-preview-close:hover { background: var(--glass-bg-hover); color: var(--text); }
+
+.plan-preview-body { flex: 1; overflow: auto; padding: 20px 24px 40px; }
+.plan-preview-doc { color: var(--text); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
+.plan-preview-doc h1, .plan-preview-doc h2, .plan-preview-doc h3 { line-height: 1.4; }
+.plan-preview-doc pre {
+  overflow: auto; padding: 10px 12px; border-radius: var(--r-sm);
+  background: var(--glass-bg);
+}
+.plan-preview-doc code { font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; }
+
+.plan-preview-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 16px; border-top: 0.5px solid var(--line);
+}
+.plan-preview-hint { color: var(--muted); font-size: 11px; }
+.plan-preview-jump {
+  height: 28px; padding: 0 10px;
+  background: var(--glass-bg); border: 0.5px solid var(--line); border-radius: var(--r-sm);
+  color: var(--text); font-size: 12px; cursor: pointer;
+}
+.plan-preview-jump:hover { background: var(--glass-bg-hover); }
+
+@media (max-width: 767px) {
+  .plan-preview-body { padding: 16px 18px 32px; }
+}

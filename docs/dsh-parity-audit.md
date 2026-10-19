@@ -567,6 +567,16 @@ harness 刻意复用 `header.system` + `header.tools` 使摘要调用成为真�
   "父会话不在线也能收到"),载不回来就与 dsh 的"父代理不在现场直接 return"一样丢掉。
   实时用 `steer_message` 事件把通知行插进本轮;刷新后由 `projectEvents` 的 `inline` 标记投影出同一形态
   (轮内通知行:折叠行带 `source.summary` 一行账,不说"触发本轮")。
+- **收尾产物挂"轮"、不挂"段"(对齐 dsh 的 `turn-tail`)**:dsh 把「已修改文件卡 / 成果物 / 计划卡 /
+  复制·分支按钮」挂在该 Turn 的 turn-tail 节点上,`client/ui-chat/.../conversation-nodes/turn-tail.ts` 的
+  `publication` 只在 `turn/end` 返回 `immediate` —— **整轮只有一处收尾产物**,且一定出现在这一轮真正
+  结束之后。一轮被拆成多段时(重试提示在失败点分界、轮内送达的通知行另起 assistant 行承接后续步骤),
+  **中间片段一律静默**,收尾段才承载它们;文件变更卡按**整轮**汇总(中间片段改过的文件一并计入,
+  不漏文件)。判定口径集中在 `web/src/utils/turnTail.ts`(`startsNewTurn` / `fragmentIndexes` /
+  `turnAssistantIndexes`),渲染层与历史投影 `turnsToMessages` 共用同一份;实时收尾(done/stopped/error/
+  status idle)把本轮**所有**段一起定格,轮末的耗时/用量也回填整轮 —— 与刷新后的投影一致,不会出现
+  "实时中间段还在扫光、刷新后才收口"。测试:`test/turn-tail.test.js`(轮边界/中间片段判定 + 历史投影)、
+  `test/subagent-ui.test.js` 的「轮内收到子代理通知:收尾产物只挂收尾段」(真浏览器,实时与刷新两条路径)。
 - **结算通知不截断、收尾消息只看"本段"**:dsh 的 `createSettlementMessage` 只对那一句话账做
   `boundContextSummary`,子代理的收尾正文是**逐块原样**带回来的;而且收尾正文取的是**本段**
   (Activation epoch)的产出 —— `lifecycle.ts` 的 `capture(child)` 先记 `boundary = child.session.seq`,

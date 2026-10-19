@@ -2,13 +2,16 @@
 // 集中管理主题:切换预设(深色三套 + 亮色一套)/ 新建 / 编辑 / 删除自定义主题。
 // 自定义主题只需要 **6 个颜色** —— 页面里出现的每一个颜色都由它们派生
 // (派生规则见 ../themes.ts 的 deriveThemeVars),因此这里只提供 6 个取色器。
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   applyTheme, getAllThemes, getTheme, loadThemeState, saveThemeState,
   buildCustomTheme, newThemeId, toDraft,
   type PersistedThemeState, type ThemeDef, type CustomThemeDraft
 } from '../../theme/themes';
+import {
+  CHAT_FONT_SIZES, applyChatFont, currentChatFont, onChatFontChange, stepChatFont
+} from '../../utils/chatFont';
 import './ThemePanel.scss';
 
 /** 预设兜底 id(删除激活的自定义主题时回落到它) */
@@ -28,6 +31,9 @@ export default function ThemePanel() {
   const [state, setState] = useState<PersistedThemeState>(() => loadThemeState());
   // 弹窗状态:null=关闭;{edit}=编辑该主题;{}=新建
   const [editor, setEditor] = useState<{ edit?: ThemeDef } | null>(null);
+  // 对话字号:与全局快捷键共用 chatFont 里的一份状态(快捷键改了这里要跟着重绘)
+  const [font, setFont] = useState<number>(() => currentChatFont());
+  useEffect(() => onChatFontChange(setFont), []);
 
   const all = getAllThemes(state);
   const active = getTheme(state.active, state) || all[0];
@@ -78,6 +84,27 @@ export default function ThemePanel() {
 
       {/* 当前主题预览 */}
       <ThemePreview t={active} badge="使用中" />
+
+      {/* 对话字号(dsh 0.2.1-rc 的 8096e18504):只放大对话正文与卡片,
+          侧栏/顶栏等 chrome 不变 —— 所以不会像浏览器缩放那样把布局一起挤爆。 */}
+      <div className="panel-title row">
+        <span>对话字号</span>
+        <span className="grow" />
+        <span className="muted sm">{font}px</span>
+      </div>
+      <div className="font-size-row">
+        <button className="sm" onClick={() => setFont(stepChatFont(-1))} disabled={font <= CHAT_FONT_SIZES[0]}
+          data-tip="缩小对话字号(Ctrl/⌘ + −)">A−</button>
+        {CHAT_FONT_SIZES.map((px) => (
+          <button key={px} className={'sm' + (px === font ? ' on' : '')} onClick={() => setFont(applyChatFont(px))}>{px}</button>
+        ))}
+        <button className="sm" onClick={() => setFont(stepChatFont(1))} disabled={font >= CHAT_FONT_SIZES[CHAT_FONT_SIZES.length - 1]}
+          data-tip="放大对话字号(Ctrl/⌘ + =)">A＋</button>
+      </div>
+      <div className="hint">
+        快捷键 <b>Ctrl/⌘ + =</b> 放大、<b>Ctrl/⌘ + −</b> 缩小(终端与代码编辑器里不拦截)。
+        只影响对话正文、代码与工具卡片,侧栏和顶栏尺寸不变;偏好保存在本机。
+      </div>
 
       {/* 预设主题 */}
       <div className="panel-title row">

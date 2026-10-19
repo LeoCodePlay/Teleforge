@@ -48,7 +48,11 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; }
+/* `overflow: clip` 而不是 `hidden`(对齐 dsh 0.2.1-rc 的 8953554b5e):
+   hidden 仍然是一个**可滚动容器** —— Windows/Linux 上在输入框里按 PageUp 会"揭示光标",
+   连带把每个可滚动祖先(含 hidden 的)横向滚走,整个界面被顶开一条缝。clip 不可滚动,
+   从根上断掉这条路;纵向滚动本来就由各面板自己承担,不受影响。 */
+html, body, #root { height: 100%; overflow: clip; }
 
 body {
   margin: 0;

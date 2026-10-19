@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { isRealUserRow } from '../web/src/utils/compactionOrder.ts';
+import { fragmentIndexes, startsNewTurn } from '../web/src/utils/turnTail.ts';
 import { mergeAttachments, mergeDeliverables } from '../web/src/utils/mergeAttachments.ts';
 
 const source = readFileSync(new URL('../web/src/components/ChatPanel/ChatPanel.tsx', import.meta.url), 'utf8');
@@ -14,7 +15,7 @@ const selected = ast.statements.filter((s) => (
 ) || (ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => names.has(d.name.getText(ast)))));
 assert.equal(selected.length, names.size, '历史投影依赖应完整提取');
 const js = ts.transpileModule(selected.map((s) => s.getText(ast)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const project = vm.runInNewContext(`${js}\nturnsToMessages`, { isRealUserRow, mergeAttachments, mergeDeliverables });
+const project = vm.runInNewContext(`${js}\nturnsToMessages`, { isRealUserRow, fragmentIndexes, startsNewTurn, mergeAttachments, mergeDeliverables });
 const retry = (n, retryGroup) => ({ role: 'notice', retry: { retry: n, retryGroup, state: 'started', error: `error-${n}`, maxRetries: 10, delayMs: 0 } });
 const shape = (rows) => rows.map((r) => r.retry ? `retry(${r.retry.retry})` : r.role).join('|');
 

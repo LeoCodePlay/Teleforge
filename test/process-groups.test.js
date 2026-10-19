@@ -205,6 +205,34 @@ console.log('\n[五] 分组:正文关组(最关键的一条)');
   eq('正文分段产生三组两组正文', units.map((u) => u.kind), ['group', 'text', 'group', 'text', 'group']);
 }
 {
+  // 纯空白正文**不算正文**(对齐 dsh 的 hasAssistantReplyContent:`text.trim() !== ''`)。
+  // 真实故障(data/sessions/s_mv6rcs2evbcz8g.json 的 turn 2):模型在两次工具调用之间只吐一个
+  // "\n\n",若把它当正文就会关组 —— 一条回复被切成 42 个过程组,每个「已读取文件」各占一行。
+  const segs = [
+    { kind: 'text', text: '开头一句' },
+    { kind: 'tools', tools: [tool('1', 'read_local_file')] },
+    { kind: 'text', text: '\n\n' },
+    { kind: 'tools', tools: [tool('2', 'read_local_file')] },
+    { kind: 'text', text: ' ' },
+    { kind: 'tools', tools: [tool('3', 'read_local_file')] }
+  ];
+  const units = P.planGroups(segs);
+  eq('空白正文不关组:只出一个组', units.map((u) => u.kind), ['text', 'group']);
+  eq('空白正文段不产出渲染单元(不渲染空行)', units.map((u) => (u.kind === 'text' ? u.index : -1)), [0, -1]);
+  eq('三个工具段收进同一个组', units[1].memberIndexes, [1, 3, 5]);
+  eq('组内是三次调用', units[1].items.length, 3);
+  eq('组头合成一句', P.doneTitle(units[1].summary), '已读取文件');
+}
+{
+  // 有内容的正文照旧关组:上面的修复不能把正常的正文分段一起吃掉
+  const units = P.planGroups([
+    { kind: 'tools', tools: [tool('1', 'read_file')] },
+    { kind: 'text', text: '\n\n真的正文\n' },
+    { kind: 'tools', tools: [tool('2', 'edit_file')] }
+  ]);
+  eq('前后带换行的正文仍然关组', units.map((u) => u.kind), ['group', 'text', 'group']);
+}
+{
   // 未知段型:既不参与分组也不丢(避免将来加段型时内容凭空消失)
   const units = P.planGroups([{ kind: 'tools', tools: [tool('1', 'read_file')] }, { kind: 'weird' }]);
   eq('未知段型不破坏分组', units.map((u) => u.kind), ['group']);

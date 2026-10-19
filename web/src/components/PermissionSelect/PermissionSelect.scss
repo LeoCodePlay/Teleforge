@@ -15,9 +15,7 @@
 }
 .perm-chip:hover:not(:disabled) { border-color: var(--line-strong); background: var(--glass-bg-hover); color: var(--text); }
 .perm-chip:disabled { opacity: .55; cursor: default; }
-/* 计划模式:琥珀色提示"只读";完全访问:红色警示。语义只靠底色 + 文字色,
-   描边一律沿用全站那条中性线,不出现彩色框按钮 */
-.perm-chip.plan { color: var(--amber); background: var(--warn-bg); }
+/* 完全访问:红色警示。语义只靠底色 + 文字色,描边一律沿用全站那条中性线,不出现彩色框按钮 */
 .perm-chip.danger { color: var(--red); background: var(--danger-soft); }
 .perm-chip-icon { display: inline-flex; flex: none; }
 .perm-chip-icon svg { width: 14px; height: 14px; }

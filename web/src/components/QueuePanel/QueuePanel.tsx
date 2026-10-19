@@ -7,6 +7,7 @@
 // 其余为空心节点;文字之外的装饰(徽标/胶囊/描边/emoji)一律不做,操作图标只在行悬浮时浮现。
 import React from 'react';
 import { displayMentionText } from '../../utils/mentionRefs';
+import { maskSecretsToText } from '../../utils/secretMask';
 import './QueuePanel.scss';
 
 /** 待执行队列项(与后端 queueSnapshot 的 {id, text, attach} 结构一致;attach=附件数) */
@@ -60,7 +61,8 @@ export default function QueuePanel({ queue, onRunNow, onEdit, onDelete }: QueueP
       <ul className="queue-list">
         {queue.map((item, i) => {
           // 队列里存的是上行正文(@source:完整路径):展示同样只留 @文件名,与消息气泡一致
-          const text = displayMentionText(item.text);
+          // 再叠一层凭据遮挡 —— 悬停 tooltip 也是明文渲染面,不能在这里漏出 Key
+          const text = maskSecretsToText(displayMentionText(item.text));
           return (
           <li
             className={`queue-item${i === 0 ? ' is-next' : ''}`}

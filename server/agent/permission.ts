@@ -174,11 +174,12 @@ export async function permissionGuard(name: string, args: any, ctx?: any, def?: 
   const mode = foldPermissionMode(session.events);
 
   if (mode === 'full-access') return undefined;
-  if (mode === 'plan') {
-    const what = access === 'command' ? '执行命令' : '写入/修改文件';
-    return `计划模式下禁止${what}:当前处于只读的计划模式,请只做调研(读文件/搜索/执行只读命令之外的操作会被拒绝),`
-      + '把完整的实施计划(步骤/涉及文件/风险)用文字或 todo_write 呈现给用户,等用户切换出计划模式后再执行。';
-  }
+  // 计划模式**不在这里**:与 dsh 一致,计划模式只是给模型的指引(plan:policy 段),
+  // 不改变工具目录、也不拦任何调用 —— "guidance and enforcement are separate axes"。
+  // 只读约束属于权限档位(confirm/auto-edit/full-access)这条正交的轴。
+  // 历史注:旧实现把 plan 当权限档位在这里硬拒写/命令,已随计划模式改为独立状态机删除;
+  // 老会话日志里遗留的 permission/mode='plan' 会落到下面 needApproval=false 的分支(放行),
+  // 与 dsh 的 "runs every call in plan mode untouched" 行为一致。
   // confirm:写 + 命令都要审批;auto-edit:只有命令要审批
   const needApproval = mode === 'confirm' || (mode === 'auto-edit' && access === 'command');
   if (!needApproval) return undefined;

@@ -137,12 +137,15 @@ export function registerAgent(rpc: RpcModule) {
       // 若只回报 compacting=true 就会把它显示成一条自动压缩运行行,用户看到"我点的记录不见了"。
       compactingManual: agent.isCompactingManual(sid),
       // 当前长期目标(移植自 harness goals 投影):无目标为 null,前端据此渲染输入卡上方的目标条
-      goal: agent.getGoal(sid) ?? null
+      goal: agent.getGoal(sid) ?? null,
+      // 计划模式(移植自 harness plan 投影):active=日志里生效的模式,pending=已选未落盘。
+      // 前端 chip 用 `pending ? !active : active` 判断是否显示(与 dsh 同式)。
+      plan: agent.getPlanMode(sid)
     });
   });
 
   rpc.register('permission_get', async (msg, { reply }) => {
-    // 当前会话的访问权限模式(变更前确认/自动编辑/计划模式/完全访问)
+    // 当前会话的访问权限模式(变更前确认/自动编辑/完全访问)
     reply({ type: 'permission', mode: agent.getPermissionMode() });
   });
 

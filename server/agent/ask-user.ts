@@ -46,9 +46,21 @@ function normalizeQuestions(questions: any[]): any[] {
       // harness 式审批卡(只有「拒绝 / 允许一次」,不给自定义回答输入),而不是通用提问卡。
       // 白名单放行,避免任意 kind 漏到前端。
       ...(q.kind === 'approval' ? { kind: 'approval' } : {}),
+      ...(q.kind === 'plan-review' ? { kind: 'plan-review' } : {}),
       ...(typeof q.header === 'string' && q.header.trim() ? { header: String(q.header) } : {}),
       // 长正文(如计划模式的计划审阅):前端以等宽正文渲染,上限 20000 字符防止刷屏
       ...(typeof q.detail === 'string' && q.detail.trim() ? { detail: String(q.detail).slice(0, 20000) } : {}),
+      // 呈现意图(dsh 的 question.intent):'plan-review' = 计划审阅 —— 前端据此渲染成审阅卡
+      // (自动打开计划预览),而不是通用提问。只放行白名单字段,避免任意结构漏到前端。
+      ...(q.intent && typeof q.intent === 'object' && q.intent.kind === 'plan-review'
+        ? {
+            intent: {
+              kind: 'plan-review',
+              approve: String(q.intent.approve || ''),
+              ...(q.intent.callId !== undefined ? { callId: String(q.intent.callId) } : {})
+            }
+          }
+        : {}),
       ...(Array.isArray(q.options) && q.options.length
         ? {
             options: q.options

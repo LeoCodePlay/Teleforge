@@ -106,6 +106,12 @@ export interface ModelContextConfig {
    * 纯图像端点模型(如 gpt-image-2)在 chat/completions 上会被网关 503 拒绝,必须开启本开关。
    */
   imageGen?: boolean;
+  /**
+   * 该模型支持的推理等级 id 列表(见 utils/reasoningLevels 的 REASONING_LEVELS)。
+   * 缺省 / 空数组 = 全部支持;声明后模型菜单只列这些档位(「默认」永远保留)。
+   * 用途:非推理模型不该出现「最高」这类档位,自定义网关的档位也各不相同。
+   */
+  reasoningLevels?: string[];
 }
 
 /** 单个 API Key 的运行状态(按 Key 字符串索引) */

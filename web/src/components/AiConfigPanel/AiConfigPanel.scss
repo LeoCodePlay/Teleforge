@@ -23,6 +23,34 @@
 .mc-remove { flex: 0 0 auto; padding: 2px 8px; font-size: 11px; }
 /* 颜色与 hover/active 反馈由 .action-icon.danger 统一提供 */
 
+/* 每模型「支持的推理等级」:summary 常驻、弹层绝对定位(这一行已经放不下第三个输入框)。
+   summary 去掉默认三角,用一颗小 chevron 代替,视觉上仍是"可点的字段"。 */
+.mc-levels { position: relative; }
+.mc-levels > summary {
+  list-style: none; cursor: pointer; white-space: nowrap;
+  font-size: 11px; color: var(--muted);
+  padding: 3px 7px; border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  background: var(--glass-bg-inset); font-family: var(--mono);
+  max-width: 148px; overflow: hidden; text-overflow: ellipsis;
+}
+.mc-levels > summary::-webkit-details-marker { display: none; }
+.mc-levels > summary::after { content: ' ▾'; }
+.mc-levels[open] > summary { color: var(--accent-2); border-color: var(--accent-border); }
+.mc-levels-body {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
+  display: flex; flex-direction: column; gap: 2px; min-width: 128px;
+  padding: 5px; background: var(--pop-bg); border: 1px solid var(--line);
+  border-radius: var(--r-sm); box-shadow: var(--glass-shadow);
+}
+.mc-level {
+  display: flex; align-items: center; gap: 7px; padding: 4px 7px; border-radius: var(--r-sm);
+  font-size: 12px; color: var(--text); cursor: pointer;
+}
+.mc-level:hover { background: var(--glass-bg-hover); }
+.mc-level.on { color: var(--accent-2); }
+.mc-level input { width: auto; padding: 0; margin: 0; accent-color: var(--accent-2); }
+.mc-level input:disabled { opacity: .55; cursor: not-allowed; }
+
 /* 多模态开关(每模型是否支持图片输入):玻璃胶囊滑块,开启时点亮 accent 色 */
 .mc-mm { cursor: pointer; }
 .mc-switch {
@@ -38,21 +66,6 @@
 .mc-switch.on { border-color: var(--accent-border); background: var(--accent-soft); }
 .mc-switch.on .mc-knob { transform: translateX(13px); background: var(--accent-2); }
 .mc-switch:disabled { opacity: .35; cursor: not-allowed; }
-
-/* 生图开关:开启后整条模型行换成"生图模型"语义 —— 上下文/最大输出对该链路无意义,
-   统一置灰;行尾提示独占一行说明这轮对话将如何路由到 /images/* */
-.mc-ig { cursor: pointer; }
-.mc-ig .mc-field > span, .mc-field.mc-ig > span { color: var(--muted); }
-.model-config-row.ig-on {
-  flex-wrap: wrap;
-  border-color: var(--accent-border);
-  background: linear-gradient(135deg, var(--accent-fill-soft), var(--glass-bg-inset));
-}
-.model-config-row.ig-on .mc-field input:disabled { opacity: .4; }
-.mc-ig-hint {
-  flex: 1 1 100%; margin-top: 2px; font-size: 11px; line-height: 1.5;
-  color: var(--accent-2); opacity: .85;
-}
 
 /* ---- AI 配置:预置提供商快速切换 chips ---- */
 .provider-chips { display: flex; flex-wrap: wrap; gap: 6px; }

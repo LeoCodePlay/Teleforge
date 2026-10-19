@@ -1,8 +1,9 @@
 /* ---- FilesChangedCard 独有样式:AI 回复下方的「N 个文件已更改」长条卡片 ----
    折叠态 = 整行胶囊(圆角/浅背景/细边框),hover 轻微提亮;
    展开列表以等宽间距排布:文件名(固定) + 路径(弹性省略) + 类型标签 + 行数(右对齐)。
-   可打开的条目整行 hover 高亮 + 手型光标 + 文件名下划线,点击在文件标签页查看
-   (远程/本机各有读取通道);已删除的条目文件不存在,降透明度灰显且不可点击。 */
+   行内有两个**各管一件事**的点击区:文件名 = 打开文件(主操作,悬停下划线),
+   路径 = 复制完整路径(悬停同样下划线,复制成功后原地显示「已复制」)。
+   已删除的条目文件不存在,文件名灰显、不可打开,路径仍可复制。 */
 .fcc { display: flex; flex-direction: column; min-width: 0; margin: 6px 0 2px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg-soft); overflow: hidden; }
 .fcc-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; transition: background 0.15s ease; }
 .fcc-head:hover { background: var(--hover-bg-hard); }
@@ -13,14 +14,13 @@
 .fcc-chevron.flip { transform: rotate(180deg); }
 .fcc-list { list-style: none; margin: 0; padding: 4px 0 8px; border-top: 1px solid var(--line-soft); }
 /* 行容器负责整行高亮:主行与次要入口落在**同一个底色块**里,
-   不再出现「左半边亮、右边按钮那截不亮」的分裂感 */
+   不再出现「左半边亮、右边按钮那截不亮」的分裂感;
+   每行都带可复制的路径,所以悬停提亮对整行统一生效 */
 .fcc-item { display: block; transition: background .14s ease; }
+.fcc-item:hover { background: var(--hover-bg); }
 /* 有次要入口(对比 / 在侧栏打开)时改成一行 flex:主行占满,按钮贴右 */
 .fcc-item.has-aside, .fcc-item.has-compare { display: flex; align-items: stretch; }
 .fcc-item.has-aside .fcc-row, .fcc-item.has-compare .fcc-row { flex: 1 1 auto; min-width: 0; }
-.fcc-item.openable:hover,
-.fcc-item.has-aside:hover,
-.fcc-item.has-compare:hover { background: var(--hover-bg); }
 /* 次要入口:行内文字按钮 —— 无边框、无自己的背景、与行同高。
    默认隐藏避免每行噪声,悬停整行时与底色**同时**出现(不再各管各的),
    悬停自身只换文字色,不再叠出第二块底色 */
@@ -39,14 +39,20 @@
 .fcc-item.has-compare:hover .fcc-compare,
 .fcc-aside:focus-visible { opacity: 1; }
 .fcc-aside:hover { color: var(--text); }
-/* 行布局:按钮与纯展示行共用(fcc-row),两者视觉一致 */
-.fcc-row { display: flex; align-items: baseline; gap: 8px; width: 100%; box-sizing: border-box; padding: 4px 12px; min-height: 26px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12.5px; line-height: 18px; text-align: left; white-space: nowrap; }
-.fcc-item.openable .fcc-row { cursor: pointer; }
-.fcc-item.openable:hover .fcc-name { text-decoration: underline; text-decoration-color: var(--placeholder); text-underline-offset: 3px; }
-.fcc-item.openable .fcc-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.fcc-item.deleted .fcc-row { opacity: 0.5; }
+/* 行布局:主行是普通容器(不再是整行按钮),内部两个点击区各自是 button */
+.fcc-row { display: flex; align-items: baseline; gap: 8px; width: 100%; box-sizing: border-box; padding: 4px 12px; min-height: 26px; font-size: 12.5px; line-height: 18px; white-space: nowrap; }
+/* 文件名 / 路径两个按钮共用的重置:去掉按钮的边框、底色与居中,
+   只保留文字本身(视觉上与纯展示行一致) */
+.fcc-open, .fcc-path { display: inline-block; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.fcc-open:focus-visible, .fcc-path:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 .fcc-name { flex: none; max-width: 42%; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
-.fcc-path { flex: 1; min-width: 0; color: var(--muted); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.fcc-open:hover { text-decoration: underline; text-decoration-color: var(--placeholder); text-underline-offset: 3px; }
+.fcc-path { flex: 1; color: var(--muted); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.fcc-path:hover { color: var(--text); text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--placeholder); text-underline-offset: 3px; }
+/* 复制成功的原地反馈:只换文字与颜色,不改变行宽 */
+.fcc-path.copied, .fcc-path.copied:hover { color: var(--green); text-decoration: none; }
+/* 已删除的文件没有内容可打开:文件名灰显;路径仍可复制,保持原样 */
+.fcc-item.deleted .fcc-name { color: var(--muted); }
 .fcc-kind { flex: none; padding: 0 7px; border-radius: var(--r-pill); font-size: 11px; line-height: 16px; background: var(--fill-1-lo); color: var(--muted); }
 .fcc-kind.kind-create { color: var(--green); }
 .fcc-kind.kind-write { color: var(--accent-2); }

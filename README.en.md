@@ -432,6 +432,16 @@ That directory contains `ai-providers.json` (custom model providers, including A
 - Outbound requests all leave through this machine (directly, or via the proxy already configured in your system) — never through a third-party relay.
 - Except for the **model provider you configure** (conversation content must be sent to it for inference), all operations and data stay on the local machine and the connected SSH servers — nothing is uploaded to any third party or the author's servers.
 
+## Disclaimer
+
+**What this project does is driven by third-party large language models, and much of the code and documentation in this repository was written with AI assistance. Please read the following before use:**
+
+- **AI-generated code is not guaranteed to be correct**: the tool simply executes whatever the model emits — generated code, commands and file edits can be wrong, insecure, or outright destructive. Read them before you merge, commit or deploy, and try them in an environment you can roll back.
+- **Models hallucinate**: they invent non-existent APIs, library versions, file paths and command flags, and state wrong conclusions with total confidence. Treat them as an intern whose work needs review, not as an authority.
+- **No warranty, no liability**: any direct or indirect damage caused by using this tool (or the code and commands it generates) — including but not limited to data loss, service outages, leaked credentials, production incidents and compliance issues — is your own responsibility. The software is distributed under the "no warranty" terms of the **GPL-3.0**.
+- **You are the last line of defence**: permission modes, workspace confinement and credential masking reduce accidental damage; they are not a security audit. Choosing "full access" hands the shell of your machine or remote server to the model.
+- **Compliance and authorization are yours to check**: before sending code or data to a third-party model provider, make sure that this does not violate your organisation's rules or the authorization attached to the data.
+
 ## Roadmap
 
 Implemented: built-in terminal (real PTY), multi-server management, upload/download, concurrent sessions, automatic long-task compaction, code editor & media preview, browser preview (AI-controllable), mobile support, **read-only research sub-agents**, **permission modes** (confirm / auto-edit / plan / full-access), **image generation** (text-to-image / image-to-image / auto-iterate), **task planning** (`todo_write`, cross-turn persistence), **skill catalog** (built-in / local-user / local-workspace), **global instruction injection** (prompt-inject), **attachment system** (multimodal, merged & deduplicated), **turn visibility & rollback**, **command-card merge on /compact**, **environment search tool auto-install**, **desktop auto-update**, **MCP integration**, **native Anthropic / Gemini protocols**, **multi-API-key rotation**, **unified outbound network layer**, **real browser (Teleforge Auto extension, multiple servers at once)**, **AI computer control (computer-use)**, **automation (one-shot / recurring / cron)**, **deliverable artifacts**, **file change review**, **Glob / Grep discovery**, **web search**, **unified activity dock + dockkit right sidebar**, and the **three-platform release pipeline**.

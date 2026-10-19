@@ -20,7 +20,7 @@ function GoalGlyph() {
 /** 阶段标签:active 还要看进程内授权(未激活 = 不会自动续跑) */
 function phaseLabel(goal: GoalInfo): string {
   switch (goal.phase) {
-    case 'active': return goal.activation === 'armed' ? '进行中的目标' : '未激活的目标';
+    case 'active': return goal.activation === 'armed' ? '进行中的目标' : '已暂停的目标';
     case 'paused': return '已暂停的目标';
     case 'blocked': return '受阻的目标';
     default: return '已完成的目标';
@@ -88,8 +88,9 @@ export default function GoalBar({ goal, onEdit, onPause, onResume, onClear, pend
         </span>
       ) : (
         <>
+          {/* 目标正文:单行截断。轮次信息挂在 tooltip 上 —— 与 dsh GoalBar 同构:
+              那一行只有「图标 + 阶段 + 目标 + 动作」四个位,轮次不在行里(见 harness GoalBar.tsx)。 */}
           <span className="goal-objective" data-tip={title}>{goal.objective}</span>
-          <span className="goal-rounds" data-tip={title}>{goal.roundsStarted}/{goal.maxGoalRounds} 轮</span>
           <span className="goal-actions">
             {goal.phase === 'active' && goal.activation === 'armed' && (
               <button type="button" className="goal-icon-btn" data-tip="暂停目标" aria-label="暂停目标" disabled={pending}

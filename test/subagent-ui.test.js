@@ -392,8 +392,11 @@ try {
     await page.locator('[data-subagent-catalog="count"]').first().isVisible());
 
   // ---- 入口不跨对话:换一个对话后不再出现,切回来又出现 ----
-  const firstSessionTitle = await page.locator('.session-item .s-title').first().innerText();
-  await page.locator('.sidebar-left').getByText('＋ 新建', { exact: true }).first().click();
+  const firstSessionTitle = await page.locator('.session-item.active .s-title').first().innerText();
+  // 会话面板按工作区分组重构后,新建入口是分组头尾部的「＋」(悬停分组头才让位出来那一个按钮);
+  // 旧文案「＋ 新建」已不存在,这里按当前 UI 走(否则整段后续用例都跑不到)。
+  await page.locator('.s-group-header').first().hover();
+  await page.locator('.s-group-add').first().click();
   await page.waitForTimeout(800);
   check('新建对话后:头部没有子智能体入口(记录属于那个对话)',
     (await page.locator('[data-subagent-catalog]').count()) === 0);
@@ -455,6 +458,104 @@ try {
         add: await page.locator('.agent-slot:not(.hide) .composer-add').count(),
         chip: await page.locator('.agent-slot:not(.hide) .ws-chip').count()
       }));
+  }
+
+  // ---- 轮内收到子代理结算通知:收尾产物只挂收尾段(对齐 dsh 的 turn-tail)----
+  // 复现用户报的场景:父代理派发后台子代理后**同一步继续改文件**,子代理随后跑完并投递结算
+  // 通知 —— 通知被 steer 进**正在跑的这一轮**(不新开轮,见 dsh 的 inbox next-step),前端据此
+  // 另起一条 assistant 行承接后续步骤。dsh 把收尾产物挂在该 Turn 末尾的 turn-tail 上(只在
+  // turn/end 后发布),所以通知行之前的那一段(**中间片段**)不该有「N 个文件已更改」卡与
+  // 复制/分支按钮;整轮结束后只有收尾段带这些,且卡片按**整轮**汇总(中间段改过的文件也算)。
+  console.log('\n[轮内收到子代理通知:收尾产物只挂收尾段]');
+  {
+    const chat = '.agent-slot:not(.hide) .chat';
+    const MY_MSG = '派个子代理边跑边等';
+    // 消息行的定位口径:前面的场景也产生过通知行,所以一律从**本次那条用户消息**往后找。
+    // (在浏览器上下文里跑:返回本次通知行的位置与它的形态)
+    const probe = ({ sel, text }) => {
+      const rows = [...document.querySelectorAll(`${sel} > .msg`)];
+      const start = rows.findIndex((r) => r.classList.contains('user') && (r.innerText || '').includes(text));
+      const noticeAt = start < 0 ? -1 : rows.findIndex((r, i) => i > start && r.querySelector('[data-turn-trigger]'));
+      const el = noticeAt >= 0 ? rows[noticeAt].querySelector('[data-turn-trigger]') : null;
+      const pick = (n) => n ? {
+        text: (n.innerText || '').replace(/\s+/g, ' ').slice(0, 40),
+        branch: !!n.querySelector('[aria-label="在新对话中分支"]'),
+        copy: !!n.querySelector('[aria-label="复制"]'),
+        fcc: !!n.querySelector('.fcc'),
+        fccTitle: n.querySelector('.fcc-title')?.textContent || ''
+      } : null;
+      return {
+        start, noticeAt,
+        title: el ? (el.innerText || '').replace(/\s+/g, ' ').slice(0, 60) : '',
+        inline: el ? el.getAttribute('data-trigger-inline') : null,
+        before: pick(rows.slice(start + 1, noticeAt < 0 ? rows.length : noticeAt).reverse().find((r) => r.classList.contains('assistant'))),
+        after: pick(rows.slice(noticeAt + 1).filter((r) => r.classList.contains('assistant')).pop())
+      };
+    };
+    // 切回**主会话**:用户截图里就是主会话(有本地工作区、有子智能体入口);
+    // 分支出来的会话绑定不同,不适合当这个场景的载体。
+    await page.locator('.session-item').filter({ hasText: firstSessionTitle }).first().click();
+    await page.waitForTimeout(1200);
+    const activeTitle = await page.locator('.session-item.active .s-title').first().innerText();
+    const input2 = page.locator('.agent-slot:not(.hide) .chatwrap textarea').first();
+    await input2.fill(MY_MSG);
+    await input2.press('Enter');
+    try {
+      await page.waitForFunction(({ sel, text }) => {
+        const rows = [...document.querySelectorAll(`${sel} > .msg`)];
+        const start = rows.findIndex((r) => r.classList.contains('user') && (r.innerText || '').includes(text));
+        return start >= 0 && rows.slice(start).some((r) => r.querySelector('[data-turn-trigger]'));
+      }, { sel: chat, text: MY_MSG }, { timeout: 60000 });
+    } catch (e) {
+      console.log('  [调试] 会话文本尾部:\n', (await page.locator(chat).innerText()).slice(-1000));
+      console.log('  [调试] msg 序列:', await page.locator(`${chat} > .msg`).evaluateAll((els) => els.map((el) => el.className)));
+      console.log('  [调试] 运行行:', await page.locator(`${chat} .running-row`).count());
+      throw e;
+    }
+    const live = await page.evaluate(probe, { sel: chat, text: MY_MSG });
+    check('轮内收到子代理通知:这一轮里出现「子任务状态更新」通知行',
+      live.noticeAt >= 0 && live.title.includes('子任务状态更新'), JSON.stringify(live));
+    check('它是**轮内**形态(通知被 steer 进正在跑的这一轮,不是新开一轮的触发者)',
+      live.inline === 'true', JSON.stringify({ inline: live.inline, title: live.title }));
+    check('实时:中间片段没有分支按钮与文件变更卡',
+      !!live.before && live.before.branch === false && live.before.fcc === false, JSON.stringify(live.before));
+
+    // 等这一轮真正结束(收尾段出现操作栏)
+    await page.waitForFunction(({ sel, text }) => {
+      const rows = [...document.querySelectorAll(`${sel} > .msg`)];
+      const start = rows.findIndex((r) => r.classList.contains('user') && (r.innerText || '').includes(text));
+      const last = rows.slice(start).reverse().find((r) => r.classList.contains('assistant'));
+      return !!last && !!last.querySelector('[aria-label="在新对话中分支"]');
+    }, { sel: chat, text: MY_MSG }, { timeout: 90000 });
+
+    // 重新加载页面:强制走一次历史投影(用户截图里的形态就是投影出来的)
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('.session-item').first().waitFor({ timeout: 30000 });
+    await page.waitForTimeout(1200);
+    const restored = await page.locator('.session-item.active .s-title').first().innerText().catch(() => '');
+    if (restored !== activeTitle) {
+      await page.locator('.session-item').filter({ hasText: activeTitle }).first().click();
+      await page.waitForTimeout(1500);
+    }
+    await page.waitForFunction(({ sel, text }) => {
+      const rows = [...document.querySelectorAll(`${sel} > .msg`)];
+      return rows.some((r) => r.classList.contains('user') && (r.innerText || '').includes(text));
+    }, { sel: chat, text: MY_MSG }, { timeout: 30000 });
+
+    const shape = await page.evaluate(probe, { sel: chat, text: MY_MSG });
+    check('投影后通知行还在(它的位置是消息面下标,不随投影丢)', shape.noticeAt >= 0, JSON.stringify(shape));
+    check('投影后它仍是轮内形态(服务端投影的 inline 标记)',
+      shape.inline === 'true', JSON.stringify({ inline: shape.inline, title: shape.title }));
+    check('中间片段确实是通知之前那一段', !!shape.before && shape.before.text.length > 0, JSON.stringify(shape.before));
+    check('中间片段没有分支 / 复制 / 文件变更卡',
+      !!shape.before && shape.before.branch === false && shape.before.copy === false && shape.before.fcc === false,
+      JSON.stringify(shape.before));
+    check('收尾段承载收尾产物(分支 + 复制 + 文件变更卡)',
+      !!shape.after && shape.after.branch && shape.after.copy && shape.after.fcc, JSON.stringify(shape.after));
+    check('文件变更卡按整轮汇总(中间段改的文件也计入)',
+      /\d+ 个文件已更改/.test(shape.after?.fccTitle || '')
+      && Number((shape.after?.fccTitle || '').match(/\d+/)?.[0]) >= 2,
+      shape.after?.fccTitle || '');
   }
 } catch (e) {
   fail++;

@@ -11,12 +11,11 @@ import { createPortal } from 'react-dom';
 import { useFeedback } from '../../context/feedback';
 import './PermissionSelect.scss';
 
-export type PermissionMode = 'confirm' | 'auto-edit' | 'plan' | 'full-access';
+export type PermissionMode = 'confirm' | 'auto-edit' | 'full-access';
 
 export const PERMISSION_MODE_OPTIONS: Array<{ value: PermissionMode; name: string; description: string }> = [
   { value: 'confirm', name: '变更前确认', description: '写文件、编辑、删除与执行命令前,先请求你批准' },
   { value: 'auto-edit', name: '自动编辑', description: '文件写入与编辑自动执行;执行命令前仍需批准' },
-  { value: 'plan', name: '计划模式', description: '只读研究:AI 只调研并给出计划,不执行任何变更' },
   { value: 'full-access', name: '完全访问', description: '全部操作自动执行,不再询问(高危命令拦截仍生效)' }
 ];
 
@@ -43,12 +42,6 @@ const modeGlyphs: Record<PermissionMode, React.ReactNode> = {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path d={SHIELD_OUTLINE} stroke="currentColor" strokeWidth="1.32" strokeLinejoin="round" />
       <path d="M10.6 4.9l.9.9-3.7 3.7-1.4.5.5-1.4 3.7-3.7z" fill="currentColor" />
-    </svg>
-  ),
-  'plan': (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d={SHIELD_OUTLINE} stroke="currentColor" strokeWidth="1.32" strokeLinejoin="round" />
-      <path d="M5 5.4h6M5 8h6M5 10.6h3.6" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" />
     </svg>
   ),
   'full-access': (
@@ -117,7 +110,7 @@ export default function PermissionSelect({ value, disabled = false, onChange, an
     <div className="perm-select" ref={rootRef}>
       <button
         type="button"
-        className={`perm-chip${value === 'plan' ? ' plan' : ''}${value === 'full-access' ? ' danger' : ''}`}
+        className={`perm-chip${value === 'full-access' ? ' danger' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
         data-tip={current.description}

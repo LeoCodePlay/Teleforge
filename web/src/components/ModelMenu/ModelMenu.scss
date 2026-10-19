@@ -17,6 +17,14 @@
   font-family: var(--mono);
 }
 .msm-effort { flex: none; font-size: 10.5px; color: var(--muted); }
+/* 提供商色点(对齐 dsh 0.2.1-rc 的 provider-aware 模型标签):色相由提供商 id 稳定散列,
+   同一提供商在触发按钮 / 分组标题 / 模型行里同色,多个网关下同名模型也能一眼区分。
+   只做"标识"不做"信息":亮度受控,避免抢走模型名的注意力。 */
+.msm-badge {
+  flex: none; width: 6px; height: 6px; border-radius: 50%;
+  background: hsl(var(--h, 210) 58% 55%);
+  box-shadow: 0 0 0 1px hsl(var(--h, 210) 58% 55% / .28);
+}
 /* 开合箭头:与远程/本地工作区 chip(.ws-chip-arrow)同款 chevron 图标、同尺寸 13px、同一条旋转动画 */
 .msm-arrow { flex: none; display: inline-flex; align-items: center; color: var(--muted); transition: transform .18s; }
 .msm-arrow svg { display: block; }
@@ -55,13 +63,14 @@
    吸顶面用实色内嵌槽(--code-bg-soft)+ 底部发丝线,不依赖 blur 也能保证文字可读 */
 .msm-group-title {
   position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; gap: 6px;
   font-size: 10.5px; color: var(--muted); letter-spacing: .5px;
   padding: 5px 9px 3px; user-select: none;
   background: var(--code-bg-soft);
   box-shadow: inset 0 -1px 0 var(--line-faint);
 }
 .msm-option {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  display: flex; align-items: center; gap: 7px;
   width: 100%; text-align: left; padding: 7px 10px; border-radius: var(--r-sm);
   background: transparent; border: none; color: var(--text); font-size: 12.5px;
   cursor: pointer; box-shadow: none; transition: background .15s;

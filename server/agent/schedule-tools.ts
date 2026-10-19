@@ -129,6 +129,18 @@ function timingChangeFrom(args: { at?: AtInput; every_seconds?: number; daily?: 
   return undefined
 }
 
+/**
+ * dsh `CREATE_TITLE_DESCRIPTION`(0.2.1-rc 的 fix(schedule) #6105):
+ * 任务名只写"做什么",频率/时间/状态/执行备注属于计时参数与 prompt ——
+ * 否则模型会把「每天 9 点」「只读模式」也塞进卡片标题,任务列表变得没法读。
+ */
+const CREATE_TITLE_DESCRIPTION = `Concise task name in the user's language, at most ${MAX_TITLE_LENGTH} characters. `
+  + 'Name only the core action and subject; keep essential target identifiers such as PR numbers and branch names. '
+  + 'Do not include execution frequency (e.g. daily, hourly), scheduled dates/times, time zones, task status, '
+  + 'or configuration and execution details (e.g. read-only mode, profile-tag filters), even when embedded in the requested or existing title. '
+  + 'Do not append parenthetical notes. '
+  + 'Put scheduling information in the timing parameters and execution instructions in prompt.'
+
 // ---- dsh SELECTOR_PARAMETERS 的 JSON-Schema 等价形式(描述逐字) ----
 const TIME_PARAMETER_DESCRIPTION = 'HH:mm:ss with optional 1-3 fractional digits, for example 23:00:00.'
 const ZONE_PARAMETER_DESCRIPTION = 'UTC or IANA Area/Location, for example Asia/Shanghai.'
@@ -210,7 +222,7 @@ export function registerScheduleTools(registry: ToolRegistry): void {
         additionalProperties: false,
         properties: {
           prompt: { type: 'string', description: 'Reminder content to present when the target becomes due.' },
-          title: { type: 'string', description: `Task name of at most ${MAX_TITLE_LENGTH} characters, shown on the task card and in task lists.` },
+          title: { type: 'string', description: CREATE_TITLE_DESCRIPTION },
           after_seconds: { type: 'number', description: 'Delay in whole seconds.' },
           ...SELECTOR_PROPERTIES,
         },
@@ -291,7 +303,7 @@ export function registerScheduleTools(registry: ToolRegistry): void {
         additionalProperties: false,
         properties: {
           id: { type: 'string', description: 'Schedule id returned by schedule_list.' },
-          title: { type: 'string', description: `New task name of at most ${MAX_TITLE_LENGTH} characters.` },
+          title: { type: 'string', description: 'New task name; follow the schedule_create title rules.' },
           prompt: { type: 'string', description: 'New reminder content.' },
           ...SELECTOR_PROPERTIES,
         },

@@ -1,4 +1,4 @@
-// 斜杠命令解析(纯函数,供输入框发送前的命令拦截使用;无 DOM 依赖,可单测)。
+// 斜杠命令解析(纯函数,供输入框发送前的命令拦截与菜单补全使用;无 DOM 依赖,可单测)。
 //
 // 成因:系统命令(/compact、/clear、/fork)过去只在「/ 菜单打开且该命令被高亮选中」时才执行。
 // 于是下面几种常见操作都会退化成普通消息发给模型:
@@ -33,4 +33,43 @@ export function matchSlashCommand(text: string, commandNames: string[]): SlashCo
   const name = m[1].toLowerCase();
   if (!commandNames.some((c) => String(c).toLowerCase() === name)) return null;
   return { name, args: (m[2] || '').trim() };
+}
+
+/** 转义正则字面量(命令名/技能名里可能有 . - 等字符) */
+function escapeRe(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 菜单里插入一个命令词的结果:text 为插好 token(或原样)的整条输入,caret 为插完后的光标位。 */
+export interface SlashTokenInsertion {
+  text: string;
+  caret: number;
+}
+
+/**
+ * 在输入里"插入"一个命令词(菜单选中命令时只补全、不执行)。
+ *
+ * 与 matchSlashCommand 同属斜杠命令的纯逻辑,故放在本模块:输入框组件只负责把它写回 textarea。
+ * 规则:
+ *  - 吃掉落笔位置前那个已键入的 /词(行首或空白后的 `/目标`、`/co`…),换成规范 token + 尾随空格,
+ *    光标停在参数位;`/` 之前的文本原样保留(支持在已有文字后面追加命令);
+ *  - token 已完整存在(前有行首/空白、后有空白/结尾)时只移动光标,不重复插入 —— 与技能补全的
+ *    "已存在则删除"旧缺陷同源,这里统一按"不重复"处理;
+ *  - 非 `/` 结尾的输入原样返回(菜单没开时的误调用不该改写草稿)。
+ *
+ * @param input 当前整条输入(草稿)
+ * @param name 命令规范名(如 goal),与 token 等价
+ * @param token 显示/输入用的词(中文 token 如「目标」;缺省用规范名)
+ */
+export function insertSlashToken(input: string, name: string, token?: string): SlashTokenInsertion {
+  const text = String(input ?? '');
+  const word = String(token || name);
+  const m = /(^|\s)\/[a-z0-9\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]*$/i.exec(text);
+  if (!m) return { text, caret: text.length };
+  const head = text.slice(0, m.index + m[1].length);
+  const tail = text.slice(m.index + m[0].length);
+  const present = new RegExp(`(?:^|\\s)/(?:${escapeRe(name)}|${escapeRe(word)})(?=\\s|$)`, 'i').test(head);
+  const insert = present ? '' : `/${word} `;
+  const next = head + insert + tail;
+  return { text: next, caret: head.length + insert.length };
 }

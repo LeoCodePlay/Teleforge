@@ -95,16 +95,15 @@ const run = (name, session) => registry.execute({
   assert.equal(r4.isError, true, 'confirm: 审批拒绝后命令拒绝执行');
   assert.match(r4.content, /用户拒绝了/);
 
-  // plan:写/命令直接拒绝(无审批挂起),读放行
+  // 计划模式**不是**权限档位(dsh:guidance 与 enforcement 是两根轴):老日志里遗留的
+  // permission/mode='plan' 不再拦任何工具 —— 与 dsh 的 "runs every call in plan mode untouched" 一致。
+  // 计划模式真正的开关是独立的 plan/mode 事件,见 plan-mode.ts 与 goal-plan.test.js 场景 2。
   const sPlan = makeSession(['plan']);
-  const r5 = await run('write_file', sPlan);
-  assert.equal(r5.isError, true, 'plan: 写工具直接拒绝');
-  assert.match(r5.content, /计划模式/);
-  const r6 = await run('run_command', sPlan);
-  assert.equal(r6.isError, true, 'plan: 命令直接拒绝');
-  assert.equal(listPendingAsks().length, 0, 'plan: 不发起审批');
+  assert.equal((await run('write_file', sPlan)).isError, false, '遗留 plan 档位: 写工具不再被拒(与 dsh 一致)');
+  assert.equal((await run('run_command', sPlan)).isError, false, '遗留 plan 档位: 命令不再被拒');
+  assert.equal(listPendingAsks().length, 0, '遗留 plan 档位: 不发起审批');
   const r7 = await run('read_file', sPlan);
-  assert.equal(r7.isError, false, 'plan: 读工具放行');
+  assert.equal(r7.isError, false, '遗留 plan 档位: 读工具放行');
 
   // auto-edit:写放行,命令审批
   const sAuto = makeSession(['auto-edit']);
@@ -123,8 +122,9 @@ const run = (name, session) => registry.execute({
   assert.equal(listPendingAsks().length, 0, 'full-access: 不发起审批');
 
   // 模式即时切换:运行中会话的日志追加 mode 事件后,下一次调用按新模式判定
-  sFull.append('permission/mode', { mode: 'plan' });
-  assert.equal((await run('write_file', sFull)).isError, true, '运行中切换到 plan 即时生效');
+  sFull.append('permission/mode', { mode: 'confirm' });
+  setTimeout(() => { for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许一次'] }]); }, 10);
+  assert.equal((await run('write_file', sFull)).isError, false, '运行中切回 confirm: 审批通过后放行');
 
   // ---- fail-closed 回归:未声明 access 的新工具不得静默放行 ----
   // 历史事故:toolAccess() 兜底分支曾返回 'read',导致新增写类工具忘记登记时
@@ -140,12 +140,11 @@ const run = (name, session) => registry.execute({
   for (const a of listPendingAsks()) answerAskUser(a.askId, [{ id: 'permission', selected: ['允许一次'] }]);
   assert.equal((await pendingUnknown).isError, false, 'confirm: 审批允许后放行');
 
-  // plan 模式下:未声明 access 的工具必须直接拒绝(只读放行、未知按写拒绝)
+  // 遗留 plan 档位下:未声明 access 的工具也照常执行(计划模式不再拦工具;兜底分类仍是 write)
   const sPlanFail = makeSession(['plan']);
   const rUnknownPlan = await run('some_new_tool', sPlanFail);
-  assert.equal(rUnknownPlan.isError, true, 'plan: 未声明 access 的工具必须被拒绝');
-  assert.match(rUnknownPlan.content, /计划模式/);
-  assert.equal(listPendingAsks().length, 0, 'plan: 不发审批直接拒绝');
+  assert.equal(rUnknownPlan.isError, false, '遗留 plan 档位: 未声明 access 的工具也放行(与 dsh 一致)');
+  assert.equal(listPendingAsks().length, 0, '遗留 plan 档位: 不发审批');
 
   // ---- 跨会话隔离回归:全局默认档位只能给"新会话"播种,绝不能当成已有会话的实时 fallback ----
   // 历史事故:foldPermissionMode 的 fallback 传了全局默认设置,而 permission_set 又会把

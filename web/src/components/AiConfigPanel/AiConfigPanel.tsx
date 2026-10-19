@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { useLlm } from '../../context/llm-context';
 import { PROVIDERS, getDefaultModelContext } from '../../data/llm-providers';
 import type { LlmProvider, ProviderDraft, ModelContextConfig, KeyState, LlmProtocol } from '../../types';
+import { REASONING_LEVELS, levelsSummary, supportedLevels } from '../../utils/reasoningLevels';
 import { parseCountInput, formatCountInput } from '../../utils/tokens';
 import { IconTrashOutline14, IconEye16, IconEyeOff16 } from '../icons/icons';
 import GlassSelect from '../GlassSelect/GlassSelect';
@@ -186,7 +187,6 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   const [baseUrl, setBaseUrl] = useState(isEdit ? editProvider.baseUrl : '');
   // 协议:旧条目没有该字段 → 按 OpenAI 兼容处理
   const [protocol, setProtocol] = useState<LlmProtocol>(isEdit ? (editProvider.protocol || 'openai') : 'openai');
-  const isOpenAiProtocol = protocol === 'openai';
   // 多个 API Key(轮询用):某个 Key 余额不足时自动切换到下一个;首位为主 Key
   const [apiKeys, setApiKeys] = useState<string[]>(() => {
     if (!isEdit) return [''];
@@ -218,13 +218,23 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
     return next;
   });
 
-  // 直接更新某模型的能力配置(上下文窗口/输出上限/多模态/生图);全部为空或关闭时清除该条配置。
+  // 把模型配置规范化:空值/空数组一律丢弃,避免配置文件里堆一堆 undefined 语义的空字段
+  const cleanCfg = (prev: ModelContextConfig): ModelContextConfig => {
+    const merged: ModelContextConfig = {};
+    if (prev.contextWindow) merged.contextWindow = prev.contextWindow;
+    if (prev.maxTokens) merged.maxTokens = prev.maxTokens;
+    if (prev.multimodal) merged.multimodal = true;
+    if (prev.reasoningLevels && prev.reasoningLevels.length > 0) merged.reasoningLevels = prev.reasoningLevels;
+    return merged;
+  };
+
+  // 直接更新某模型的能力配置(上下文窗口/输出上限/多模态);全部为空或关闭时清除该条配置。
   // 布尔开关用 '1'/'' 两个字符串值复用同一签名(与数字字段一致的调用形态)
-  const updateModelCfg = (m: string, field: 'contextWindow' | 'maxTokens' | 'multimodal' | 'imageGen', raw: string) => {
+  const updateModelCfg = (m: string, field: 'contextWindow' | 'maxTokens' | 'multimodal', raw: string) => {
     setModelConfig((cur) => {
       const next = { ...cur };
       const prev: ModelContextConfig = { ...(next[m] || {}) };
-      if (field === 'multimodal' || field === 'imageGen') prev[field] = raw === '1' ? true : undefined;
+      if (field === 'multimodal') prev[field] = raw === '1' ? true : undefined;
       else {
         // 数字字段支持带单位输入(1M=1000000、128k=128000);清空即取消配置,非法文本保留上一次有效值
         const text = String(raw ?? '').trim();
@@ -234,11 +244,27 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
           if (n !== undefined) prev[field] = n;
         }
       }
-      const merged: ModelContextConfig = {};
-      if (prev.contextWindow) merged.contextWindow = prev.contextWindow;
-      if (prev.maxTokens) merged.maxTokens = prev.maxTokens;
-      if (prev.multimodal) merged.multimodal = true;
-      if (prev.imageGen) merged.imageGen = true;
+      const merged = cleanCfg(prev);
+      if (Object.keys(merged).length > 0) next[m] = merged;
+      else delete next[m];
+      return next;
+    });
+  };
+
+  // 切换某模型「支持哪些推理等级」(dsh 0.2.1-rc 的 f61d9982f8:自定义模型可编辑档位)。
+  // 全选时清掉声明 —— "未声明"与"声明全部"语义相同,但前者配置更短、后续新增档位自动继承。
+  const toggleModelLevel = (m: string, levelId: string) => {
+    // 「默认」= 不传 reasoning_effort,任何网关都必须能接受,因此不允许取消
+    if (levelId === 'default') return;
+    setModelConfig((cur) => {
+      const next = { ...cur };
+      const prev: ModelContextConfig = { ...(next[m] || {}) };
+      const all = REASONING_LEVELS.map((lv) => lv.id);
+      const picked = new Set(prev.reasoningLevels ?? all);
+      if (picked.has(levelId)) picked.delete(levelId); else picked.add(levelId);
+      const ordered = all.filter((id) => picked.has(id));
+      prev.reasoningLevels = ordered.length === all.length ? undefined : ordered;
+      const merged = cleanCfg(prev);
       if (Object.keys(merged).length > 0) next[m] = merged;
       else delete next[m];
       return next;
@@ -433,36 +459,12 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                 {models.map((m) => {
                   const cfg = modelConfig[m] || {};
                   const dflt = getDefaultModelContext(m);
-                  // 生图链路只实现了 OpenAI 协议端点(/images/generations|edits):
-                  // 非 OpenAI 协议下该开关不生效(禁用),避免"开了却不走生图"的静默错配
                   const mm = cfg.multimodal === true;
-                  const ig = cfg.imageGen === true && isOpenAiProtocol;
                   const ctxKey = draftKey(m, 'contextWindow');
                   const outKey = draftKey(m, 'maxTokens');
                   return (
-                    <div key={m} className={`model-config-row${ig ? ' ig-on' : ''}`}>
+                    <div key={m} className="model-config-row">
                       <span className="mc-name" data-tip={m}>{m}</span>
-                      {/* 生图开关:纯图像端点模型(gpt-image-2 等)在 chat/completions 会被网关 503 拒绝,
-                          开启后该对话每一轮直接走 /images/generations(文生图)或 /images/edits(图生图) */}
-                      <label className="mc-field mc-ig" data-tip={!isOpenAiProtocol
-                        ? '生图对话只支持 OpenAI 兼容协议(/images/generations 与 /images/edits);当前协议下该开关不生效'
-                        : ig
-                          ? '已开启:该对话每轮直接生成图片(文生图 / 图生图 / 按上文成图迭代修改)'
-                          : '开启后本对话切换为生图对话:直接调用 /images/generations 与 /images/edits,不再走文本对话与工具'}>
-                        <span>生图</span>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={ig}
-                          disabled={!isOpenAiProtocol}
-                          className={`mc-switch ${ig ? 'on' : ''}`}
-                          onClick={() => {
-                            // 与多模态互斥:生图模型没有 chat 通道,"看图对话"这一能力对它无意义
-                            if (!ig && mm) updateModelCfg(m, 'multimodal', '');
-                            updateModelCfg(m, 'imageGen', ig ? '' : '1');
-                          }}
-                        ><span className="mc-knob" /></button>
-                      </label>
                       {/* 多模态开关:开启后聊天输入框支持粘贴/上传图片(模型支持看图才勾选) */}
                       <label className="mc-field mc-mm" data-tip={mm ? '已开启:聊天中可发送图片' : '开启后聊天中可向该模型发送图片'}>
                         <span>多模态</span>
@@ -470,35 +472,49 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
                           type="button"
                           role="switch"
                           aria-checked={mm}
-                          disabled={ig}
                           className={`mc-switch ${mm ? 'on' : ''}`}
                           onClick={() => updateModelCfg(m, 'multimodal', mm ? '' : '1')}
                         ><span className="mc-knob" /></button>
                       </label>
-                      {/* 上下文/最大输出只对文本模型有意义:生图链路不注入历史、不设 max_tokens。
-                          均为文本输入框,接受 1M / 128k 这类带单位写法(1M=1000000、128k=128000) */}
-                      <label className="mc-field" data-tip={ig ? '生图模型不使用该参数(不走文本请求)' : '可填纯数字,也可带单位:1M = 100 万、128k = 12.8 万'}>
+                      {/* 上下文/最大输出:均为文本输入框,接受 1M / 128k 这类带单位写法(1M=1000000、128k=128000) */}
+                      <label className="mc-field" data-tip="可填纯数字,也可带单位:1M = 100 万、128k = 12.8 万">
                         <span>上下文</span>
-                        <input type="text" inputMode="numeric" autoComplete="off" disabled={ig}
+                        <input type="text" inputMode="numeric" autoComplete="off"
                           value={numDraft[ctxKey] ?? formatCountInput(cfg.contextWindow)}
                           placeholder={dflt.contextWindow ? '默认 ' + formatCountInput(dflt.contextWindow) : '默认'}
                           onChange={(e) => { setDraft(ctxKey, e.target.value); updateModelCfg(m, 'contextWindow', e.target.value); }}
                           onBlur={() => dropDraft(ctxKey)} />
                       </label>
-                      <label className="mc-field" data-tip={ig ? '生图模型不使用该参数(不走文本请求)' : '可填纯数字,也可带单位:1M = 100 万、32k = 3.2 万'}>
+                      <label className="mc-field" data-tip="可填纯数字,也可带单位:1M = 100 万、32k = 3.2 万">
                         <span>最大输出</span>
-                        <input type="text" inputMode="numeric" autoComplete="off" disabled={ig}
+                        <input type="text" inputMode="numeric" autoComplete="off"
                           value={numDraft[outKey] ?? formatCountInput(cfg.maxTokens)}
                           placeholder={dflt.maxTokens ? '默认 ' + formatCountInput(dflt.maxTokens) : '默认'}
                           onChange={(e) => { setDraft(outKey, e.target.value); updateModelCfg(m, 'maxTokens', e.target.value); }}
                           onBlur={() => dropDraft(outKey)} />
                       </label>
-                      <button className="mc-remove action-icon danger" onClick={() => toggleModel(m)}>✕</button>
-                      {ig && (
-                        <div className="mc-ig-hint">
-                          该模型将作为生图模型使用:发送文字＝文生图；附带图片＝图生图；后续每轮自动携带上一张成图继续修改
+                      {/* 该模型支持的推理等级(勾掉的档位不会出现在模型菜单里)。
+                          用 details 做成行内弹层,不额外占行宽 —— 这一行已经够挤了。 */}
+                      <details className="mc-field mc-levels" data-tip="勾选该模型支持的推理等级;取消的档位不会在模型菜单里出现(「默认」始终可用)">
+                        <summary>推理 {levelsSummary(supportedLevels(cfg.reasoningLevels))}</summary>
+                        <div className="mc-levels-body">
+                          {REASONING_LEVELS.map((lv) => {
+                            const on = lv.id === 'default' || supportedLevels(cfg.reasoningLevels).some((x) => x.id === lv.id);
+                            return (
+                              <label key={lv.id} className={`mc-level${on ? ' on' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={on}
+                                  disabled={lv.id === 'default'}
+                                  onChange={() => toggleModelLevel(m, lv.id)}
+                                />
+                                <span>{lv.label}</span>
+                              </label>
+                            );
+                          })}
                         </div>
-                      )}
+                      </details>
+                      <button className="mc-remove action-icon danger" onClick={() => toggleModel(m)}>✕</button>
                     </div>
                   );
                 })}

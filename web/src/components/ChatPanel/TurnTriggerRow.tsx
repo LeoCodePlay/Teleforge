@@ -52,7 +52,7 @@ function clockOf(ts?: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export function TurnTriggerRow({ source, content, time, inline = false }: {
+export function TurnTriggerRow({ source, content, time, inline = false, goalRound }: {
   source: MessageSource;
   /** 模型可见正文(展开后才显示) */
   content?: string;
@@ -61,14 +61,19 @@ export function TurnTriggerRow({ source, content, time, inline = false }: {
    *  折叠行带上 `summary` 一行账(DSH: "The one-line account also rides the collapsed row"),
    *  且不再说"触发本轮"(本轮早就开始了,它不是触发者)。 */
   inline?: boolean;
+  /** 目标续跑轮的轮号:折叠行标出「第 N/M 轮」(目标续跑不是人打的字,标清楚是哪一轮) */
+  goalRound?: { round: number; revision?: number };
 }) {
   // 默认收起:dsh 同款(折叠行已经把"发生了什么"说清楚了,正文按需展开)
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   const title = triggerTitle(source.kind);
   const timeText = clockOf(time);
-  // 轮内形态的一行账:优先用 source.summary(dsh 的 boundContextSummary)
+  // 轮内形态的一行账:优先用 source.summary(dsh 的 boundContextSummary);
+  // 目标续跑轮的 summary 是"第 N/M 轮",与 goalRound 二选一(以轮号为准,避免两处口径打架)
   const summary = String(source.summary || '').trim();
+  const roundText = goalRound ? `第 ${goalRound.round} 轮` : '';
+  const account = roundText || summary;
   return (
     <section className="ttr" data-turn-trigger={source.kind}
       data-trigger-form={source.form || undefined}
@@ -78,7 +83,7 @@ export function TurnTriggerRow({ source, content, time, inline = false }: {
         onClick={(e) => { e.currentTarget.focus(); setOpen((v) => !v); }}>
         <span className="ttr-icon" aria-hidden><IconAgentPreset size={14} /></span>
         <span className="ttr-title">{title}</span>
-        {inline && summary && <><span className="ttr-sep" aria-hidden /><span className="ttr-summary" data-trigger-summary>{summary}</span></>}
+        {account && <><span className="ttr-sep" aria-hidden /><span className="ttr-summary" data-trigger-summary>{account}</span></>}
         {timeText && <time className="ttr-time" dateTime={new Date(time || 0).toISOString()}>{timeText}</time>}
         <span className="ttr-chevron" aria-hidden>{open ? <IconChevronUp size={12} /> : <IconChevronDown size={12} />}</span>
       </button>

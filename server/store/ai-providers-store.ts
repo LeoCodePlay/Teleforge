@@ -39,8 +39,9 @@ export interface AiProvider {
   note: string;
   /** 每个模型的能力/参数声明(可选),key = 模型名:
    *  contextWindow 输入窗口、maxTokens 输出上限、multimodal 是否支持图片输入、
-   *  imageGen 是否为生图模型(对话改走 /images/generations 与 /images/edits) */
-  modelConfig?: Record<string, { contextWindow?: number; maxTokens?: number; multimodal?: boolean; imageGen?: boolean }>;
+   *  imageGen 是否为生图模型(对话改走 /images/generations 与 /images/edits)、
+   *  reasoningLevels 该模型支持的推理等级 id(缺省 = 全部) */
+  modelConfig?: Record<string, { contextWindow?: number; maxTokens?: number; multimodal?: boolean; imageGen?: boolean; reasoningLevels?: string[] }>;
 }
 
 let providers: AiProvider[] | null = null; // 懒加载缓存

@@ -173,8 +173,8 @@ export default function ImageGenPanel() {
         </div>
       </div>
 
-      {/* ---- 两条生图链路的说明:用户最常问的是"我这样接对不对",放在表单下方备查 ---- */}
-      <div className="panel-title ig-paths-title">两条生图链路</div>
+      {/* ---- 生图链路说明:用户最常问的是"我这样接对不对",放在表单下方备查 ---- */}
+      <div className="panel-title ig-paths-title">生图链路</div>
       <div className="ig-paths">
         <div className="ig-path">
           <div className="ig-path-head">
@@ -184,17 +184,6 @@ export default function ImageGenPanel() {
           <div className="ig-path-desc">
             对话仍用任意文本模型,由它在你要求画图时自动调用上面这份端点:文本模型手里有完整对话历史,
             能把"再亮一点""把帽子换蓝"补全成自包含提示词,并自行决定文生图/图生图与尺寸质量。
-          </div>
-        </div>
-        <div className="ig-path">
-          <div className="ig-path-head">
-            <span className="ig-path-tag alt">进阶</span>
-            <span className="ig-path-name">生图对话(模型本身就是图像端点)</span>
-          </div>
-          <div className="ig-path-desc">
-            若所选模型只能走 /images/*(纯图像端点,chat/completions 会被网关拒绝),
-            请到「AI 配置 → 编辑提供方」勾选该模型的「生图」开关:该对话整轮切为生图链路,
-            端点用该提供方自身的 Base URL / Key / 模型名,不走上面这份配置。
           </div>
         </div>
       </div>

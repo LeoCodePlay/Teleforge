@@ -498,11 +498,11 @@ export class LlmClient {
         }
         // 纯图像端点模型被误当文本模型使用:网关会明确拒绝(503 "only supported on
         // /v1/images/...")。这是配置级错误,重试只会白等并给出同样结论,
-        // 因此立即失败并把"去开生图开关"作为可操作指引返回。
+        // 因此立即失败并把可操作的指引返回。
         if (isOpenAi && IMAGES_ONLY_RE.test(text)) {
           throw new Error(
-            `模型 ${this.model} 是生图模型,不支持文本对话端点(网关已拒绝)。` +
-            '请在「设置 → AI 配置 → 编辑提供方」里勾选该模型的「生图」开关,该对话将切换为生图对话(文生图 / 图生图)。'
+            `模型 ${this.model} 是纯图像端点模型,不支持文本对话端点(网关已拒绝)。` +
+            '请改用文本模型对话;若要出图,到「设置 → 生图配置」配好图像端点,再由文本模型调用生图工具。'
           );
         }
         // 4xx 里只有超时/冲突/过载/限流值得重试;鉴权、余额、参数、找不到这类重试不会变好
@@ -702,7 +702,7 @@ function sniffImageMime(buf: Buffer): string {
 function imageApiError(status: number, model: string, text: string): string {
   const head = `生图接口 HTTP ${status} [model=${model}]: ${text}`;
   if (status === 404 || status === 405) {
-    return `${head}\n提示:该提供商未开放图像端点(/images/generations、/images/edits)。请确认 Base URL 指向的是支持生图的网关,或关闭该模型的「生图」开关改回文本对话。`;
+    return `${head}\n提示:该提供商未开放图像端点(/images/generations、/images/edits)。请确认 Base URL 指向的是支持生图的网关(可在「设置 → 生图配置」里改用别的图像端点)。`;
   }
   if (status === 429) {
     return `${head}\n提示:触发生图限流。生图按张计费、并发额度通常远低于文本模型,请稍后再试。`;
@@ -1815,6 +1815,20 @@ async function mockChat({ messages, tools, signal, onDelta }: { messages: any[];
   const toolMsgs = turnMsgs.filter((m) => m.role === 'tool');
   // 用户真正说的那句:跳过运行时上下文快照(它以 <runtime_context> 开头,同为用户角色)
   const lastUser = [...messages].reverse().find((m) => m.role === 'user' && !/^<runtime_context>/.test(String(m.content || '').trim()));
+  // 脚本判定专用的"最后一句用户话":轮内送达的通知(子代理结算等)同样是 user 角色,
+  // 它进来之后 lastUser 会变成通知正文 —— 直接拿它判脚本,后续步骤会整段掉回默认脚本。
+  // 这里越过运行时快照与轮内通知,取用户真正说的最后一句。
+  const scriptUser = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m?.role !== 'user') continue;
+      const text = String(m.content || '').trim();
+      if (!text || /^<runtime_context>/.test(text)) continue;
+      if (/后台子代理\s+sa_\w+\s+已完成/.test(text)) continue;
+      return m;
+    }
+    return lastUser;
+  })();
   const ws = extractWorkspace(messages);
   await sleep(80, signal);
 
@@ -1831,6 +1845,75 @@ async function mockChat({ messages, tools, signal, onDelta }: { messages: any[];
     onDelta?.({ kind: 'text', text: '已列出目录,给出结论。' });
     return { content: '结论:目录可读,未发现异常。', toolCalls: [] };
   }
+  // 父代理:用户说"派个子代理边跑边等"时,派发后台子代理**并在同一步继续改文件**(联调用)。
+  // 用来钉死"轮内收到子代理结算通知"这条链路:通知被 steer 进**正在跑的这一轮**(不新开轮),
+  // 前端另起一条 assistant 行承接后续步骤 —— 中间段不该长出收尾产物
+  // (dsh 的 turn-tail 只在该 Turn 末尾发布一次,见 web/src/utils/turnTail.ts)。
+  const wantsSubWhileRunning = /派[个一]?子代理.*(边跑边等|并继续)/.test(String(scriptUser?.content || ''));
+  if (wantsSubWhileRunning) {
+    // 本分支第一步说的那句话:同时充当下一步判断"已经派发过"的闸门
+    const PHASE1_TEXT = '好,我派个子代理去挖,自己接着改文件。';
+    let localWsRunning = '';
+    for (const m of messages) {
+      const mm = m.content?.match?.(/本地工作区: ([^\n]+)/);
+      if (mm) { localWsRunning = mm[1].trim(); break; }
+    }
+    const dirRunning = localWsRunning || ws || '.';
+    // id 必须是全轮唯一的:步骤判据不再看 toolMsgs(见下),每一步都会新发一条工具调用,
+    // 若沿用 `mock_<name>_<toolMsgs.length>` 会与服务端历史里的旧 callId 撞车(配对错乱、历史膨胀)
+    const swSeq = (() => { let n = 0; return () => `${Date.now().toString(36)}${++n}`; })();
+    const mkSw = (name, args) => ({ id: `mock_${name}_${swSeq()}`, name, arguments: JSON.stringify(args) });
+    // 轮内是否已经收到**本次派发的那个子代理**的结算通知:它以 user/message 落进日志
+    // (正文是「后台子代理 sa_… 已完成…」)。不能只看"有没有任何结算通知" ——
+    // 会话历史里的旧通知会让本轮误判成"通知已到",父轮会提前收尾(通知就永远赶不上轮内)。
+    const startedIds = messages
+      .filter((m) => m.role === 'tool' && /started subagent/.test(String(m.content || '')))
+      .map((m) => String(m.content).match(/sa_\w+/)?.[0] || '')
+      .filter(Boolean);
+    const myRunId = startedIds[startedIds.length - 1] || '';
+    const noticeSeen = !!myRunId && messages.some((m) => m.role === 'user'
+      && String(m.content || '').includes(`后台子代理 ${myRunId} 已完成`));
+    // 本轮是否已经派发过:用"自己那句话"当闸门 —— **不能**按 `toolMsgs.length` 判断,
+    // 运行时上下文快照同样是 user 角色,会把本轮已发生的工具消息整段切掉,
+    // 于是每一步都看起来像"第一步"(联调时会反复派发子代理、永远等不到通知)。
+    const dispatched = messages.some((m) => m.role === 'assistant'
+      && String(m.content || '').includes(PHASE1_TEXT));
+    if (!dispatched) {
+      onDelta?.({ kind: 'text', text: PHASE1_TEXT });
+      return {
+        content: PHASE1_TEXT,
+        toolCalls: [
+          mkSw('subagent', {
+            description: '看工作区目录',
+            objective: '列出工作区目录并确认 note.txt 是否存在',
+            scope: '只读本机工作区;不要写文件、不要执行命令',
+            deliverable: '结论 + 证据'
+          }),
+          // 一次写两个:通知万一很快就到(父轮第 2 步就收尾),收尾段的「N 个文件已更改」
+          // 也至少有两个文件,断言不必依赖"父轮多跑了几步"这种时序巧合
+          mkSw('write_local_file', { path: `${dirRunning}/step-1.md`, content: '# step 1\n' }),
+          mkSw('write_local_file', { path: `${dirRunning}/step-2.md`, content: '# step 2\n' })
+        ]
+      };
+    }
+    // 通知还没到就继续干活:序号按"已经写出的 step-*.md 数"递增;上限兜底,防死循环
+    const wroteSteps = messages.filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls)
+      && m.tool_calls.some((c) => c?.function?.name === 'write_local_file'
+        && /step-\d+\.md/.test(String(c.function.arguments || '')))).length;
+    if (!noticeSeen && wroteSteps < 12) {
+      const n = wroteSteps + 1;
+      // 这一步故意慢一点:让父轮在子代理结算时**还在跑** —— 通知因此走 dsh 的 steer(轮内送达),
+      // 而不是"父轮已结束→通知开新轮"那条路;这才是"中间段不该长收尾产物"要验的路径。
+      await sleep(350, signal);
+      return {
+        content: '',
+        toolCalls: [mkSw('write_local_file', { path: `${dirRunning}/step-${n}.md`, content: `# step ${n}\n` })]
+      };
+    }
+    onDelta?.({ kind: 'text', text: '子代理的回执到了,收尾。' });
+    return { content: '子代理的回执到了,收尾。', toolCalls: [] };
+  }
+
   // 父代理:用户明确说"派个子代理"时走一次 subagent 调用(联调用;默认脚本不受影响)
   const wantsSub = /派[个一]?子代理|派发子代理/.test(String(lastUser?.content || ''));
   if (wantsSub) {

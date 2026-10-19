@@ -1,23 +1,24 @@
 // 模型选择器(二级菜单,交互对齐 deepseek-harness 的 ModelSelect):
-// 触发按钮显示当前模型(附推理等级),点击弹出根菜单 = 两行「模型 / 推理等级」,
-// 各自带右箭头下钻:模型 → 按提供商分组(提供商名不可选,模型可选)的完整清单;
-// 推理等级 → 6 档 reasoning_effort 列表。点击外部关闭,Esc 先退回根菜单再关闭。
+// 触发按钮显示当前模型(附推理等级与提供商色点),点击弹出根菜单 = 两行「模型 / 推理等级」,
+// 各自带右箭头下钻:模型 → 按提供商分组(提供商名不可选)的完整清单;
+// 推理等级 → 该模型**支持**的档位(dsh 0.2.1-rc 的 f61d9982f8:每模型可声明支持的档位)。
+// 点击外部关闭,Esc 先退回根菜单再关闭。
 import React, { useEffect, useRef, useState } from 'react';
 import { useLlm } from '../../context/llm-context';
+import { modelSupportedLevels, REASONING_LEVELS } from '../../utils/reasoningLevels';
 import { IconChevronDownOutline14 } from '../icons/icons';
 import './ModelMenu.scss';
 
-// 推理等级 = 模型的 reasoning_effort 参数,共 6 档:
-// Default(不传,用提供方默认)/ Off(关闭思考,thinking.type=disabled)/
-// Low / High / Xhigh / Max。Off 即关闭思考,无需单独的思考开关。
-export const REASONING_LEVELS = [
-  { id: 'default', label: '默认' },
-  { id: 'off', label: '关闭' },
-  { id: 'low', label: '低' },
-  { id: 'high', label: '高' },
-  { id: 'xhigh', label: '较高' },
-  { id: 'max', label: '最高' }
-];
+// 等级清单已迁到 utils/reasoningLevels(设置面板与菜单共用);此处保留再导出,
+// 避免历史调用方(以及"推理等级定义在 ModelMenu"这条注释)失效。
+export { REASONING_LEVELS };
+
+/** 提供商色相:按 id 稳定散列到 0..359,同一提供商在触发按钮/分组标题/模型行里始终同色。 */
+function providerHue(id: string): number {
+  let h = 7;
+  for (const ch of id) h = (h * 31 + (ch.codePointAt(0) ?? 0)) % 360;
+  return h;
+}
 
 interface ModelMenuProps {
   reasoning: string;
@@ -37,6 +38,9 @@ export default function ModelMenu({ reasoning, onChangeReasoning }: ModelMenuPro
 
   const curLevel = REASONING_LEVELS.find((lv) => lv.id === reasoning);
   const curModel = llm.isMock ? 'mock' : llm.effModel;
+  // 当前模型的「支持档位」(缺省 = 全部):菜单只列它支持的那些,见 utils/reasoningLevels
+  const curProvider = llm.userProviders.find((p) => p.id === llm.providerId);
+  const curLevels = modelSupportedLevels(curProvider?.modelConfig?.[curModel]);
   // 当前生效模型是否正是选中项(兼容自定义模型:自定义名命中也算选中)
   const isCur = (pid: string, m: string) =>
     pid === llm.providerId && (llm.model === m || (llm.model === '__custom__' && llm.customModel === m));
@@ -100,6 +104,7 @@ export default function ModelMenu({ reasoning, onChangeReasoning }: ModelMenuPro
         aria-expanded={open}
         onClick={() => { if (open) close(); else { setPane('root'); setOpen(true); } }}
       >
+        <span className="msm-badge" style={{ ['--h' as string]: providerHue(llm.providerId) }} aria-hidden />
         <span className="msm-label">{curModel}</span>
         {curLevel && <span className="msm-effort">{curLevel.label}</span>}
         <span className="msm-arrow"><IconChevronDownOutline14 size={13} /></span>
@@ -129,8 +134,11 @@ export default function ModelMenu({ reasoning, onChangeReasoning }: ModelMenuPro
                 const cur = p.id === llm.providerId;
                 return (
                   <div className="msm-group" key={p.id}>
-                    {/* 提供商名:仅作分组标题,不可选 */}
-                    <div className="msm-group-title">{p.name}</div>
+                    {/* 提供商名:仅作分组标题,不可选;色点让同名模型在不同网关下也能一眼区分 */}
+                    <div className="msm-group-title" data-provider-id={p.id}>
+                      <span className="msm-badge" style={{ ['--h' as string]: providerHue(p.id) }} aria-hidden />
+                      {p.name}
+                    </div>
                     {p.models.length === 0 ? (
                       <div className="msm-empty">无模型(手动输入)</div>
                     ) : p.models.map((m) => (
@@ -139,9 +147,12 @@ export default function ModelMenu({ reasoning, onChangeReasoning }: ModelMenuPro
                         type="button"
                         role="menuitemradio"
                         aria-checked={isCur(p.id, m)}
+                        data-provider-id={p.id}
+                        data-model-id={m}
                         className={`msm-option ${isCur(p.id, m) ? 'on' : ''}`}
                         onClick={() => pickModel(p.id, m)}
                       >
+                        <span className="msm-badge" style={{ ['--h' as string]: providerHue(p.id) }} aria-hidden />
                         <span className="msm-option-name">{m}</span>
                         {isCur(p.id, m) && <span className="msm-check">✓</span>}
                       </button>
@@ -166,7 +177,11 @@ export default function ModelMenu({ reasoning, onChangeReasoning }: ModelMenuPro
           )}
           {pane === 'effort' && (
             <div className="msm-groups">
-              {REASONING_LEVELS.map((lv) => (
+              {/* 只列当前模型支持的档位;声明过档位的模型会多一行说明,免得用户以为菜单缺项 */}
+              {curLevels.length < REASONING_LEVELS.length && (
+                <div className="msm-empty">该模型只声明了 {curLevels.length} 档(可在 AI 配置里修改)</div>
+              )}
+              {curLevels.map((lv) => (
                 <button
                   key={lv.id}
                   type="button"

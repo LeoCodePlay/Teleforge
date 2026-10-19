@@ -57,7 +57,7 @@
 /* 斜杠命令卡片(CommandCard,/compact 等):同样占满对话宽度、左对齐
    (样式参照 harness 的 GenericCommandCard) */
 .msg.command { justify-content: flex-start; align-items: stretch; }
-.bubble { max-width: 78%; min-width: 0; padding: 10px 14px; border-radius: var(--r-md); line-height: 1.6; font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
+.bubble { max-width: 78%; min-width: 0; padding: 10px 14px; border-radius: var(--r-md); line-height: 1.6; font-size: calc(13.5px * var(--chat-scale, 1)); white-space: pre-wrap; word-break: break-word; }
 
 /* 用户气泡:实色淡晕底 + 描边,不再用玻璃材质。
    跟随主题 token,宽度上限占父元素 70% */
@@ -65,13 +65,6 @@
   max-width: 70%;
   background: var(--accent-fill);
   color: var(--text); border-top-right-radius: var(--r-sm);
-}
-/* 目标自动续跑轮的行头(移植自 harness goal-round-driver 的轮次提示):
-   这条用户消息不是人打的,标清楚是哪一轮,避免被误读成用户自己发的指令 */
-.goal-round-tag {
-  margin-bottom: 6px; padding-bottom: 5px;
-  border-bottom: 1px dashed var(--accent-border);
-  color: var(--accent-2); font-size: 11.5px; font-weight: 600;
 }
 /* @ 文件/文件夹引用:气泡里折叠成 @文件名,用与输入框同款 accent 淡底标记引用关系
    (完整路径挂在 title 上,悬停可见) */
@@ -94,8 +87,9 @@
   white-space: normal;
   padding: 2px 4px;
   /* 正文尺寸与行高对齐 dsh(14px / 24px),而不是沿用 .bubble 的 13.5/1.6(21.6px)。
-     助手正文是"文档",不是气泡里的短句,行距更疏、字号回到基准。 */
-  font-size: 14px; line-height: 24px;
+     助手正文是"文档",不是气泡里的短句,行距更疏、字号回到基准。
+     字号走 --chat-scale(设置页/快捷键调整),行高按同倍率放大,否则大字号会挤成一团。 */
+  font-size: calc(14px * var(--chat-scale, 1)); line-height: calc(24px * var(--chat-scale, 1));
 }
 /* 过程流间距照搬 dsh ChatView.module.css 的 --dsh-chat-flow-gap:
    过程行之间 6px;助手回复段与相邻项 12px;整轮过程控件(.pf)前后 16px。
@@ -315,10 +309,10 @@
 .retry-msg .retry-detail-label { color: var(--muted); }
 .msg.notice { justify-content: center; }
 .md { white-space: normal; }
-.md code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; border: 1px solid var(--code-bor); color: var(--code-ink); }
+.md code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: calc(12.5px * var(--chat-scale, 1)); border: 1px solid var(--code-bor); color: var(--code-ink); }
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 10px 0 6px; line-height: 1.3; }
-.md h1 { font-size: 17px; } .md h2 { font-size: 16px; } .md h3 { font-size: 15px; }
-.md h4, .md h5, .md h6 { font-size: 14px; }
+.md h1 { font-size: calc(17px * var(--chat-scale, 1)); } .md h2 { font-size: calc(16px * var(--chat-scale, 1)); } .md h3 { font-size: calc(15px * var(--chat-scale, 1)); }
+.md h4, .md h5, .md h6 { font-size: calc(14px * var(--chat-scale, 1)); }
 .md p { margin: 6px 0; }
 .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
 .md li { margin: 2px 0; }
@@ -329,7 +323,7 @@
   border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 .md blockquote p { margin: 3px 0; }
-.md table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; display: block; max-width: 100%; overflow-x: auto; }
+.md table { border-collapse: collapse; margin: 8px 0; font-size: calc(12.5px * var(--chat-scale, 1)); display: block; max-width: 100%; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--line-soft); padding: 4px 10px; text-align: left; word-break: break-word; }
 .md th { background: var(--code-bg); font-weight: 600; white-space: nowrap; color: var(--code-ink); }
 .md tr:nth-child(even) td { background: var(--fill-1-lo); }
@@ -412,10 +406,10 @@
   background: var(--code-bg-soft); min-width: 0;
   box-shadow: inset 0 1px 0 var(--ins-hl);
 }
-.toolcard-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 11px; font-size: 12.5px; cursor: pointer; user-select: none; min-width: 0; }
+.toolcard-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 11px; font-size: calc(12.5px * var(--chat-scale, 1)); cursor: pointer; user-select: none; min-width: 0; }
 .toolcard-head:hover:not(:disabled) { color: var(--accent-2); }
 .toolcard-head b { color: var(--accent-2); }
-.toolcard pre { border-top: 1px solid var(--line-soft); margin: 0; max-width: 100%; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.toolcard pre { border-top: 1px solid var(--line-soft); margin: 0; max-width: 100%; max-height: 240px; overflow: auto; font-size: calc(12px * var(--chat-scale, 1)); line-height: 1.5; padding: 8px 10px; border-radius: 0 0 var(--r-sm) var(--r-sm); }
 .toolcard pre.args { color: var(--muted); max-height: 140px; }
 .toolcard pre.res.err { color: var(--err-text); }
 .toolcard pre.pending { color: var(--muted); border-top: none; }
@@ -429,7 +423,7 @@
 .thinking summary { cursor: pointer; padding: 6px 11px; user-select: none; color: var(--muted); }
 .thinking summary:hover { color: var(--accent-2); }
 .thinking .tf-body { border-top: 1px dashed var(--line-soft); padding: 6px 11px; max-height: 320px; overflow: auto; }
-.thinking .tf-line { font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+.thinking .tf-line { font-family: var(--mono); font-size: calc(12px * var(--chat-scale, 1)); line-height: 1.6; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
 
 /* ---- AI 提问独占聚焦(askPending):只显示提问面板 ----
    挂起提问时隐藏输入框/工具栏/工作区切换/待执行队列/任务计划/消息操作与跳转点,

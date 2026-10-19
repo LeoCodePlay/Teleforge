@@ -7,6 +7,7 @@ import { sessionDot, sessionDotClass, SESSION_DOT_TIP } from '../../utils/sessio
 import { useGroupReorder } from '../../hooks/useGroupReorder';
 import { orderGroups } from '../../utils/sessionGroupOrder';
 import { usesRemoteWorkspace } from '../../utils/sessionLock';
+import { showsInTaskList } from '../../utils/sessionVisibility';
 import { scrollMovesPanel } from '../../utils/scrollClose';
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
@@ -428,9 +429,10 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   // 其他服务器后台运行的会话:connKey 是其他服务器(排除本地模式会话——连接时本地会话
   // 也始终可见,归入本地任务列表),且仅在运行中(服务端只下发运行中的)
   const foreign = scopeKey ? (sessions || []).filter((s) => s.connKey && s.connKey !== scopeKey && s.connKey !== 'local') : [];
-  // 可见会话:仅显示"有对话内容"的(msgCount>0)、正运行中、或当前激活的——
-  // 新建会话(尚未发送首条消息,或服务端自动创建的空会话)不占任务列表位
-  const mine = (sessions || []).filter((s) => !foreign.includes(s) && (s.id === activeId || busyIds.includes(s.id) || (s.msgCount ?? 0) > 0));
+  // 可见会话:仅显示"有对话内容"的(msgCount>0)、曾有过用户消息的(被回退/删除清空)、
+  // 正运行中、或当前激活的——新建会话(尚未发送首条消息,或服务端自动创建的空会话)不占任务列表位;
+  // 回退成空的会话必须留下(内容已回填输入框,列表里没了就再也点不回去),见 utils/sessionVisibility。
+  const mine = (sessions || []).filter((s) => !foreign.includes(s) && showsInTaskList(s, { activeId, busyIds }));
   const foreignLabel = (s: Session) => s.connKey === 'local' ? '本地工作区' : String(s.connKey || '');
 
   // 分组:远程任务 = 绑定了具体远程工作区目录的会话(按该目录分组);

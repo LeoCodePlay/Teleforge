@@ -29,7 +29,6 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text);
 }
-.goal-rounds { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .goal-actions { display: inline-flex; flex: none; align-items: center; gap: 2px; }
 .goal-icon-btn {
@@ -51,8 +50,3 @@
   border-radius: var(--r-sm); color: var(--text); font-size: 12px; font-family: inherit;
 }
 .goal-edit-input:focus { outline: none; border-color: var(--accent-2); }
-
-/* 窄屏:目标正文优先,轮次计数让位 */
-@media (max-width: 560px) {
-  .goal-rounds { display: none; }
-}

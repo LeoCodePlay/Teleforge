@@ -76,7 +76,9 @@
 .conn-chip.off { color: var(--accent-2); }
 .ws-path { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-2); }
 
-.layout { display: flex; flex: 1; min-height: 0; }
+/* 三栏布局本身也裁掉溢出(同 styles.scss 的 overflow: clip 说明):右栏收起时是整块卸载,
+   但拖宽右栏、标签条横滚等路径仍可能让 .layout 产生横向溢出,这里一并封死。 */
+.layout { display: flex; flex: 1; min-height: 0; overflow: clip; }
 
 /* ---- 左侧栏:实色面板 ---- */
 .sidebar {
@@ -112,7 +114,7 @@ body.resizing * { cursor: col-resize !important; }
 }
 body.splitting { cursor: row-resize; user-select: none; }
 body.splitting * { cursor: row-resize !important; }
-.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: clip; }
 
 /* ---- 标签页条:浏览器式标签(左侧固定页:AI 编程助手/命令台;右侧文件页:可拖拽排序/关闭) ----
    固定段与滚动段分离:固定页永远显示;文件页多时只滚动文件段。
