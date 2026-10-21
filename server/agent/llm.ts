@@ -281,7 +281,9 @@ export class LlmClient {
     // 线上差异全部下沉到 buildXxxBody / parseXxxSse(见文件末尾「协议适配」)。
     // OpenAI 兼容路径要先做消息面的线材预处理与结构校验;其它协议的方言不同,由各自的构建器负责。
     const isOpenAi = this.protocol === 'openai';
-    const requestMessages = isOpenAi ? prepareMessagesForWire(messages, { tools: hasTools, model: this.model }) : messages;
+    const requestMessages = isOpenAi
+      ? prepareMessagesForWire(messages, { tools: hasTools, model: this.model, reasoning })
+      : messages;
     if (isOpenAi) validateMessages(requestMessages); // 发送前校验,避免 400 类结构错误
     // 输出上限:调用方可按本次请求收紧(摘要压缩传 SUMMARY_MAX_TOKENS),否则用模型配置的 maxTokens
     const outMaxTokens = Number(maxTokens) > 0 ? Math.floor(Number(maxTokens)) : this.maxTokens;
@@ -315,6 +317,7 @@ export class LlmClient {
     let lastPartial = false; // 上次失败时是否已流出增量(重试需回滚这段半成品)
     let truncatedRetries = 0; // 「没有结束标记的截断」已重试次数:只给一次机会,避免不认 [DONE] 的提供方白等预算
     let degradedReasoning = false; // 已因「reasoning_content 未完整回传」剥离历史 reasoning 降级重试过一次
+    let reasoningRepaired = false; // 已因「历史缺少 reasoning_content」补齐占位重发过一次
     let emittedChars = 0;    // 本次尝试已通过 onDelta 吐出的字符数(正文/思考/工具参数)
     let attempt = 0;         // 已发起的请求次数(含首次)
     // 已被网关判定不可用(余额/鉴权)的 Key:仅用于最终错误里报告「试过哪几个 Key」,
@@ -478,6 +481,28 @@ export class LlmClient {
             );
           }
         }
+        // 网关要求「历史每一步 assistant 都带 reasoning_content」(实测基元 tokenrhythm 中转:
+        // 400 UNSUPPORTED_FIELD,data.field=messages[N].reasoning_content,N 指向历史里第一条没带
+        // 思考的 assistant)。历史里确实存在没回思考的步骤(中转某些请求不吐 reasoning /
+        // 中途换过模型 / 曾把推理设为关闭),只靠回传已有 reasoning 修不好。
+        // 补齐占位后重发一次;仍被拒就按不可重试收尾 —— 同一份历史再撞 10 次不会有不同结果,
+        // 只会让用户对着"重试延迟"发呆两分钟。
+        if (isOpenAi && REASONING_MISSING_RE.test(rawBody)) {
+          if (!reasoningRepaired) {
+            reasoningRepaired = true;
+            body.messages = backfillReasoningContent(body.messages);
+            lastFailure = { retryable: true, status: res.status, text: `LLM API ${res.status} [model=${this.model}]: ${rawBody}` };
+            lastErr = new LlmRequestError(lastFailure.text, { retryable: true, status: res.status });
+            console.warn(`[llm] ${this.model} 网关要求历史补齐 reasoning_content,已补占位后重试一次`);
+            continue;
+          }
+          throw new Error(
+            `网关要求历史每一步都带 reasoning_content,补齐占位后仍被拒绝(模型 ${this.model})。`
+            + '这通常是因为该会话里有些步骤网关没有返回思考内容;'
+            + '可把推理等级设为「关闭」后重发,或新建会话(原会话历史不会丢失)。'
+            + `\n网关原文:${rawBody.slice(0, 300)}`
+          );
+        }
         // 网关以「历史 reasoning_content 未完整回传」拒绝(DeepSeek thinking mode 400):
         // 历史中确实存在没有 reasoning_content 的 assistant 消息(网关漏报 / 早期由非思考模型
         // 产生 / 中途切过模型),只靠回传已有的 reasoning 修不好。降级为「剥离历史里全部
@@ -494,7 +519,7 @@ export class LlmClient {
           continue;
         }
         if (isOpenAi && /reasoning_content/i.test(text)) {
-          text += '\n提示:DeepSeek 思考模式要求历史完整回传 reasoning_content(已尝试剥离历史 reasoning 自动重试)。若仍失败,请清空当前会话历史,或把推理等级设为 off(关闭思考)。';
+          text += '\n提示:DeepSeek 思考模式要求历史完整回传 reasoning_content(已尝试自动修复历史 reasoning)。若仍失败,请清空当前会话历史,或把推理等级设为 off(关闭思考)。';
         }
         // 纯图像端点模型被误当文本模型使用:网关会明确拒绝(503 "only supported on
         // /v1/images/...")。这是配置级错误,重试只会白等并给出同样结论,
@@ -548,6 +573,24 @@ export class LlmClient {
         const bodyKind: KeyUnusableKind | null = isBalanceError(undefined, errText(e)) ? 'balance'
           : (isAuthError(undefined, errText(e)) ? 'auth' : null);
         if (bodyKind && markUnusableAndRotate(bodyKind, errText(e))) continue;
+        // 同一条「历史缺少 reasoning_content」也可能被网关包在 200 的流里返回:
+        // 与 HTTP 分支同一套处理(补占位重发一次,仍失败就停止),别在这里白撞 10 次。
+        if (isOpenAi && REASONING_MISSING_RE.test(errText(e))) {
+          if (!reasoningRepaired) {
+            reasoningRepaired = true;
+            body.messages = backfillReasoningContent(body.messages);
+            lastFailure = { retryable: true, text: `LLM API 返回:${errText(e).slice(0, 500)}` };
+            lastErr = new LlmRequestError(lastFailure.text, { retryable: true });
+            console.warn(`[llm] ${this.model} 网关要求历史补齐 reasoning_content(流内错误),已补占位后重试一次`);
+            continue;
+          }
+          throw new Error(
+            `网关要求历史每一步都带 reasoning_content,补齐占位后仍被拒绝(模型 ${this.model})。`
+            + '这通常是因为该会话里有些步骤网关没有返回思考内容;'
+            + '可把推理等级设为「关闭」后重发,或新建会话(原会话历史不会丢失)。'
+            + `\n网关原文:${errText(e).slice(0, 300)}`
+          );
+        }
         // 流中断:无论有没有吐出过内容都重试。吐过内容的这次尝试整体作废
         // (onRetry 带 discard,上层丢弃半成品并回滚前端显示),历史里不会留下残句。
         lastErr = e;
@@ -944,6 +987,31 @@ const IMAGES_ONLY_RE = /only supported on\s+\S*\/images\/(generations|edits)/i;
 // (DeepSeek thinking mode 官方 400:The `reasoning_content` in the thinking mode must be passed back to the API.)
 const REASONING_PASSBACK_RE = /reasoning_content[\s\S]{0,160}?(passed back|thinking mode)|(passed back|thinking mode)[\s\S]{0,160}?reasoning_content/i;
 
+// 网关要求「历史每一步 assistant 都带 reasoning_content」的错误文案特征
+// (实测基元 tokenrhythm:400 {"code":"UNSUPPORTED_FIELD","data":{"field":"messages[16].reasoning_content"},
+//  message:"历史消息缺少 reasoning_content,当前可用路线无法继续工具调用"——
+//  data.field 指的就是历史里第一条没带思考的 assistant 消息下标)
+const REASONING_MISSING_RE = /UNSUPPORTED_FIELD[\s\S]{0,300}reasoning_content|(缺少|缺失|missing)[\s\S]{0,40}reasoning_content|reasoning_content[\s\S]{0,40}(缺少|缺失|missing)/i;
+
+// 补齐历史时写进 reasoning_content 的占位文案:字段必须非空 ——
+// 网关既查「字段在不在」,也可能查「是不是空串」,给个可读的短句一次过。
+// 它只是历史里的一段思考文本,不会展示给用户。
+const REASONING_PLACEHOLDER = '(该步未返回思考内容)';
+
+/**
+ * 给缺 reasoning_content 的 assistant 历史补占位(其余消息原样返回)。
+ * 用于「思考模式下历史必须逐步带 reasoning」的网关:历史里只要有一条缺失,
+ * 整条会话之后每次请求都会被 400 拒绝(messages[N].reasoning_content),
+ * 而缺失原因(中转没吐思考 / 换过模型 / 曾关闭推理)已经无从追回,只能补齐。
+ */
+function backfillReasoningContent(messages: any[]): any[] {
+  return messages.map((m) => {
+    if (!m || typeof m !== 'object' || m.role !== 'assistant') return m;
+    if (typeof m.reasoning_content === 'string' && m.reasoning_content.trim()) return m;
+    return { ...m, reasoning_content: REASONING_PLACEHOLDER };
+  });
+}
+
 /** 剥离单条消息的 reasoning_content(仅用于「请求不带 tools」的路径:上游会忽略,剥离省 token) */
 function stripReasoningForWire(m: any): any {
   if (!m || typeof m !== 'object') return m;
@@ -961,15 +1029,20 @@ function dropReasoningContent(m: any): any {
 }
 
 /**
- * 发送前的 reasoning_content 处理(DeepSeek thinking_mode 官方规则):
+ * 发送前的 reasoning_content 处理(DeepSeek thinking_mode 官方规则 + 中转的更强要求):
  * - 请求带 tools:历史里所有 assistant 轮次(含未发生工具调用的纯文本轮次)的 reasoning_content
  *   都必须完整回传,否则上游 400「reasoning_content ... must be passed back to the API」;
- *   因此对 DeepSeek 系模型原样放行,一条都不剥。
+ *   因此对 DeepSeek 系模型原样放行。其中 v4 显式开启思考时,还要**补齐**历史里缺失的那些
+ *   (中转不会每次请求都回思考,缺一条就会让整条会话此后每次都 400:UNSUPPORTED_FIELD
+ *   messages[N].reasoning_content),补齐占位即可继续。
  * - 请求不带 tools:reasoning_content 会被上游忽略,剥离省 token。
  * 非 DeepSeek 提供方对未知字段的容忍度不一,维持原有的「只留 tool_calls 轮」剥离行为。
  */
-function prepareMessagesForWire(messages: any[], { tools, model }: { tools: boolean; model: string }): any[] {
-  if (tools && isDeepSeek(model)) return messages;
+function prepareMessagesForWire(messages: any[], { tools, model, reasoning }: { tools: boolean; model: string; reasoning: string }): any[] {
+  if (tools && isDeepSeek(model)) {
+    // reasoning === 'off' 时不发 thinking,补齐占位反而会凭空造出思考历史
+    return isDeepSeekV4(model) && reasoning !== 'off' ? backfillReasoningContent(messages) : messages;
+  }
   return messages.map(stripReasoningForWire);
 }
 

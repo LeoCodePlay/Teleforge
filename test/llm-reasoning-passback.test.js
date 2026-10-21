@@ -1,4 +1,5 @@
-// 回归:DeepSeek thinking_mode 的 reasoning_content 回传规则 + 「未回传」400 的自动降级重试。
+// 回归:DeepSeek thinking_mode 的 reasoning_content 回传规则、「未回传」400 的自动降级重试,
+// 以及「历史缺 reasoning_content」网关(基元等中转:UNSUPPORTED_FIELD)的补齐 + 一次性修复重试。
 // 真实链路:LlmClient(真 fetch + 真 SSE 解析 + 真重试)。断言的是实际发到网关的请求体。
 process.env.LLM_RETRY_BASE_DELAY_MS = '10';
 process.env.LLM_RETRY_MAX_DELAY_MS = '30';
@@ -88,6 +89,68 @@ console.log('== 「reasoning_content 未回传」400 自动降级重试 ==');
   check('网关共收到 2 次请求(自动重试)', seen.length === 2, String(seen.length));
   check('第 2 次请求剥离了全部 reasoning_content', seen[1].messages.every((m) => !m || !('reasoning_content' in m)), JSON.stringify(seen[1].messages.map((m) => m.reasoning_content)));
   check('降级重试后本轮正常拿到回复', res.content === '降级后跑通', JSON.stringify(res));
+}
+
+// 历史里有一轮 assistant 没带 reasoning_content(中转某些请求不吐思考 / 中途换过模型 /
+// 曾关闭推理)。思考模式下网关会拿 messages[N].reasoning_content 拒绝整条会话。
+const HISTORY_MISSING = () => {
+  const h = HISTORY();
+  h[3] = { role: 'assistant', content: '北京晴。' }; // 纯文本轮:reasoning 缺失
+  return h;
+};
+
+console.log('== 思考模式发请求前补齐缺失的 reasoning_content ==');
+{
+  const body = await run('deepseek-v4.1-flash', TOOLS);
+  check('参照:完整历史不受影响(原样回传)', body.messages[3].reasoning_content === '已有工具结果,直接回答。');
+}
+{
+  seen = [];
+  script = [{ type: 'ok', text: '好' }];
+  const llm = new LlmClient({ baseUrl, apiKey: 'k', model: 'deepseek-v4.1-flash' });
+  await llm.chat({ messages: HISTORY_MISSING(), tools: TOOLS, onDelta: () => {} });
+  const assistants = seen[0].messages.filter((m) => m.role === 'assistant');
+  check('DeepSeek v4 + tools:缺失的历史被补成非空 reasoning_content',
+    assistants.every((m) => typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0),
+    JSON.stringify(assistants.map((m) => m.reasoning_content)));
+  check('补齐不覆盖已有的真实思考', assistants[0].reasoning_content === '调用 get_weather。', JSON.stringify(assistants[0]));
+}
+{
+  seen = [];
+  script = [{ type: 'ok', text: '好' }];
+  const llm = new LlmClient({ baseUrl, apiKey: 'k', model: 'deepseek-v4.1-flash' });
+  await llm.chat({ messages: HISTORY_MISSING(), tools: TOOLS, reasoning: 'off', onDelta: () => {} });
+  const assistants = seen[0].messages.filter((m) => m.role === 'assistant');
+  check('推理等级 off(不发 thinking)时不凭空补思考历史',
+    !('reasoning_content' in assistants[1]), JSON.stringify(assistants[1]));
+}
+
+console.log('== 网关以 UNSUPPORTED_FIELD 拒绝「历史缺 reasoning_content」==');
+const MISSING_ERR = JSON.stringify({
+  code: 'UNSUPPORTED_FIELD',
+  message: '历史消息缺少 reasoning_content，当前可用路线无法继续工具调用；请保留原始推理内容，或开启新会话。',
+  data: { field: 'messages[1].reasoning_content' }
+});
+{
+  seen = [];
+  script = [{ type: 'status', code: 400, body: MISSING_ERR }, { type: 'ok', text: '补齐后跑通' }];
+  // deepseek-flash 不是 v4:不会在发送前补齐,专门验证「失败后补占位再发一次」的兜底路径
+  const llm = new LlmClient({ baseUrl, apiKey: 'k', model: 'deepseek-flash' });
+  const res = await llm.chat({ messages: HISTORY(), tools: TOOLS, onDelta: () => {} });
+  check('共 2 次请求(补占位后只重试一次)', seen.length === 2, String(seen.length));
+  check('第 2 次请求每一步 assistant 都带 reasoning_content',
+    seen[1].messages.filter((m) => m.role === 'assistant').every((m) => typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0),
+    JSON.stringify(seen[1].messages.filter((m) => m.role === 'assistant').map((m) => m.reasoning_content)));
+  check('补齐后本轮正常拿到回复', res.content === '补齐后跑通', JSON.stringify(res));
+}
+{
+  seen = [];
+  script = [{ type: 'status', code: 400, body: MISSING_ERR }, { type: 'status', code: 400, body: MISSING_ERR }];
+  const llm = new LlmClient({ baseUrl, apiKey: 'k', model: 'deepseek-flash' });
+  let err = null;
+  try { await llm.chat({ messages: HISTORY(), tools: TOOLS, onDelta: () => {} }); } catch (e) { err = e; }
+  check('补齐后仍被拒:不再撞满 10 次(只发 2 次)', seen.length === 2, String(seen.length));
+  check('错误里给出可操作指引(关闭推理 / 新建会话)', /推理等级|新建会话/.test(String(err?.message)), String(err?.message));
 }
 
 server.close();
