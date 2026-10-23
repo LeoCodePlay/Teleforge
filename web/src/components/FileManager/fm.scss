@@ -19,7 +19,6 @@
 .crumb-sep { color: var(--muted); user-select: none; }
 /* 路径编辑输入框(点当前级面包屑进入,替代面包屑行):与工具栏同高(border-box 含边框),进出编辑零高度变化 */
 .fm-path-edit { flex: 1; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; font-size: 12.5px; }
-.fm-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 操作行(上级/刷新/上传/传到本地):原内联 margin-top 收敛到类上;
    窄侧栏下允许换行,保证所有操作按钮完整可见 */
 .fm-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 8px; }
@@ -42,6 +41,49 @@
   flex: 1; min-height: 72px; overflow-x: hidden; overflow-y: auto;
 }
 .fmlist:focus { outline: none; }
+
+/* 列表 + 状态栏占位。状态栏固定在提示行下面(列表之外):
+   放在列表上方会随出现/消失把列表整体推上推下;悬浮在列表里又会挡住文件。 */
+.fm-listwrap { position: relative; display: flex; flex: 1; min-height: 0; }
+.fm-listwrap > .fmlist { flex: 1; min-width: 0; }
+
+/* 底部提示行 */
+.fm-hint { padding-top: 6px; line-height: 1.4; }
+
+/* ---- 底部状态栏:高度写死,任何状态(进度 / 结果 / 报错)出现都不改变布局 ---- */
+.fm-statusbar { position: relative; flex: none; margin-top: 2px; }
+.fm-status-row {
+  display: flex; align-items: center; gap: 6px;
+  height: 18px; overflow: hidden;
+  font-size: 11.5px; color: var(--muted);
+}
+.fm-status-row[data-clickable] { cursor: pointer; }
+.fm-status-row[data-clickable]:hover { color: var(--text-2); }
+.fm-status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-status-text.err { color: var(--red); }
+/* 右端:圆圈进度 + 百分比(悬浮显示正在上传的文件名,由 data-tip 提供) */
+.fm-ring-wrap { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
+.fm-ring { display: block; transform: rotate(-90deg); }
+.fm-ring-track { fill: none; stroke: var(--progress-track); stroke-width: 2; }
+.fm-ring-bar {
+  fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  transition: stroke-dashoffset .2s;
+}
+/* 无总量(删除项数未知)时用转圈表示"还在跑" */
+.fm-ring.indet { animation: fm-spin .9s linear infinite; }
+.fm-ring.indet .fm-ring-bar { stroke-dasharray: 10 40; }
+.fm-ring-pct { font-size: 11px; font-variant-numeric: tabular-nums; }
+.fm-caret { flex: none; font-size: 9px; opacity: .75; }
+/* 展开的详情:绝对定位浮在状态栏上方,展开/收起不改变面板高度,也不推挤列表 */
+.fm-status-detail {
+  position: absolute; left: 0; right: 0; bottom: 100%; z-index: 5;
+  max-height: 200px; overflow: auto; margin-bottom: 4px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--pop-bg); box-shadow: var(--glass-shadow);
+  font-size: 11.5px; line-height: 1.5; color: var(--text-2);
+  white-space: pre-wrap; word-break: break-word;
+}
+.fm-status-detail-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .fmph { padding: 14px 12px; }
 .fmrow {
   position: relative; /* 作为重命名输入框(绝对定位覆盖整行)的定位基准 */
@@ -90,25 +132,6 @@
 .fmrow.nav-loading { background: var(--accent-soft); }
 @keyframes fm-spin { to { transform: rotate(360deg); } }
 
-/* 上传进度 */
-.progress { height: 5px; background: var(--progress-track); border-radius: 3px; margin: 6px 0; overflow: hidden; }
-.progress-bar {
-  height: 100%; border-radius: 3px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  transition: width .2s;
-}
-/* 删除/未知总量:不确定进度条(左右流动) */
-.progress-bar.indet {
-  width: 40%;
-  background: linear-gradient(90deg, var(--accent) 25%, var(--accent-2) 50%, var(--accent) 75%);
-  background-size: 200% 100%;
-  animation: indet-slide 1.2s linear infinite;
-}
-@keyframes indet-slide {
-  from { background-position: 200% 0; }
-  to   { background-position: -200% 0; }
-}
-
 /* 多选模式开关:仅触屏设备显示(桌面有 Ctrl/Shift 多选,按钮不渲染出来占位置)。
    这里**不挂共享的 .icon-btn**:styles.scss 的 `button.icon-btn` 是「元素+class」权重,
    比 `.fm-select-toggle` 单个 class 高,会把 display:none 顶掉 —— 桌面端就冒出这个按钮。
@@ -135,6 +158,8 @@
     background: var(--accent-soft);
   }
   .fm-selbar button { min-height: 40px; }
+  /* 状态栏在触屏上也要好点:行高加到 26px */
+  .fm-status-row { height: 26px; font-size: 12px; }
 }
 @media (hover: none) and (pointer: coarse) {
   .fmrow { -webkit-touch-callout: none; }

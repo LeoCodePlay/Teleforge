@@ -11,9 +11,13 @@
 // 纯文本模型无法内联看图,而带 ref 的快照能精确点击/输入,比像素坐标稳得多。
 import { browserManager, defaultBrowserIdFor, normalizePreviewUrl, ownerFromBrowserId } from '../core/browser-manager.ts';
 import { nativeAvailable, nativeInventory, nativeOpsFor, previewOps, sessionNativeTarget } from './browser-backends.ts';
+import { egoOps } from './ego-backend.ts';
 import type { BrowserOps } from './browser-backends.ts';
 import { resolvePreviewUrl } from '../core/port-tunnel.ts';
 import { saveAttachment, attachmentUrl } from '../store/attachments-store.ts';
+import { rememberLearning, listLearnings, forgetLearning, learningHint } from '../core/browser-memory.ts';
+import { auditBrowser } from '../core/browser-audit.ts';
+import type { BatchStep } from '../core/browser-manager.ts';
 import type { ToolDef } from './registry.ts';
 
 /** 兜底会话 id:没有会话上下文(如旧路径直接调用工具)时,行为与旧版共享预览一致 */
@@ -89,7 +93,8 @@ function resolveBrowserId(args: any, invokeCtx: any, opts: { preferOwn?: boolean
 
 /** 真机浏览器相关的工具参数说明(所有 browser_* 工具共用) */
 const TARGET_DESC = '作用在哪个浏览器上:auto(默认)= 有扩展连接就用本机真机浏览器,否则用内置预览;'
-  + 'native = 强制真机浏览器(未连接会直接报错);preview = 强制内置预览浏览器';
+  + 'native = 强制真机浏览器(未连接会直接报错);preview = 强制内置预览浏览器;'
+  + 'ego = 用 ego(lite) 浏览器(需本机安装了 ego lite,任务跑在它自己的 Space 里)';
 /** 同时开着多台真机浏览器(Chrome + Edge)时,用这个参数指定操作哪一台 */
 const BROWSER_DESC = '真机浏览器实例:填内核名 chrome / edge,或填连接 id(结果里 browsers[].id;'
   + '两台都是同款浏览器时用它区分)。省略 = 本对话已绑定的那台,其次默认目标那台。'
@@ -108,6 +113,10 @@ function resolveOps(args: any, ctx: any, opts: { preferOwn?: boolean } = {}): Br
   const want = String(args?.target || '').trim().toLowerCase();
   const rawBrowserId = String(args?.browser_id || '').trim();
   const browserHint = String(args?.browser || '').trim();
+  // ego(lite) 必须显式指定:机器上装了 ego 不代表用户想让 AI 用它
+  if (want === 'ego' || rawBrowserId.startsWith('ego:')) {
+    return egoOps({ sid: callerSid(ctx), url: args?.url });
+  }
   const forceNative = want === 'native' || rawBrowserId.startsWith('native:') || !!browserHint;
   const forcePreview = want === 'preview';
   if (!forcePreview && (forceNative || nativeAvailable())) {
@@ -148,6 +157,7 @@ function resolveOps(args: any, ctx: any, opts: { preferOwn?: boolean } = {}): Br
 
 /** 工具结果里回带的"我现在能操作哪些浏览器目标":真机列标签,预览列预览 */
 function inventoryMeta(sid: string | null, kind: string): Record<string, unknown> {
+  if (kind === 'ego') return { backend: 'ego' };
   return kind === 'native' ? nativeInventory() : previewInventoryMeta(sid);
 }
 
@@ -156,14 +166,29 @@ function browserMeta(extra: Record<string, unknown> = {}) {
   return { card: 'browser', ...extra };
 }
 
+/**
+ * 动作回执:默认只回"现在在哪",不再每步附带一份全量快照。
+ * 快照是 token 大头(单份 2~5k),而"点完要不要再看页面"模型自己知道 —— 要看就显式 snapshot。
+ */
+function receipt(st: { url?: string; title?: string } | null | undefined, snap?: string): string {
+  const line = `\n当前页面:${st?.url || '(未知地址)'}${st?.title ? ` 「${st.title}」` : ''}`;
+  if (snap) return `${line}\n\n${snap}`;
+  return `${line}\n(需要看页面时调用 browser_snapshot;连续多步请用 browser_batch 一次跑完)`;
+}
+
 async function openTarget(args: any, { emit, sid: callSid }: any) {
   const raw = String(args?.url || '').trim();
   if (!raw) throw new Error('url 不能为空,请给出形如 http://localhost:5173 的项目地址');
   // 真机浏览器:直接开新标签,不走 resolvePreviewUrl —— 端口探测与 SSH 隧道是内置预览的能力,
   // 用户自己的浏览器访问的就是他这台机器的 localhost。
   const ops = resolveOps(args, { sid: callSid }, { preferOwn: true });
-  if (ops.kind === 'native') {
+  if (ops.kind === 'ego') {
+    // ego(lite) 是用户本机的浏览器:和真机一样不走端口探测/SSH 隧道
     const st = await ops.openUrl(raw);
+    return { target: { url: raw, direct: raw, tunneled: false, note: null }, id: ops.id, state: st, ops };
+  }
+  if (ops.kind === 'native') {
+    const st = await ops.openUrl(raw, { focus: args?.focus === true });
     return { target: { url: raw, direct: raw, tunneled: false, note: null }, id: ops.id, state: st, ops };
   }
   const tunnel = args?.tunnel === true ? true : args?.tunnel === false ? false : undefined;
@@ -215,9 +240,11 @@ export const browserToolDefs: ToolDef[] = [
         browser_id: { type: 'string', description: '预览标签 id;省略 = 本会话自己的预览(同一会话里已开多个预览时按打开顺序取第一个)。'
           + '同一会话可多开预览:传一个新的 id(如 "<会话id>:2")即可新开一个' },
         tunnel: { type: 'boolean', description: '是否强制走 SSH 隧道映射远程端口;省略=回环地址且已连 SSH 时自动隧道' },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
+        focus: { type: 'boolean', description: '真机浏览器:是否把新标签切到前台并抢焦点。默认 false(不打断用户);'
+          + '需要用户看着 AI 操作时传 true' },
         width: { type: 'integer', description: '视口宽度,默认 1280' },
         height: { type: 'integer', description: '视口高度,默认 800' }
       },
@@ -243,7 +270,7 @@ export const browserToolDefs: ToolDef[] = [
         head.push(ops.kind === 'native' ? '已在本机浏览器里打开该标签,用户能直接看到。' : '用户已能在「浏览器预览」标签里看到该页面。');
       }
       return {
-        content: head.join('\n') + '\n\n' + snap,
+        content: head.join('\n') + '\n\n' + snap + learningHint(state.url),
         meta: browserMeta({
           backend: ops.kind, browserId: id, url: state.url, direct: target.direct,
           tunneled: target.tunneled, note: target.note || null, title: state.title,
@@ -255,15 +282,23 @@ export const browserToolDefs: ToolDef[] = [
 
   {
     name: 'browser_snapshot',
-    description: 'Return a structured text snapshot of the current browser preview page: interactive elements with '
-      + 'stable refs (e[n]), headings and a body-text excerpt. Call it before clicking/typing to see what is on '
-      + 'the page; refs are refreshed on every snapshot and may become stale after the page re-renders.',
+    description: 'Return a structured text snapshot of the page: interactive elements with STABLE refs (like e3f9a — '
+      + 'the same element keeps its ref across snapshots), headings as structure, open shadow DOM content, and '
+      + 'sub-frames (refs there look like f1:e3f9a and are clickable the same way). '
+      + 'Call it before clicking/typing to choose a target. Default scope is the viewport; pass scope=full_page for '
+      + 'the whole page, or scope=subtree + root=<ref> to zoom into one region. Body text is NOT included by default '
+      + '(pass text=2000 only when you actually need the prose) — this keeps snapshots small.',
     parameters: {
       type: 'object',
       properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
-        tab_id: { type: 'integer', description: TAB_ID_DESC }, }
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
+        scope: { type: 'string', enum: ['viewport', 'full_page', 'subtree'], description: '看多大范围:viewport(默认,当前视口)/ full_page(整页)/ subtree(只看 root 那棵子树)' },
+        root: { type: 'string', description: 'scope=subtree 时的根:快照里的 ref(如 e3f9a)或 CSS 选择器' },
+        text: { type: 'integer', description: '附带多少字正文(默认 0=不带)。需要读文章/表格内容时再传,例如 2000' },
+        max: { type: 'integer', description: '节点上限,默认 160(最大 400)' },
+        frames: { type: 'boolean', description: '是否连子框架一起抓(默认 true,最多 6 个)' }, }
     },
     access: 'read',
     timeoutMs: 30_000,
@@ -271,7 +306,9 @@ export const browserToolDefs: ToolDef[] = [
       const sid = callerSid(ctx);
       const ops = resolveOps(args, ctx);
       const id = ops.id;
-      const snap = await ops.snapshot();
+      const snap = await ops.snapshot({
+        scope: args?.scope, root: args?.root, text: args?.text, max: args?.max, frames: args?.frames !== false
+      });
       const st = ops.state();
       return {
         content: snap,
@@ -288,7 +325,7 @@ export const browserToolDefs: ToolDef[] = [
       properties: {
         url: { type: 'string', description: '目标地址' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
         tunnel: { type: 'boolean', description: '是否强制走 SSH 隧道;省略=自动' }
@@ -331,16 +368,19 @@ export const browserToolDefs: ToolDef[] = [
 
   {
     name: 'browser_click',
-    description: 'Click an element in the browser preview page. Prefer ref from browser_snapshot (e.g. ref="e3"); '
-      + 'selector (CSS) or text (visible label) are also accepted. Returns an updated snapshot.',
+    description: 'Click an element. Prefer ref from browser_snapshot (e.g. ref="e3f9a"; sub-frame refs look like '
+      + '"f1:e3f9a"). selector (CSS) or text (visible label) are also accepted. '
+      + 'Returns a short receipt (result + current url/title) instead of a full snapshot: call browser_snapshot when '
+      + 'you need to see the page again, pass snapshot=true to include it here, or put the whole flow in browser_batch.',
     parameters: {
       type: 'object',
       properties: {
-        ref: { type: 'string', description: 'browser_snapshot 返回的元素引用,如 e3' },
+        ref: { type: 'string', description: 'browser_snapshot 返回的元素引用,如 e3f9a(子框架里的是 f1:e3f9a)' },
         selector: { type: 'string', description: 'CSS 选择器(与 ref/text 三选一)' },
         text: { type: 'string', description: '可见文本,匹配第一个包含它的元素' },
+        snapshot: { type: 'boolean', description: '结果里是否附带完整快照(默认 false)' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
@@ -353,10 +393,10 @@ export const browserToolDefs: ToolDef[] = [
       const ops = resolveOps(args, ctx);
       const id = ops.id;
       const msg = await ops.click({ ref: args?.ref, selector: args?.selector, text: args?.text });
-      const snap = await ops.snapshot().catch(() => '');
+      const snap = args?.snapshot === true ? await ops.snapshot().catch((e) => `(快照失败:${e.message})`) : '';
       const st = ops.state();
       return {
-        content: `${msg}\n\n${snap}`,
+        content: `${msg}${receipt(st, snap)}`,
         meta: browserMeta({ backend: ops.kind, browserId: id, url: st?.url || '', title: st?.title || '', ...inventoryMeta(sid, ops.kind) })
       };
     }
@@ -364,19 +404,20 @@ export const browserToolDefs: ToolDef[] = [
 
   {
     name: 'browser_type',
-    description: 'Type text into an input / textarea / contenteditable in the browser preview page '
-      + '(locate by ref from browser_snapshot, or a CSS selector). Set submit=true to press Enter afterwards. '
-      + 'Returns an updated snapshot.',
+    description: 'Type text into an input / textarea / contenteditable (locate by ref from browser_snapshot, or a CSS '
+      + 'selector). Set submit=true to press Enter afterwards. Returns a short receipt instead of a full snapshot; '
+      + 'pass snapshot=true if you need the page state back.',
     parameters: {
       type: 'object',
       properties: {
-        ref: { type: 'string', description: 'browser_snapshot 返回的元素引用,如 e5' },
+        ref: { type: 'string', description: 'browser_snapshot 返回的元素引用,如 e5a1c(子框架里的是 f1:e5a1c)' },
         selector: { type: 'string', description: 'CSS 选择器(与 ref 二选一)' },
         text: { type: 'string', description: '要输入的文本' },
         clear: { type: 'boolean', description: '是否先清空原有内容,默认 true' },
         submit: { type: 'boolean', description: '输入后是否回车提交,默认 false' },
+        snapshot: { type: 'boolean', description: '结果里是否附带完整快照(默认 false)' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
@@ -393,10 +434,10 @@ export const browserToolDefs: ToolDef[] = [
         ref: args?.ref, selector: args?.selector,
         text: String(args?.text ?? ''), clear: args?.clear, submit: args?.submit === true
       });
-      const snap = await ops.snapshot().catch(() => '');
+      const snap = args?.snapshot === true ? await ops.snapshot().catch((e) => `(快照失败:${e.message})`) : '';
       const st = ops.state();
       return {
-        content: `${msg}\n\n${snap}`,
+        content: `${msg}${receipt(st, snap)}`,
         meta: browserMeta({ backend: ops.kind, browserId: id, url: st?.url || '', title: st?.title || '', ...inventoryMeta(sid, ops.kind) })
       };
     }
@@ -411,7 +452,7 @@ export const browserToolDefs: ToolDef[] = [
       properties: {
         key: { type: 'string', description: '按键名,如 Enter / Tab / Escape / ArrowDown / Control+A' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
@@ -440,7 +481,7 @@ export const browserToolDefs: ToolDef[] = [
         direction: { type: 'string', enum: ['down', 'up'], description: '滚动方向,默认 down' },
         amount: { type: 'integer', description: '滚动像素,默认 600' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
@@ -471,7 +512,7 @@ export const browserToolDefs: ToolDef[] = [
         url: { type: 'string', description: '等待 URL 匹配(支持通配,如 **/dashboard)' },
         timeout_ms: { type: 'integer', description: '超时毫秒,默认 8000,最大 60000' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
@@ -499,8 +540,9 @@ export const browserToolDefs: ToolDef[] = [
       type: 'object',
       properties: {
         full_page: { type: 'boolean', description: '是否整页截图(含滚动区域),默认 false 只截视口' },
+        overlay: { type: 'boolean', description: '是否在截图里叠上最近一次操作的 AI 光标(让人一眼看出 AI 点了哪),默认 false' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       }
@@ -511,7 +553,7 @@ export const browserToolDefs: ToolDef[] = [
       const sid = callerSid(ctx);
       const ops = resolveOps(args, ctx);
       const id = ops.id;
-      const buf = await ops.screenshot({ fullPage: args?.full_page === true });
+      const buf = await ops.screenshot({ fullPage: args?.full_page === true, overlay: args?.overlay === true });
       const st = ops.state();
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const att = await saveAttachment(buf, `浏览器截图-${ts}.png`, 'image/png');
@@ -539,7 +581,7 @@ export const browserToolDefs: ToolDef[] = [
       properties: {
         expression: { type: 'string', description: '要执行的 JS 表达式,如 document.querySelectorAll("li").length' },
         browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC },
       },
@@ -559,13 +601,175 @@ export const browserToolDefs: ToolDef[] = [
   },
 
   {
+    name: 'browser_batch',
+    description: 'Run a whole multi-step flow in ONE call: navigate, click, type, wait, assert, and optionally snapshot '
+      + 'at the end. PREFER THIS over many browser_click/browser_type calls — one round trip instead of one per step, '
+      + 'and you can express "click, wait for X, then read Y" as a single plan. Stops at the first failure by default '
+      + 'and returns one line per step. Refs come from browser_snapshot (sub-frame refs look like "f1:e3f9a"). '
+      + 'ops: navigate|click|type|press|scroll|hover|dblclick|rightClick|select|upload|wait|networkIdle|assert|text|eval|load',
+    parameters: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          description: '按顺序执行的步骤,最多 60 步',
+          items: {
+            type: 'object',
+            properties: {
+              op: { type: 'string', description: 'navigate|click|type|press|scroll|hover|dblclick|rightClick|select|upload|wait|networkIdle|assert|text|eval|load' },
+              ref: { type: 'string', description: '快照里的 ref(可带 fN: 前缀)' },
+              selector: { type: 'string', description: 'CSS 选择器' },
+              text: { type: 'string', description: 'type 的输入内容 / assert 要断言的文字' },
+              url: { type: 'string', description: 'navigate 的地址 / wait 的 URL 通配' },
+              key: { type: 'string', description: 'press 的按键,如 Enter / Control+A' },
+              value: { type: 'string', description: 'select 的值 / eval 的表达式' },
+              label: { type: 'string', description: 'select 按可见文本选择' },
+              files: { type: 'array', items: { type: 'string' }, description: 'upload 的文件绝对路径' },
+              direction: { type: 'string', enum: ['up', 'down'], description: 'scroll 方向' },
+              amount: { type: 'integer', description: 'scroll 像素' },
+              timeoutMs: { type: 'integer', description: 'wait 的超时毫秒' },
+              submit: { type: 'boolean', description: 'type 后回车' },
+              clear: { type: 'boolean', description: 'type 前清空,默认 true' }
+            },
+            required: ['op']
+          }
+        },
+        stopOnError: { type: 'boolean', description: '失败即停,默认 true;false = 继续跑完并逐条报错' },
+        snapshot: { type: 'string', enum: ['always', 'on_error', 'never'], description: '结束后附不附快照,默认 on_error' },
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
+      },
+      required: ['steps']
+    },
+    access: 'write',
+    timeoutMs: 180_000,
+    mutating: true,
+    async run(args, ctx) {
+      const sid = callerSid(ctx);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
+      const steps = normalizeSteps(args?.steps);
+      const policy = args?.snapshot === 'always' || args?.snapshot === 'never' ? args.snapshot : 'on_error';
+      const r = await ops.batch(steps, { stopOnError: args?.stopOnError !== false, snapshot: policy });
+      const lines = r.steps.map((s) => `${s.ok ? '✓' : '✗'} ${s.index}. ${s.op} — ${s.detail}`);
+      const head = r.ok
+        ? `批处理完成:${r.steps.length} 步全部成功`
+        : `批处理在第 ${r.failedAt} 步失败(共 ${r.steps.length} 步,${r.steps.filter((s) => s.ok).length} 步成功)`;
+      const tail = `\n当前页面:${r.url || ''}${r.title ? ` 「${r.title}」` : ''}`;
+      return {
+        content: `${head}\n${lines.join('\n')}${tail}${r.snapshot ? `\n\n${r.snapshot}` : ''}`,
+        meta: browserMeta({
+          backend: ops.kind, browserId: id, url: r.url, title: r.title,
+          batch: { ok: r.ok, failedAt: r.failedAt, steps: r.steps.length },
+          ...inventoryMeta(sid, ops.kind)
+        })
+      };
+    }
+  },
+
+  {
+    name: 'browser_act',
+    description: 'One non-click page action: hover | dblclick | rightClick | select | upload | dialog | console | '
+      + 'networkIdle | text | assert. Use browser_click/browser_type for the common cases, browser_batch for flows. '
+      + 'dialog: set the JS dialog policy (accept=true/false) and see the last dialog; console: read recent page console '
+      + 'and errors; networkIdle: wait until the page stops fetching; text: read page body on demand; '
+      + 'assert: check some text appears (or set accept=false style exists check via value).',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['hover', 'dblclick', 'rightClick', 'select', 'upload', 'dialog', 'console', 'networkIdle', 'text', 'assert'], description: '要执行的动作' },
+        ref: { type: 'string', description: '快照里的 ref(可带 fN: 前缀)' },
+        selector: { type: 'string', description: 'CSS 选择器' },
+        text: { type: 'string', description: 'assert 要检查的文字' },
+        value: { type: 'string', description: 'select 的值' },
+        label: { type: 'string', description: 'select 按可见文本选择' },
+        files: { type: 'array', items: { type: 'string' }, description: 'upload 的文件绝对路径(可多个)' },
+        accept: { type: 'boolean', description: 'dialog:是否自动接受(默认自动关闭)' },
+        max: { type: 'integer', description: 'text:最多读多少字,默认 2000' },
+        timeoutMs: { type: 'integer', description: 'networkIdle 的超时毫秒' },
+        browser_id: { type: 'string', description: BROWSER_ID_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
+        browser: { type: 'string', description: BROWSER_DESC },
+        tab_id: { type: 'integer', description: TAB_ID_DESC },
+      },
+      required: ['action']
+    },
+    access: 'write',
+    timeoutMs: 60_000,
+    mutating: true,
+    async run(args, ctx) {
+      const sid = callerSid(ctx);
+      const ops = resolveOps(args, ctx);
+      const id = ops.id;
+      const action = String(args?.action || '').trim();
+      if (!action) throw new Error('action 不能为空');
+      const params: Record<string, unknown> = {
+        ref: args?.ref, selector: args?.selector, text: args?.text, value: args?.value,
+        label: args?.label, files: args?.files, accept: args?.accept, max: args?.max, timeoutMs: args?.timeoutMs
+      };
+      const msg = await ops.act(action, params);
+      const st = ops.state();
+      return {
+        content: msg,
+        meta: browserMeta({ backend: ops.kind, browserId: id, url: st?.url || '', title: st?.title || '', ...inventoryMeta(sid, ops.kind) })
+      };
+    }
+  },
+
+  {
+    name: 'browser_memory',
+    description: 'Remember what you learned about a site so the next browser_open does not start from zero: '
+      + '"the export button is inside the ⋯ menu", "the row link uses loc=#orders > a:nth-of-type(2)", '
+      + '"login asks for a 2FA code — stop and ask the user". Notes are stored per host and shown automatically on '
+      + 'browser_open. Save only facts you verified in this session; selectors may go stale, so read them as hints.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['save', 'list', 'forget'], description: 'save = 记一条;list = 看这个站的;forget = 删(不传 note 就清空)' },
+        note: { type: 'string', description: 'save 时的经验内容(一句话,300 字以内);forget 时可作为匹配片段' },
+        url: { type: 'string', description: '站点地址(可省略:默认用当前页面;没有浏览器时必须给)' },
+        selector: { type: 'string', description: '可选的稳定选择器(快照里的 loc= 或 CSS)' },
+      },
+      required: ['action']
+    },
+    access: 'write',
+    timeoutMs: 15_000,
+    mutating: true,
+    async run(args, ctx) {
+      const action = String(args?.action || '').trim();
+      let url = String(args?.url || '').trim();
+      if (!url) {
+        try { url = resolveOps(args, ctx).state()?.url || ''; } catch { /* 没有在线浏览器:下面按缺 url 报错 */ }
+      }
+      if (!url) throw new Error('需要 url(当前没有可用的浏览器页面可以推断域名)');
+      if (action === 'list') {
+        const list = listLearnings(url);
+        return {
+          content: list.length
+            ? `这个站记了 ${list.length} 条经验:\n` + list.map((x, i) => `${i + 1}. ${x.note}${x.selector ? `(选择器 ${x.selector})` : ''}`).join('\n')
+            : '这个站还没有记过经验。',
+          meta: browserMeta({ url })
+        };
+      }
+      if (action === 'forget') {
+        const n = forgetLearning(url, String(args?.note || ''));
+        return { content: n ? `已删除 ${n} 条经验` : '没有匹配的经验', meta: browserMeta({ url }) };
+      }
+      const item = rememberLearning(url, String(args?.note || ''), args?.selector ? String(args.selector) : undefined);
+      return { content: `已记下 ${item.host} 的经验:${item.note}`, meta: browserMeta({ url }) };
+    }
+  },
+
+  {
     name: 'browser_close',
     description: 'Close a browser preview tab (frees the underlying page). Do this when the user no longer needs '
       + 'the preview, or before opening a completely unrelated project.',
     parameters: {
       type: 'object',
       properties: { browser_id: { type: 'string', description: BROWSER_ID_DESC },
-        target: { type: 'string', enum: ['auto', 'native', 'preview'], description: TARGET_DESC },
+        target: { type: 'string', enum: ['auto', 'native', 'preview', 'ego'], description: TARGET_DESC },
         browser: { type: 'string', description: BROWSER_DESC },
         tab_id: { type: 'integer', description: TAB_ID_DESC }, }
     },
@@ -591,3 +795,63 @@ export function isBrowserTool(name: string): boolean {
 
 /** 归一化地址的再导出(供 RPC/前端提示复用同一套判定) */
 export { normalizePreviewUrl };
+
+// ---------------- 批量步骤:运行时校验(模型给的东西不能直接信) ----------------
+
+function normalizeSteps(raw: unknown): BatchStep[] {
+  if (!Array.isArray(raw)) throw new Error('steps 必须是数组,每一项形如 {"op":"click","ref":"e3f9a"}');
+  if (!raw.length) throw new Error('steps 不能为空');
+  if (raw.length > 60) throw new Error(`一次最多 60 步(收到 ${raw.length}),拆成多次 browser_batch`);
+  return raw.map((s, i) => {
+    if (!s || typeof s !== 'object') throw new Error(`第 ${i + 1} 步不是对象`);
+    const op = String((s as any).op || '').trim();
+    if (!op) throw new Error(`第 ${i + 1} 步缺少 op`);
+    return { ...(s as any), op } as BatchStep;
+  });
+}
+
+// ---------------- 审计包装:所有 mutating 的浏览器工具自动落一条 ----------------
+
+function auditTarget(args: any): string {
+  if (args?.ref) return `ref=${args.ref}`;
+  if (args?.selector) return `selector=${args.selector}`;
+  if (args?.action) return `action=${args.action}`;
+  if (Array.isArray(args?.steps)) return `steps=${args.steps.length}`;
+  if (args?.url) return `url=${args.url}`;
+  return '';
+}
+
+for (const def of browserToolDefs) {
+  // 站点经验只写本机小文件,不是"对浏览器做了什么",不进浏览器审计
+  if (!def.mutating || def.name === 'browser_memory') continue;
+  const orig = (def as any).run as (a: any, c: any) => Promise<any>;
+  (def as any).run = async (args: any, ctx: any) => {
+    const started = Date.now();
+    try {
+      const r = await orig(args, ctx);
+      auditBrowser({
+        backend: (r?.meta?.backend as 'native' | 'preview') || 'preview',
+        tool: def.name,
+        tabId: typeof r?.meta?.tabId === 'number' ? r.meta.tabId : undefined,
+        url: String(r?.meta?.url || ''),
+        target: auditTarget(args),
+        ok: true,
+        ms: Date.now() - started,
+        textLen: typeof args?.text === 'string' ? args.text.length : undefined,
+        steps: Array.isArray(args?.steps) ? args.steps.length : undefined
+      });
+      return r;
+    } catch (e: any) {
+      auditBrowser({
+        backend: 'preview',
+        tool: def.name,
+        url: '',
+        target: auditTarget(args),
+        ok: false,
+        ms: Date.now() - started,
+        error: String(e?.message || e).slice(0, 300)
+      });
+      throw e;
+    }
+  };
+}

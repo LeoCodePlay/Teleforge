@@ -18,7 +18,7 @@ import type {
 import { canSplit } from './constraints.ts'
 import { createIdMinter, createInitialState, type IdMinter, type TabFactory } from './initial.ts'
 import {
-  activeDockPaneId as dockedActivePane, planAddTab, planDropTab, planDuplicateTab, planFloatTab, planOpenContent, planPlaceTab,
+  activeDockPaneId as dockedActivePane, planAddTab, planClosePane, planDropTab, planDuplicateTab, planFloatTab, planOpenContent, planPlaceTab,
   planResizeSplit, planSetExpanded, planSetMode, planSplitPane, planUnfloatPane,
   type OpenContentInput,
 } from './planner.ts'
@@ -157,6 +157,17 @@ export class DockController {
    */
   splitPane(paneId?: PaneId): boolean {
     return this.run(planSplitPane(this.state, this.mint, paneId, this.makePaneTab))
+  }
+
+  /**
+   * Close a docked pane and the tabs it holds, collapsing its split onto the
+   * surviving sibling.
+   * @param paneId - pane to close; defaults to the active docked pane.
+   * @returns false when the pane is floating or is the last docked pane.
+   */
+  closePane(paneId?: PaneId): boolean {
+    const target = paneId ?? dockedActivePane(this.state)
+    return this.run(planClosePane(this.state, target))
   }
 
   /**

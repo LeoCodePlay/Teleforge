@@ -8,7 +8,9 @@
 .ws-panel .fm-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ws-panel .fm-pane.hide { display: none; }
 .ws-panel .fm { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.ws-panel .fm > :not(.fmlist) { flex: none; }
+/* 只有列表容器吃剩余高度,其余(工具栏/操作行/多选条/提示行)固定高度。
+   注意不是 .fmlist:列表现在包在 .fm-listwrap 里,底部悬浮层要在它内部绝对定位。 */
+.ws-panel .fm > :not(.fm-listwrap) { flex: none; }
 
 /* 移动端(<768):远程/本地 Tab 切换加大触控目标 */
 @media (max-width: 767px) { .fm-tab { min-height: 44px; padding: 8px 12px; } }

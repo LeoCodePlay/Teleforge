@@ -300,3 +300,17 @@
 @media (hover: hover) and (pointer: fine) {
   .ctxmenu .s-group-menu-reorder { display: none; }
 }
+
+/* 三点菜单顶部的会话 ID(dsh 0.2.1-rc 的 668b7f9746:完整展示、可选中)。
+   等宽小字便于逐字符核对;不截断 —— 长 id 折行而不是被省略号吃掉,排障时要的正是完整值。 */
+.ctxmenu .ctx-sid {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  padding: 4px 10px 5px;
+  max-width: 320px;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
+}

@@ -42,7 +42,9 @@ import { matchSlashCommand, insertSlashToken } from '../../utils/slashCommand';
 import { atTokenAt, displayMentionText, restoreMentionInput, serializeMention, splitMentions } from '../../utils/mentionRefs';
 import { mergeHistoryKeepingLiveTurn } from '../../utils/liveTurn';
 import { tailAssistantIndex, applyRetryNotice, isRealUserRow } from '../../utils/compactionOrder';
-import { planTurnFold, fragmentIndexes, startsNewTurn, turnAssistantIndexes, turnStartIndex } from '../../utils/turnTail';
+import { planTurnFold, fragmentIndexes, startsNewTurn, turnAssistantIndexes, turnStartIndex, foldedTextHidden, latestFoldOwner } from '../../utils/turnTail';
+// 过程收起时机(completion / next-input):设置面板与这里共用一份偏好(见 utils/procFold)
+import { currentProcFoldTiming, onProcFoldTimingChange } from '../../utils/procFold';
 import { mergeAttachments, mergeDeliverables } from '../../utils/mergeAttachments';
 import { refreshOverlayScrollbar, setScrollbarHost } from '../../utils/scrollbar-ui';
 import { StateDot } from '../StateDot/StateDot';
@@ -892,6 +894,11 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 回合过程折叠行的展开状态,按消息下标记。默认收起(与 dsh 一致:完成对话后过程是收起来的)。
   // 纯 UI 瞬时状态,不持久化;切换会话/重载历史时按新下标自然复位。
   const [procFoldOpen, setProcFoldOpen] = useState<Record<number, boolean>>({});
+  // 过程收起时机(设置页可选「完成即收起 / 下条消息时收起」—— dsh 的 collapseTiming,
+  // 上游 a0a9aef5ec + 61112eab8f)。它只决定**默认开合**:手动点过折叠行的轮次以
+  // procFoldOpen 里的选择为准,偏好改动即时生效(偏好本身由 utils/procFold 持久化)。
+  const [foldTiming, setFoldTiming] = useState(() => currentProcFoldTiming());
+  useEffect(() => onProcFoldTimingChange(setFoldTiming), []);
   // 本轮开始时刻(毫秒)。与结束事件一起算出「已完成,用时 X」的折叠行文案。
   // 实时路径自己打戳、历史路径用服务端 turn/start→turn/end 的耗时 —— 两者口径一致:
   // 都取"至少 1 秒"(服务端 max(1000, …)),所以刷新前后不会显示成不同的时长。
@@ -3107,6 +3114,9 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
   // 这里按轮算一次:折叠行只挂宿主(轮首那一段),重试行属于"过程内容",折叠闭合时跟着一起收起
   // (dsh 的 model-retry 节点 groupTree: 'process'),展开后仍留在它发生的位置上。
   const foldRows = planTurnFold(messages);
+  // 「下条消息时收起」:最新一轮的过程默认敞着,收到下一条输入(或新一轮 assistant 段出现前)
+  // 后连它一起收 —— 判定见 utils/turnTail.latestFoldOwner(与 dsh 的 next-input 同语义)
+  const latestOwner = foldTiming === 'next-input' ? latestFoldOwner(messages, foldRows) : -1;
 
   return (
     // 根为 fragment:跳转点(chat-dots)渲染在 chatwrap 之外,作为 tab-body 的子元素
@@ -3125,9 +3135,32 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
           {messages.map((m, i) => {
             const fold = foldRows[i] ?? { owner: -1, foldable: false, hasProcess: false, hideWhenFolded: false };
             const foldOwner = fold.owner >= 0 ? fold.owner : i;
-            const foldOpen = fold.foldable ? !!procFoldOpen[foldOwner] : true;
+            const foldOpen = fold.foldable
+              // 手动点过折叠行 → 以那次选择为准;没点过 → 按收起时机(下条消息时收起:最新一轮默认敞着)
+              ? (procFoldOpen[foldOwner] === undefined ? foldOwner === latestOwner : procFoldOpen[foldOwner])
+              : true;
             // 折起来的过程内容(重试提示行)直接不出现:最终结果里只留正文 + 那一句「已完成」
             if (fold.hideWhenFolded && !foldOpen) return null;
+            // dsh 的 flow 会跳过空节点(`:empty` 不参与间距);这里同样不渲染空气泡 ——
+            // 重试分界偶尔留下一条没有任何内容的 assistant 行,留着只会白占一段 14px 外边距。
+            const bubbleEmpty = m.role === 'assistant' && !m.streaming
+              && !(m.segments && m.segments.length)
+              && !(m.attachments && m.attachments.length)
+              && !(m.deliverables && m.deliverables.length)
+              && !(m.filesChanged && m.filesChanged.length)
+              && !m.imageJob;
+            if (bubbleEmpty) return null;
+            // 收起时,同轮里"内容已经全部收进折叠行"的其它段整行不出现。
+            // 只把内容 hidden 起来的话,每条中间段自己的 14px 外边距还在 —— 一轮被两次重试
+            // 拆成三段时,折叠行与最终答案之间就会叠出 30-40px 的空档;dsh 里折叠行到答案固定
+            // 16px,因为那是**一串 flow 节点**,而不是多条各带外边距的消息。
+            const foldedAway = fold.foldable && !foldOpen
+              && fold.owner !== i && fold.answerRow !== i
+              && !(m.attachments && m.attachments.length)
+              && !(m.deliverables && m.deliverables.length)
+              && !(m.filesChanged && m.filesChanged.length)
+              && !m.imageJob;
+            if (foldedAway) return null;
             return (
             <div key={i} className={`msg ${m.source?.form === 'notice' ? 'trigger' : m.role}${m.compaction ? ' compaction-msg' : ''}`} ref={(el) => { userMsgRefs.current[i] = el; }}>
               {m.compaction && (
@@ -3179,10 +3212,14 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                           展开后**完整铺开、不限高、不出滚动条**;
                         内层 ChatGroupSeat = 每个"一段工具活动"一个组头(「已读取文件并修改了文件」)▾,
                           组体限高 min(400px,50vh) 带上下渐隐 —— 与 dsh 逐条一致;
-                        **正文段不参与折叠**:收起时只藏工具活动,回复正文始终可见。 */}
+                        折叠的**过程范围**按 dsh 的 processMember 口径:思考、工具调用,
+                          以及**定稿答案之前的过程叙述正文**都算过程 —— 收起时一起收进去,
+                          只留最终答案那一段(判据见 utils/turnTail 的 foldedTextHidden)。 */}
                     {(() => {
                       const segs = m.segments || [];
                       const units = planGroups(segs);
+                      // 整轮过程收起(本轮每一段的过程内容都听宿主那个折叠行)
+                      const foldHidden = fold.foldable && !foldOpen;
                       // 折叠行只在**宿主**(本轮第一段)上出现:一轮一句「已完成,用时 X」,
                       // 而不是每段各来一句(本轮各段都带着同一个 turnElapsedMs)。
                       const isFoldHost = fold.owner === i;
@@ -3199,16 +3236,18 @@ export default function ChatPanel({ connected, workspace, localWorkspace, remote
                           )}
                           {units.map((u, ui) => {
                             if (u.kind === 'text') {
-                              // 正文段:AssistantSegment 按 text 引用 memo,历史段不变时跳过重渲染
-                              return <AssistantSegment key={`t${u.index}`} text={segs[u.index]?.text || ''} />;
+                              // 正文段:AssistantSegment 按 text 引用 memo,历史段不变时跳过重渲染。
+                              // 过程叙述随整轮折叠一起收起,只有最终答案那一段始终可见 ——
+                              // 否则收起后"工具收起来了、过程中的话还留在外面",还会与总结贴成一段。
+                              return <AssistantSegment key={`t${u.index}`} text={segs[u.index]?.text || ''}
+                                hidden={foldedTextHidden(fold, i, u.index, foldOpen)} />;
                             }
                             // 折叠时**隐藏而不是卸载**:内容留在 DOM 里(与 dsh 的
                             // hidden="until-found" 同效,浏览器页内查找仍能命中),
                             // 展开也不必重建终端/差异卡这些较重的小组件。
                             // 开关是**整轮**的:本轮每一段的过程组都听宿主那个折叠行
                             return (
-                              <div key={`g${ui}`} className="dsh-procslot"
-                                hidden={fold.foldable && !foldOpen ? true : undefined}>
+                              <div key={`g${ui}`} className="dsh-procslot" hidden={foldHidden || undefined}>
                                 {/* 与 dsh 同构的**两层**折叠:外层是整轮控件(「已完成,用时 X」),
                                     内层是过程组自己的组头(「已读取文件并修改了文件」),它的组体
                                     限高 min(400px,50vh) 并自带上下渐隐。

@@ -53,7 +53,18 @@ export function setupWs(httpServer: Server) {
   const browserWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
   // 浏览器扩展桥接通道:用户本机真实浏览器里的扩展反向连到这里(见 core/browser-bridge.ts)。
   // 与 /ws/browser 的区别:那个推的是内置预览的画面帧,这个只走控制指令(真机浏览器用户自己看得见)。
-  const extWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
+  // handleProtocols:新扩展把配对 token 放在子协议里(tf.<token>),服务端必须原样回选,
+  // 否则按 RFC 6455 客户端会以"服务器没有选择子协议"断连。老扩展只带 ?token=,不传子协议,不受影响。
+  const extWss = new WebSocketServer({
+    noServer: true,
+    maxPayload: WS_MAX_PAYLOAD,
+    handleProtocols: (protocols) => {
+      for (const p of protocols) {
+        if (String(p).startsWith('tf.')) return p;
+      }
+      return false;
+    }
+  });
 
   // 同一 http server 上有两个 WSS,必须手动路由 upgrade:
   // 若各自自动监听,非匹配路径的 WSS 会对已升级的 socket abortHandshake(400),

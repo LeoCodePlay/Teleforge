@@ -28,6 +28,7 @@ const LABELS: DockLabels = {
   splitPane: '分屏(左右并排)',
   splitPaneDisabled: `最多 ${MAX_DOCK_PANES} 栏`,
   splitPaneNarrow: '栏太窄,放不下两栏',
+  closePane: '关闭此栏（连同标签）',
   closeTab: '关闭',
   addTab: '新建空白栏',
   dockFloat: '收回栏内',

@@ -74,7 +74,13 @@ function render(status) {
     ? `已连接 ${online} 个`
     : (servers.length ? (connecting ? '连接中…' : '未连接') : '未配对');
   const inst = String(status.instance || '').slice(0, 6);
-  $('ver').textContent = (status.browser ? `${status.browser} · v${status.version}` : `v${status.version}`) + (inst ? ` · ${inst}` : '');
+  const protos = servers.filter((s) => s.connected && s.protocol).map((s) => s.protocol);
+  const protoTag = protos.length
+    ? (protos.some((p) => p >= 2) ? ' · 协议v2' : ' · 旧服务端(建议升级)')
+    : '';
+  const tabsTag = (status.attachedTabs && status.attachedTabs.length) ? ` · 控制中 ${status.attachedTabs.length} 标签` : '';
+  $('ver').textContent = (status.browser ? `${status.browser} · v${status.version}` : `v${status.version}`)
+    + (inst ? ` · ${inst}` : '') + protoTag + tabsTag;
   $('paused').checked = status.paused === true;
 
   const list = $('list');

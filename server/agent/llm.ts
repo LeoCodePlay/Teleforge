@@ -626,17 +626,35 @@ export class LlmClient {
   }
 
   /**
-   * 图生图 / 成图修改:POST {baseUrl}/images/edits(multipart/form-data)
-   * 多张参考图统一以 image[] 提交(实测 fucheers 的 gpt-image-2 逐张消费:
-   * 同一张图传两遍会画出两个主体,证明不是只取首张)。单张也走 image[] 保持同一形态。
-   * imageField 可切为 'image'(dall-e-2 等只认单数字段的旧方言);该形态下多余参考图被丢弃。
-   * 不手动设 Content-Type:交给 fetch 生成 multipart boundary。
+   * 图生图 / 成图修改:POST {baseUrl}/images/edits
+   * 提交形态由 submit 决定(方言见 ImageDialect):
+   *  - multipart(默认):multipart/form-data,参考图作为文件部件。多张统一以 image[] 提交
+   *    (实测 fucheers 的 gpt-image-2 逐张消费:同一张图传两遍会画出两个主体,证明不是只取首张)。
+   *    imageField 可切为 'image'(dall-e-2 等只认单数字段的旧方言);该形态下多余参考图被丢弃。
+   *  - json_base64:application/json,参考图以 data URL 字符串放进 image 字段。有些网关的 edits
+   *    端点根本收不了文件(实测 api.tk1688.com:带文件部件一律 400「reference image uploads
+   *    are not supported by this gateway」,而同一端点改发 JSON + base64 即可正常出图)。
+   * multipart 分支不手动设 Content-Type:交给 fetch 生成 boundary。
    */
-  async editImage({ prompt, images, size, quality, imageField = 'image[]', signal }: {
+  async editImage({ prompt, images, size, quality, imageField = 'image[]', submit = 'multipart', signal }: {
     prompt: string; images: ImageInput[]; size?: string; quality?: string;
-    imageField?: 'image[]' | 'image'; signal?: AbortSignal;
+    imageField?: 'image[]' | 'image'; submit?: 'multipart' | 'json_base64'; signal?: AbortSignal;
   }): Promise<ImageGenResult[]> {
     if (!images.length) throw new Error('图生图需要至少一张参考图');
+    if (submit === 'json_base64') {
+      const body: Record<string, any> = { model: this.model, prompt, n: 1 };
+      if (size) body.size = size;
+      if (quality) body.quality = quality;
+      const urls = images.map((im) => `data:${im.mime || 'image/png'};base64,${im.buf.toString('base64')}`);
+      // 单图发字符串、多图发数组:只收 base64 的网关(如 tk1688)实测只认单数字符串;
+      // 数组形态留给支持多参考图 JSON 的网关,失败也只是 4xx,由上层降级逻辑决定是否继续试。
+      body.image = urls.length === 1 ? urls[0] : urls;
+      return this._imageRequest(`${this.baseUrl}/images/edits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }, signal);
+    }
     const form = new FormData();
     form.append('model', this.model);
     form.append('prompt', prompt);

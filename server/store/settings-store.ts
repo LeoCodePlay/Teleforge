@@ -3,8 +3,9 @@
 //   会同步到这里(计划模式除外),**新建**会话在创建时把它播种成自己的一条 permission/mode
 //   事件(见 agent.ts 的 _pinDefaultPermission)。它只影响之后新建的会话,不会回溯改变已有
 //   会话 —— 模式是会话级状态(见 permission.ts 的 foldPermissionMode 注释)。
-// - imageTool:「生图工具」独立配置(url/key/model + 默认质量与尺寸)。它与对话所用的
-//   LLM 提供商完全解耦 —— 对话可以是任意文本模型,生图另指一个图像端点。
+// - imageTool:旧版「生图工具」的单条配置(url/key/model + 默认质量与尺寸),现已由
+//   store/image-providers-store.ts 的多模型商列表取代;这里只保留**只读**解析,供该 store
+//   首次加载时做一次性迁移。新配置不再写回本文件。
 // - 落盘 data/settings.json(测试可注入 DATA_DIR 隔离目录),原子写防损坏(见 store/atomic-write.ts)。
 import fs from 'node:fs';
 import { DATA_DIR, SETTINGS_FILE } from '../config.ts';
@@ -14,16 +15,26 @@ import { writeFileAtomic } from './atomic-write.ts';
 // permission.ts -> settings-store.ts 的循环依赖)
 const VALID_MODES = new Set(['confirm', 'auto-edit', 'plan', 'full-access']);
 
-/** 生图工具的接口方言:决定 /images/edits 提交参考图的字段形态 */
-export type ImageDialect = 'auto' | 'image_array' | 'image_single';
+/**
+ * 生图工具的接口方言:决定 /images/edits 提交参考图的形态。
+ *  - image_array / image_single:multipart 表单,图片部件名为 image[] / image(OpenAI 官方口径);
+ *  - json_base64:JSON 请求体,图片以 data URL 字符串放进 image(部分网关不收 multipart,
+ *    实测 api.tk1688.com:带文件一律 400「reference image uploads are not supported」,
+ *    而同一端点改发 JSON + base64 就能正常出图);
+ *  - auto:按上面三种依次尝试,只在「请求形态被 4xx 拒绝」时降级(此时还没出图、不扣费)。
+ */
+export type ImageDialect = 'auto' | 'image_array' | 'image_single' | 'json_base64';
+/** 合法的方言白名单(设置面板与配置文件回读共用) */
+export const IMAGE_DIALECTS: string[] = ['auto', 'image_array', 'image_single', 'json_base64'];
 export type ImageQuality = 'auto' | 'low' | 'medium' | 'high';
 /** 质量档位白名单(显式 string[] 以便 .includes(任意字符串) 通过严格检查) */
 export const IMAGE_QUALITIES: string[] = ['auto', 'low', 'medium', 'high'];
 
 /**
- * 「生图工具」配置(供 generate_image 工具与 imageGen 生图对话共用)。
+ * 单条图像端点配置的公共字段(生图模型商在此基础上补 id / 名称 / 多 Key 状态)。
  * baseUrl 需含版本段(如 https://www.fucheers.top/v1、https://api.openai.com/v1),
  * 请求路径按 OpenAI 兼容约定拼成 {baseUrl}/images/generations 与 {baseUrl}/images/edits。
+ * 旧版 settings.json 的 imageTool 也是这个形状,首次启动会自动迁移成一条模型商。
  */
 export interface ImageToolConfig {
   baseUrl: string;
@@ -88,25 +99,12 @@ export function sanitizeImageTool(raw: unknown): ImageToolConfig | null {
   if (!baseUrl || !/^https?:\/\//i.test(baseUrl) || !model) return null;
   const quality = IMAGE_QUALITIES.includes(r.quality) ? r.quality : 'auto';
   const size = IMG_SIZES.has(String(r.size || '')) ? String(r.size) : 'auto';
-  const dialect: ImageDialect = (['auto', 'image_array', 'image_single'] as string[]).includes(r.dialect) ? r.dialect : 'auto';
+  const dialect: ImageDialect = IMAGE_DIALECTS.includes(r.dialect) ? r.dialect : 'auto';
   return { baseUrl, apiKey: String(r.apiKey || '').trim(), model, quality, size, dialect };
 }
 
-/** 读取生图工具配置;未配置或配置不完整返回 null */
+/** 读取旧版单条生图配置(只读);未配置或配置不完整返回 null。
+ *  仅供 image-providers-store 首次加载时迁移到多模型商列表,新代码不要再用它。 */
 export function getImageToolConfig(): ImageToolConfig | null {
   return sanitizeImageTool(readSettings().imageTool);
-}
-
-/** 保存生图工具配置;传入非法值时抛错(由调用方转成 HTTP 400) */
-export function setImageToolConfig(raw: unknown): ImageToolConfig | null {
-  const cfg = sanitizeImageTool(raw);
-  if (raw && cfg === null) throw new Error('生图工具配置不完整:Base URL(需 http(s):// 开头)与模型名均为必填');
-  writeSettings({ imageTool: cfg });  // cfg=null 即清除配置
-  return cfg;
-}
-
-/** 配置摘要(供前端展示:不回传 apiKey 明文以外的敏感字段之外的信息) */
-export function imageToolSummary(): (ImageToolConfig & { configured: boolean }) | null {
-  const cfg = getImageToolConfig();
-  return cfg ? { ...cfg, configured: true } : null;
 }

@@ -27,6 +27,8 @@ export interface DockLabels {
   readonly splitPaneDisabled: string
   /** The split control, while the pane is too narrow for two working halves. */
   readonly splitPaneNarrow: string
+  /** Close a docked pane and the tabs it holds. Omit to leave the close-pane control undrawn. */
+  readonly closePane?: string | undefined
   /** Destroy a tab: the chip's close control and the menu's close item. */
   readonly closeTab: string
   /** Effective close combination, when bound. */
@@ -78,6 +80,8 @@ export interface DockIntents {
   readonly focusPane: (paneId: PaneId) => void
   /** Split a pane and seed the new one. */
   readonly splitPane: (paneId: PaneId) => void
+  /** Close a docked pane and the tabs it holds. Omit to leave the close-pane control undrawn. */
+  readonly closePane?: ((paneId: PaneId) => void) | undefined
   /** Add the embedder's seeded tab to a pane (the strip's `+`). */
   readonly addTab: (paneId: PaneId) => void
   /** Destroy a tab. */

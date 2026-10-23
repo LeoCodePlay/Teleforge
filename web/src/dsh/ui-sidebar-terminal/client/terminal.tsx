@@ -12,6 +12,9 @@ import '@xterm/xterm/css/xterm.css'
 import css from './terminal.module.css'
 import { TerminalTheme } from './terminal-theme.ts'
 import { observeTerminalCursor } from './terminal-cursor.ts'
+// 本地改动(非上游原样):界面字号联动(dsh 0.2.1-rc 的 0c6968b649 让正文/代码/终端一起缩放)。
+// 本项目的字号偏好住在 web/src/utils/chatFont,这里只借用它的当前倍率与订阅。
+import { onChatFontChange, scaledFont } from '../../../utils/chatFont.ts'
 
 /** Standard sidebar owner share plus terminal model and localized copy. */
 export type TerminalBodyProps = PropsRuntime<'sidebar.right.pane.tab'> & PropsLocale<'sidebarTerminal'> & InjectFace<TerminalBodyInjected>
@@ -87,7 +90,7 @@ function TerminalScreen({ state, model, visible, label, theme }: {
 
   useLayoutEffect(() => {
     const node = element.current!
-    const xterm = new Terminal({ minimumContrastRatio: 4.5, cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', scrollback: current.current.state.environment?.scrollback ?? 0 })
+    const xterm = new Terminal({ minimumContrastRatio: 4.5, cursorBlink: true, fontSize: scaledFont(13), fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', scrollback: current.current.state.environment?.scrollback ?? 0 })
     const addon = new FitAddon()
     xterm.loadAddon(addon)
     xterm.open(node)
@@ -105,7 +108,13 @@ function TerminalScreen({ state, model, visible, label, theme }: {
     }
     const observer = new ResizeObserver(measure)
     observer.observe(node)
+    // 字号偏好变化:改 xterm 的字号并重新量一次(xterm 的字号不是 CSS,CSS 变量管不到)。
+    const stopFont = onChatFontChange(() => {
+      xterm.options.fontSize = scaledFont(13)
+      measure()
+    })
     return () => {
+      stopFont()
       observer.disconnect()
       input.dispose()
       cursor.dispose()

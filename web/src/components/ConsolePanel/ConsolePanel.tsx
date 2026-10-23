@@ -3,12 +3,26 @@ import { createPortal } from 'react-dom';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { useCoarsePointer } from '../../hooks/useMediaQuery';
+import { onChatFontChange, scaledFont } from '../../utils/chatFont';
 import { IconCloud16, IconDesktop16 } from '../icons/icons';
 import '@xterm/xterm/css/xterm.css';
 import './ConsolePanel.scss';
 
 const QUICK = ['ls -la', 'pwd', 'node -v', 'git status', 'df -h .'];
 const encoder = new TextEncoder();
+
+// 上行水位(dsh 0.2.1-rc 的 5538b790c6「bounded terminal uplink」)。
+// 浏览器的 WebSocket 发送缓冲没有上限:一次粘贴一大段文本、或连按方向键时,未发出的数据会
+// 全堆在内存里,页面越用越卡直到假死。这里按"高水位 + 本地队列"限流:
+//   - 缓冲超过高水位 → 输入先入本地队列(队列自身也有上限),不直接 send;
+//   - 缓冲回落到水位以下(ws.onbufferedamountlow)→ 按序补发;
+//   - 队列也满了 → 丢弃并**明确提示**(静默丢键更糟:用户以为输入生效了)。
+// 与上游的差别:上游有服务端 ack 与帧窗口,本项目是单条 WS 双向(输入/输出共用),
+// 直接读 bufferedAmount 就是同一条通道的未发字节数,语义等价且不需要协议改造。
+const UPLINK_HIGH_WATER = 512 * 1024;
+const UPLINK_MAX_QUEUE = 2 * 1024 * 1024;
+/** shell 就绪前的输入缓存上限:启动阶段连按也只保留最近的这些字节 */
+const PENDING_MAX = 256 * 1024;
 
 type TermMode = 'remote' | 'local';
 type TermState = 'idle' | 'starting' | 'running' | 'closed';
@@ -67,6 +81,12 @@ interface TermSession {
   ws: WebSocket | null;
   state: TermState;
   pending: string[];        // shell 就绪前缓存的键盘输入
+  /** 上面 pending 的累计字节数(超过 PENDING_MAX 丢最旧的,不让启动阶段无限堆积) */
+  pendingBytes: number;
+  /** 上行待发队列:WS 发送缓冲超水位时数据先落这里(见 UPLINK_HIGH_WATER) */
+  uplink: string[];
+  uplinkBytes: number;
+  uplinkNotified: boolean;
   restartWanted: boolean;
   wsFail: boolean;
   wsFailNotified: boolean;
@@ -165,10 +185,38 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
     const ws = ses.ws;
     if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch {} }
   };
-  // 发送键盘输入(二进制帧)
+  // 发送键盘输入(二进制帧)。上行有界:缓冲超水位先排队,队列满则丢弃并提示
+  // (见文件顶部 UPLINK_HIGH_WATER 的说明,dsh 0.2.1-rc 的 5538b790c6)。
   const sendInput = (ses: TermSession, data: string) => {
     const ws = ses.ws;
-    if (ws && ws.readyState === 1) { try { ws.send(encoder.encode(data)); } catch {} }
+    if (!ws || ws.readyState !== 1) return;
+    if (ws.bufferedAmount > UPLINK_HIGH_WATER) {
+      if (ses.uplinkBytes + data.length > UPLINK_MAX_QUEUE) {
+        if (!ses.uplinkNotified) {
+          ses.uplinkNotified = true;
+          writeLine(ses, '\r\n' + red('[输入过快:已丢弃部分按键,请等终端跟上再继续]') + '\r\n');
+        }
+        return;
+      }
+      ses.uplink.push(data);
+      ses.uplinkBytes += data.length;
+      return;
+    }
+    ses.uplinkNotified = false;
+    // 缓冲已回落:顺手补发积压(不依赖 onbufferedamountlow,老浏览器也能自愈)
+    if (ses.uplink.length > 0) flushUplink(ses);
+    try { ws.send(encoder.encode(data)); } catch { /* 正在断开 */ }
+  };
+  // 发送缓冲回落到水位以下:按序补发本地队列(ws.onbufferedamountlow / 重连后各调一次)
+  const flushUplink = (ses: TermSession) => {
+    const ws = ses.ws;
+    if (!ws || ws.readyState !== 1) return;
+    while (ses.uplink.length > 0 && ws.bufferedAmount <= UPLINK_HIGH_WATER) {
+      const d = ses.uplink.shift() as string;
+      ses.uplinkBytes -= d.length;
+      try { ws.send(encoder.encode(d)); } catch { break; }
+    }
+    if (ses.uplink.length === 0) ses.uplinkNotified = false;
   };
   const writeLine = (ses: TermSession, s: string) => { try { ses.term.write(s); } catch {} };
 
@@ -179,6 +227,7 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
     if (ses.state === 'running' || ses.state === 'starting') return;
     setStateOf(ses, 'starting');
     ses.pending = [];
+    ses.pendingBytes = 0;
     sendCtrl(ses, { type: 'start', mode: ses.mode, cols: ses.term.cols || 80, rows: ses.term.rows || 24 });
   };
 
@@ -227,7 +276,8 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
     const term = new Terminal({
       theme: CAMPBELL,
       fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
-      fontSize: 13,
+      // 界面字号联动:与对话正文同一倍率(dsh 0.2.1-rc 的 0c6968b649)
+      fontSize: scaledFont(13),
       cursorBlink: true,
       scrollback: 5000,
       convertEol: false,
@@ -237,14 +287,20 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
     term.loadAddon(fit);
     const ses: TermSession = {
       id, mode, name, term, fit, ws: null,
-      state: 'idle', pending: [], restartWanted: false,
+      state: 'idle', pending: [], pendingBytes: 0, restartWanted: false,
+      uplink: [], uplinkBytes: 0, uplinkNotified: false,
       wsFail: false, wsFailNotified: false, hasSel: false, reconnectTimer: null, manualClose: false
     };
 
-    // 键盘输入 -> 上行;shell 未就绪时先缓存
+    // 键盘输入 -> 上行;shell 未就绪时先缓存(缓存同样有界,超限丢最旧的按键)
     term.onData((data) => {
-      if (ses.state === 'running') sendInput(ses, data);
-      else if (ses.state === 'starting') ses.pending.push(data);
+      if (ses.state === 'running') { sendInput(ses, data); return; }
+      if (ses.state !== 'starting') return;
+      ses.pendingBytes += data.length;
+      ses.pending.push(data);
+      while (ses.pendingBytes > PENDING_MAX && ses.pending.length > 1) {
+        ses.pendingBytes -= (ses.pending.shift() as string).length;
+      }
     });
     // 跟踪是否选中文本(供复制功能/右键菜单使用)
     term.onSelectionChange(() => { ses.hasSel = term.hasSelection(); });
@@ -268,6 +324,15 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
       let ws: WebSocket;
       try { ws = new WebSocket(`${proto}://${location.host}/ws/term`); } catch { return; }
       ws.binaryType = 'arraybuffer';
+      // 上行有界的回落信号:发送缓冲降到水位以下时把本地队列补发出去(见 UPLINK_HIGH_WATER)。
+      // 这两个成员是标准 WebSocket 的发送缓冲 API,但 lib.dom 的 WebSocket 类型还没收录,显式断言;
+      // 老浏览器没有该事件也不影响正确性 —— sendInput 每次都会顺带补发积压。
+      const wsLow = ws as WebSocket & {
+        bufferedAmountLowThreshold: number;
+        onbufferedamountlow: ((this: WebSocket, ev: Event) => unknown) | null;
+      };
+      wsLow.bufferedAmountLowThreshold = UPLINK_HIGH_WATER;
+      wsLow.onbufferedamountlow = () => flushUplink(ses);
       ses.ws = ws;
       const onMessage = (e: MessageEvent) => {
         if (typeof e.data === 'string') {
@@ -275,7 +340,7 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
           try { m = JSON.parse(e.data); } catch { return; }
           if (m.type === 'ready') {
             setStateOf(ses, 'running');
-            const p = ses.pending; ses.pending = [];
+            const p = ses.pending; ses.pending = []; ses.pendingBytes = 0;
             for (const d of p) sendInput(ses, d);
             if (visibleRef.current && activeIdRef.current === ses.id) ses.term.focus();
           } else if (m.type === 'exit') {
@@ -398,6 +463,20 @@ export default function ConsolePanel({ connected, visible, activeConn, hostIp, c
 
   const activeDesc = descs.find((d) => d.id === activeId) || descs[0];
   const visibleDescId = activeDesc?.id ?? null;
+
+  // --- 界面字号联动(dsh 0.2.1-rc 的 0c6968b649:正文 / 代码 / 终端字号一起步进)---
+  // xterm 的字号是 JS 选项,CSS 缩放管不到;改完必须重新 fit 并把新的行列数告诉 PTY,
+  // 否则换行位置、进度条宽度会与实际字符格对不上。
+  useEffect(() => onChatFontChange(() => {
+    for (const ses of sessions.current.values()) {
+      ses.term.options.fontSize = scaledFont(13);
+      try { ses.fit.fit(); } catch { /* 容器还没布局(标签不可见)时跳过 */ }
+      const ws = ses.ws;
+      if (ws && ws.readyState === 1) {
+        try { ws.send(JSON.stringify({ type: 'resize', cols: ses.term.cols, rows: ses.term.rows })); } catch { /* 正在断开 */ }
+      }
+    }
+  }), []);
 
   // --- 卸载:收掉本实例的全部会话 ---
   // 右栏把终端做成一条**可关闭的标签**,关掉标签会卸载本组件;不收的话 WS 与它背后的 shell 会一直挂着

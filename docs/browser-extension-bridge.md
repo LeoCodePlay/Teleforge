@@ -341,3 +341,126 @@ RPC 侧新增 `server/api/rpc/extension.ts`:`ext_status` / `ext_pair_token` / `e
 | 版本号 | `extension/manifest.json` 的 `version` 是唯一来源;CI 在 `extension-v*` tag 上校验 tag 与它一致 |
 | 独立发布 | `.github/workflows/extension.yml`:打 `extension-v*` tag 或手动触发 → 打包并发布 GitHub Release |
 | 随桌面端一起 | `scripts/build.mjs` 把 `extension/` 复制进 `src-tauri/resources/extension/`,安装包里自带一份;桌面 release 也附上同一个 zip |
+
+---
+
+## 11. v2 实现记录(协议 v2 / 扩展 1.1.0)
+
+这一轮把「快、稳、不打扰、可管控」四件事补上。**服务端与扩展同版本发布**,
+协议版本在 `ext_hello.protocol` / `ext_welcome.protocol` 里协商,不匹配时按下面的兼容表降级。
+
+### 11.1 快照 v2(`server/core/browser-snapshot.ts`)
+
+| 变化 | 为什么 |
+|---|---|
+| ref 从 `e1..eN` 改为 `role|name|css` 的短哈希(`e3f9a`) | v1 按出现顺序编号,页面上多一个元素后面全错位;模型跨轮拿着旧 ref 就是随机点错 |
+| 输出 `loc=`(id 优先的 CSS 路径) | ref 失效时的稳定兜底,也是"站点经验"能沉淀的基础 |
+| 递归 open shadow root | v1 只扫 `document`,自定义元素/设计系统里的按钮完全读不到 |
+| 子框架逐个抓,ref 加 `fN:` 前缀 | 后台系统大量用 iframe;跨进程(OOPIF)读不到的会明确标注,不假装成功 |
+| 默认不带正文,`text:` 按需 | v1 每次塞 2000 字正文,单份快照 2~5k token,而模型多数时候只关心按钮 |
+| `scope: viewport/full_page/subtree` | 长页面一次全抓又贵又吵 |
+| 按标题层级缩进 | 平铺列表看不出"这个「保存」属于哪个区块" |
+
+文本渲染仍在服务端(`formatSnapshot`),扩展只回原始 JSON —— 真机与预览逐字一致,
+老扩展回 v1 数据也能渲染(向后兼容分支)。
+
+### 11.2 可操作性检查(`extension/page-ops.js`)
+
+点击/输入前:存在 → 可见 → 未禁用 → `scrollIntoView` → rect 非零 → `elementFromPoint` 命中检测
+(穿 shadow 边界:命中宿主算命中影子内容)→ 60ms 后复核坐标,防点在动画中途。
+失败会带上"被谁遮挡/为什么不可见",而不是让模型猜"点了没反应"。
+
+### 11.3 批处理(`browser_batch`)
+
+- 真机:一条 `batch` 指令,扩展在同一个标签上顺序执行;每标签有串行队列,和单步调用不会交叉。
+- 预览:服务端循环(`browserManager.batch`),省掉的是**模型往返**而不是 IPC 往返。
+- 失败默认停在该步(`stopOnError`),`snapshot=on_error/always/never` 控制是否附最终快照。
+- 支持 `click/type/press/scroll/navigate/wait/hover/dblclick/rightClick/select/upload/networkIdle/assert/text/eval/load`。
+
+### 11.4 不抢焦点
+
+`tabs.open` 改为 `active: p.active === true`(默认后台);工具层 `browser_open` 的 `focus` 默认 `false`。
+后台标签收不到键盘事件 → attach 时开 `Emulation.setFocusEmulationEnabled`,并用
+`Page.setWebLifecycleState('active')` 防冻结。工具栏角标显示当前被控制的标签数。
+
+### 11.5 事件采集与动作原语
+
+`cdp.js` 加了事件订阅表(chrome.debugger.onEvent → 每标签监听器),据此实现:
+弹窗自动处置(`Page.javascriptDialogOpening`)、console/异常缓冲(Runtime,按需开)、
+网络 in-flight 计数(Network,按需开)。`browser_act` 暴露 hover/dblclick/rightClick/select/upload/
+dialog/console/networkIdle/text/assert;`upload` 走 `DOM.setFileInputFiles`(真机)与 `setInputFiles`(预览)。
+
+### 11.6 回执与视觉反馈
+
+`browser_click` / `browser_type` 默认只回「结果 + 当前 url/title」,不再每步附全量快照
+(要看就显式 `snapshot:true` 或单独 `browser_snapshot`)。动作会在页面里画一个 AI 光标 +
+目标高亮 + 动作说明(1.2s 自动消失),截图可叠加。
+
+### 11.7 站点经验(`server/core/browser-memory.ts`)
+
+`data/browser-learnings.json` 按域名存最多 12 条短笔记;`browser_memory` 工具 save/list/forget,
+`browser_open` 结果里自动附最多 3 条提示。只提示不重放:选择器会过期,照搬比重新找更危险。
+
+### 11.8 安全
+
+| 项 | 做法 |
+|---|---|
+| token 传输 | 优先 `Sec-WebSocket-Protocol: tf.<token>`(不进 URL);服务端 `handleProtocols` 回选;老服务端自动退回 `?token=` |
+| 域名策略 | `browser-bridge.json` 里的 `allowedDomains` / `blockedDomains`;`canOperate` 在授权检查之后再过一遍,按域名而不是按标签(切标签绕不过去) |
+| 审计 | `data/browser-audit.log`(JSONL,2MB 轮转);只记工具/目标/URL/结果/耗时,**输入文本只记长度** |
+| RPC | `ext_domains`(读/写)、`ext_audit`(最近 N 条),仍不暴露 token |
+
+### 11.9 保活:为什么没有引入 offscreen document
+
+MV3 的 service worker 默认约 30s 空闲被回收,但 Chrome 116+ 起**WebSocket 有收发就会重置空闲计时器**
+(manifest 的 `minimum_chrome_version` 正是 116),服务端 20s 一次的 `ext_ping` 足以维持常驻;
+再加 `chrome.alarms` 30s 兜底与指数退避重连,实测没有"跑一会儿就断"的问题。
+
+曾评估用 offscreen document 持有 WS(官方推荐做法之一),但:
+- offscreen 需要 `AUDIO_PLAYBACK` 之类的长寿 reason(静音音频循环)才不会被自己回收,属于 hack;
+- WS 挪进 offscreen 后,所有指令要经 `chrome.runtime.sendMessage` 中转一层,popup 与 SW 的状态同步变复杂;
+- 现有方案的失败面(握手被拒、服务端重启)已经有明确的重连与提示。
+
+因此这一轮没有引入 offscreen,而是把**重连路径**做扎实:子协议握手失败自动退回 `?token=`、
+协议版本协商(旧服务端只下发 v1 快照也能跑)、`snapshotScriptSrc` 与连接一起清理避免用旧脚本。
+
+### 11.10 测试
+
+| 用例 | 覆盖 |
+|---|---|
+| `test/browser-snapshot.test.js` | 快照脚本:稳定 ref、shadow DOM、scope、按需正文、v1 渲染兼容(真 Chromium) |
+| `test/browser-extension-ops.test.js` | **扩展 page-ops 本体**:把 `chrome.debugger.sendCommand` 接到 Playwright CDP,验证快照/遮挡/点击/输入/批处理/子框架(fN:) |
+| `test/browser-preview-v2.test.js` | 预览后端:跨域 iframe 内点击、批处理、console、截图 |
+| `test/browser-bridge-v2.test.js` | 协议:子协议 token、welcome 下发 v2 脚本、batch 单条指令、域名拒绝、审计 |
+| `test/browser-native-tab-binding.test.js` | 既有:会话标签绑定不被用户切标签带偏 |
+
+运行:`npm run test:browser`(没有可用 Chrome 的用例会自动跳过并算通过)。
+
+### 11.11 第三条后端:ego(lite)
+
+`target=ego` 用官方 `ego-browser nodejs` CLI 驱动 ego(lite)(App 把原生绑定注入子进程,
+外部进程拿不到,只能走 CLI)。实现要点:
+
+- 一个动作一次 CLI 调用,一个 `browser_batch` 一次进程跑完(ego Space 名按会话固定,跨调用续用);
+- ego 的 `@N` 只在产生它的进程内有效 → 快照行里的 `loc=` 做短哈希成本端 ref(`e3f1a`),
+  下次调用翻译回 `loc=...` 执行;`unstable/ambiguous` 的元素明确报错而不是瞎点;
+- 脚本从 stdin 投递(绕开 Windows 引号/编码),结果用 `__TF__{json}` 标记回传;
+- 未安装/App 没跑/版本过旧都有可操作的中文提示。
+
+详见 `docs/ego-integration.md`,回归见 `test/ego-backend.test.js`(用假 CLI 覆盖全链路,不需要真装 ego)。
+
+### 11.12 标签授权:从"内存里记一下"到"原子标记 + 落盘 + 继承"
+
+用户报的现象:AI 用扩展开的标签,过一会儿读页面却提示「没有授权给 AI」。原因有三层,都修了:
+
+| 漏洞 | 修法 |
+|---|---|
+| `markAiTab` 用 tabId **反查连接**:标签清单有 200ms 去抖、或同时开着 Chrome+Edge 时会标到错的那台上 | 新增 `BrowserBridge.openTab()`:在**执行 tabs.open 的那条连接**上直接标记,不再反查 |
+| AI 自建标签只存在内存 (`conn.aiTabs`),服务端重启/进程重启就丢 | 授权按浏览器实例落盘到 `browser-bridge.json` 的 `auth` 字段;`finishHello` 在内存没有记录时从磁盘恢复。落盘是**合并写**,不会把别的实例的历史授权覆盖掉 |
+| AI 标签里点开的新标签(链接 `target=_blank` / `window.open`)从来没被标记过 | 扩展在 `tabs.list` 里带上 `openerTabId`;服务端刷新清单时把"AI/已授权标签的子标签"传递性地归给 AI(多级弹窗也覆盖) |
+
+安全边界没有放松:用户自己的标签、以及用户标签里点开的子标签,依然不算授权;
+只有"AI 开的"和"用户显式交给 AI 的"才会传播。`revoke` 会同时清掉自建与授权标记并落盘。
+
+回归:`test/browser-tab-permission.test.js`(13 项)覆盖 —— 开完立刻可读、写盘、换 socket 重连、
+模拟服务端重启后从磁盘恢复、opener 子标签继承、用户子标签不误授权、多浏览器标记不串台。

@@ -26,41 +26,44 @@ import { computerUse } from '../core/computer-use/index.ts';
 import { saveAttachment, attachmentUrl } from '../store/attachments-store.ts';
 import type { ToolDef } from './registry.ts';
 
-const COORD_RULE = '坐标一律使用最近一次 computer_screenshot 返回图片的像素坐标'
-  + '(左上角为 0,0);缩放与多显示器偏移由工具自动换算,不要自己换算。';
+const COORD_RULE = 'x/y 用本图的像素坐标(左上角 0,0),缩放与多屏偏移由工具自动换算,不要自己换算。';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** 窗口选择器参数(三个工具共用) */
 const WINDOW_PARAMS = {
   hwnd: { type: 'integer', description: '窗口句柄(来自 computer_windows,最精确)' },
-  pid: { type: 'integer', description: '进程 id(来自 computer_windows)' },
-  title: { type: 'string', description: '窗口标题子串(如 "微信";多个同名窗口时取面积最大的)' }
+  pid: { type: 'integer', description: '进程 id' },
+  title: { type: 'string', description: '窗口标题子串(如 "微信";多个同名时取面积最大)' }
 };
 
 function fmtWindows(list: any[]): string {
   if (!list.length) return '当前没有可见窗口。';
   return list.map((w) => {
     const marks = [w.foreground ? '前台' : '', w.minimized ? '最小化' : ''].filter(Boolean).join(',');
-    return `- hwnd=${w.hwnd} pid=${w.pid} ${w.process} | 「${w.title || '(无标题)'}」 | 位置 (${w.x},${w.y}) ${w.w}x${w.h}${marks ? ` [${marks}]` : ''}`;
+    return `- hwnd=${w.hwnd} pid=${w.pid} ${w.process} 「${w.title || '(无标题)'}」${w.w}x${w.h} @(${w.x},${w.y})${marks ? ` [${marks}]` : ''}`;
   }).join('\n');
 }
 
+// 输出的坐标一律是**元素中心**:模型直接拿去点(computer_ui_action 按 ref,或
+// computer_action 用 sx/sy),不需要自己算 x+w/2 —— 算错中心是估坐标点偏的主因之一。
 function fmtUiNodes(nodes: any[]): string {
   if (!nodes.length) return '(没有可操作元素)';
   return nodes.map((n) => {
-    const flags = [n.enabled === false ? 'disabled' : '', n.offscreen ? 'offscreen' : ''].filter(Boolean).join(',');
-    const pat = (n.patterns || []).length ? ` [${(n.patterns || []).join('/')}]` : '';
-    return `[${n.ref}] ${n.type} "${n.name || '(无名)'}"${n.autoId ? ` id=${n.autoId}` : ''}`
-      + ` @(${n.x},${n.y}) ${n.w}x${n.h}${pat}${flags ? ` (${flags})` : ''}`;
+    const cx = Math.round((Number(n.x) || 0) + (Number(n.w) || 0) / 2);
+    const cy = Math.round((Number(n.y) || 0) + (Number(n.h) || 0) / 2);
+    const flags = [n.enabled === false ? '禁用' : '', n.offscreen ? '不可见' : ''].filter(Boolean).join(',');
+    const pat = (n.patterns || []).length ? ` ${(n.patterns || []).join(',')}` : '';
+    return `[${n.ref}] ${n.type} "${n.name || '(无名)'}"${n.autoId ? ` id=${n.autoId}` : ''} @(${cx},${cy}) ${n.w || 0}x${n.h || 0}${pat}${flags ? ` (${flags})` : ''}`;
   }).join('\n');
 }
 
-function fmtOcr(lines: any[], rect: any): string {
-  if (!lines.length) return `识别区域 (${rect.x},${rect.y}) ${rect.w}x${rect.h}:没有识别到文字。`;
+function fmtOcr(lines: any[]): string {
+  if (!lines.length) return '(没有识别到文字)';
   return lines.map((l) => {
-    const cx = Math.round(l.x + l.w / 2), cy = Math.round(l.y + l.h / 2);
-    return `"${l.text}" @(${l.x},${l.y}) ${l.w}x${l.h} 中心=(${cx},${cy})`;
+    const cx = Math.round((Number(l.x) || 0) + (Number(l.w) || 0) / 2);
+    const cy = Math.round((Number(l.y) || 0) + (Number(l.h) || 0) / 2);
+    return `"${l.text}" @(${cx},${cy})`;
   }).join('\n');
 }
 
@@ -88,27 +91,38 @@ export const computerUseToolDefs: ToolDef[] = [
   {
     name: 'computer_windows',
     description: '列出本机当前所有可见窗口(标题/进程/句柄/位置/是否前台/是否最小化)。'
-      + '这是操作电脑的**第一步**:① 判断目标应用是否已经开着(开着就不要再启动,直接 activate);'
-      + '② 拿到 hwnd 供 computer_ui / computer_screenshot / computer_action 精确定位窗口;'
-      + '③ 用 activate 把被遮挡/最小化的窗口切到前台。'
-      + '典型用法:用户说"打开微信发消息"→ 先 computer_windows 看微信在不在 → 在就 activate,不在再 computer_launch。',
-    parameters: { type: 'object', properties: {} },
+      + '操作电脑的第一步:① 判断目标应用是否已开着(开着就用 computer_launch 激活,别重复启动);'
+      + '② 拿到 hwnd 供 computer_ui / computer_screenshot / computer_action 精确定位窗口。'
+      + '窗口很多时传 filter 只留标题/进程名含该子串的窗口(如 filter="微信"),能省掉无关行。',
+    parameters: {
+      type: 'object',
+      properties: {
+        filter: { type: 'string', description: '只看标题/进程名含该子串的窗口(可选)' }
+      }
+    },
     access: 'read',
     timeoutMs: 30_000,
-    async run() {
+    async run(args: any) {
       computerUse.requireActive('computer_windows');
       const r = await computerUse.windows();
-      return { content: `当前可见窗口 ${(r.windows || []).length} 个:\n${fmtWindows(r.windows || [])}${lockNote(r)}` };
+      const all: any[] = r.windows || [];
+      const f = String(args?.filter || '').trim().toLowerCase();
+      const list = f
+        ? all.filter((w) => String(w.title || '').toLowerCase().includes(f) || String(w.process || '').toLowerCase().includes(f))
+        : all;
+      const head = f
+        ? `当前可见窗口 ${all.length} 个,标题/进程名含「${args.filter}」的 ${list.length} 个:`
+        : `当前可见窗口 ${all.length} 个:`;
+      return { content: `${head}\n${fmtWindows(list)}${lockNote(r)}` };
     }
   },
 
   {
     name: 'computer_launch',
-    description: '打开一个应用。**会先检查它是否已经在运行**:已经在跑就直接切到前台,不会重复启动。'
-      + 'app 可以是完整路径,也可以是开始菜单里的应用名(如 "微信"、"记事本"、"计算器")。'
-      + 'match 可选:用来匹配已运行窗口的标题或进程名(例如 app="微信" 时 match="Weixin",'
-      + '因为微信的进程名是 Weixin 而窗口标题是"微信",两者都给能提高命中率)。'
-      + '启动后会等窗口出现并把窗口信息返回给你。',
+    description: '打开一个应用(已经在运行就直接切到前台,不会重复启动)。'
+      + 'app 可以是完整路径,也可以是开始菜单里的应用名(如 "微信"、"记事本")。'
+      + 'match 可选:用来匹配已运行窗口的标题或进程名(app="微信" 时 match="Weixin" 更稳)。'
+      + '启动后会等窗口出现并返回窗口信息。',
     parameters: {
       type: 'object',
       properties: {
@@ -128,16 +142,14 @@ export const computerUseToolDefs: ToolDef[] = [
       if (r.already) {
         const ok = r.activate?.activated === true;
         return {
-          content: `「${app}」已经在运行,${ok ? '已把它切到前台' : '尝试切到前台但可能没成功'}(没有重复启动)。\n${fmtForeground(r.activate?.foreground)}\n`
-            + (ok ? '接下来用 computer_ui / computer_ocr 看它的界面,再决定点哪里。'
-              : '⚠ 前台窗口不是它:可能有全屏覆盖层(截图工具/录屏/锁屏),或系统拒绝了前台切换。'
-                + '请先确认没有覆盖层;后续截图/OCR 会抓到覆盖层而不是这个窗口。')
+          content: `「${app}」已在运行,${ok ? '已切到前台' : '⚠ 切前台可能失败(可能有全屏覆盖层或系统拒绝)'}(没有重复启动)。\n${fmtForeground(r.activate?.foreground)}`
         };
       }
-      // 等窗口出现(最多 ~8s),让下一步操作不用瞎猜
+      // 等窗口出现(最多 ~8s):windows 现在 ~10ms 一次,250ms 一轮足够快,
+      // 又不用让模型为了"等它起来"额外发一次 computer_windows
       const needles = [match, app].filter(Boolean).map((s) => String(s).toLowerCase());
-      for (let i = 0; i < 16; i++) {
-        await sleep(500);
+      for (let i = 0; i < 32; i++) {
+        await sleep(250);
         try {
           const l = await computerUse.windows();
           const hit = (l.windows || []).find((w: any) => {
@@ -157,12 +169,10 @@ export const computerUseToolDefs: ToolDef[] = [
 
   {
     name: 'computer_ui',
-    description: '用 Windows UI Automation 读取窗口的**元素结构**(不是像素):返回可点击/可输入的元素清单,每个带 ref。'
-      + '这是最准的操作方式——拿到 ref 后直接 computer_ui_action,不需要任何坐标,也不依赖视觉模型。'
-      + '传 query 时按控件名/文本子串查找(等价于"找名字里含 xx 的按钮/列表项/输入框");不传 query 时返回窗口的元素树。'
-      + '不传窗口参数时默认用当前前台窗口。'
-      + '注意:自绘应用(微信 PC 版、部分游戏/工具)只暴露外壳,元素很少或没有名字,'
-      + '这时不要硬试,改用 computer_ocr 按文字定位。',
+    description: '用 UI Automation 读取窗口的**元素结构**(文字,不是像素):返回可点击/可输入的元素清单,每个带 ref 和中心坐标。'
+      + '这是最准的操作方式——拿到 ref 直接 computer_ui_action,完全不用坐标,也不依赖视觉模型。'
+      + '传 query 时按控件名/文本子串查找;不传则返回整棵元素树(不传窗口参数时默认当前前台窗口)。'
+      + '自绘应用(微信 PC 版等)只暴露外壳、元素很少时不要硬试,改用 computer_ocr。',
     parameters: {
       type: 'object',
       properties: {
@@ -181,14 +191,14 @@ export const computerUseToolDefs: ToolDef[] = [
       if (args?.query) {
         const r = await computerUse.uiFind({ query: String(args.query), ...sel, limit: args?.max_nodes });
         return {
-          content: `在窗口里查找「${args.query}」:扫描 ${r.scanned} 个元素,命中 ${r.count} 个。\n`
+          content: `在窗口内查找「${args.query}」:扫描 ${r.scanned} 个元素,命中 ${r.count} 个(@ 为元素中心):\n`
             + (r.count ? fmtUiNodes(r.matches) : '没有名字匹配的元素。若是自绘应用(如微信),请改用 computer_ocr 按文字定位。')
         };
       }
       const r = await computerUse.uiTree({ ...sel, maxDepth: args?.max_depth, maxNodes: args?.max_nodes, interactiveOnly: args?.interactive_only !== false });
       return {
-        content: `窗口元素树(根:「${r.root?.name || '(无标题)'}」[${r.root?.type}]):\n${fmtUiNodes(r.nodes || [])}`
-          + (r.truncated ? '\n(已截断,可用 query 精确查找或用 max_nodes 调大)' : '')
+        content: `窗口元素树(根:「${r.root?.name || '(无标题)'}」[${r.root?.type}]),@ 为元素中心:\n${fmtUiNodes(r.nodes || [])}`
+          + (r.truncated ? '\n(已截断:用 query 精确查找,或调大 max_nodes)' : '')
       };
     }
   },
@@ -226,13 +236,12 @@ export const computerUseToolDefs: ToolDef[] = [
 
   {
     name: 'computer_ocr',
-    description: '对窗口(或屏幕区域)做文字识别,返回每一行文字**及其屏幕坐标与中心点**。'
-      + '两个用途:① 自绘应用(UIA 读不到内容的,如微信 PC 版)里"按文字找目标";'
-      + '② 给不支持视觉的模型提供屏幕上的文字内容。'
-      + '强烈建议用 match 参数直接给目标文字(如 match="廖钧涛"):OCR 认错字很常见,'
-      + '工具会按逐字重合度**模糊匹配**并返回最可能的几行 + 中心坐标,直接点中心即可,不用自己比对。'
-      + '识别前会自动放大 2 倍(scale 可调),小字识别率更高。'
-      + '不传窗口/区域时识别整张虚拟桌面。',
+    description: '对窗口(或屏幕区域)做文字识别,返回每一行文字**及其屏幕中心坐标**。'
+      + '两个用途:① 自绘应用(UIA 读不到内容的,如微信 PC 版)里按文字找目标;'
+      + '② 让不支持视觉的模型"看到"屏幕上的文字。'
+      + '建议传 match(如 match="廖钧涛"):OCR 常认错字,工具会按逐字重合度模糊匹配,'
+      + '只回最可能的几行,直接用其中心坐标点击即可。'
+      + '识别前自动放大 2 倍(scale 可调),小字更容易认对;不传窗口/区域时识别整张虚拟桌面。',
     parameters: {
       type: 'object',
       properties: {
@@ -256,41 +265,44 @@ export const computerUseToolDefs: ToolDef[] = [
         scale: args?.scale, match: args?.match, minScore: args?.min_score
       });
       if (args?.match) {
-        const head = `在识别区域 (${r.rect.x},${r.rect.y}) ${r.rect.w}x${r.rect.h} 内模糊查找「${args.match}」:`
-          + `共 ${r.count} 行,命中 ${r.matches.length} 个候选(按相似度排序):`;
+        const head = `在 (${r.rect.x},${r.rect.y}) ${r.rect.w}x${r.rect.h} 内模糊查找「${args.match}」:`
+          + `共 ${r.count} 行,命中 ${r.matches.length} 个候选(按相似度排序,@ 为文字行中心):`;
         const body = r.matches.length
-          ? r.matches.map((m: any) => `- 相似度 ${m.score} "${m.text}" @(${m.x},${m.y}) ${m.w}x${m.h} 中心=(${m.centerX},${m.centerY})`).join('\n')
+          ? r.matches.map((m: any) => `- ${m.score} "${m.text}" @(${m.centerX},${m.centerY})`).join('\n')
           : '(没有足够相似的文字)可放宽 min_score(如 0.34)、把 match 换成更短的片段(如只给姓名后两个字),'
             + '或先不传 match 看全部识别结果。';
-        return { content: `${head}\n${body}\n点击方式:computer_action(action="click", sx=<中心x>, sy=<中心y>)。` };
+        return { content: `${head}\n${body}` };
       }
-      const header = `识别区域 (${r.rect.x},${r.rect.y}) ${r.rect.w}x${r.rect.h},语言 ${r.language},放大 ${r.scale}x,共 ${r.count} 行:`;
+      const header = `识别区域 (${r.rect.x},${r.rect.y}) ${r.rect.w}x${r.rect.h},语言 ${r.language},放大 ${r.scale}x,共 ${r.count} 行(@ 为文字行中心):`;
       // 整屏 OCR 可能有几百行,全塞进上下文会挤爆历史:默认只回前 120 行,
       // 需要精确找目标时用 match 参数(那条路只回少量候选)。
       const MAX_LINES = 120;
       const shown = (r.lines || []).slice(0, MAX_LINES);
       return {
-        content: `${header}\n${fmtOcr(shown, r.rect)}`
+        content: `${header}\n${fmtOcr(shown)}`
           + (r.count > shown.length ? `\n(仅显示前 ${shown.length} 行,还有 ${r.count - shown.length} 行未显示;找目标请用 match 参数)` : '')
-          + '\n要点击某一行:直接用它给出的中心坐标调用 computer_action(action="click", sx=<中心x>, sy=<中心y>),'
-          + '这是屏幕物理坐标,不需要任何换算。点完再 computer_ocr 一次确认结果。'
       };
     }
   },
 
   {
     name: 'computer_screenshot',
-    description: '截取本机屏幕画面并交给你观察。默认截**当前前台窗口所在的那块显示器**'
-      + '(整张多屏拼图会被缩得很小,看不清细节);也可以指定 window 截某个窗口、monitor 截某块显示器、all=true 截全部显示器。'
-      + '这是"操作电脑"的感知入口:每次动手前先看屏,动手后再看屏确认结果。'
-      + '只有在 AI 电脑操控已开启(computer_control action="start")时才能截图,否则会被拒绝。'
-      + '返回:屏幕画面图片 + 显示器布局 + 当前前台窗口 + 光标位置。' + COORD_RULE,
+    description: '截取本机屏幕画面(图片)。默认截**前台窗口所在的那块显示器**'
+      + '(整张多屏拼图会被缩得很小,看不清细节);也可 window=截某个窗口、monitor=某块显示器、'
+      + 'all=true=整张虚拟桌面、rect=只截一块区域(要看清小字/小图标时用它,又快又省)。'
+      + '看界面优先用 computer_ui / computer_ocr(文字,更准也更省);截图用于看布局、图标、图表这类没有文字的东西。'
+      + '返回:图片 + 显示器布局 + 前台窗口 + 光标位置;' + COORD_RULE,
     parameters: {
       type: 'object',
       properties: {
         ...WINDOW_PARAMS,
         monitor: { type: 'integer', description: '只截某一块显示器(0 开始的下标)' },
         all: { type: 'boolean', description: 'true = 截取所有显示器拼成的整张虚拟桌面(适合看全局布局,会缩得比较小)' },
+        rect: {
+          type: 'object',
+          description: '只截某个屏幕区域 {x,y,w,h}(物理像素,与 computer_ui / computer_ocr 同一坐标系);区域按 1:1 输出,适合放大看细节',
+          properties: { x: { type: 'integer' }, y: { type: 'integer' }, w: { type: 'integer' }, h: { type: 'integer' } }
+        },
         max_width: { type: 'integer', description: '图片最长边像素上限,默认 2560;要看清小字可调大(如 3200)' }
       }
     },
@@ -305,6 +317,7 @@ export const computerUseToolDefs: ToolDef[] = [
       const shot = await computerUse.capture({
         monitor, maxWidth,
         window: winSel,
+        rect: args?.rect && Number(args.rect.w) > 0 && Number(args.rect.h) > 0 ? args.rect : undefined,
         all: args?.all === true
       });
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -314,11 +327,11 @@ export const computerUseToolDefs: ToolDef[] = [
       const blind = ctx?.llm?.multimodal !== true;
       const content = `已截取屏幕画面(附件 id:${att.id},${Math.round(shot.buf.length / 1024)}KB)。\n`
         + fmtMonitors(shot) + '\n'
-        + (shot.foreground ? `当前前台窗口:「${shot.foreground.title || '(无标题)'}」(${shot.foreground.process || '未知进程'}) 区域 (${shot.foreground.x},${shot.foreground.y}) ${shot.foreground.w}x${shot.foreground.h}\n` : '')
-        + (shot.cursor ? `当前光标(屏幕物理像素):(${shot.cursor.x},${shot.cursor.y})\n` : '')
+        + (shot.foreground ? `前台:「${shot.foreground.title || '(无标题)'}」(${shot.foreground.process || '未知进程'}) (${shot.foreground.x},${shot.foreground.y}) ${shot.foreground.w}x${shot.foreground.h}\n` : '')
+        + (shot.cursor ? `光标:(${shot.cursor.x},${shot.cursor.y})\n` : '')
         + COORD_RULE + lockNote(shot)
-        + (blind ? '\n⚠ 当前模型未声明视觉能力,这张截图不会进入你的上下文(你看不到它)。'
-          + '请改用 computer_ui(元素结构)或 computer_ocr(屏幕文字)来"看"界面,这两条路不依赖视觉。' : '');
+        + (blind ? '\n⚠ 当前模型未声明视觉能力,这张图不会进入你的上下文(你看不到)。'
+          + '请改用 computer_ui / computer_ocr 来"看"界面。' : '');
       return {
         content,
         // 截图在对话里直接展示(前端复用 MessageAttachments);工具卡的 meta.screenshot 保持不变
@@ -327,8 +340,7 @@ export const computerUseToolDefs: ToolDef[] = [
           screenshot: { id: att.id, url: attachmentUrl(att.id), name: att.name },
           // 供请求期把图片注入多模态模型(见 session.ts 的 visionAttachments 处理)
           visionAttachments: [att],
-          visionCaption: '【本机屏幕截图】这是当前电脑屏幕画面。'
-            + '要操作就调用 computer_action,x/y 用这张图的像素坐标;更推荐先用 computer_ui / computer_ocr 按名字或文字定位。',
+          visionCaption: '【本机屏幕截图】要操作就调 computer_action(x/y 用本图坐标);优先用 computer_ui / computer_ocr 定位。',
           screen: {
             imageWidth: shot.mapping.imgW, imageHeight: shot.mapping.imgH,
             scale: shot.scale,
@@ -344,14 +356,13 @@ export const computerUseToolDefs: ToolDef[] = [
     name: 'computer_action',
     description: '在本机电脑上执行鼠标/键盘操作。**这是最后手段**:能用 computer_ui_action(元素)或 '
       + 'computer_ocr(文字)定位目标时,优先用它们,不要靠估坐标。'
-      + '坐标三种给法(按优先级):① 窗口相对位置 rx/ry ∈ [0,1] + 窗口(hwnd/pid/title)——'
-      + '对窗口移动/缩放/多显示器完全免疫,例如"微信窗口底部中间"= rx=0.5, ry=0.9;'
-      + '② 屏幕物理坐标 sx/sy —— computer_ocr 返回的"中心=(x,y)"与 computer_ui 返回的坐标就是这一套,直接填即可;'
-      + '③ 图片坐标 x/y —— 最近一次 computer_screenshot 的像素坐标。'
+      + '坐标三种给法(按优先级):① rx/ry ∈ [0,1] + 窗口(hwnd/pid/title)——对窗口移动/缩放/多屏免疫,'
+      + '如"窗口底部中间"= rx=0.5, ry=0.9;② sx/sy —— computer_ui / computer_ocr 返回的就是这套屏幕物理坐标,直接填;'
+      + '③ x/y —— 最近一次 computer_screenshot 的图片像素坐标。'
       + 'action 取值:move/click/double_click/right_click/middle_click/down|up(配合 move 自定义拖拽)/'
-      + 'drag(从 x,y 拖到 to_x,to_y,或 rx,ry → to_rx,to_ry)/scroll(amount 正数向上)/'
-      + 'type(输入文本,支持中文)/key(组合键,如 ["ctrl","c"]、["alt","tab"])/wait。'
-      + '每次鼠标动作后会返回"落点下的元素",如果那不是你要点的东西,立刻停下重新定位。',
+      + 'drag(x,y → to_x,to_y,或 rx,ry → to_rx,to_ry)/scroll(amount 正数向上)/'
+      + 'type(输入文本,支持中文)/key(组合键,如 ["ctrl","c"])/wait。'
+      + '鼠标动作后会回报"落点下的元素":不是你要点的东西就立刻停下重新定位。',
     parameters: {
       type: 'object',
       properties: {
@@ -361,14 +372,14 @@ export const computerUseToolDefs: ToolDef[] = [
           description: '要执行的动作'
         },
         ...WINDOW_PARAMS,
-        rx: { type: 'number', description: '窗口内相对 x(0~1),需配合窗口参数;优先级最高' },
-        ry: { type: 'number', description: '窗口内相对 y(0~1),需配合窗口参数;优先级最高' },
-        sx: { type: 'integer', description: '屏幕物理坐标 x(computer_ocr / computer_ui 返回的坐标系)' },
+        rx: { type: 'number', description: '窗口内相对 x(0~1),需配 hwnd/pid/title;优先级最高' },
+        ry: { type: 'number', description: '窗口内相对 y(0~1),需配 hwnd/pid/title;优先级最高' },
+        sx: { type: 'integer', description: '屏幕物理坐标 x(computer_ui / computer_ocr 返回的坐标系)' },
         sy: { type: 'integer', description: '屏幕物理坐标 y' },
         x: { type: 'integer', description: '截图像素坐标 x(最近一次 computer_screenshot)' },
         y: { type: 'integer', description: '截图像素坐标 y' },
-        to_x: { type: 'integer', description: 'drag 终点 x(图片坐标)' },
-        to_y: { type: 'integer', description: 'drag 终点 y(图片坐标)' },
+        to_x: { type: 'integer', description: 'drag 终点 x(同 x 的坐标系)' },
+        to_y: { type: 'integer', description: 'drag 终点 y(同 y 的坐标系)' },
         to_sx: { type: 'integer', description: 'drag 终点 x(屏幕物理坐标)' },
         to_sy: { type: 'integer', description: 'drag 终点 y(屏幕物理坐标)' },
         to_rx: { type: 'number', description: 'drag 终点相对 x(0~1)' },
@@ -392,11 +403,9 @@ export const computerUseToolDefs: ToolDef[] = [
   {
     name: 'computer_control',
     description: '开启/关闭/查询 AI 对本机电脑的操作权限。'
-      + 'action="start":开启控制(会在所有显示器上弹出「AI 操控中」悬浮窗),之后才能 computer_screenshot / computer_action;'
-      + 'action="stop":AI 主动结束控制,悬浮窗消失;'
-      + 'action="status":查询当前是否开启(并返回屏幕是否锁屏)。'
-      + '注意:如果用户手动点了悬浮窗的「停止」,会进入"用户已锁定"状态,start 会被拒绝——必须请用户在界面上重新开启,AI 不能自行恢复。'
-      + '需要操作电脑时,第一步就调用 action="start"。',
+      + 'start=开启(所有显示器弹出「AI 操控中」悬浮窗,之后才能截图/操作);stop=结束;status=查询状态与是否锁屏。'
+      + '用户手动点过「停止」后会进入锁定态,start 会被拒绝——必须请用户在界面重新开启,AI 不能自行恢复。'
+      + '需要操作电脑时第一步就调用 start。',
     parameters: {
       type: 'object',
       properties: {
@@ -416,7 +425,7 @@ export const computerUseToolDefs: ToolDef[] = [
           const p = await computerUse.probe();
           if (p?.locked) lockNote = ' ⚠ 但电脑当前处于【锁屏状态】,截图只会得到锁屏画面、鼠标键盘操作也无效;请先让用户解锁屏幕。';
         } catch { /* 探测失败不影响开启 */ }
-        return { content: r.message + ' 建议下一步:先 computer_windows 看目标应用是否已在运行,再用 computer_ui / computer_ocr 定位。' + lockNote };
+        return { content: r.message + ' 下一步:computer_windows 看目标应用是否已在运行,再用 computer_ui / computer_ocr 定位。' + lockNote };
       }
       if (action === 'stop') {
         return { content: computerUse.stopByAi().message };

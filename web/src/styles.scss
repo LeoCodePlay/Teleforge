@@ -109,7 +109,7 @@ textarea { resize: vertical; }
 textarea.codeedit {
   width: 100%; height: 100%; min-height: 320px;
   background: var(--code-bg-solid); border: none; padding: 12px;
-  line-height: 1.5; font-size: 12.5px; white-space: pre;
+  line-height: 1.5; font-size: calc(12.5px * var(--chat-scale, 1)); white-space: pre;
   color: var(--code-ink);
 }
 .row { display: flex; gap: 6px; align-items: center; }
@@ -193,8 +193,9 @@ button:focus { box-shadow: none !important; }
    因此组件里同一属性的覆盖会被这条压住,保证「看不到第二个形状」。
    仅两处结构件例外,见下方。 */
 button { border-radius: var(--r-sm) !important; }
-/* 例外 1:贴在标签条上的导航标签(结构件),保留与标签条同宽的上圆角 */
-.btab, .tabstrip-add, .fm-tab { border-radius: var(--r-sm) var(--r-sm) 0 0 !important; }
+/* 例外 1:文件管理器的页签(结构件),保留与标签条同宽的上圆角。
+   顶部主标签条已对齐右栏 dockkit 的圆角 chip,`.btab` / `.tabstrip-add` 不再走上圆角。 */
+.fm-tab { border-radius: var(--r-sm) var(--r-sm) 0 0 !important; }
 /* 例外 2:附件缩略图按钮,圆角跟随图片容器 */
 .msg-att-img, .att-thumb { border-radius: var(--r-lg) !important; }
 /* 例外 3:开关(switch)滑块轨道 —— 形状本身就是「开关」这个语义 */
@@ -521,6 +522,37 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 }
 .provider-add .pa-icon { font-size: 15px; }
 .provider-empty { border: 1px dashed var(--line-dash); border-radius: var(--r-md); padding: 14px; text-align: center; color: var(--muted); font-size: 12px; }
+
+/* ---- 多 API Key:弹窗里的 Key 列表编辑器(AI 配置 / 生图配置共用) ---- */
+.key-list { display: flex; flex-direction: column; gap: 6px; }
+.key-row { display: flex; align-items: center; gap: 6px; }
+.key-row input { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 12px; }
+/* 去掉 input[type=password] 自带的显隐小眼睛(Edge/WebView2 的 ::-ms-reveal 会渲染在输入框内部,
+   与本行行尾的显隐按钮重复:两个眼睛一个能点一个点不动,反而不知道按哪个)。
+   显隐只由 .key-reveal 负责,输入框内一律不再出现浏览器控件 */
+.key-row input::-ms-reveal,
+.key-row input::-ms-clear { display: none; }
+.key-row.exhausted input { border-color: var(--warn-border); }
+/* 行尾图标按钮(显隐 / 删除)。颜色/hover/按下反馈由 .action-icon(.danger) 统一提供,
+   这里只定几何 —— 与输入框等高(30px)的方形热区,保证同一行的隐式高度不被按钮撑高 */
+.key-row .key-reveal,
+.key-row .key-del {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: var(--r-sm);
+}
+/* 明文显示时眼睛常亮:让「当前能看见 Key」这件事在扫视时也有状态可读,
+   否则只能靠图标里那条斜杠去分辨 */
+.key-row .key-reveal[aria-pressed='true'] { color: var(--accent-2); }
+.key-list > button.sm { align-self: flex-start; }
+
+/* ---- 多 API Key:卡片上的 Key 状态行(无余额徽标 + 重置;AI 配置 / 生图配置共用) ---- */
+.pc-keys { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.pc-key { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.pc-key-mask {
+  flex: 1 1 auto; min-width: 0; font-family: var(--mono); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pc-key.exhausted .pc-key-mask { color: var(--amber); }
+.pc-key button.sm { padding: 1px 7px; font-size: 11px; }
 
 /* ============================================================
    滚动条:全站唯一规格(要改粗细/配色只改这一处)

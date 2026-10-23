@@ -5,8 +5,9 @@
 //
 // 之所以单独成模块:tools.ts 不能反向 import agent.ts(循环依赖),
 // 而两条链路都要用同一套「取参考图 → 调端点 → 落盘附件 → 生成摘要」逻辑。
-import { LlmClient, type ImageInput } from './llm.ts';
-import { getImageToolConfig, type ImageDialect, type ImageToolConfig } from '../store/settings-store.ts';
+import { LlmClient, type ImageGenResult, type ImageInput } from './llm.ts';
+import { type ImageDialect } from '../store/settings-store.ts';
+import { imageKeys, imageProviders, usableImageKeys, type ImageProvider } from '../store/image-providers-store.ts';
 import { getAttachment, readImageBytes, saveAttachment, type AttachmentMeta } from '../store/attachments-store.ts';
 import type { SessionEvent } from './session.ts';
 import fs from 'node:fs/promises';
@@ -14,6 +15,12 @@ import path from 'node:path';
 import { sshManager as ssh, joinRemote, type SshConnection } from '../core/ssh-manager.ts';
 import { localFs } from '../core/local-fs.ts';
 import { GENERATED_IMAGES_DIRNAME } from '../config.ts';
+
+/** 一次图生图尝试的提交形态:multipart 文件部件 / JSON 里的 base64 data URL */
+type EditAttempt = {
+  submit: 'multipart' | 'json_base64';
+  imageField: 'image[]' | 'image';
+};
 
 /** 一次生图执行的完整结果 */
 export interface ImageJobResult {
@@ -40,31 +47,50 @@ export interface ImageJobResult {
   ms: number;
 }
 
-/** 未配置生图工具时给模型/用户的可操作提示 */
+/** 未配置生图模型商时给模型/用户的可操作提示 */
 export const IMAGE_TOOL_MISSING =
-  '生图工具尚未配置。请打开「设置 → 生图配置」,填写 Base URL、API Key 与模型名'
+  '生图工具尚未配置。请打开「设置 → 生图配置」,添加一个生图模型商(名称、Base URL、API Key 与模型名)'
   + '(例如 Base URL=https://www.fucheers.top/v1、模型=gpt-image-2;或 OpenAI 官方 https://api.openai.com/v1、模型=gpt-image-1)。'
   + '配置完成后重试即可生图。';
 
 // LlmClient 按配置缓存:每次生图新建客户端没必要,但配置一改就必须换实例
 const clientCache = new Map<string, LlmClient>();
 
-/** 由生图工具配置构造(或复用)一个指向图像端点的 LlmClient */
-export function imageClientFor(cfg: ImageToolConfig): LlmClient {
-  const key = `${cfg.baseUrl}|${cfg.model}|${cfg.apiKey.length}`;
-  let c = clientCache.get(key);
+/** 由生图模型商配置构造(或复用)一个指向图像端点的 LlmClient。
+ *  Key 列表取「当前可用」的那些(已排除被标记余额不足 / 鉴权失败的);
+ *  Key 被上游判为不可用时回调写回该模型商,界面刷新后可见并能重置。 */
+export function imageClientFor(cfg: ImageProvider): LlmClient {
+  const keys = usableImageKeys(cfg);
+  const cacheKey = `${cfg.id}|${cfg.baseUrl}|${cfg.model}|${keys.join('\u0000')}`;
+  let c = clientCache.get(cacheKey);
   if (!c) {
-    c = new LlmClient({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model });
+    c = new LlmClient({
+      baseUrl: cfg.baseUrl,
+      apiKey: keys[0] || '',
+      apiKeys: keys,
+      model: cfg.model,
+      onKeyExhausted: (key, reason, kind = 'balance') => {
+        imageProviders.markKeyExhausted(cfg.id, key, reason, kind);
+      }
+    });
     if (clientCache.size > 8) clientCache.clear();
-    clientCache.set(key, c);
+    clientCache.set(cacheKey, c);
   }
   return c;
 }
 
-/** 读取已配置的生图工具;未配置返回 null(调用方负责给出 IMAGE_TOOL_MISSING 提示) */
-export function resolveImageTool(): { cfg: ImageToolConfig; llm: LlmClient } | null {
-  const cfg = getImageToolConfig();
+/** 读取当前使用中的生图模型商;未配置返回 null(调用方负责给出 IMAGE_TOOL_MISSING 提示)。
+ *  全部 Key 都被标记不可用时直接抛可操作错误 —— 否则会退化成一次无鉴权请求,
+ *  上游只会回一个看不出原因的 401。 */
+export function resolveImageTool(): { cfg: ImageProvider; llm: LlmClient } | null {
+  const cfg = imageProviders.active();
   if (!cfg) return null;
+  if (imageKeys(cfg).length > 0 && usableImageKeys(cfg).length === 0) {
+    throw new Error(
+      `生图模型商「${cfg.name}」的全部 API Key 都不可用(余额不足 / 鉴权失败)。`
+      + '请打开「设置 → 生图配置」重置或更换 API Key 后再试。'
+    );
+  }
   return { cfg, llm: imageClientFor(cfg) };
 }
 
@@ -139,7 +165,8 @@ async function writeToWorkspace(target: GeneratedImagesTarget, name: string, buf
  * 关键约定:
  *  - 参考图只认服务端附件索引里的图片(调用方给的 id 一律重新校验,防伪造与越权读盘);
  *  - 上游按张计费,失败不自动重试;唯一的例外是"请求形态被 4xx 拒绝"(此时还没出图、
- *    不会扣费),允许把 edits 的参考图字段在 image[] / image 之间换一种方言重试一次。
+ *    不会扣费),允许把 edits 的参考图提交形态在 multipart(image[] / image)与 JSON base64
+ *    之间换一种再试(auto 方言下最多三种形态,见下面的 attempts)。
  */
 export async function runImageJob({
   llm, prompt, refIds = [], useLastImage = false, events, quality, size, dialect = 'auto', signal
@@ -180,19 +207,41 @@ export async function runImageJob({
   const q = quality && quality !== 'auto' ? quality : (quality === 'auto' ? 'auto' : undefined);
   const sz = size && size !== 'auto' ? size : undefined;
 
-  let imgs;
+  let imgs: ImageGenResult[] = [];
   if (!useEdits) {
     imgs = await llm.generateImage({ prompt, quality: q, size: sz, signal });
   } else {
-    const firstField: 'image[]' | 'image' = dialect === 'image_single' ? 'image' : 'image[]';
-    try {
-      imgs = await llm.editImage({ prompt, images: refs, quality: q, size: sz, imageField: firstField, signal });
-    } catch (e: any) {
-      // 多张参考图只有 gpt-image 系列的 image[] 支持,换单数字段会丢图,不做降级重试
-      const other = firstField === 'image[]' ? 'image' : 'image[]';
-      if (dialect !== 'auto' || refs.length > 1 || other !== 'image' || !isRequestShapeError(e)) throw e;
-      imgs = await llm.editImage({ prompt, images: refs, quality: q, size: sz, imageField: 'image', signal });
+    // 参考图提交形态的候选序列。上游以「请求形态不接受」类 4xx 拒绝时还没出图、不会扣费
+    // (见 isRequestShapeError),所以换下一种形态再试是安全的。
+    //  - 显式方言:只试那一种,不替用户猜;
+    //  - auto:multipart image[] → multipart image(仅单图,多图换单数字段会丢图)→ JSON base64。
+    //    JSON 兜底是为了那种「edits 端点收得了 JSON、收不了文件」的网关(实测 api.tk1688.com)。
+    const attempts: EditAttempt[] = dialect === 'auto'
+      ? [
+          { submit: 'multipart', imageField: 'image[]' },
+          ...(refs.length === 1 ? [{ submit: 'multipart', imageField: 'image' } as EditAttempt] : []),
+          { submit: 'json_base64', imageField: 'image' }
+        ]
+      : [{
+          submit: dialect === 'json_base64' ? 'json_base64' : 'multipart',
+          imageField: dialect === 'image_single' ? 'image' : 'image[]'
+        }];
+    let lastError: unknown = null;
+    for (let i = 0; i < attempts.length; i++) {
+      try {
+        imgs = await llm.editImage({
+          prompt, images: refs, quality: q, size: sz,
+          submit: attempts[i].submit, imageField: attempts[i].imageField, signal
+        });
+        lastError = null;
+        break;
+      } catch (e: any) {
+        lastError = e;
+        // 只有「形态被拒」且还有下一种形态时才继续;其余(鉴权/余额/超时/中止)一律原样抛出
+        if (i + 1 >= attempts.length || !isRequestShapeError(e)) throw e;
+      }
     }
+    if (lastError) throw lastError;
   }
 
   const saved: AttachmentMeta[] = [];

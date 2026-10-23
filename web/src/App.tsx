@@ -1107,14 +1107,23 @@ export default function App() {
     );
   };
 
-  // 标签条溢出时滚轮横向滚动:直接用 React 合成 onWheel(挂在滚动容器上,
-  // 不依赖 useEffect/ref 时序,只要组件渲染必然生效);当前布局为 100vh 无
-  // 页面纵向滚动,passive 限制(不能 preventDefault)不影响功能
-  const onStripWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    if (el.scrollWidth <= el.clientWidth + 1) return;
-    el.scrollLeft += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-  };
+  // 标签条溢出时鼠标滚轮横向滚动。用原生非 passive 监听:滚轮落在标签上时
+  // 也能拿到事件,并在确实可横移时 preventDefault,避免 WebView2/浏览器把
+  // 纵向滚轮交给页面或终端;deltaMode 为行/页时换算成像素。
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      const dominant = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (dominant === 0) return;
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1;
+      e.preventDefault();
+      el.scrollLeft += dominant * unit;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   // 激活标签自动滚入可视区(打开新标签/切换时)
   useEffect(() => {
@@ -1438,7 +1447,7 @@ export default function App() {
             </div>
             {/* 滚动段:普通文件标签可横向滚动(滚轮/拖拽到边缘);用项目悬浮滚动条引擎(不占布局,高度不变)。
                手机端 pinned 段被 CSS 隐藏(见 App.scss),置顶文件也放滚动段保证可见 */}
-            <div className="tabstrip-scroll" ref={stripRef} onWheel={onStripWheel}>
+            <div className="tabstrip-scroll" ref={stripRef}>
               {tabs.filter((t) => (t.kind === 'browser' || (t.kind === 'file' && (!t.pinnedFile || isPhone)))).map(renderTab)}
             </div>
             {/* 手动打开浏览器预览:与浏览器「新建标签」同位,点一下即开预览标签(空面板里可输地址/点最近地址) */}

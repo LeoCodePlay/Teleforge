@@ -187,6 +187,48 @@ check('本地全盘:清空本地工作区并置标记', localFs.workspace === nu
   await ssh.disconnect(W2);
 }
 
+// ---- 掉线连带中止的边界(stopForConn / stopAll)----
+// 用户上报:对话在本地工作区干活,断开那台服务器却把整轮停掉("我本地工作区跟你服务器有什么关系")。
+// 规矩:只有「工作押在那台服务器上」的轮次(占用了该服务器上的具体目录)才连带中止;
+// 本地工作区对话(含「不在工作区对话」的整台服务器边界)掉线只让远程工具各自报错,本轮照常跑完。
+{
+  const conn = new sshMod.SshConnection();
+  conn.hostInfo = { host: '10.6.6.6', port: 22, username: 'root' };
+  const mkRt = (workspace) => ({
+    workspace, connKey: 'local', boundConn: conn, signal: new AbortController(),
+    steer: [], stopCause: null, stopLabel: null, busy: true
+  });
+
+  const localRt = mkRt(NO_WORKSPACE);
+  const remoteRt = mkRt('/srv/remote');
+  agent._runtimes.set('s-local-conn-drop', localRt);
+  agent._runtimes.set('s-remote-conn-drop', remoteRt);
+
+  agent.stopForConn(conn);
+  check('本地工作区对话:断开该服务器不中止本轮(远程工具各自报错即可)',
+    localRt.signal.signal.aborted === false && localRt.stopCause === null,
+    JSON.stringify({ aborted: localRt.signal.signal.aborted, cause: localRt.stopCause }));
+  check('服务器工作区会话:仍然中止(它的工作就在那台服务器上)',
+    remoteRt.signal.signal.aborted === true && remoteRt.stopCause === 'conn-lost',
+    JSON.stringify({ aborted: remoteRt.signal.signal.aborted, cause: remoteRt.stopCause }));
+
+  // 连接对象都拿不到时的兜底路径(stopAll)同一条规矩
+  const localRt2 = mkRt(NO_WORKSPACE);
+  const remoteRt2 = mkRt('/srv/remote');
+  agent._runtimes.set('s-local-conn-drop', localRt2);
+  agent._runtimes.set('s-remote-conn-drop', remoteRt2);
+  agent.stopAll();
+  check('兜底 stopAll 同样不牵连本地工作区对话',
+    localRt2.signal.signal.aborted === false && localRt2.stopCause === null,
+    JSON.stringify({ aborted: localRt2.signal.signal.aborted, cause: localRt2.stopCause }));
+  check('兜底 stopAll 仍会停掉服务器工作区会话',
+    remoteRt2.signal.signal.aborted === true && remoteRt2.stopCause === 'conn-lost',
+    JSON.stringify({ aborted: remoteRt2.signal.signal.aborted, cause: remoteRt2.stopCause }));
+
+  agent._runtimes.delete('s-local-conn-drop');
+  agent._runtimes.delete('s-remote-conn-drop');
+}
+
 // ---- 端到端(用户上报的原始现场)----
 // 会话归本地作用域、却带着断线前留下的远程全盘边界,且此刻没有任何 SSH 连接:
 // 旧实现这一轮直接被拒("该会话属于服务器 local,它当前未连接:本轮未执行"),

@@ -10,7 +10,8 @@ import { join } from 'node:path';
 import fs from 'node:fs';
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-it-'));
 const { Agent, projectEvents, messageFaceIndexes } = await import('../server/agent/agent.ts');
-const { setImageToolConfig, getImageToolConfig } = await import('../server/store/settings-store.ts');
+const { imageProviders, usableImageKeys } = await import('../server/store/image-providers-store.ts');
+const { resolveImageTool } = await import('../server/agent/image-gen.ts');
 const { saveAttachment, attachmentPath } = await import('../server/store/attachments-store.ts');
 const { toolRegistry: registry } = await import('../server/agent/agent.ts');
 
@@ -24,6 +25,8 @@ const PNG_1X1 = Buffer.from(
 
 // mock 图像端点:记录收到的请求,返回一张 PNG
 const seen = [];
+const auths = []; // 每个请求实际带的 Authorization(多 Key 轮询断言用)
+let rejectMultipartEdits = false; // 模拟「只收 JSON base64、拒收文件上传」的网关(实测 api.tk1688.com)
 function startMock() {
   return new Promise((resolve) => {
     const srv = http.createServer((req, res) => {
@@ -33,23 +36,46 @@ function startMock() {
         const raw = Buffer.concat(chunks);
         const url = req.url || '';
         const rec = { url, ct: req.headers['content-type'] || '', fields: {}, imageParts: 0 };
+        const auth = String(req.headers.authorization || '');
+        auths.push(auth);
         // 强制校验鉴权头:两个图像端点都必须带 Authorization。
         // (曾经只有 generations 带、edits 漏带 —— 表现为"文生图正常、图生图恒 401",
         //  只有真实网络才暴露;这里用 mock 把它变成离线可测。)
-        if (!/^Bearer\s+\S+/.test(String(req.headers.authorization || ''))) {
+        if (!/^Bearer\s+\S+/.test(auth)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'missing or invalid Authorization header' } }));
+          return;
+        }
+        // 固定把 sk-dead 判为鉴权失败:用于验证「第一个 Key 失效 → 自动换下一个」
+        if (auth === 'Bearer sk-dead') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'invalid api key' } }));
           return;
         }
         if (url.endsWith('/images/generations')) {
           try { Object.assign(rec.fields, JSON.parse(raw.toString('utf8'))); } catch { /* 非 JSON */ }
         } else if (url.endsWith('/images/edits')) {
-          // 按 utf8 解:要断言的中文提示词是 UTF-8 编码的 multipart 字段值
-          // (latin1 会把它解成乱码);文件名等匹配全是 ASCII,不受解码影响。
-          const s = raw.toString('utf8');
-          // 粗略解析 multipart:统计图片部件数 + 抽出文本字段值
-          rec.imageParts = (s.match(/filename="/g) || []).length;
-          for (const m of s.matchAll(/name="(model|prompt|n|size|quality)"\r\n\r\n([^\r]*)/g)) rec.fields[m[1]] = m[2];
+          const ct = String(req.headers['content-type'] || '');
+          if (rejectMultipartEdits && ct.includes('multipart/form-data')) {
+            seen.push({ ...rec, rejected: true });
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: { message: 'reference image uploads are not supported by this gateway', type: 'new_api_error' }
+            }));
+            return;
+          }
+          if (ct.includes('application/json')) {
+            // JSON 方言:参考图放在 image 里(data URL 字符串或数组)
+            try { rec.jsonBody = JSON.parse(raw.toString('utf8')); } catch { rec.jsonBody = null; }
+            Object.assign(rec.fields, rec.jsonBody || {});
+          } else {
+            // 按 utf8 解:要断言的中文提示词是 UTF-8 编码的 multipart 字段值
+            // (latin1 会把它解成乱码);文件名等匹配全是 ASCII,不受解码影响。
+            const s = raw.toString('utf8');
+            // 粗略解析 multipart:统计图片部件数 + 抽出文本字段值
+            rec.imageParts = (s.match(/filename="/g) || []).length;
+            for (const m of s.matchAll(/name="(model|prompt|n|size|quality)"\r\n\r\n([^\r]*)/g)) rec.fields[m[1]] = m[2];
+          }
         } else if (url.endsWith('/models')) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ data: [{ id: 'mock-image-1' }] }));
@@ -101,8 +127,8 @@ function makeTextLlm(toolArgs) {
 async function main() {
   const { srv, base } = await startMock();
   try {
-    // ---- 设置存储:未配置 → 工具必须给出"去配置"的可操作提示,而不是静默失败 ----
-    check('初始为生图未配置状态', getImageToolConfig() === null);
+    // ---- 生图模型商 store:未配置 → 工具必须给出"去配置"的可操作提示,而不是静默失败 ----
+    check('初始为生图未配置状态', imageProviders.active() === null);
     check('工具已注册到注册表', !!registry.get('generate_image'));
     const schema = registry.schemas().find((s) => s.function.name === 'generate_image');
     check('工具 schema 对模型可见且含 size/quality 枚举',
@@ -128,12 +154,18 @@ async function main() {
       (errRes?.data?.content || '').slice(0, 160));
     check('未配置时整轮不崩(仍能走到收尾)', agent.history.some((m) => /图已生成完毕|尚未配置/.test(String(m.content))));
 
-    // ---- 配置写入(经设置存储,模拟 HTTP PUT 的落盘结果)----
-    const saved = setImageToolConfig({ baseUrl: base, apiKey: 'sk-test', model: 'mock-image-1', quality: 'medium', size: '1024x1024', dialect: 'auto' });
-    check('配置已持久化', !!saved && getImageToolConfig()?.model === 'mock-image-1');
-    check('非法配置被拒(Base URL 缺协议)', (() => { try { setImageToolConfig({ baseUrl: 'x', model: 'm' }); return false; } catch { return true; } })());
-    check('非法尺寸回落到 auto(不污染配置)', setImageToolConfig({ baseUrl: base, model: 'mock-image-1', size: '999x999' }).size === 'auto');
-    setImageToolConfig({ baseUrl: base, apiKey: 'sk-test', model: 'mock-image-1', quality: 'medium', size: '1024x1024', dialect: 'auto' });
+    // ---- 配置写入(经生图模型商 store,模拟 HTTP 新增的落盘结果)----
+    const provider = imageProviders.add({
+      name: '测试生图端点', baseUrl: base, apiKey: 'sk-test', model: 'mock-image-1',
+      quality: 'medium', size: '1024x1024', dialect: 'auto'
+    });
+    check('配置已持久化并成为使用中', imageProviders.active()?.id === provider.id && imageProviders.active()?.model === 'mock-image-1');
+    check('非法配置被拒(Base URL 缺协议)', (() => { try { imageProviders.add({ baseUrl: 'x', model: 'm' }); return false; } catch { return true; } })());
+    check('非法尺寸回落到 auto(不污染配置)', imageProviders.update(provider.id, { size: '999x999' })?.size === 'auto');
+    imageProviders.update(provider.id, {
+      baseUrl: base, apiKey: 'sk-test', model: 'mock-image-1',
+      quality: 'medium', size: '1024x1024', dialect: 'auto'
+    });
 
     // ---- 文生图:文本模型调工具,参数透传到上游 ----
     // 注意:不清空事件日志 —— 清空会抹掉上一张成图,后续"迭代改图"就取不到参考图了。
@@ -188,6 +220,40 @@ async function main() {
     check('改图提示词由模型补全为自包含描述',
       /蓝色/.test(String(ed2?.fields?.prompt || '')) && /保持/.test(String(ed2?.fields?.prompt || '')), ed2?.fields?.prompt);
 
+    // ---- 只收 JSON base64 的网关:multipart 被 4xx 拒 → 自动改发 JSON ----
+    // (实测 api.tk1688.com 的真实行为:edits 端点带文件一律 400,改发 JSON + base64 才出图)
+    rejectMultipartEdits = true;
+    seen.length = 0;
+    imageProviders.update(provider.id, { dialect: 'auto', apiKeys: ['sk-test'] });
+    const genBeforeJson = agent.session.events.filter((e) => e.type === 'image/generated').length;
+    const ref2 = await saveAttachment(PNG_1X1, '参考图2.png', 'image/png');
+    swapLlm(agent, makeTextLlm({ prompt: '把背景改成蓝色', reference_attachment_ids: [ref2.id] }));
+    await agent.run('把这张图的背景改成蓝色', { attachments: [{ id: ref2.id }] });
+    const edRejected = seen.find((r) => r.url.endsWith('/images/edits') && r.rejected);
+    const edJson = seen.find((r) => r.url.endsWith('/images/edits') && !r.rejected);
+    check('multipart 被判「不收文件」后自动改发 JSON',
+      !!edRejected && !!edJson, JSON.stringify(seen.map((s) => [s.ct.slice(0, 24), s.rejected ? 'rejected' : 'ok'])));
+    check('JSON 方言把参考图放进 image 的 data URL 单字符串',
+      /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(String(edJson?.jsonBody?.image || '')),
+      String(edJson?.jsonBody?.image || '').slice(0, 60));
+    check('JSON 方言仍带 model 与提示词',
+      edJson?.jsonBody?.model === 'mock-image-1' && /蓝色/.test(String(edJson?.fields?.prompt || '')),
+      JSON.stringify(edJson?.jsonBody || {}).slice(0, 160));
+    check('降级只落一张图(被拒的那次不计费、不重复出图)',
+      agent.session.events.filter((e) => e.type === 'image/generated').length === genBeforeJson + 1);
+
+    // ---- 显式选 json_base64:不试探,首发即 JSON ----
+    seen.length = 0;
+    imageProviders.update(provider.id, { dialect: 'json_base64' });
+    swapLlm(agent, makeTextLlm({ prompt: '再改一次', use_last_image: true }));
+    await agent.run('再改一次');
+    check('显式 json_base64 首发即 JSON(不产生 multipart 请求)',
+      seen.filter((r) => r.url.endsWith('/images/edits')).length === 1 && !seen.some((r) => r.rejected),
+      JSON.stringify(seen.map((s) => s.ct.slice(0, 24))));
+    rejectMultipartEdits = false;
+    imageProviders.update(provider.id, { dialect: 'auto' });
+
+
     // ---- 投影与前端一致性 ----
     const turns = projectEvents(agent.session.events);
     check('projectEvents 与 messageFaceIndexes 计数一致',
@@ -196,9 +262,36 @@ async function main() {
     check('成图投影为带附件的 assistant 消息(工具路径同样渲染)',
       turns.some((t) => t.role === 'assistant' && Array.isArray(t.attachments) && t.attachments.length));
 
-    // ---- 方言降级:上游拒绝 image[] 时自动改单图字段 ----
-    setImageToolConfig({ baseUrl: base, apiKey: 'k', model: 'mock-image-1', dialect: 'auto' });
-    check('配置可回读 dialect', getImageToolConfig()?.dialect === 'auto');
+    // ---- 多 Key 轮询:第一个 Key 401 → 自动换下一个并把判定写回模型商 ----
+    imageProviders.update(provider.id, {
+      apiKeys: ['sk-dead', 'sk-test'], quality: 'auto', size: 'auto', dialect: 'auto'
+    });
+    auths.length = 0; seen.length = 0;
+    swapLlm(agent, makeTextLlm({ prompt: '多 Key 轮询测试图' }));
+    await agent.run('再画一张,测试多 Key 轮询');
+    check('第一个 Key 被拒后仍成功出图',
+      seen.some((r) => r.url.endsWith('/images/generations')), JSON.stringify(seen.map((s) => s.url)));
+    check('确实先用了 sk-dead,再切到 sk-test',
+      auths.includes('Bearer sk-dead') && auths.includes('Bearer sk-test'), JSON.stringify(auths));
+    const afterRotate = imageProviders.find(provider.id);
+    check('失效 Key 被标记为鉴权失败',
+      afterRotate?.keyStates?.['sk-dead']?.invalid === true, JSON.stringify(afterRotate?.keyStates));
+    check('后续轮询不再包含失效 Key',
+      usableImageKeys(afterRotate).join(',') === 'sk-test', usableImageKeys(afterRotate).join(','));
+
+    // ---- 全部 Key 不可用:直接给可操作错误,不发无鉴权请求 ----
+    imageProviders.markKeyExhausted(provider.id, 'sk-test', 'quota', 'balance');
+    let unusableMsg = '';
+    try { resolveImageTool(); } catch (e) { unusableMsg = e.message; }
+    check('全部 Key 不可用时提示重置/更换',
+      /全部 API Key 都不可用/.test(unusableMsg) && /生图配置/.test(unusableMsg), unusableMsg);
+    imageProviders.resetAllKeys(provider.id);
+    check('重置后恢复参与轮询',
+      usableImageKeys(imageProviders.find(provider.id)).join(',') === 'sk-dead,sk-test');
+
+    // ---- 方言配置可回读 ----
+    imageProviders.update(provider.id, { dialect: 'auto' });
+    check('配置可回读 dialect', imageProviders.active()?.dialect === 'auto');
   } finally {
     // undici 的 keep-alive 套接字会让 srv.close() 后仍有活动句柄,
     // Node 退出时触发 libuv 断言崩溃;必须先强制关掉全部连接。

@@ -7,7 +7,24 @@
 // 未安装依赖或找不到浏览器时,给出可操作的错误提示,而不是让服务启动失败。
 import { EventEmitter } from 'node:events';
 import { sshManager } from './ssh-manager.ts';
-import type { Browser, BrowserContext, Page, CDPSession } from 'playwright-core';
+import { SNAPSHOT_SCRIPT, formatSnapshot } from './browser-snapshot.ts';
+import type { SnapshotData } from './browser-snapshot.ts';
+import type { Browser, BrowserContext, Page, Frame, CDPSession } from 'playwright-core';
+
+// 快照脚本与文本渲染在 core/browser-snapshot.ts(真机扩展跑的是同一份,由桥接层下发)。
+// 这里再导出一次,保持既有导入路径(browser-bridge / 测试)不变。
+export { SNAPSHOT_SCRIPT, formatSnapshot };
+export type { SnapshotData };
+
+/** 快照参数:见 core/browser-snapshot.ts 的 SNAPSHOT_SCRIPT */
+export interface SnapshotOptions {
+  scope?: 'viewport' | 'full_page' | 'subtree';
+  root?: string;
+  text?: number;
+  max?: number;
+  /** false = 不抓子框架(默认抓,最多 6 个) */
+  frames?: boolean;
+}
 
 export interface BrowserViewport { width: number; height: number }
 
@@ -86,6 +103,83 @@ const MAX_DIM = 3840;
 const SCREENCAST_QUALITY = 62;
 const NAV_TIMEOUT_MS = 45_000;
 const ACTION_TIMEOUT_MS = 10_000;
+
+/** 批处理里的一步(真机侧同一份结构,由扩展按 op 分发) */
+export interface BatchStep {
+  op: string;
+  ref?: string;
+  selector?: string;
+  text?: string;
+  value?: string;
+  url?: string;
+  key?: string;
+  direction?: string;
+  amount?: number;
+  timeoutMs?: number;
+  submit?: boolean;
+  clear?: boolean;
+  fullPage?: boolean;
+  scope?: SnapshotOptions['scope'];
+  root?: string;
+  files?: string[];
+  accept?: boolean;
+  [k: string]: unknown;
+}
+
+export interface BatchStepResult { index: number; op: string; ok: boolean; detail: string }
+export interface BatchResult {
+  ok: boolean;
+  steps: BatchStepResult[];
+  failedAt: number | null;
+  url: string;
+  title: string;
+  snapshot?: string;
+}
+
+/** 页面的全部子框架(深度优先,顺序稳定):快照里的 fN 前缀就是这里的第 N 个 */
+function pageFrames(page: Page): Frame[] {
+  const out: Frame[] = [];
+  const walk = (f: Frame) => {
+    for (const c of f.childFrames()) { out.push(c); walk(c); }
+  };
+  walk(page.mainFrame());
+  return out;
+}
+
+/** 拆 "f2:e3abc" → { index: 2, ref: 'e3abc' };没有前缀就是主框架 */
+export function splitFrameRef(ref?: string): { index: number; ref: string } {
+  const raw = String(ref || '');
+  const m = /^f(\d+):(.+)$/.exec(raw);
+  if (!m) return { index: 0, ref: raw };
+  return { index: Number(m[1]), ref: m[2] };
+}
+
+/** 给模型看的"我操作了哪个元素" */
+function targetLabel(t: { ref?: string; selector?: string; text?: string }): string {
+  if (t?.ref) return `ref=${t.ref}`;
+  if (t?.selector) return `选择器 ${t.selector}`;
+  if (t?.text) return `文本「${t.text}」`;
+  return '(未知目标)';
+}
+
+/** console / pageerror 环形缓冲(最多 60 条):动作失败时把它们回给模型,比"点了没反应"有用得多 */
+function pushLog(s: { logs: string[] }, line: string): void {
+  const t = String(line || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!t) return;
+  s.logs.push(`${new Date().toISOString().slice(11, 19)} ${t}`);
+  if (s.logs.length > 60) s.logs.splice(0, s.logs.length - 60);
+}
+
+/** 输入回值是否达标(容忍 maxlength 截断):与扩展侧 page-ops 同一套判定 */
+function fillMatches(value: unknown, text: string, clear?: boolean): boolean {
+  const v = String(value == null ? '' : value);
+  const t = String(text == null ? '' : text);
+  if (!t) return true;
+  if (v.includes(t)) return true;
+  if (v.length > 0 && t.startsWith(v)) return true;
+  if (clear === false && v.endsWith(t)) return true;
+  return false;
+}
 
 const clampDim = (v: unknown, fallback: number) => {
   const n = Math.round(Number(v));
@@ -208,6 +302,14 @@ interface BrowserSession {
   viewers: number;
   /** 会话级串行队列:输入与交互动作按到达顺序执行(见 _enqueue) */
   chain: Promise<unknown>;
+  /** 页面 console 输出与未捕获异常(环形缓冲,最多 60 条;排查"点了没反应"用) */
+  logs: string[];
+  /** 最近一次 JS 弹窗(alert/confirm/prompt)的文案 */
+  lastDialog: string | null;
+  /** JS 弹窗的默认处置:dismiss(默认)| accept。browser_act 的 dialog 动作可改 */
+  dialogPolicy: 'dismiss' | 'accept';
+  /** 最近一次点击的页面坐标(截图叠加 AI 光标用) */
+  lastPoint: { x: number; y: number } | null;
 }
 
 function launchCandidates(): Array<{ label: string; opts: Record<string, unknown> }> {
@@ -243,103 +345,8 @@ function launchArgs(): string[] {
  * 页面快照脚本:给可见的可交互元素打上 data-tp-ref="eN" 引用,返回结构化描述。
  * 必须是自包含函数(page.evaluate 会把它序列化后在页面里执行,不能引用外部变量)。
  */
-export const SNAPSHOT_SCRIPT = () => {
-  const win = globalThis as any;
-  const doc = win.document;
-  const ATTR = 'data-tp-ref';
-  const MAX_ELEMENTS = 160;
-  doc.querySelectorAll('[' + ATTR + ']').forEach((e: any) => e.removeAttribute(ATTR));
-  const clean = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
-  const visible = (el: any) => {
-    const r = el.getBoundingClientRect();
-    if (r.width <= 1 || r.height <= 1) return false;
-    const st = win.getComputedStyle(el);
-    return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
-  };
-  const accName = (el: any) => {
-    const aria = clean(el.getAttribute('aria-label'));
-    if (aria) return aria;
-    const ph = clean(el.getAttribute('placeholder'));
-    if (ph) return ph;
-    const alt = clean(el.getAttribute('alt'));
-    if (alt) return alt;
-    const title = clean(el.getAttribute('title'));
-    if (title) return title;
-    const text = clean(el.innerText || el.textContent);
-    if (text) return text.slice(0, 90);
-    const val = clean(el.value);
-    if (val) return val.slice(0, 90);
-    return '';
-  };
-  const SEL = 'a[href],button,input,textarea,select,summary,[role=button],[role=link],[role=tab],'
-    + '[role=menuitem],[role=checkbox],[role=radio],[role=switch],[role=combobox],[role=textbox],'
-    + '[contenteditable=""],[contenteditable=true],[onclick]';
-  const items: string[] = [];
-  let n = 0;
-  doc.querySelectorAll(SEL).forEach((el: any) => {
-    if (n >= MAX_ELEMENTS) return;
-    if (!visible(el)) return;
-    const tag = el.tagName.toLowerCase();
-    const type = clean(el.getAttribute('type'));
-    if (tag === 'input' && type === 'hidden') return;
-    n += 1;
-    const ref = 'e' + n;
-    el.setAttribute(ATTR, ref);
-    const bits = [`[${ref}] <${tag}${type ? ' type=' + type : ''}>`];
-    const role = clean(el.getAttribute('role'));
-    if (role) bits.push('role=' + role);
-    const name = accName(el);
-    if (name) bits.push(JSON.stringify(name));
-    if (tag === 'input' || tag === 'textarea') bits.push('值=' + JSON.stringify(clean(el.value).slice(0, 80)));
-    const href = clean(el.getAttribute('href'));
-    if (href) bits.push('href=' + href.slice(0, 160));
-    if (el.disabled) bits.push('(禁用)');
-    if (type === 'checkbox' || type === 'radio') bits.push(el.checked ? '(已选)' : '(未选)');
-    items.push(bits.join(' '));
-  });
-  const heads: string[] = [];
-  doc.querySelectorAll('h1,h2,h3').forEach((h: any) => {
-    if (heads.length >= 25 || !visible(h)) return;
-    heads.push(`<${h.tagName.toLowerCase()}> ${clean(h.innerText).slice(0, 120)}`);
-  });
-  const body = doc.body as any;
-  const bodyText = clean(body ? body.innerText : '').slice(0, 3000);
-  return {
-    url: win.location.href,
-    title: doc.title,
-    items,
-    heads,
-    text: bodyText,
-    count: n,
-    scrollY: Math.round(win.scrollY),
-    scrollHeight: doc.documentElement ? doc.documentElement.scrollHeight : 0,
-    viewportHeight: win.innerHeight
-  };
-};
-
-export function formatSnapshot(d: any): string {
-  const lines: string[] = [];
-  lines.push(`页面标题:${d?.title || '(无标题)'}`);
-  lines.push(`地址:${d?.url || ''}`);
-  lines.push(`视口:${d?.viewportHeight || 0}px 高 · 已滚动 ${d?.scrollY || 0}/${d?.scrollHeight || 0}px`);
-  const items: string[] = Array.isArray(d?.items) ? d.items : [];
-  lines.push('');
-  lines.push(`可交互元素(${items.length} 个,点击用 ref,如 e3):`);
-  lines.push(items.length ? items.join('\n') : '(无可交互元素)');
-  const heads: string[] = Array.isArray(d?.heads) ? d.heads : [];
-  if (heads.length) {
-    lines.push('');
-    lines.push('标题结构:');
-    lines.push(heads.join('\n'));
-  }
-  const text = String(d?.text || '').trim();
-  if (text) {
-    lines.push('');
-    lines.push('正文摘录:');
-    lines.push(text.length > 2000 ? text.slice(0, 2000) + '\n…(已截断)' : text);
-  }
-  return lines.join('\n');
-}
+// 页面快照 v1 已迁移到 core/browser-snapshot.ts(v2:稳定 ref / shadow DOM / 子框架 / scope)。
+// 这里保留一个注释锚点,避免以后有人在本文件里又写一份会漂移的脚本。
 
 /** 把浏览器按键名规范成 Playwright 能识别的名字 */
 function normalizeKey(key: string): string {
@@ -725,46 +732,371 @@ class BrowserManager extends EventEmitter {
     }
   }
 
-  /** 给 AI:页面结构化快照(带 ref 引用);sid = 调用方会话,非归属拒绝 */
-  async snapshot(id: string, sid?: string | null): Promise<string> {
-    const s = this.assertOwner(id, sid);
-    const data = await s.page.evaluate(SNAPSHOT_SCRIPT);
-    return formatSnapshot(data);
+  /** 解析目标:ref(可带 fN: 前缀)/ CSS / 可见文本 → 对应框架里的 locator */
+  private _locator(s: BrowserSession, target: { ref?: string; selector?: string; text?: string }) {
+    const t = target || {};
+    const { index, ref } = splitFrameRef(t.ref);
+    const frames = pageFrames(s.page);
+    const frame = index === 0 ? s.page.mainFrame() : frames[index - 1];
+    if (!frame) throw new Error(`快照里的子框架 f${index} 已经不在了(页面变了?),请重新 browser_snapshot`);
+    if (ref) return frame.locator(`[data-tp-ref="${String(ref).replace(/"/g, '')}"]`).first();
+    if (t.selector) return frame.locator(String(t.selector)).first();
+    if (t.text) return frame.getByText(String(t.text), { exact: false }).first();
+    throw new Error('需要提供 ref / selector / text 之一');
   }
+
+  /** 把 Playwright 的英文报错翻成"下一步该干什么",并带上最近几条 console */
+  private _actionError(e: unknown, s: BrowserSession, target: unknown): Error {
+    const raw = String((e as any)?.message || e).split('\n')[0];
+    const hints: string[] = [];
+    if (/strict mode violation/i.test(raw)) hints.push('匹配到多个元素:改用 ref,或把 selector 写得更具体');
+    if (/Timeout .* exceeded/i.test(raw)) hints.push('元素一直不可见/不可点(被遮挡、动画没结束、或在跨域框架里)');
+    if (/not attached to the DOM|Element is not attached/i.test(raw)) hints.push('页面重新渲染了:ref 可能过期,重新 browser_snapshot');
+    if (/intercepts pointer events/i.test(raw)) hints.push('有浮层挡住了目标(弹窗/遮罩)');
+    if (/not an <input>|Cannot type/i.test(raw)) hints.push('目标不是可输入元素:确认 ref 指向 input/textarea/contenteditable');
+    const logs = s.logs.slice(-3).join(' | ');
+    return new Error(`操作 ${targetLabel(target as any)} 失败:${raw}`
+      + `${hints.length ? `\n可能原因:${hints.join(';')}` : ''}${logs ? `\n最近 console:${logs}` : ''}`);
+  }
+
+  // ---------------- 快照 ----------------
+
+  /** 给 AI:页面结构化快照(稳定 ref / shadow DOM / 子框架 / scope);sid = 调用方会话,非归属拒绝 */
+  async snapshot(id: string, sid?: string | null, opts: SnapshotOptions = {}): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    return formatSnapshot(await this._snapshotData(s, opts));
+  }
+
+  /**
+   * 抓快照:主文档 + 各子框架(默认最多 6 个)。
+   * 子框架里的 ref 在渲染时加 fN: 前缀,点击/输入按前缀路由回对应 Frame —— 跨域 iframe 由 Playwright 原生支持,
+   * 这也是内置预览相对真机扩展的优势场景。
+   */
+  private async _snapshotData(s: BrowserSession, opts: SnapshotOptions = {}): Promise<SnapshotData> {
+    const args = { scope: opts.scope || 'viewport', root: opts.root, text: opts.text, max: opts.max };
+    const main = (await s.page.mainFrame().evaluate(SNAPSHOT_SCRIPT, args)) as SnapshotData | undefined;
+    const data: SnapshotData = main || { v: 2, url: s.page.url(), title: s.title, nodes: [] };
+    const frames = pageFrames(s.page);
+    if (opts.frames !== false && frames.length) {
+      const out: NonNullable<SnapshotData['frames']> = [];
+      for (let i = 0; i < frames.length && i < 6; i++) {
+        const f = frames[i];
+        try {
+          const d = (await f.evaluate(SNAPSHOT_SCRIPT, { scope: 'viewport', max: 60 })) as SnapshotData | undefined;
+          out.push({ index: i + 1, url: f.url(), name: f.name() || undefined, nodes: d?.nodes || [] });
+        } catch (e: any) {
+          out.push({ index: i + 1, url: f.url(), name: f.name() || undefined, note: `读取失败:${e?.message || e}` });
+        }
+      }
+      data.frames = out;
+    }
+    return data;
+  }
+
+  // ---------------- 动作(内部实现,批量与单步共用) ----------------
+
+  private async _clickNow(s: BrowserSession, target: { ref?: string; selector?: string; text?: string }): Promise<string> {
+    const loc = this._locator(s, target);
+    try {
+      await loc.click({ timeout: ACTION_TIMEOUT_MS });
+    } catch (e) { throw this._actionError(e, s, target); }
+    // 记下点击位置:页内画一个 AI 光标,用户/截图都能看出 AI 点了哪
+    const box = await loc.boundingBox().catch(() => null);
+    if (box) {
+      s.lastPoint = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+      await this._paintCursor(s, targetLabel(target));
+    }
+    await this._settle(s, 120);
+    return `已点击:${targetLabel(target)}`;
+  }
+
+  /** 页内 AI 光标 + 动作说明(1.2s 自动消失;截图叠加也用它) */
+  private async _paintCursor(s: BrowserSession, label: string): Promise<void> {
+    const p = s.lastPoint;
+    if (!p) return;
+    await s.page.evaluate(({ x, y, text }: { x: number; y: number; text: string }) => {
+      const doc = (globalThis as any).document;
+      if (!doc || !doc.documentElement) return;
+      const id = '__tp_cursor__';
+      const old = doc.getElementById(id);
+      if (old) old.remove();
+      const d = doc.createElement('div');
+      d.id = id;
+      d.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:0;height:0;z-index:2147483647;pointer-events:none`;
+      const ring = doc.createElement('div');
+      ring.style.cssText = 'position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;'
+        + 'border:2px solid #ff3b6b;box-shadow:0 0 0 4px rgba(255,59,107,.25)';
+      const tip = doc.createElement('div');
+      tip.textContent = text;
+      tip.style.cssText = 'position:absolute;left:18px;top:-10px;white-space:nowrap;font:12px/1.4 system-ui,sans-serif;'
+        + 'color:#fff;background:#ff3b6b;padding:2px 6px;border-radius:4px;max-width:320px;overflow:hidden;text-overflow:ellipsis';
+      d.append(ring, tip);
+      doc.documentElement.appendChild(d);
+      setTimeout(() => { try { d.remove(); } catch { /* 忽略 */ } }, 1200);
+    }, { x: p.x, y: p.y, text: String(label || '').slice(0, 60) }).catch(() => { /* 页面禁止 DOM 操作时忽略 */ });
+  }
+
+  private async _fillNow(s: BrowserSession, t: { ref?: string; selector?: string; text: string; submit?: boolean; clear?: boolean }): Promise<string> {
+    const loc = this._locator(s, t);
+    const expected = String(t.text ?? '');
+    try {
+      if (t.clear !== false) await loc.fill('', { timeout: ACTION_TIMEOUT_MS });
+      await loc.fill(expected, { timeout: ACTION_TIMEOUT_MS });
+    } catch (e) { throw this._actionError(e, s, t); }
+    // 校验回值:中文在部分站点上第一次会被吞/变成乱码,这里直接兜底重写,不让模型再花一轮
+    const readBack = () => loc.evaluate((el: any) => (el.isContentEditable
+      ? String(el.innerText || '')
+      : String(el.value !== undefined ? el.value : el.textContent || ''))).catch(() => '');
+    let got = await readBack();
+    if (!fillMatches(got, expected, t.clear)) {
+      await loc.evaluate((el: any, v: string) => {
+        if (el.isContentEditable) {
+          el.focus();
+          try { (globalThis as any).document.execCommand('insertText', false, v); } catch { /* 忽略 */ }
+          return;
+        }
+        const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+        if (desc && desc.set) desc.set.call(el, v); else el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }, expected).catch(() => {});
+      got = await readBack();
+      if (!fillMatches(got, expected, t.clear)) {
+        throw new Error(`输入校验失败:期望「${expected.slice(0, 60)}」,实际「${String(got).slice(0, 60)}」`);
+      }
+    }
+    if (t.submit) {
+      try { await loc.press('Enter'); } catch (e) { throw this._actionError(e, s, t); }
+      await this._settle(s, 300);
+    }
+    return `已输入${t.submit ? '并提交' : ''}:${targetLabel(t)}`;
+  }
+
+  private async _hoverNow(s: BrowserSession, target: { ref?: string; selector?: string; text?: string }): Promise<string> {
+    try { await this._locator(s, target).hover({ timeout: ACTION_TIMEOUT_MS }); }
+    catch (e) { throw this._actionError(e, s, target); }
+    await this._settle(s, 120);
+    return `已悬停:${targetLabel(target)}`;
+  }
+
+  private async _dblclickNow(s: BrowserSession, target: { ref?: string; selector?: string; text?: string }): Promise<string> {
+    try { await this._locator(s, target).dblclick({ timeout: ACTION_TIMEOUT_MS }); }
+    catch (e) { throw this._actionError(e, s, target); }
+    await this._settle(s, 120);
+    return `已双击:${targetLabel(target)}`;
+  }
+
+  private async _rightClickNow(s: BrowserSession, target: { ref?: string; selector?: string; text?: string }): Promise<string> {
+    try { await this._locator(s, target).click({ button: 'right', timeout: ACTION_TIMEOUT_MS }); }
+    catch (e) { throw this._actionError(e, s, target); }
+    await this._settle(s, 120);
+    return `已右键:${targetLabel(target)}`;
+  }
+
+  private async _selectNow(s: BrowserSession, t: { ref?: string; selector?: string; value?: string; label?: string }): Promise<string> {
+    const loc = this._locator(s, t);
+    try {
+      if (t.label != null) await loc.selectOption({ label: String(t.label) }, { timeout: ACTION_TIMEOUT_MS });
+      else await loc.selectOption(String(t.value ?? ''), { timeout: ACTION_TIMEOUT_MS });
+    } catch (e) { throw this._actionError(e, s, t); }
+    return `已选择「${t.label ?? t.value}」:${targetLabel(t)}`;
+  }
+
+  private async _uploadNow(s: BrowserSession, t: { ref?: string; selector?: string; files?: string[] }): Promise<string> {
+    const files = (Array.isArray(t.files) ? t.files : []).map((f) => String(f)).filter(Boolean);
+    if (!files.length) throw new Error('files 不能为空(要给绝对路径,可以是多个)');
+    try { await this._locator(s, t).setInputFiles(files, { timeout: ACTION_TIMEOUT_MS }); }
+    catch (e) { throw this._actionError(e, s, t); }
+    return `已上传 ${files.length} 个文件到 ${targetLabel(t)}`;
+  }
+
+  // ---------------- 动作(对外,带会话级串行) ----------------
 
   /** 给 AI:点击(ref / CSS 选择器 / 可见文本三选一) */
   async click(id: string, target: { ref?: string; selector?: string; text?: string }, sid?: string | null): Promise<string> {
     const s = this.assertOwner(id, sid);
-    return this._enqueue(s, async () => {
-      const { ref, selector, text } = target || {};
-      let loc = null as any;
-      if (ref) loc = s.page.locator(`[data-tp-ref="${String(ref).replace(/"/g, '')}"]`).first();
-      else if (selector) loc = s.page.locator(String(selector)).first();
-      else if (text) loc = s.page.getByText(String(text), { exact: false }).first();
-      else throw new Error('需要提供 ref / selector / text 之一');
-      await loc.click({ timeout: ACTION_TIMEOUT_MS });
-      await this._settle(s, 350);
-      return `已点击:${ref ? `ref=${ref}` : selector ? `选择器 ${selector}` : `文本「${text}」`}`;
-    });
+    return this._enqueue(s, () => this._clickNow(s, target));
   }
 
   /** 给 AI:向输入框填入文本(ref / selector 定位) */
   async fill(id: string, target: { ref?: string; selector?: string; text: string; submit?: boolean; clear?: boolean }, sid?: string | null): Promise<string> {
     const s = this.assertOwner(id, sid);
+    return this._enqueue(s, () => this._fillNow(s, target));
+  }
+
+  async hover(id: string, t: { ref?: string; selector?: string; text?: string }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    return this._enqueue(s, () => this._hoverNow(s, t));
+  }
+
+  async dblclick(id: string, t: { ref?: string; selector?: string; text?: string }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    return this._enqueue(s, () => this._dblclickNow(s, t));
+  }
+
+  async rightClick(id: string, t: { ref?: string; selector?: string; text?: string }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    return this._enqueue(s, () => this._rightClickNow(s, t));
+  }
+
+  async selectOption(id: string, t: { ref?: string; selector?: string; value?: string; label?: string }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    return this._enqueue(s, () => this._selectNow(s, t));
+  }
+
+  async uploadFiles(id: string, t: { ref?: string; selector?: string; files?: string[] }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    return this._enqueue(s, () => this._uploadNow(s, t));
+  }
+
+  /** 设置/查询 JS 弹窗策略;返回最近一次弹窗文案(没有就是 null) */
+  async dialog(id: string, { accept, policy }: { accept?: boolean; policy?: 'accept' | 'dismiss' }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    if (policy === 'accept' || policy === 'dismiss') s.dialogPolicy = policy;
+    else if (typeof accept === 'boolean') s.dialogPolicy = accept ? 'accept' : 'dismiss';
+    const last = s.lastDialog;
+    return `弹窗策略:${s.dialogPolicy === 'accept' ? '自动接受' : '自动关闭'}`
+      + (last ? `;最近一次弹窗:${last}` : ';最近没有弹窗');
+  }
+
+  /** 页面 console / 未捕获异常(最近的在后) */
+  async logs(id: string, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    return s.logs.length ? s.logs.join('\n') : '(页面没有 console 输出)';
+  }
+
+  /** 等网络空闲(没有 in-flight 请求持续 500ms) */
+  async networkIdle(id: string, { timeoutMs = 10_000 }: { timeoutMs?: number } = {}, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    try {
+      await s.page.waitForLoadState('networkidle', { timeout: Math.max(1000, Math.min(Number(timeoutMs) || 10_000, 60_000)) });
+      return '网络已空闲';
+    } catch { return '等待网络空闲超时(页面可能还有长连接/轮询),继续操作'; }
+  }
+
+  /** 读页面正文(按需,不进快照) */
+  async pageText(id: string, { max = 2000 }: { max?: number } = {}, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    const text = await s.page.evaluate(() => String((globalThis as any).document?.body?.innerText || ''))
+      .catch(() => '');
+    const t = String(text || '').replace(/\s+\n/g, '\n').trim();
+    const limit = Math.max(100, Math.min(Number(max) || 2000, 20_000));
+    return t ? (t.length > limit ? t.slice(0, limit) + '\n…(已截断)' : t) : '(页面没有正文)';
+  }
+
+  /** 断言页面里出现/不出现某段文字(批量里做校验用) */
+  async assertText(id: string, { text, exists = true }: { text: string; exists?: boolean }, sid?: string | null): Promise<string> {
+    const s = this.assertOwner(id, sid);
+    const want = String(text || '');
+    if (!want) throw new Error('assertText 需要 text');
+    const body = await s.page.evaluate(() => String((globalThis as any).document?.body?.innerText || '')).catch(() => '');
+    const has = body.includes(want);
+    if (has !== exists) {
+      throw new Error(`断言失败:期望页面${exists ? '包含' : '不包含'}「${want}」,实际${has ? '包含' : '不包含'}`);
+    }
+    return `断言通过:页面${exists ? '包含' : '不包含'}「${want}」`;
+  }
+
+  /**
+   * 一次执行多步(预览侧):没有服务端↔扩展的往返开销,但省掉的是**模型往返** ——
+   * 这才是 ego 那种"一次脚本跑完一段流程"真正快的地方。
+   */
+  async batch(id: string, steps: BatchStep[], sid?: string | null, opts: { stopOnError?: boolean } = {}): Promise<BatchResult> {
+    const s = this.assertOwner(id, sid);
     return this._enqueue(s, async () => {
-      const { ref, selector, text, submit, clear } = target || {};
-      let loc = null as any;
-      if (ref) loc = s.page.locator(`[data-tp-ref="${String(ref).replace(/"/g, '')}"]`).first();
-      else if (selector) loc = s.page.locator(String(selector)).first();
-      else throw new Error('需要提供 ref 或 selector');
-      if (clear !== false) await loc.fill('', { timeout: ACTION_TIMEOUT_MS });
-      await loc.fill(String(text ?? ''), { timeout: ACTION_TIMEOUT_MS });
-      if (submit) {
-        await loc.press('Enter');
-        await this._settle(s, 600);
+      const list = Array.isArray(steps) ? steps.slice(0, 60) : [];
+      if (!list.length) throw new Error('steps 不能为空');
+      const results: BatchStepResult[] = [];
+      let failedAt: number | null = null;
+      for (let i = 0; i < list.length; i++) {
+        const step = list[i] || ({} as BatchStep);
+        try {
+          const detail = await this._runStep(s, step);
+          results.push({ index: i + 1, op: String(step.op || ''), ok: true, detail });
+        } catch (e: any) {
+          results.push({ index: i + 1, op: String(step.op || ''), ok: false, detail: String(e?.message || e) });
+          failedAt = i + 1;
+          if (opts.stopOnError !== false) break;
+        }
       }
-      return `已输入${submit ? '并提交' : ''}:${ref ? `ref=${ref}` : selector ? `选择器 ${selector}` : ''}`;
+      return {
+        ok: failedAt === null,
+        steps: results,
+        failedAt,
+        url: s.page.url(),
+        title: s.title
+      };
     });
+  }
+
+  /** 批量里的一步:只做动作,不做快照(快照由工具层按策略补) */
+  private async _runStep(s: BrowserSession, step: BatchStep): Promise<string> {
+    const op = String(step.op || '').toLowerCase();
+    switch (op) {
+      case 'click': return this._clickNow(s, step);
+      case 'type':
+      case 'fill': return this._fillNow(s, { ref: step.ref, selector: step.selector, text: String(step.text ?? ''), submit: step.submit === true, clear: step.clear !== false });
+      case 'hover': return this._hoverNow(s, step);
+      case 'dblclick': return this._dblclickNow(s, step);
+      case 'rightclick': return this._rightClickNow(s, step);
+      case 'select': return this._selectNow(s, { ref: step.ref, selector: step.selector, value: step.value, label: step.label as string | undefined });
+      case 'upload': return this._uploadNow(s, { ref: step.ref, selector: step.selector, files: step.files });
+      case 'press': {
+        await s.page.keyboard.press(String(step.key || 'Enter'));
+        await this._settle(s, 120);
+        return `已按键:${step.key || 'Enter'}`;
+      }
+      case 'scroll': {
+        const dy = String(step.direction || '').toLowerCase() === 'up' ? -Math.abs(Number(step.amount) || 600) : Math.abs(Number(step.amount) || 600);
+        await s.page.mouse.wheel(0, dy);
+        await this._settle(s, 200);
+        return `已滚动 ${dy}px`;
+      }
+      case 'navigate':
+      case 'goto': {
+        const url = String(step.url || '');
+        if (!url) throw new Error('navigate 需要 url');
+        await this._navigate(s, url);
+        if (s.error) throw new Error(s.error);
+        return `已打开:${url}`;
+      }
+      case 'wait': {
+        const timeout = Math.min(Math.max(Number(step.timeoutMs) || 8000, 200), 60_000);
+        if (step.selector) await s.page.waitForSelector(String(step.selector), { state: 'visible', timeout });
+        else if (step.text) await s.page.getByText(String(step.text), { exact: false }).first().waitFor({ state: 'visible', timeout });
+        else if (step.url) await s.page.waitForURL(String(step.url), { timeout });
+        else await s.page.waitForTimeout(timeout);
+        return '等待完成';
+      }
+      case 'networkidle': {
+        await s.page.waitForLoadState('networkidle', { timeout: Math.min(Number(step.timeoutMs) || 10_000, 60_000) }).catch(() => undefined);
+        return '网络已空闲';
+      }
+      case 'asserttext':
+      case 'assert': {
+        const body = await s.page.evaluate(() => String((globalThis as any).document?.body?.innerText || '')).catch(() => '');
+        const want = String(step.text || '');
+        if (!want) throw new Error('assert 需要 text');
+        if (!body.includes(want)) throw new Error(`断言失败:页面里没有「${want}」`);
+        return `断言通过:「${want}」`;
+      }
+      case 'text': {
+        const body = await s.page.evaluate(() => String((globalThis as any).document?.body?.innerText || '')).catch(() => '');
+        return String(body || '').replace(/\s+\n/g, '\n').trim().slice(0, Math.max(100, Number(step.max) || 800));
+      }
+      case 'eval': {
+        const expr = String(step.expression || step.value || '');
+        if (!expr) throw new Error('eval 需要 expression');
+        const r = await s.page.evaluate(expr);
+        return JSON.stringify(r ?? null);
+      }
+      case 'waitforload':
+      case 'load':
+        await s.page.waitForLoadState('load', { timeout: Math.min(Number(step.timeoutMs) || 15_000, 60_000) });
+        return '页面已加载';
+      default:
+        throw new Error(`未知操作:${step.op}(可用 click/type/press/scroll/navigate/wait/hover/dblclick/rightClick/select/upload/networkIdle/assert/text/eval/load)`);
+    }
   }
 
   /** 给 AI:按一次按键(Enter/Tab/Escape/ArrowDown/Ctrl+A 等) */
@@ -835,9 +1167,10 @@ class BrowserManager extends EventEmitter {
     return out.length > 8000 ? out.slice(0, 8000) + '\n…(结果已截断)' : out;
   }
 
-  /** 给 AI:整页截图(PNG),返回缓冲区交给上层落盘为附件 */
-  async screenshot(id: string, { fullPage = false }: { fullPage?: boolean } = {}, sid?: string | null): Promise<Buffer> {
+  /** 给 AI:整页截图(PNG),返回缓冲区交给上层落盘为附件;overlay=true 时叠上最近一次操作的 AI 光标 */
+  async screenshot(id: string, { fullPage = false, overlay = false }: { fullPage?: boolean; overlay?: boolean } = {}, sid?: string | null): Promise<Buffer> {
     const s = this.assertOwner(id, sid);
+    if (overlay) await this._paintCursor(s, 'AI 操作位置');
     return await s.page.screenshot({ fullPage: !!fullPage, type: 'png' });
   }
 
@@ -869,7 +1202,8 @@ class BrowserManager extends EventEmitter {
       id, ownerSid, context, page, cdp, viewport,
       frame: null, frameWidth: viewport.width, frameHeight: viewport.height,
       title: '', loading: false, error: null, closed: false, titleTimer: null,
-      canBack: false, canForward: false, viewers: 0, chain: Promise.resolve()
+      canBack: false, canForward: false, viewers: 0, chain: Promise.resolve(),
+      logs: [], lastDialog: null, dialogPolicy: 'dismiss', lastPoint: null
     };
     this.sessions.set(id, s);
     this._wireSession(s);
@@ -888,6 +1222,17 @@ class BrowserManager extends EventEmitter {
     s.page.on('domcontentloaded', () => { s.loading = false; sync(); });
     s.page.on('close', () => { s.closed = true; this.sessions.delete(s.id); this.emit('closed', { id: s.id }); });
     s.page.on('crash', () => { s.error = '页面崩溃'; this._emitState(s); });
+    // console / 未捕获异常:动作失败时回给模型,比"点了没反应"有用得多
+    s.page.on('console', (m) => pushLog(s, `${m.type()}: ${m.text()}`));
+    s.page.on('pageerror', (e) => pushLog(s, `pageerror: ${(e as any)?.message || e}`));
+    // JS 弹窗:Playwright 默认会自动关闭,这里显式接住并记下文案,供 browser_act(dialog) 查询/切换策略
+    s.page.on('dialog', async (d) => {
+      s.lastDialog = `${d.type()}: ${d.message()}`;
+      try {
+        if (s.dialogPolicy === 'accept') await d.accept();
+        else await d.dismiss();
+      } catch { /* 弹窗可能已被导航关掉 */ }
+    });
     // 新窗口(target=_blank)在预览里没有第二块画布:直接关掉,并在当前页打开该地址
     s.page.on('popup', async (popup) => {
       try {

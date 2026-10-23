@@ -19,6 +19,7 @@ process.env.LLM_STREAM_IDLE_MS = '3000';
 import http from 'node:http';
 const { Agent, projectEvents, messageFaceIndexes } = await import('../server/agent/agent.ts');
 const { sshManager: ssh } = await import('../server/core/ssh-manager.ts');
+const { NO_WORKSPACE } = await import('../server/config.ts');
 const sessions = await import('../server/store/session-store.ts');
 const { Session } = await import('../server/agent/session.ts');
 
@@ -60,6 +61,15 @@ const server = http.createServer((req, res) => {
     if (step.type === 'eof') { res.end(); return; }                            // 无 finish_reason / [DONE] 就关闭
     if (step.type === 'doneOnly') { res.write('data: [DONE]\n\n'); res.end(); return; } // 有 [DONE] 但整条流没有 finish_reason
     if (step.type === 'hold') return;                                          // 保持打开:等客户端中止(模拟掉线)
+    // 已流出内容后延迟收尾:留出"生成途中发生某件事(如服务器掉线)"的时间窗,再看本轮是否继续跑完
+    if (step.type === 'slow') {
+      setTimeout(() => {
+        res.write(sse({}, 'stop'));
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }, step.delay ?? 400);
+      return;
+    }
     res.write(sse({}, 'stop'));
     res.write('data: [DONE]\n\n');
     res.end();
@@ -201,6 +211,49 @@ console.log('== 3) 服务器掉线被迫中断:对话里写明原因,而不是�
 
   ssh.conns.delete(KEY);
   ssh._activeId = null;
+}
+
+console.log('== 3b) 本地工作区对话:服务器掉线不该连带中止 (本轮继续跑完) ==');
+{
+  // 用户上报的现场:会话在本地工作区干活(远程侧只是「不使用工作区」的整台服务器边界),
+  // 生成途中断开/掉线那台服务器,整轮被 stopForConn 判成 conn-lost 中止 ——
+  // 本地工作区跟服务器连没连上没有关系,这一轮必须照常跑完,远程工具各自报"SSH 连接已断开"。
+  const KEY = 'root@10.10.10.10:22';
+  const fakeConn = { status: 'connected', hostInfo: { host: '10.10.10.10', port: 22, username: 'root' } };
+  ssh.conns.set(KEY, fakeConn);
+  ssh._activeId = KEY;                 // 界面正连着这台服务器
+  ssh.workspace = null;
+  ssh.noWorkspace = true;              // 远程侧「不使用工作区」:有远程边界,但不是具体目录
+
+  const { agent, events } = makeAgent();
+  agent._connKey = KEY;                // 前端认为当前连的就是这台
+  const s = agent.createSession('本地工作区对话');
+  const rt = agent._runtimes.get(s.id);
+  rt.localWorkspace = mkdtempSync(join(tmpdir(), 'sshai-local-')); // 工作落在本机
+  check('前置:该会话归本地作用域,本轮却会绑定活动连接',
+    rt.connKey === 'local' && rt.workspace === NO_WORKSPACE, j({ c: rt.connKey, w: rt.workspace }));
+
+  script = [{ type: 'slow', text: '本地文件已改好一半', delay: 400 }];
+  const from = agent.session.events.length;
+  const p = agent.run('改本地文件');
+  await waitFor(() => agentEvents(events, 'text_delta').length > 0, 3000);
+  agent.stopForConn(fakeConn);         // 生成途中服务器掉线
+  await p;
+
+  const evs = agent.session.events.slice(from);
+  const ends = evs.filter((e) => e.type === 'turn/end');
+  const reason = ends.length ? ends[ends.length - 1].data.reason : null;
+  check('本轮照常跑完(没被判成 conn-lost 中止)', reason?.kind === 'completed', j(reason));
+  check('没有写「被迫中断」披露',
+    !evs.some((e) => e.type === 'notice' && e.data?.kind === 'interrupted'),
+    j(evs.filter((e) => e.type === 'notice').map((e) => e.data)));
+  check('本地这轮生成的内容完整落库',
+    evs.some((e) => e.type === 'assistant/message' && /本地文件已改好一半/.test(String(e.data.message.content))),
+    j(evs.map((e) => e.type)));
+
+  ssh.conns.delete(KEY);
+  ssh._activeId = null;
+  ssh.noWorkspace = false;
 }
 
 console.log('== 4) 请求彻底失败:原因也留在对话里(不只在瞬时错误条) ==');

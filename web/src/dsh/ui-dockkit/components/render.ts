@@ -15,6 +15,8 @@ export interface PaneCallbacks {
   readonly onFocusTab: (tabId: TabId) => void
   readonly onFocusPane: (paneId: PaneId) => void
   readonly onSplitPane: (paneId: PaneId) => void
+  /** Close this pane and the tabs it holds; absent leaves the control undrawn. */
+  readonly onClosePane: ((paneId: PaneId) => void) | undefined
   readonly onAddTab: (paneId: PaneId) => void
   readonly onCloseTab: (tabId: TabId) => void
   /** Begin dragging a tab; the surface owns the gesture from here. */

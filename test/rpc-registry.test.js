@@ -51,7 +51,7 @@ const GOLDEN = {
   'ai-term': ['ai_term_list', 'ai_term_log', 'ai_term_resize', 'ai_term_delete'],
   'subagent': ['subagent_list', 'subagent_get', 'subagent_prompt', 'subagent_interrupt'],
   'computer-use': ['computer_use_status', 'computer_use_set'],
-  extension: ['ext_status', 'ext_tabs', 'ext_grant', 'ext_revoke', 'ext_set_mode'],
+  extension: ['ext_status', 'ext_tabs', 'ext_grant', 'ext_revoke', 'ext_set_mode', 'ext_domains', 'ext_audit'],
   changes:  ['changes_find', 'changes_summary', 'changes_diff'],
   schedule: ['schedule_list', 'schedule_catalog', 'schedule_history', 'schedule_delete', 'schedule_update', 'schedule_preview'],
   mcp:      ['mcp_list', 'mcp_save', 'mcp_reload']

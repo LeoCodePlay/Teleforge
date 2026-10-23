@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { planTurnFold, fragmentIndexes, startsNewTurn, turnAssistantIndexes, turnStartIndex } from '../web/src/utils/turnTail.ts';
+import { planTurnFold, fragmentIndexes, startsNewTurn, turnAssistantIndexes, turnStartIndex, foldedTextHidden, latestFoldOwner } from '../web/src/utils/turnTail.ts';
 import { isRealUserRow } from '../web/src/utils/compactionOrder.ts';
 import { mergeAttachments, mergeDeliverables } from '../web/src/utils/mergeAttachments.ts';
 
@@ -148,6 +148,113 @@ console.log('\n[三] 回合过程折叠行:一轮只挂一处,重试行属于过
   ];
   const plan = planTurnFold(rows);
   check('普通提示行不被跳过', plan[2].owner === 1 && !plan[2].hideWhenFolded);
+}
+
+console.log('\n[三·补] 过程叙述随折叠收起:最终答案边界(对齐 dsh 的 processMember / latestAnswer)');
+// 用户报的两个现象都在这一节钉死:
+//   ① 中途停止后收起,工具行收起了、"过程中的话"还留在外面 —— 因为它们当时不算过程成员;
+//   ② 完成自动折叠时,过程叙述与总结贴在一起像一段 —— 同样是没有把过程正文收进去。
+{
+  const textSeg = (t) => ({ kind: 'text', text: t });
+  const toolSeg = (name = 'read_local_file') => ({ kind: 'tools', tools: [{ tool: name, ok: true }] });
+  const row = (segments) => ({ role: 'assistant', segments });
+  {
+    // 过程叙述 → 工具 → 结论:答案只有最后那一段
+    const rows = [user, row([textSeg('我先看目录'), toolSeg(), textSeg('结论:改这里')])];
+    const plan = planTurnFold(rows);
+    check('答案 = 最后一个实质段(正文)', plan[1].answerRow === 1 && plan[1].answerSegment === 2, JSON.stringify(plan[1]));
+    check('收起时过程叙述藏起、答案留下',
+      foldedTextHidden(plan[1], 1, 0, false) === true && foldedTextHidden(plan[1], 1, 2, false) === false);
+    check('展开时过程叙述照常显示', foldedTextHidden(plan[1], 1, 0, true) === false);
+  }
+  {
+    // 停止在工具执行中:最后一步没有正文 → 本轮没有答案 → 收起时整轮都收进去
+    const rows = [user, { ...row([textSeg('我换个思路'), toolSeg()]), turnEndReason: 'aborted' }];
+    const plan = planTurnFold(rows);
+    check('最后一步在调工具 → 本轮没有最终答案',
+      plan[1].answerRow === -1 && plan[1].answerSegment === -1, JSON.stringify(plan[1]));
+    check('没有答案时过程叙述也跟着收起', foldedTextHidden(plan[1], 1, 0, false) === true);
+  }
+  {
+    // 只有思考收尾:最后一步没有定稿正文,同样没有答案
+    const rows = [user, row([textSeg('先说一句'), toolSeg(), { kind: 'reasoning', text: '再想想' }])];
+    const plan = planTurnFold(rows);
+    check('最后一步只有思考 → 没有答案', plan[1].answerRow === -1, JSON.stringify(plan[1]));
+  }
+  {
+    // 轮尾空气泡(流式没流出内容 / 重试分界留下的空行)不算答案,答案仍在前一行
+    const rows = [user, row([textSeg('过程'), toolSeg(), textSeg('结论')]), row([])];
+    const plan = planTurnFold(rows);
+    check('轮尾空气泡跳过,答案仍在前一行', plan[1].answerRow === 1 && plan[1].answerSegment === 2, JSON.stringify(plan[1]));
+  }
+  {
+    // 空白正文段不算"最后一步"(与 planGroups / dsh 的 blockIsVisible 同口径)
+    const rows = [user, row([textSeg('过程'), toolSeg(), textSeg('结论'), textSeg('\n\n')])];
+    const plan = planTurnFold(rows);
+    check('空白正文段不抢占答案', plan[1].answerRow === 1 && plan[1].answerSegment === 2, JSON.stringify(plan[1]));
+  }
+  {
+    // 重试拆段:答案只在最后一段,前面各段(连同正文)整段属于过程
+    const rows = [
+      user, row([textSeg('第一段的叙述'), toolSeg()]), retryRow,
+      row([textSeg('恢复后的叙述'), toolSeg(), textSeg('最终结论')])
+    ];
+    const plan = planTurnFold(rows);
+    check('答案落在收尾段', plan[1].answerRow === 3 && plan[1].answerSegment === 2, JSON.stringify(plan[1]));
+    check('前面各段的正文都属于过程(同轮共用同一份边界)',
+      foldedTextHidden(plan[1], 1, 0, false) === true && foldedTextHidden(plan[3], 3, 0, false) === true
+      && foldedTextHidden(plan[3], 3, 2, false) === false);
+  }
+  {
+    // 跨轮:新一轮的边界不串到上一轮
+    const rows = [
+      user, row([textSeg('上轮过程'), toolSeg(), textSeg('上轮结论')]), laterUser,
+      row([textSeg('本轮过程'), toolSeg()])
+    ];
+    const plan = planTurnFold(rows);
+    check('上一轮答案不受新一轮影响', plan[1].answerRow === 1 && plan[1].answerSegment === 2, JSON.stringify(plan[1]));
+    check('新一轮最后在调工具 → 它自己没有答案', plan[3].answerRow === -1, JSON.stringify(plan[3]));
+  }
+}
+
+console.log('\n[三·补2] 收起时机 next-input:最新一轮默认敞着');
+{
+  const textSeg = (t) => ({ kind: 'text', text: t });
+  const toolSeg = () => ({ kind: 'tools', tools: [{ tool: 'read_local_file', ok: true }] });
+  const row = (segments) => ({ role: 'assistant', segments });
+  {
+    // 一轮完成:它是最新一轮 → next-input 下默认展开
+    const rows = [user, row([textSeg('过程'), toolSeg(), textSeg('结论')])];
+    const plan = planTurnFold(rows);
+    check('完成的这一轮是最新轮', latestFoldOwner(rows, plan) === 1, String(latestFoldOwner(rows, plan)));
+  }
+  {
+    // 用户又发了下一条消息(新一轮还没产出 assistant 段):上一轮不再"最新" → 收起
+    const rows = [user, row([textSeg('过程'), toolSeg(), textSeg('结论')]), laterUser];
+    const plan = planTurnFold(rows);
+    check('发了下一条消息后,上一轮不再是"最新"', latestFoldOwner(rows, plan) === -1);
+  }
+  {
+    // 新一轮已经产出 assistant 段:最新轮切换到它
+    const rows = [
+      user, row([textSeg('过程'), toolSeg(), textSeg('结论')]), laterUser,
+      row([textSeg('新过程'), toolSeg()])
+    ];
+    const plan = planTurnFold(rows);
+    check('新一轮的 assistant 段出现后,最新轮切到它', latestFoldOwner(rows, plan) === 3, String(latestFoldOwner(rows, plan)));
+  }
+  {
+    // 轮内送达的通知行不算新输入:最新轮不变(它属于正在跑的这一轮)
+    const rows = [user, row([textSeg('过程'), toolSeg(), textSeg('结论')]), inlineNotice];
+    const plan = planTurnFold(rows);
+    check('轮内送达的通知行不抢走"最新"', latestFoldOwner(rows, plan) === 1);
+  }
+  {
+    // 轮首通知行开启新轮:它之后的 assistant 段属于新轮
+    const rows = [user, row([textSeg('过程'), toolSeg(), textSeg('结论')]), turnHeadNotice];
+    const plan = planTurnFold(rows);
+    check('轮首通知行之后还没产出 → 没有最新轮', latestFoldOwner(rows, plan) === -1);
+  }
 }
 
 console.log('\n[四] 历史投影:文件变更只挂收尾段,且按整轮汇总');

@@ -23,6 +23,7 @@ Add-Type -AssemblyName System.Drawing
 
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -49,6 +50,12 @@ public class TFNative {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+  // 输入法(IME):中文输入法会拦截注入的按键,把第一批字符当成拼音编码吃掉 ——
+  // 表现就是"第一次输入是乱码,第二次才正常"。发送前临时摘掉目标窗口的 IME 上下文。
+  [DllImport("imm32.dll")] public static extern IntPtr ImmGetContext(IntPtr hWnd);
+  [DllImport("imm32.dll")] public static extern bool ImmReleaseContext(IntPtr hWnd, IntPtr hIMC);
+  [DllImport("imm32.dll")] public static extern IntPtr ImmAssociateContext(IntPtr hWnd, IntPtr hIMC);
+  [DllImport("imm32.dll")] public static extern bool ImmSetOpenStatus(IntPtr hIMC, bool fOpen);
 
   // 把窗口强制切到前台。直接用 SetForegroundWindow 经常无效:Windows 有"前台锁定",
   // 后台进程不能随便抢前台(实测:调完 activate 前台窗口仍是别的应用,后续 OCR/截图全抓错)。
@@ -99,6 +106,50 @@ public class TFNative {
       return Marshal.ReadInt32(buf, 16);
     } finally { WTSFreeMemory(buf); }
   }
+
+  // ---------------- 窗口枚举与进程名(比 UIA 全量枚举 + Get-Process 快 1~2 个数量级) ----------------
+  // 为什么不用 UIA:[AutomationElement]::RootElement.FindAll(Children) 实测 ~90ms,
+  // 本机 28 个窗口再对每个窗口调一次 Get-Process(13ms/个)就是 230~330ms/次;
+  // windows 是 computer_windows 的全部开销,也是 computer_launch 每次轮询的开销。
+  // EnumWindows ~9ms,进程名走 QueryFullProcessImageNameW ~0.3ms/个(hwnd 仍是同一个,
+  // 后续 UIA 的 FromHandle / 元素树完全兼容)。
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+  [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextLengthW(IntPtr hWnd);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  public static extern bool QueryFullProcessImageNameW(IntPtr h, int flags, StringBuilder sb, ref int size);
+
+  /** 进程名(不含 .exe);取不到时返回空串 */
+  public static string ProcessName(int pid) {
+    IntPtr h = OpenProcess(0x1000, false, pid);   // PROCESS_QUERY_LIMITED_INFORMATION
+    if (h == IntPtr.Zero) return "";
+    try {
+      var sb = new StringBuilder(1024);
+      int n = sb.Capacity;
+      if (!QueryFullProcessImageNameW(h, 0, sb, ref n)) return "";
+      string p = sb.ToString(0, n);
+      int i = p.LastIndexOf('\\');
+      return i >= 0 ? p.Substring(i + 1) : p;
+    } catch { return ""; } finally { CloseHandle(h); }
+  }
+
+  /** 顶层可见窗口(排除桌面 Shell 与有主窗口,与 UIA 根节点 enumerating 的口径接近) */
+  public static IntPtr[] TopLevelWindows() {
+    var list = new List<IntPtr>();
+    IntPtr shell = GetShellWindow();
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      if (h == shell) return true;
+      if (!IsWindowVisible(h)) return true;
+      if (GetWindow(h, 4) != IntPtr.Zero) return true;   // GW_OWNER
+      list.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return list.ToArray();
+  }
 }
 '@
 
@@ -129,6 +180,17 @@ $VK = @{
 }
 # 反引号/波浪键:字面反引号会破坏本文件的模板字符串,改用字符码注册
 $VK[[string][char]0x60] = 0xC0
+
+# UIA 对"最小化/已销毁/离屏"的元素会把 BoundingRectangle 报成空矩形
+# (X/Y/W/H = ±Infinity),直接 [int][Math]::Round 会抛
+# "无法将值 ∞ 转换为类型 System.Int32" —— 一个这样的元素就能让整棵元素树失败
+# (实测 Chrome / Electron / Windows Terminal 的 uia_tree 全部因此报错)。
+# 统一走 To-I:非有限值一律按 0 记,配合 offscreen 字段告诉模型它不可点。
+function To-I([double]$v) {
+  if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { return 0 }
+  if ($v -gt 2000000000.0 -or $v -lt -2000000000.0) { return 0 }
+  return [int][Math]::Round($v)
+}
 
 function Get-VirtualBounds {
   $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -163,11 +225,10 @@ function Get-Foreground {
   [TFNative]::GetWindowRect($h, [ref]$r) | Out-Null
   $procId = 0
   [TFNative]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
-  $name = ''
-  try { $name = (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { }
+  # 进程名走 P/Invoke(0.3ms),不再用 Get-Process(13ms):每次鼠标动作都要回报前台窗口
   return [ordered]@{
-    title = $sb.ToString(); process = $name
-    x = $r.Left; y = $r.Top; w = ($r.Right - $r.Left); h = ($r.Bottom - $r.Top)
+    title = $sb.ToString(); process = [TFNative]::ProcessName([int]$procId)
+    x = (To-I $r.Left); y = (To-I $r.Top); w = (To-I ($r.Right - $r.Left)); h = (To-I ($r.Bottom - $r.Top))
   }
 }
 
@@ -175,9 +236,18 @@ function Get-Foreground {
 # 这是截图式 computer-use 的固有限制,必须让模型知道"现在操作无效",而不是对着锁屏瞎点。
 # 注意 WTSINFOEX 的 SessionFlags 语义反直觉:0=已锁定,1=未锁定(未知=-1)。
 # 读不到/布局不符/会话号对不上时一律返回"未锁定"(宁可漏报,也不要误封把功能整个锁死)。
+$script:sessionId = -1
+function Get-SessionId {
+  if ($script:sessionId -lt 0) {
+    try { $script:sessionId = [int](Get-Process -Id $PID).SessionId } catch { $script:sessionId = -1 }
+  }
+  return $script:sessionId
+}
+
 function Test-Locked {
   try {
-    $sid = (Get-Process -Id $PID).SessionId
+    $sid = Get-SessionId
+    if ($sid -lt 0) { return $false }
     $flags = [TFNative]::SessionFlags([int]$sid)
     if ($flags -lt 0) { return $false }
     return ($flags -eq 0)
@@ -226,39 +296,58 @@ function Test-Actionable($desc) {
 function Uia-Desc($e) {
   $r = $e.Current.BoundingRectangle
   $kinds = Get-Patterns $e
+  $w = To-I $r.Width; $h = To-I $r.Height
   return [ordered]@{
     name = [string]$e.Current.Name
     type = $e.Current.ControlType.ProgrammaticName.Replace('ControlType.', '')
     autoId = [string]$e.Current.AutomationId
-    cls = [string]$e.Current.ClassName
-    hwnd = [int64]$e.Current.NativeWindowHandle
-    x = [int][Math]::Round($r.X); y = [int][Math]::Round($r.Y)
-    w = [int][Math]::Round($r.Width); h = [int][Math]::Round($r.Height)
+    x = (To-I $r.X); y = (To-I $r.Y); w = $w; h = $h
     enabled = [bool]$e.Current.IsEnabled
-    offscreen = [bool]$e.Current.IsOffscreen
+    # 尺寸为 0 的元素同样不可点(离屏元素报空矩形时坐标会被兜底成 0,不能让它看起来像可点)
+    offscreen = ([bool]$e.Current.IsOffscreen) -or ($w -le 0) -or ($h -le 0)
     patterns = $kinds
   }
 }
 
-# 按 hwnd / pid / title 找最合适的顶层窗口(多个同名时取面积最大的那个)
-function Find-RootWindow($sel) {
-  $wins = $AE::RootElement.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition)
-  $best = $null
+# 按 hwnd / pid / title 找目标窗口句柄(面积最大的那个:同名窗口里通常就是要操作的主窗口)。
+# hwnd 直接返回,不再枚举 —— 这一步原来要全量枚举 UIA 根节点(~90ms),而它几乎是所有
+# 工具的前置动作(window_rect / activate / uia_* / ocr / 相对坐标点击)。
+function Resolve-HWND($sel) {
+  if ($sel.hwnd) { return [IntPtr][int64]$sel.hwnd }
+  $best = [IntPtr]::Zero
   $bestArea = -1
-  foreach ($w in $wins) {
-    try {
-      if ($sel.hwnd -and ([int64]$w.Current.NativeWindowHandle) -ne [int64]$sel.hwnd) { continue }
-      if ($sel.pid -and $w.Current.ProcessId -ne [int]$sel.pid) { continue }
-      if ($sel.title) {
-        $t = [string]$w.Current.Name
-        if (-not $t -or -not $t.ToLower().Contains(([string]$sel.title).ToLower())) { continue }
-      }
-      $r = $w.Current.BoundingRectangle
-      $area = [int]$r.Width * [int]$r.Height
-      if ($area -gt $bestArea) { $bestArea = $area; $best = $w }
-    } catch { }
+  $needle = ''
+  if ($sel.title) { $needle = ([string]$sel.title).ToLower() }
+  foreach ($h in [TFNative]::TopLevelWindows()) {
+    if ($sel.pid) {
+      $p = 0
+      [TFNative]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null
+      if ([int]$p -ne [int]$sel.pid) { continue }
+    }
+    if ($needle) {
+      $sb = New-Object System.Text.StringBuilder 512
+      [TFNative]::GetWindowTextW($h, $sb, 512) | Out-Null
+      $t = $sb.ToString()
+      if (-not $t -or -not $t.ToLower().Contains($needle)) { continue }
+    }
+    $r = New-Object TFRect
+    [TFNative]::GetWindowRect($h, [ref]$r) | Out-Null
+    $area = (To-I ($r.Right - $r.Left)) * (To-I ($r.Bottom - $r.Top))
+    if ($area -gt $bestArea) { $bestArea = $area; $best = $h }
   }
   return $best
+}
+
+# 选择器为空时取前台窗口;明确指定了 hwnd/pid/title 但没找到时**返回 null**,
+# 由调用方报错。绝不能悄悄回落到前台窗口——那会让模型以为看到的是目标窗口,
+# 对着另一个窗口的元素/文字操作,比直接失败危险得多。
+function Get-Root($sel) {
+  if ($sel.Count -gt 0) {
+    $h = Resolve-HWND $sel
+    if ($h -eq [IntPtr]::Zero) { return $null }
+    try { return $AE::FromHandle($h) } catch { return $null }
+  }
+  try { return $AE::FromHandle([TFNative]::GetForegroundWindow()) } catch { return $null }
 }
 
 function Window-Selector($req) {
@@ -274,17 +363,21 @@ function Walk-Uia($e, $depth, $maxDepth, $maxNodes, $interactiveOnly) {
   $script:walkCount++
   $kids = $null
   try { $kids = $e.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition) } catch { }
-  $desc = Uia-Desc $e
-  $desc['depth'] = $depth
-  $actionable = Test-Actionable $desc
-  $desc['actionable'] = $actionable
+  # 单个元素读属性失败(已被销毁/跨进程拒绝)不能拖垮整棵树:跳过它,继续走兄弟节点
+  $desc = $null
+  try { $desc = Uia-Desc $e } catch { $desc = $null }
   $isLeaf = (-not $kids) -or ($kids.Count -eq 0)
-  # 默认只回"可操作元素 + 有名字的叶子",否则一个浏览器窗口能吐出上万条匿名容器
-  if ((-not $interactiveOnly) -or $actionable -or (($desc.name -ne '') -and $isLeaf)) {
-    $script:refSeq++
-    $desc['ref'] = 'e' + $script:refSeq
-    $script:refs[$desc['ref']] = $e
-    $script:walkOut += , $desc
+  if ($desc) {
+    $desc['depth'] = $depth
+    $actionable = Test-Actionable $desc
+    $desc['actionable'] = $actionable
+    # 默认只回"可操作元素 + 有名字的叶子",否则一个浏览器窗口能吐出上万条匿名容器
+    if ((-not $interactiveOnly) -or $actionable -or (($desc.name -ne '') -and $isLeaf)) {
+      $script:refSeq++
+      $desc['ref'] = 'e' + $script:refSeq
+      $script:refs[$desc['ref']] = $e
+      $script:walkOut += , $desc
+    }
   }
   if ($depth -ge $maxDepth -or (-not $kids)) { return }
   foreach ($k in $kids) { Walk-Uia $k ($depth + 1) $maxDepth $maxNodes $interactiveOnly }
@@ -292,10 +385,8 @@ function Walk-Uia($e, $depth, $maxDepth, $maxNodes, $interactiveOnly) {
 
 function Invoke-UiaTree($req) {
   $sel = Window-Selector $req
-  $root = $null
-  if ($sel.Count -gt 0) { $root = Find-RootWindow $sel }
-  if (-not $root) { $root = $AE::FromHandle([TFNative]::GetForegroundWindow()) }
-  if (-not $root) { throw '未找到目标窗口(可先用 windows 操作列出当前窗口)' }
+  $root = Get-Root $sel
+  if (-not $root) { throw '未找到目标窗口(句柄可能已失效;可先用 windows 列出当前窗口)' }
   $script:refs = @{}
   $script:refSeq = 0
   $script:walkOut = @()
@@ -312,10 +403,8 @@ function Invoke-UiaTree($req) {
 
 function Invoke-UiaFind($req) {
   $sel = Window-Selector $req
-  $root = $null
-  if ($sel.Count -gt 0) { $root = Find-RootWindow $sel }
-  if (-not $root) { $root = $AE::FromHandle([TFNative]::GetForegroundWindow()) }
-  if (-not $root) { throw '未找到目标窗口' }
+  $root = Get-Root $sel
+  if (-not $root) { throw '未找到目标窗口(句柄可能已失效;可先用 windows 列出当前窗口)' }
   $q = [string]$req.query
   if (-not $q) { throw 'find 需要 query(控件名/文本,子串匹配,忽略大小写)' }
   $needle = $q.ToLower()
@@ -330,7 +419,8 @@ function Invoke-UiaFind($req) {
     try { $nm = [string]$e.Current.Name } catch { continue }
     if (-not $nm) { continue }
     if (-not $nm.ToLower().Contains($needle)) { continue }
-    $d = Uia-Desc $e
+    $d = $null
+    try { $d = Uia-Desc $e } catch { continue }
     $d['actionable'] = Test-Actionable $d
     $script:refSeq++
     $d['ref'] = 'e' + $script:refSeq
@@ -358,7 +448,10 @@ function Invoke-UiaAction($req) {
     'focus' { $e.SetFocus() }
     'scroll_into_view' { ([System.Windows.Automation.ScrollItemPattern]$e.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)).ScrollIntoView() }
     'click_center' {
-      Move-To ([int]($r.X + $r.Width / 2)) ([int]($r.Y + $r.Height / 2))
+      $cx = To-I ($r.X + $r.Width / 2)
+      $cy = To-I ($r.Y + $r.Height / 2)
+      if ($cx -le 0 -and $cy -le 0) { throw '该元素没有可见区域(offscreen),无法按中心点击' }
+      Move-To $cx $cy
       Mouse-Click 'left'
     }
     default { throw ('未知 UIA 动作: ' + $action + '(可用 invoke/set_value/select/toggle/expand/collapse/focus/scroll_into_view/click_center)') }
@@ -384,23 +477,29 @@ function Invoke-ElementAt($req) {
 function Get-AppWindows {
   $out = @()
   $fg = [TFNative]::GetForegroundWindow()
-  $wins = $AE::RootElement.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition)
-  foreach ($w in $wins) {
+  # EnumWindows(~9ms)+ QueryFullProcessImageNameW(0.3ms/个)
+  # 替代 UIA 根节点 FindAll(~90ms)+ Get-Process(13ms/个):29 个窗口 231ms -> ~12ms
+  foreach ($h in [TFNative]::TopLevelWindows()) {
     try {
-      $r = $w.Current.BoundingRectangle
-      $ww = [int][Math]::Round($r.Width); $hh = [int][Math]::Round($r.Height)
+      $r = New-Object TFRect
+      [TFNative]::GetWindowRect($h, [ref]$r) | Out-Null
+      $ww = To-I ($r.Right - $r.Left); $hh = To-I ($r.Bottom - $r.Top)
       if ($ww -le 60 -or $hh -le 40) { continue }   # 过滤不可见的辅助窗口
-      $p2 = $w.Current.ProcessId
-      $pname = ''
-      try { $pname = (Get-Process -Id $p2 -ErrorAction Stop).ProcessName } catch { }
-      $hw = [int64]$w.Current.NativeWindowHandle
+      $procId = 0
+      [TFNative]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
+      $sb = New-Object System.Text.StringBuilder 512
+      [TFNative]::GetWindowTextW($h, $sb, 512) | Out-Null
+      $title = $sb.ToString()
+      # 任务栏 / 输入法画布这类"没有标题、只有一条"的壳窗口不是操作目标:
+      # 留在清单里既占 token 又容易让模型挑错窗口。只按高度判(任务栏 48px),
+      # 正常的小弹窗(≥100px 高)仍然保留,免得 computer_launch 找不到已开的窗口。
+      if ($title.Trim() -eq '' -and $hh -lt 100) { continue }
       $out += , ([ordered]@{
-          hwnd = $hw; pid = $p2; process = $pname
-          title = [string]$w.Current.Name
-          type = $w.Current.ControlType.ProgrammaticName.Replace('ControlType.', '')
-          x = [int][Math]::Round($r.X); y = [int][Math]::Round($r.Y); w = $ww; h = $hh
-          minimized = ([TFNative]::IsIconic([IntPtr]$hw) -eq $true)
-          foreground = ($hw -eq [int64]$fg)
+          hwnd = [int64]$h; pid = [int]$procId; process = [TFNative]::ProcessName([int]$procId)
+          title = $title
+          x = (To-I $r.Left); y = (To-I $r.Top); w = $ww; h = $hh
+          minimized = ([TFNative]::IsIconic($h) -eq $true)
+          foreground = ($h -eq $fg)
         })
     } catch { }
   }
@@ -410,13 +509,18 @@ function Get-AppWindows {
 function Invoke-Activate($req) {
   $sel = Window-Selector $req
   if ($sel.Count -eq 0) { throw 'activate 需要 hwnd / pid / title 之一' }
-  $w = Find-RootWindow $sel
-  if (-not $w) { throw '未找到匹配窗口(可先用 windows 操作列出)' }
-  $h = [IntPtr][int64]$w.Current.NativeWindowHandle
+  $h = Resolve-HWND $sel
+  if ($h -eq [IntPtr]::Zero) { throw '未找到匹配窗口(可先用 windows 操作列出)' }
+  $title = ''
+  try {
+    $sb = New-Object System.Text.StringBuilder 512
+    [TFNative]::GetWindowTextW($h, $sb, 512) | Out-Null
+    $title = $sb.ToString()
+  } catch { }
   $ok = [TFNative]::ForceForeground($h)
   Start-Sleep -Milliseconds 300
   return [ordered]@{
-    ok = $true; hwnd = [int64]$h; title = [string]$w.Current.Name
+    ok = $true; hwnd = [int64]$h; title = $title
     activated = [bool]$ok; foreground = (Get-Foreground)
   }
 }
@@ -475,11 +579,11 @@ function Invoke-Ocr($req) {
     $vw = [int]$req.rect.w; $vh = [int]$req.rect.h
   } elseif ($req.hwnd -or $req.pid -or $req.title) {
     $sel = Window-Selector $req
-    $w = Find-RootWindow $sel
-    if (-not $w) { throw '未找到要识别的窗口(可先用 windows 操作列出)' }
+    $w = Get-Root $sel
+    if (-not $w) { throw '未找到要识别的窗口(句柄可能已失效;可先用 windows 列出当前窗口)' }
     $r = $w.Current.BoundingRectangle
-    $vx = [int][Math]::Round($r.X); $vy = [int][Math]::Round($r.Y)
-    $vw = [int][Math]::Round($r.Width); $vh = [int][Math]::Round($r.Height)
+    $vx = To-I $r.X; $vy = To-I $r.Y
+    $vw = To-I $r.Width; $vh = To-I $r.Height
   } else {
     $v = Get-VirtualBounds
     $vx = [int]$v.x; $vy = [int]$v.y; $vw = [int]$v.w; $vh = [int]$v.h
@@ -489,6 +593,16 @@ function Invoke-Ocr($req) {
   # 先按 1:1 抓取,再按 scale 放大后交给 OCR:小字放大 2 倍识别率明显更高
   $scale = 1.0
   if ($req.scale) { $scale = [Math]::Min(4.0, [Math]::Max(1.0, [double]$req.scale)) }
+  # OcrEngine 对输入图有硬上限(默认 10000px),超了 RecognizeAsync 直接抛异常。
+  # 整张虚拟桌面(如双 4K = 7680 宽)按 2 倍放大就会越界,所以按上限把倍数压回去。
+  $limit = 10000
+  try { $limit = [int][Windows.Media.Ocr.OcrEngine]::MaxImageDimension } catch { }
+  $longest = [Math]::Max($vw, $vh)
+  if ($limit -gt 0 -and $longest -gt 0) {
+    $maxScale = [Math]::Floor(($limit - 1) * 100.0 / $longest) / 100.0
+    if ($maxScale -lt 1.0) { $maxScale = 1.0 }
+    if ($scale -gt $maxScale) { $scale = $maxScale }
+  }
   $bmp = New-Object System.Drawing.Bitmap($vw, $vh)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $hdcDst = $g.GetHdc()
@@ -618,28 +732,79 @@ function Send-Hotkey([string[]]$keys) {
 
 # 任意 Unicode 文本输入:用 KEYEVENTF_UNICODE 逐字符注入,不经过键盘布局,
 # 中文/emoji 之外的全部字符都能原样送入(不受 SendKeys 特殊字符转义影响)。
+#
+# 中文输入法是这条路上最大的坑:IME 挂在目标窗口的输入上下文上时,注入的 Unicode 码点会被
+# 当成拼音输进去(第一次一堆乱码,第二次输入法状态变了才正常)。所以发送前把前台窗口的
+# IME 上下文临时摘下 + 关闭打开状态,发完再原样挂回去 —— 不改变用户的输入法设置。
 function Send-UnicodeText([string]$text) {
-  foreach ($ch in $text.ToCharArray()) {
-    $code = [int][char]$ch
-    if ($code -eq 10 -or $code -eq 13) { Send-Hotkey @('enter'); continue }
-    if ($code -eq 9) { Send-Hotkey @('tab'); continue }
-    [TFNative]::keybd_event(0, [byte]($code -band 0xFF), $KEYEVENTF_UNICODE, [IntPtr]::Zero)
-    [TFNative]::keybd_event(0, [byte](($code -shr 8) -band 0xFF), $KEYEVENTF_UNICODE, [IntPtr]::Zero)
-    [TFNative]::keybd_event(0, [byte]($code -band 0xFF), ($KEYEVENTF_UNICODE -bor $KEYEVENTF_KEYUP), [IntPtr]::Zero)
-    [TFNative]::keybd_event(0, [byte](($code -shr 8) -band 0xFF), ($KEYEVENTF_UNICODE -bor $KEYEVENTF_KEYUP), [IntPtr]::Zero)
-    Start-Sleep -Milliseconds 8
+  $hwnd = [TFNative]::GetForegroundWindow()
+  $oldImc = [IntPtr]::Zero
+  $detached = $false
+  if ($hwnd -ne [IntPtr]::Zero) {
+    $imc = [TFNative]::ImmGetContext($hwnd)
+    if ($imc -ne [IntPtr]::Zero) {
+      [TFNative]::ImmSetOpenStatus($imc, $false) | Out-Null
+      [TFNative]::ImmReleaseContext($hwnd, $imc) | Out-Null
+    }
+    $oldImc = [TFNative]::ImmAssociateContext($hwnd, [IntPtr]::Zero)
+    $detached = $true
   }
+  try {
+    foreach ($ch in $text.ToCharArray()) {
+      $code = [int][char]$ch
+      if ($code -eq 10 -or $code -eq 13) { Send-Hotkey @('enter'); continue }
+      if ($code -eq 9) { Send-Hotkey @('tab'); continue }
+      [TFNative]::keybd_event(0, [byte]($code -band 0xFF), $KEYEVENTF_UNICODE, [IntPtr]::Zero)
+      [TFNative]::keybd_event(0, [byte](($code -shr 8) -band 0xFF), $KEYEVENTF_UNICODE, [IntPtr]::Zero)
+      [TFNative]::keybd_event(0, [byte]($code -band 0xFF), ($KEYEVENTF_UNICODE -bor $KEYEVENTF_KEYUP), [IntPtr]::Zero)
+      [TFNative]::keybd_event(0, [byte](($code -shr 8) -band 0xFF), ($KEYEVENTF_UNICODE -bor $KEYEVENTF_KEYUP), [IntPtr]::Zero)
+      Start-Sleep -Milliseconds 8
+    }
+  } finally {
+    if ($detached -and $oldImc -ne [IntPtr]::Zero) {
+      [TFNative]::ImmAssociateContext($hwnd, $oldImc) | Out-Null
+    }
+  }
+}
+
+$script:jpgEnc = $null
+$script:jpgParams = $null
+# 编码器查一次就够了:GetImageEncoders() 每次调用要枚举系统编码器,截图是高频路径
+function Get-JpegCodec {
+  if (-not $script:jpgEnc) {
+    $script:jpgEnc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+    $script:jpgParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+    $script:jpgParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]82)
+  }
+  return $script:jpgEnc
 }
 
 function Invoke-Capture($req) {
   $monitors = Get-Monitors
+  $idx = $req.monitor
+  # 'fg' = 前台窗口所在的那块显示器。默认口径就应该是它:整张多屏拼图(6000px 宽)
+  # 缩到 2560 后是 0.43 倍,文字和小按钮基本看不清。放在 worker 里算,
+  # Node 侧就不用为了"猜哪块屏"多发一次 monitors 往返。
+  if ($idx -eq 'fg') {
+    $idx = $null
+    try {
+      $h = [TFNative]::GetForegroundWindow()
+      $fr = New-Object TFRect
+      [TFNative]::GetWindowRect($h, [ref]$fr) | Out-Null
+      $cx = ($fr.Left + $fr.Right) / 2
+      $cy = ($fr.Top + $fr.Bottom) / 2
+      for ($i = 0; $i -lt $monitors.Count; $i++) {
+        $m = $monitors[$i]
+        if ($cx -ge $m.x -and $cx -lt ($m.x + $m.w) -and $cy -ge $m.y -and $cy -lt ($m.y + $m.h)) { $idx = $i; break }
+      }
+    } catch { $idx = $null }
+  }
   if ($req.rect) {
     # 区域截图:用于把一小块放大到 1:1 看清细节(整屏缩放后看不清小字/小图标)
     $vx = [int]$req.rect.x; $vy = [int]$req.rect.y
     $vw = [int]$req.rect.w; $vh = [int]$req.rect.h
     if ($vw -le 0 -or $vh -le 0) { throw '截图区域为空' }
   } else {
-  $idx = $req.monitor
   $useMonitor = $false
   if ($null -ne $idx) {
     $n = [int]$idx
@@ -688,10 +853,8 @@ function Invoke-Capture($req) {
     $img = $dst
   }
 
-  $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
-  $ps = New-Object System.Drawing.Imaging.EncoderParameters(1)
-  $ps.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]82)
-  $img.Save($req.path, $enc, $ps)
+  $enc = Get-JpegCodec
+  $img.Save($req.path, $enc, $script:jpgParams)
 
   $iw = $img.Width; $ih = $img.Height
   if ($img -ne $bmp) { $img.Dispose() }
@@ -717,13 +880,16 @@ function Invoke-Op($req) {
     'capture' { return Invoke-Capture $req }
     'windows' { return [ordered]@{ ok = $true; windows = (Get-AppWindows); locked = (Test-Locked) } }
     'window_rect' {
-      $w = Find-RootWindow (Window-Selector $req)
-      if (-not $w) { throw '未找到窗口(可先用 windows 操作列出)' }
+      $h = Resolve-HWND (Window-Selector $req)
+      if ($h -eq [IntPtr]::Zero) { throw '未找到窗口(句柄可能已失效;可先用 windows 列出当前窗口)' }
+      # 仍用 UIA 的 BoundingRectangle(不含 DWM 的隐形缩放边),与 computer_action 的
+      # 相对坐标口径保持一致;hwnd 直连后这一步从"全量枚举根节点"降到 ~2ms
+      $w = $AE::FromHandle($h)
       $r = $w.Current.BoundingRectangle
       return [ordered]@{
-        ok = $true; hwnd = [int64]$w.Current.NativeWindowHandle; title = [string]$w.Current.Name
-        x = [int][Math]::Round($r.X); y = [int][Math]::Round($r.Y)
-        w = [int][Math]::Round($r.Width); h = [int][Math]::Round($r.Height)
+        ok = $true; hwnd = [int64]$h; title = [string]$w.Current.Name
+        x = (To-I $r.X); y = (To-I $r.Y)
+        w = (To-I $r.Width); h = (To-I $r.Height)
       }
     }
     'activate' { return Invoke-Activate $req }
@@ -765,14 +931,21 @@ function Invoke-Op($req) {
         }
         default { throw "未知鼠标动作: $action" }
       }
-      return [ordered]@{ ok = $true; cursor = (Get-Cursor); foreground = (Get-Foreground) }
+      # 落点自检就地做掉(FromPoint ~4ms):不再让 Node 侧多发一次 element_at 往返
+      $cur = Get-Cursor
+      $under = $null
+      try { $under = (Invoke-ElementAt @{ x = $cur.x; y = $cur.y }).element } catch { }
+      return [ordered]@{ ok = $true; cursor = $cur; element = $under; foreground = (Get-Foreground) }
     }
     'scroll' {
       if ($null -ne $req.x -and $null -ne $req.y) { Move-To ([int]$req.x) ([int]$req.y) }
       $amount = 3
       if ($null -ne $req.amount) { $amount = [int]$req.amount }
       [TFNative]::mouse_event($MOUSEEVENTF_WHEEL, 0, 0, ($amount * 120), [IntPtr]::Zero)
-      return [ordered]@{ ok = $true; cursor = (Get-Cursor) }
+      $cur = Get-Cursor
+      $under = $null
+      try { $under = (Invoke-ElementAt @{ x = $cur.x; y = $cur.y }).element } catch { }
+      return [ordered]@{ ok = $true; cursor = $cur; element = $under }
     }
     'type' {
       $text = [string]$req.text

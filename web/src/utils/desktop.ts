@@ -19,7 +19,10 @@ export function downloadViaTauri(apiPath: string, suggestedName: string): void {
     return;
   }
   const tauri = (window as any).__TAURI__;
-  tauri.core.invoke('download', { apiPath, suggestedName }).catch((e: Error) => {
+  // Rust 侧命令签名是 download(args: DownloadArgs):具名结构体参数必须整包放进 `args`,
+  // 平铺成 { apiPath, suggestedName } 会被 Tauri 判为 missing required key `args`;
+  // 结构体内部的字段名走 serde(api_path / suggested_name),不跟外层参数的 camelCase 规则。
+  tauri.core.invoke('download', { args: { api_path: apiPath, suggested_name: suggestedName } }).catch((e: Error) => {
     console.error('下载失败:', e);
     alert('下载失败: ' + (e?.message || String(e)));
   });

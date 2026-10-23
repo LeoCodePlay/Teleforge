@@ -44,12 +44,15 @@ allowed-tools:
 | 优先级 | 手段 | 什么时候用 | 准确率 |
 | --- | --- | --- | --- |
 | 1 | `computer_ui` + `computer_ui_action` | 标准应用(资源管理器、浏览器、Office、设置、大多数 Win32/WPF/UWP)。按控件名拿 `ref` 后直接 invoke/set_value | **不会点偏**(不经过坐标) |
-| 2 | `computer_ocr` → 用返回的中心坐标点击 | 自绘应用(微信 PC 版、QQ、部分游戏/工具),UIA 里只有匿名容器 | 高(按文字行中心点) |
+| 2 | `computer_ocr` → 用返回的 `@(x,y)` 点击 | 自绘应用(微信 PC 版、QQ、部分游戏/工具),UIA 里只有匿名容器 | 高(返回的就是文字行中心) |
 | 3 | `computer_action` + **相对坐标** rx/ry | 目标位置相对窗口固定,但既没有元素也没有文字(如画布某处) | 高(不受窗口移动/缩放影响) |
 | 4 | `computer_action` + 图片坐标 x/y | 上面都不行时的兜底 | 一般(模型估像素必然有误差) |
 
 **关键:第 4 种是最后手段。** 实测教训——靠估像素点击,在多屏拼图(缩放 0.43)上会系统性点偏,
 然后就是"点错 → 截图 → 再点错"的死循环。能用元素或文字定位就绝不要估坐标。
+
+`computer_ui` / `computer_ocr` 返回的 `@(x,y)` 已经是**元素 / 文字行的中心**(屏幕物理坐标),
+不用自己算 `x + w/2`,直接当 `sx/sy` 传给 `computer_action` 即可 —— 算错中心是点偏的常见原因。
 
 ## 打开应用:先查在不在跑,再决定启动
 
@@ -58,7 +61,7 @@ allowed-tools:
 ```
 computer_launch(app="微信", match="Weixin")     # 已经在跑 → 自动切到前台,不重复启动
                                               # 没在跑 → 启动并等窗口出现
-computer_windows()                            # 需要看全部窗口 / 拿 hwnd 时用
+computer_windows()                            # 需要看全部窗口 / 拿 hwnd 时用(可传 filter="微信" 只看相关的)
 computer_action(action="click", ...)          # 但激活窗口请用 computer_launch 或下面这条
 ```
 
@@ -84,6 +87,13 @@ computer_ui()                     # 再看一次,确认状态变了
 - 操作后**必须再看一次**(`computer_ui` 或 `computer_ocr` 或 `computer_screenshot`)确认结果。
 - `computer_action` 每次鼠标动作后会回报"落点元素"。**如果那不是你要点的东西,立刻停下重新定位**,
   不要继续下一步。
+
+## 截图:看布局用它,读文字别用它
+
+- 默认只截**前台窗口所在的那块显示器**(接近 1:1);`window` 截单个窗口,`all=true` 才截整张虚拟桌面
+  (多屏拼图会被缩得很小,小字看不清,只在看全局布局时用)。
+- 要看某个角落的小字/小图标,用 `rect={x,y,w,h}` 只截那一块 —— 按 1:1 输出,又快又省。
+- 界面上的文字优先用 `computer_ui` / `computer_ocr` 读:更准、更省 token,也不会因为图被缩小而看错。
 
 ## 自绘应用(微信 PC 版这类)实操
 

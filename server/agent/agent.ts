@@ -48,6 +48,7 @@ import { getDefaultPermissionMode as storeDefaultMode, setDefaultPermissionMode 
 import { getAttachment, readImageDataURL, readImageBytes, saveAttachment, isTextLike, attachmentPath, type AttachmentMeta } from '../store/attachments-store.ts';
 import { aiProviders } from '../store/ai-providers-store.ts';
 import { browserManager, extractPreviewUrls } from '../core/browser-manager.ts';
+import { egoInstalled } from './ego-backend.ts';
 
 // 全局唯一工具注册表:启动时注册全部内置工具与守卫
 const registry = new ToolRegistry();
@@ -313,6 +314,17 @@ const LOCAL_SCOPE = 'local';
  */
 function usesRemoteWorkspace(meta: { workspace?: string | null }): boolean {
   return !!meta.workspace && meta.workspace !== NO_WORKSPACE;
+}
+
+/**
+ * 连接掉线时该不该连带中止这一轮:判据与会话归哪个任务列表完全一致(usesRemoteWorkspace)——
+ * 只有占用了那台服务器上「具体目录」的会话,这一轮的工作才真的押在那台服务器上。
+ * 本地工作区对话(没占远程目录;「不在工作区对话」的整台服务器边界也只是边界、不是目录)
+ * 虽然会顺手绑定活动连接去用远程工具,但连接掉了只该让那些工具各自报「SSH 连接已断开」,
+ * 不能把整轮(连同本机那部分工作)一起掐掉——本地工作区跟服务器连没连上没有关系。
+ */
+function turnAnchoredToServer(rt: { workspace?: string | null }): boolean {
+  return usesRemoteWorkspace(rt);
 }
 
 /**
@@ -1883,9 +1895,11 @@ export class Agent {
     rt.steer.length = 0;
   }
 
-  // 停止所有运行中的会话(SSH 断开等全局异常时)
+  // 停止所有运行中的会话(SSH 断开等全局异常时)。与 stopForConn 同一条规矩:
+  // 只停"工作押在服务器上"的轮次(见 turnAnchoredToServer),本地工作区对话不受牵连。
   stopAll() {
     for (const rt of this._runtimes.values()) {
+      if (!turnAnchoredToServer(rt)) continue;
       if (rt.signal) rt.stopCause = 'conn-lost';
       if (rt.signal) {
         try { rt.signal.abort(); } catch {}
@@ -1899,6 +1913,9 @@ export class Agent {
     if (!conn) return;
     for (const rt of this._runtimes.values()) {
       if (rt.boundConn !== conn) continue;
+      // 本地工作区对话也会绑定活动连接(远程全盘工具要用它),但它的工作不在那台服务器上:
+      // 掉线只让远程工具各自报「SSH 连接已断开」,本轮照常跑完(用户上报:断开服务器把本地对话一起停掉)。
+      if (!turnAnchoredToServer(rt)) continue;
       if (rt.signal) rt.stopCause = 'conn-lost';
       rt.stopLabel = connLabelOf(conn);
       if (rt.signal) {
@@ -2201,6 +2218,8 @@ export class Agent {
    *  2) 没归属具体服务器、却带了远程边界(「不在工作区对话」的全盘会话、归属未知的旧会话)
    *     → 连着服务器就顺着用当前活动连接(全盘边界照常可用),**没连也在本机把这一轮照常
    *     跑完**。local 不是一台服务器,不存在"服务器 local 未连接"这种拒绝理由。
+   *     注意:这里的绑定只是"借当前这台服务器的连接给远程工具用",不等于把整轮押在它上面——
+   *     它掉线不会中止本轮,远端工具各自报「SSH 连接已断开」(见 turnAnchoredToServer)。
    *  3) 完全没用到远程的会话 → 不绑连接:任何连接断开都不会连带停止它,远程工具也因无绑定而不可见。
    * 单独成方法:让绑定规则能被测试直接断言,不必真的起一轮模型请求。
    */
@@ -3292,8 +3311,15 @@ export class Agent {
       '- browser_snapshot / browser_click / browser_type / browser_screenshot 等的 browser_id 省略时就是本会话的第一个预览;'
         + '同一会话里开了多个预览时,按上面的 browser_id 指定其中某一个。',
       '- 打开/导航新地址用 browser_open(url=…);同一个地址只想刷新用 browser_reload;不再需要时用 browser_close 释放。',
+      '- 多步流程(点击 → 等待 → 输入 → 校验)优先用 browser_batch 一次跑完:只一次工具往返,失败会停在那一步并逐条回报;'
+        + '单步动作只回执,需要看页面时再 browser_snapshot。',
+      '- 在这个站上摸出来的稳定定位/流程,用 browser_memory(action=save) 记一条,下次 browser_open 会自动带上(只是提示,别盲信旧选择器)。',
       '- 每个预览浏览器只属于它所在的对话:别的会话的预览你既看不到也操作不了,不要猜测或传递别人的 browser_id。',
       '- 页面是真实浏览器渲染的,截图/快照就是用户看到的内容;判断前端改动是否生效,用它验证比读代码更可靠。',
+      ...(egoInstalled()
+        ? ['- 本机装了 ego(lite):需要隔离工作区、或要读跨域 iframe/复杂组件时,可用 target=ego 把任务跑在 ego 的 Space 里'
+          + '(前置:ego lite 正在运行;多步流程放 browser_batch 里最划算)。']
+        : []),
       '</browser_preview>'
     ].join('\n');
   }

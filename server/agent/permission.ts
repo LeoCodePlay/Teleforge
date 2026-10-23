@@ -83,7 +83,7 @@ const WRITE_TOOLS = new Set([
   'write_local_file', 'edit_local_file', 'create_local_dir', 'delete_local_path',
   // 浏览器工具:会改变页面/浏览器状态,plan 模式下不应执行
   'browser_open', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll',
-  'browser_eval', 'browser_close',
+  'browser_eval', 'browser_close', 'browser_batch', 'browser_act', 'browser_memory',
   // 电脑操控:会改变外部状态的动作类工具(plan 模式不应执行)
   'computer_action', 'computer_launch', 'computer_ui_action', 'computer_control'
 ]);

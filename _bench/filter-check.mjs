@@ -1,0 +1,16 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'sshai-cu-f-'));
+process.env.TF_COMPUTER_USE_NO_OVERLAY = '1';
+const { computerUse } = await import('../server/core/computer-use/index.ts');
+const { ToolRegistry } = await import('../server/agent/registry.ts');
+const { registerTools } = await import('../server/agent/tools.ts');
+const reg = new ToolRegistry();
+registerTools(reg);
+computerUse.enableByUser();
+const r = await reg.execute({ name: 'computer_windows', args: JSON.stringify({ filter: 'chrome' }) });
+console.log(r.content);
+computerUse.disableByUser();
+computerUse.shutdown();
+process.exit(0);

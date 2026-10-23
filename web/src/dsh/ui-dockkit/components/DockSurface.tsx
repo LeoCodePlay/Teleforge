@@ -210,6 +210,7 @@ function Surface({
     onFocusTab: intents.focusTab.bind(intents),
     onFocusPane: intents.focusPane.bind(intents),
     onSplitPane: intents.splitPane.bind(intents),
+    onClosePane: intents.closePane?.bind(intents),
     onAddTab: intents.addTab.bind(intents),
     onCloseTab: intents.closeTab.bind(intents),
     // A press is not yet a drag: the chip lifts, and the drop preview follows,

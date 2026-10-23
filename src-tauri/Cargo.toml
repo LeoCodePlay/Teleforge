@@ -23,3 +23,8 @@ serde = { version = "1", features = ["derive"] }
 # 自动更新下载只能直连 GitHub(国内常年几十 KB/s 甚至 0),必须显式打开。
 reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls", "system-proxy"] }
 futures-util = "0.3"
+
+# 桌面端右键菜单:WebView2 默认菜单会和应用内的自绘菜单叠在一起(看起来像弹了两份)。
+# 用它拿到 ICoreWebView2Settings,在启动时关掉默认菜单,只保留前端自绘的那一份。
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"

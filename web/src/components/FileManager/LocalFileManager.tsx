@@ -56,6 +56,9 @@ const sepOf = (p: string) => (String(p || '').includes('\\') ? '\\' : '/');
 
 // 本地删除可能很慢(尤其递归删大目录),放宽请求超时
 const DELETE_TIMEOUT = 600000;
+// 状态栏右侧的圆环进度:半径与周长(SVG 里的 stroke-dasharray 用)
+const RING_R = 6.2;
+const RING_C = 2 * Math.PI * RING_R;
 
 interface LocalFileManagerProps {
   workspace?: string | null;
@@ -178,6 +181,7 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
   const [deleting, setDeleting] = useState<DeletingInfo | null>(null);
   const [transferring, setTransferring] = useState(false);
   const [wrState, setWrState] = useState<WriteState | null>(null); // 传到远程进度
+  const [statusOpen, setStatusOpen] = useState(false); // 底部状态栏展开详情
   const listRef = useRef<HTMLDivElement>(null);
   const crumbsRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -575,11 +579,23 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
     return { c, p };
   });
 
-  const statusText = deleting
-    ? `正在删除 ${deleting.index + 1}/${deleting.total}: ${deleting.name}…已删 ${deleting.done} 项`
-    : transferring ? (wrState ? `传到远程 ${wrState.done}/${wrState.total}` : '正在传到远程…')
-      : msg ? msg
-        : selection.size > 1 ? `已选 ${selection.size} 项` : '';
+  // ---- 底部状态栏:固定占位(高度恒定),进度 / 结果 / 报错全在这里显示,点一下展开细节 ----
+  const busy = !!deleting || transferring;
+  const busyPct = deleting ? 100
+    : transferring ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : 100) : 0;
+  const busyIndet = !!deleting; // 删除只有"已删 N 项",没有总量:走不确定转圈
+  const busyLabel = deleting ? `删除中 ${deleting.index + 1}/${deleting.total}`
+    : transferring ? (wrState ? `传到远程 ${wrState.done}/${wrState.total}` : '传到远程中') : '';
+  // 一行状态:错误 > 进行中 > 操作结果 > 选中数量
+  const statusText = error ? `✕ ${error}` : busy ? busyLabel
+    : msg ? msg : selection.size > 1 ? `已选 ${selection.size} 项` : '';
+  const statusTip = deleting ? `正在删除:${deleting.current || deleting.name}` : error ? error : undefined;
+  const statusDetail: string[] = error ? [`✕ ${error}`]
+    : deleting ? [
+      `正在删除 ${deleting.index + 1}/${deleting.total}:${deleting.name}`,
+      `已删除 ${deleting.done} 项${deleting.current ? `;当前:${deleting.current}` : ''}`
+    ]
+      : transferring ? [`传到远程:${wrState ? `${wrState.done}/${wrState.total}` : '进行中'}`] : [];
 
   return (
     <div className="fm" ref={rootRef}>
@@ -625,80 +641,60 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
         <button className="ghost sm icon-btn" disabled={opCount === 0 || !remoteCwd || transferring}
           onClick={doTransferToRemote}
           data-tip={!remoteCwd ? '请先连接服务器并查看远程目录' : `把选中项传到远程当前目录 ${remoteCwd||''}(同名覆盖)`}><IconTransfer16 size={13} />传到远程</button>
-        <span className="muted sm fm-status"
-          data-tip={deleting ? `正在删除: ${deleting.current || deleting.name}` : selection.size > 1 ? `已选 ${selection.size} 项,点空白处取消` : msg}>
-          {statusText}
-        </span>
       </div>
-      {(deleting || transferring) && (
-        <div className="progress">
-          <div className={`progress-bar ${deleting && !transferring ? 'indet' : ''}`}
-            style={{ width: transferring
-              ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : 100) + '%'
-              : '100%' }} />
-        </div>
-      )}
-      {error && (
-        <div className="error" onClick={() => { setError(''); setRenameRetry(null); }}>
-          {renameRetry && (
-            <button className="ghost sm" style={{ marginRight: 8 }}
-              onClick={(ev) => { ev.stopPropagation(); performRename(renameRetry.oldName, renameRetry.newName); }}
-              data-tip="已关闭占用程序?点此用原名/新名重新尝试">↻ 重试</button>
-          )}
-          ✕ {error}
-        </div>
-      )}
 
-      <div className="fmlist" ref={listRef} tabIndex={-1}
-        onClick={(e) => { if (e.target === e.currentTarget) { clearSelection(); e.currentTarget.focus(); } }}
-        onKeyDown={handleListKey}
-        onContextMenu={(e) => openMenu(e, null)}>
-        {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
-        {!loading && entries.length === 0 && !creating && <div className="muted fmph">(空目录)</div>}
-        {entries.map((e) => (
-          <FmRow
-            key={e.name}
-            entry={e}
-            selected={selection.has(e.name)}
-            navLoading={entryPath(e.name) === navLoading}
-            renaming={renaming === e.name}
-            renameBusy={renameBusy}
-            renameDraft={renameDraft}
-            onRenameDraft={setRenameDraft}
-            onCommitRename={commitRename}
-            onCancelRename={() => { setRenaming(null); setRenameDraft(''); }}
-            onRowClick={handleRowClick}
-            onOpen={openEntry}
-            onMenu={openMenu}
-            onLongPress={(x, y, item) => openMenuAt(x, y, item)}
-          />
-        ))}
-        {creating && (
-          <div className="fmrow">
-            <span className="fm-ico">{creating === 'dir' ? <IconFolder16 size={14} /> : '📄'}</span>
-            <span className="fm-name fm-hide" />
-            <span className="fm-time fm-hide" />
-            <input className="fm-rename" autoFocus value={createDraft}
-              spellCheck={false}
-              onChange={(ev) => setCreateDraft(ev.target.value)}
-              onFocus={(ev) => {
-                // 默认选中不含扩展名的部分,方便直接输入新名
-                const dot = ev.target.value.lastIndexOf('.');
-                if (dot > 0) ev.target.setSelectionRange(0, dot);
-                else ev.target.select();
-              }}
-              onClick={(ev) => ev.stopPropagation()}
-              onDoubleClick={(ev) => ev.stopPropagation()}
-              onContextMenu={(ev) => ev.preventDefault()}
-              onKeyDown={(ev) => {
-                ev.stopPropagation();
-                if (ev.nativeEvent.isComposing) return;
-                if (ev.key === 'Enter') commitCreate();
-                else if (ev.key === 'Escape') cancelCreate();
-              }}
-              onBlur={commitCreate} />
-          </div>
-        )}
+      <div className="fm-listwrap">
+        <div className="fmlist" ref={listRef} tabIndex={-1}
+          onClick={(e) => { if (e.target === e.currentTarget) { clearSelection(); e.currentTarget.focus(); } }}
+          onKeyDown={handleListKey}
+          onContextMenu={(e) => openMenu(e, null)}>
+          {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
+          {!loading && entries.length === 0 && !creating && <div className="muted fmph">(空目录)</div>}
+          {entries.map((e) => (
+            <FmRow
+              key={e.name}
+              entry={e}
+              selected={selection.has(e.name)}
+              navLoading={entryPath(e.name) === navLoading}
+              renaming={renaming === e.name}
+              renameBusy={renameBusy}
+              renameDraft={renameDraft}
+              onRenameDraft={setRenameDraft}
+              onCommitRename={commitRename}
+              onCancelRename={() => { setRenaming(null); setRenameDraft(''); }}
+              onRowClick={handleRowClick}
+              onOpen={openEntry}
+              onMenu={openMenu}
+              onLongPress={(x, y, item) => openMenuAt(x, y, item)}
+            />
+          ))}
+          {creating && (
+            <div className="fmrow">
+              <span className="fm-ico">{creating === 'dir' ? <IconFolder16 size={14} /> : '📄'}</span>
+              <span className="fm-name fm-hide" />
+              <span className="fm-time fm-hide" />
+              <input className="fm-rename" autoFocus value={createDraft}
+                spellCheck={false}
+                onChange={(ev) => setCreateDraft(ev.target.value)}
+                onFocus={(ev) => {
+                  // 默认选中不含扩展名的部分,方便直接输入新名
+                  const dot = ev.target.value.lastIndexOf('.');
+                  if (dot > 0) ev.target.setSelectionRange(0, dot);
+                  else ev.target.select();
+                }}
+                onClick={(ev) => ev.stopPropagation()}
+                onDoubleClick={(ev) => ev.stopPropagation()}
+                onContextMenu={(ev) => ev.preventDefault()}
+                onKeyDown={(ev) => {
+                  ev.stopPropagation();
+                  if (ev.nativeEvent.isComposing) return;
+                  if (ev.key === 'Enter') commitCreate();
+                  else if (ev.key === 'Escape') cancelCreate();
+                }}
+                onBlur={commitCreate} />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 多选模式操作条:触屏批量操作入口(复制/传到远程/删除) */}
@@ -711,7 +707,45 @@ export default function LocalFileManager({ workspace, home, remoteCwd, onCwdChan
         </div>
       )}
 
-      <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · F2 重命名 · 右键操作 · 传到远程当前目录</div>
+      <div className="muted sm fm-hint">Ctrl/Shift 多选</div>
+
+      {/* 底部状态栏:固定占位(高度恒定),进度 / 结果 / 报错都在这里显示,不会挡住文件也不会抖动;
+          点一下展开详情(进度明细、完整报错) */}
+      <div className="fm-statusbar">
+        <div className="fm-status-row"
+          onClick={() => { if (statusDetail.length) setStatusOpen((v) => !v); }}
+          data-tip={statusTip} data-clickable={statusDetail.length ? '1' : undefined}>
+          <span className={`fm-status-text${error ? ' err' : ''}`}>{statusText}</span>
+          {busy && (
+            <span className="fm-ring-wrap">
+              <svg className={`fm-ring${busyIndet ? ' indet' : ''}`} viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+                <circle className="fm-ring-track" cx="8" cy="8" r={RING_R} />
+                <circle className="fm-ring-bar" cx="8" cy="8" r={RING_R}
+                  style={busyIndet ? undefined : { strokeDasharray: RING_C, strokeDashoffset: RING_C * (1 - busyPct / 100) }} />
+              </svg>
+              {!busyIndet && <span className="fm-ring-pct">{busyPct}%</span>}
+            </span>
+          )}
+          {statusDetail.length > 0 && <span className="fm-caret">{statusOpen ? '▾' : '▸'}</span>}
+        </div>
+        {statusOpen && statusDetail.length > 0 && (
+          /* 绝对定位浮在状态栏上方:展开/收起不改变面板高度,列表也不会被顶动 */
+          <div className="fm-status-detail" onClick={() => setStatusOpen(false)}>
+            {statusDetail.map((line, i) => <div key={i}>{line}</div>)}
+            {error && (
+              <div className="fm-status-detail-actions">
+                {/* 重命名失败(Windows 上多为目录被占用)可直接重试,免去重新输入名字 */}
+                {renameRetry && (
+                  <button className="ghost sm"
+                    onClick={(ev) => { ev.stopPropagation(); performRename(renameRetry.oldName, renameRetry.newName); }}
+                    data-tip="已关闭占用程序?点此用原名/新名重新尝试">↻ 重试</button>
+                )}
+                <button className="ghost sm" onClick={(ev) => { ev.stopPropagation(); setError(''); setRenameRetry(null); setStatusOpen(false); }}>关闭</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {menu && createPortal(
         <div ref={menuRef} className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>

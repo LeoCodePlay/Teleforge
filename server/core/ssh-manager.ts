@@ -3,6 +3,7 @@
 // 同一时刻只有一个是「活动连接」,文件与命令操作都作用在活动连接上。
 import { EventEmitter } from 'node:events';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Readable } from 'node:stream';
 import { Client } from 'ssh2';
 import type { SFTPWrapper, Stats, ClientChannel, ConnectConfig } from 'ssh2';
 import { SSH, EXEC, FILE, NO_WORKSPACE } from '../config.ts';
@@ -113,6 +114,14 @@ function truncateOutput(text: string, chr: number, head?: number): { text: strin
 const call = (fn: (cb: (err: any, res?: any) => void) => void): Promise<any> => new Promise((resolve, reject) => {
   fn((err, res) => (err ? reject(err) : resolve(res)));
 });
+
+// 一个 SFTP WRITE 包能带的最大数据长度:OpenSSH 协商后是 254KB,其他服务器是 31KB。
+// 读私有字段是为了让分块正好等于「一包」:ssh2 自己遇到超长 buffer 会先截断、
+// 等这一包的 ack 回来再串行续写剩下的部分,那样等于又退回「一次一个 RTT」。
+function sftpWriteChunk(sftp: SFTPWrapper): number {
+  const max = Number((sftp as unknown as { _maxWriteLen?: number })._maxWriteLen);
+  return Number.isFinite(max) && max > 4096 ? Math.min(max, 256 * 1024) : 32 * 1024;
+}
 
 interface ActiveRun {
   id: string;
@@ -501,6 +510,80 @@ export class SshConnection extends EventEmitter {
     }
   }
 
+  // 流式写入远程文件:边读边写,并**同时保持多个 SFTP WRITE 请求在途**。
+  // ssh2 的 sftp.write 一次只挂一个在途请求(超长 buffer 还会被截断后串行续写),
+  // 吞吐就被钉死在 一个包 / RTT:32KB 包 + 200ms RTT 只有 ~160KB/s,而且越慢越像卡死,
+  // 链路一抖整批上传就断。这里自己切块并维护在途窗口:窗口满了就挂起读取(对上游形成背压,
+  // 浏览器侧的发送进度因此反映真实写入速度),有空位才继续下发,吞吐不再受 RTT 限制。
+  // 与 VSCode 远程 SSH 上传走同一种思路:一条连接上把字节连续灌过去,而不是一问一答。
+  async writeRemoteStream(p: string, src: Readable, opts: {
+    mkdir?: boolean;
+    onProgress?: (written: number) => void;
+    // 外部取消:置 aborted 后尽快停写(用于客户端断开/用户取消)
+    signal?: { aborted: boolean };
+  } = {}): Promise<number> {
+    if (!this.sftp) throw new Error('SFTP 未就绪');
+    const sftp = this.sftp;
+    if (opts.mkdir) await this.mkdirp(remoteDirName(p));
+    const chunk = sftpWriteChunk(sftp);
+    // 在途窗口:目标 ~4MB 在途字节,最少 4 个、最多 64 个请求
+    const window = Math.min(64, Math.max(4, Math.ceil((4 * 1024 * 1024) / chunk)));
+    const handle = await call((cb) => sftp.open(p, 'w', cb));
+    let inflight = 0;
+    const waiting: Array<() => void> = [];
+    const acquire = () => new Promise<void>((res) => {
+      if (inflight < window) { inflight++; res(); }
+      else waiting.push(res);
+    });
+    const release = () => {
+      inflight--;
+      const next = waiting.shift();
+      if (next) { inflight++; next(); }
+    };
+    const active = new Set<Promise<void>>();
+    let written = 0;
+    let fatal: Error | null = null;
+    try {
+      let pos = 0;
+      for await (const raw of src) {
+        if (fatal) break;
+        const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as string);
+        let off = 0;
+        while (off < buf.length) {
+          const len = Math.min(chunk, buf.length - off);
+          const position = pos;
+          await acquire(); // 窗口满 → 挂起,天然背压
+          if (fatal) break;
+          if (opts.signal?.aborted) { fatal = new Error('上传已取消'); break; }
+          pos += len;
+          let done!: () => void;
+          let fail!: (e: any) => void;
+          const task = new Promise<void>((res, rej) => { done = res; fail = rej; });
+          task.catch(() => {}); // 结局统一在收尾处判定,避免未处理的 rejection
+          active.add(task);
+          sftp.write(handle, buf, off, len, position, (e: any) => {
+            active.delete(task);
+            release();
+            if (e) { if (!fatal) fatal = e; fail(e); return; }
+            written += len;
+            opts.onProgress?.(written);
+            done();
+          });
+          off += len;
+        }
+        if (fatal) break;
+      }
+      // 等所有在途写落地(窗口为空才真的无人在写)
+      await Promise.all([...active].map((t) => t.catch(() => {})));
+      if (fatal) throw fatal;
+      return written;
+    } finally {
+      waiting.length = 0;
+      try { (src as any).destroy?.(); } catch {}
+      try { await call((cb) => sftp.close(handle, cb)); } catch {}
+    }
+  }
+
   async mkdirp(p: string): Promise<void> {
     const norm = normalizeRemote(p);
     if (norm === '/') return;
@@ -627,6 +710,28 @@ export class SshConnection extends EventEmitter {
     if (!this.sftp) throw new Error('SFTP 未就绪');
     await call((cb) => this.sftp!.rename(src, dst, cb));
     return { src, dst };
+  }
+
+  // 原子替换:把 src 改名成 dst,允许覆盖已存在的 dst(上传落盘用)。
+  // SFTP v3 的 rename 在部分实现上拒绝覆盖已存在目标,所以直接 rename 失败且目标确实存在时,
+  // 退化为「先删目标再改名」——两步之间没有窗口期问题:目标此刻必然是旧内容或新内容之一。
+  async replaceByRename(src: string, dst: string): Promise<void> {
+    if (!this.sftp) throw new Error('SFTP 未就绪');
+    const s = normalizeRemote(src);
+    const d = normalizeRemote(dst);
+    const rename = () => call((cb) => this.sftp!.rename(s, d, cb));
+    try { await rename(); return; }
+    catch (e) {
+      if (!(await this.atype(d))) throw e;
+      await call((cb) => this.sftp!.unlink(d, cb));
+      await rename();
+    }
+  }
+
+  // 尽力删除单个文件(清理上传临时文件用);失败不抛错
+  async unlinkQuiet(p: string): Promise<void> {
+    if (!this.sftp) return;
+    try { await call((cb) => this.sftp!.unlink(normalizeRemote(p), cb)); } catch {}
   }
 
   async _copyFile(src: string, dst: string): Promise<void> {
@@ -925,11 +1030,14 @@ export class SshManager extends EventEmitter {
   readFileChunk(p: string, o?: any) { return this._act('readFileChunk', p, o); }
   isProbablyBinary(b: Buffer | null) { return this._act('isProbablyBinary', b); }
   writeRemoteFile(p: string, c: string | Buffer, o?: any) { return this._act('writeRemoteFile', p, c, o); }
+  writeRemoteStream(p: string, s: Readable, o?: any) { return this._act('writeRemoteStream', p, s, o); }
   mkdirp(p: string) { return this._act('mkdirp', p); }
   atype(p: string) { return this._act('atype', p); }
   rmdirRecursive(p: string, cb?: (cur: string) => void, allow?: boolean) { return this._act('rmdirRecursive', p, cb, allow); }
   copyPath(s: string, d: string, o?: any) { return this._act('copyPath', s, d, o); }
   renamePath(s: string, d: string) { return this._act('renamePath', s, d); }
+  replaceByRename(s: string, d: string) { return this._act('replaceByRename', s, d); }
+  unlinkQuiet(p: string) { return this._act('unlinkQuiet', p); }
   exec(cmd: string, o?: ExecOptions) { return this._act('exec', cmd, o); }
   execBackground(cmd: string, o?: ExecOptions) { return this._act('execBackground', cmd, o); }
   shell(o?: any) { return this._act('shell', o); }

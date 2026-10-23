@@ -57,7 +57,14 @@ export async function startApp({ port = PORT, host = HOST, quiet = false } = {})
   await initNetwork();
   // serverFactory 包住自建 http.Server,供 setupWs 在 app.server 上挂 /ws、/ws/term、/ws/browser 的 upgrade 路由
   const app = Fastify({
-    serverFactory: (handler) => http.createServer(handler),
+    serverFactory: (handler) => {
+      const server = http.createServer(handler);
+      // 上传大文件时,服务端按 SFTP 写入速度对客户端做背压,整个请求体可能要收十几分钟。
+      // Node 默认 requestTimeout=300s 会直接把这条请求掐断(前端只看到"网络错误/上传已取消"),
+      // 大文件因此永远传不完。这里放宽到 30 分钟,仍保留超时下限防止慢连接长期占用。
+      server.requestTimeout = 30 * 60 * 1000;
+      return server;
+    },
     bodyLimit: 16 * 1024 * 1024, // 与原先 express.json({ limit: '16mb' }) 一致
     // 默认 warn:逐请求的 info 日志(每条请求 2 行)在桌面端会一直追加进 backend.log,
     // 实测一个前端自激循环就写出一份 525MB 的日志文件。排查时用 TELEFORGE_LOG_LEVEL=info 打开。

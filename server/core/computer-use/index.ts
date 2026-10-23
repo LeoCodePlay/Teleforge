@@ -257,22 +257,11 @@ class ComputerUse extends EventEmitter {
       const wr = await this.windowRect(winSel);
       useRect = { x: wr.x, y: wr.y, w: wr.w, h: wr.h };
     }
-    let useMonitor = monitor;
     // 默认不截整张多屏拼图:6000px 宽缩到 2560 后是 0.43 倍,文字和小按钮基本看不清,
-    // 模型据此估坐标必然偏。默认改成"前台窗口所在的那块显示器",接近 1:1。
-    if (!useRect && useMonitor == null && all !== true) {
-      try {
-        const p = await this.probe();
-        const fg = p?.foreground;
-        const mons = Array.isArray(p?.monitors) ? p.monitors : [];
-        if (fg && fg.w > 0 && mons.length > 1) {
-          const cx = fg.x + fg.w / 2;
-          const cy = fg.y + fg.h / 2;
-          const hit = mons.find((m: any) => cx >= m.x && cx < m.x + m.w && cy >= m.y && cy < m.y + m.h);
-          if (hit) useMonitor = hit.index;
-        }
-      } catch { /* 探测失败就回落整屏 */ }
-    }
+    // 模型据此估坐标必然偏。默认截"前台窗口所在的那块显示器"(接近 1:1)——
+    // 由 worker 直接算('fg'),这里不再先发一次 monitors 探测,省一个往返。
+    let useMonitor: number | string | undefined = monitor;
+    if (!useRect && useMonitor == null && all !== true) useMonitor = 'fg';
     const shotPath = path.join(TMP_DIR, `shot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`);
     const res = await this.worker.call('capture', { path: shotPath, monitor: useMonitor, max_width: maxWidth, rect: useRect }, 40_000);
     let buf: Buffer;
@@ -528,16 +517,13 @@ class ComputerUse extends EventEmitter {
     if (r?.cursor) desc.push(`光标 (${r.cursor.x}, ${r.cursor.y})`);
     if (fg) desc.push(`前台窗口「${fg.title || '(无标题)'}」(${fg.process || '未知进程'})`);
 
-    // 落点自检:告诉模型"这一点下面是什么元素",点错了立刻能发现
-    let under: any = null;
+    // 落点自检:告诉模型"这一点下面是什么元素",点错了立刻能发现。
+    // 元素由 worker 在动作完成的那一刻就地取(FromPoint),不再多发一次 element_at 往返。
+    const under: any = r?.element || null;
     if ((p.op === 'mouse' || p.op === 'scroll') && r?.cursor) {
-      try {
-        const ea = await this.elementAt(r.cursor.x, r.cursor.y);
-        under = ea?.element || null;
-        desc.push(under
-          ? `落点元素:「${under.name || '(无名)'}」[${under.type}]${under.autoId ? ` id=${under.autoId}` : ''}`
-          : '落点下没有 UI 元素(可能是自绘区域,建议用 computer_ocr 确认后再点)');
-      } catch { /* 自检失败不影响动作结果 */ }
+      desc.push(under
+        ? `落点元素:「${under.name || '(无名)'}」[${under.type}]${under.autoId ? ` id=${under.autoId}` : ''}${under.offscreen ? '(不可见)' : ''}`
+        : '落点下没有 UI 元素(可能是自绘区域,建议用 computer_ocr 确认后再点)');
     }
     // meta 里带上"动作刚做完那一刻"的光标与落点元素:供前端展示与自动化校验
     // (若改用事后再查光标,人在同一时刻挪了鼠标就会误判)。

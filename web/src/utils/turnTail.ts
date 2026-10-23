@@ -100,6 +100,11 @@ export function turnStartIndex(msgs: TurnRowCarrier[], atIdx: number): number {
 // 渲染一个折叠行(每段都带着同一个 turnElapsedMs),于是界面上每段下面都冒出一句
 // 「已完成,用时 15分41秒」,重试行还平铺在正文之间。这里按轮算一次:折叠行只挂宿主那一段,
 // 轮内的重试行标记成"过程内容",由渲染层在折叠闭合时收起。
+//
+// **过程范围不止工具与思考**:dsh 的 processMember 把「定稿答案之前的一切」都算过程,
+// 包括模型在两次工具调用之间说的那些过程叙述("我换个思路…")。收起时它们必须跟着一起收,
+// 否则会出现"工具收起来了、过程中的话还留在外面"的割裂观感(用户报的现象),
+// 以及"过程叙述紧贴总结、两段看起来像一段"的混淆。边界判定见下面的 finalAnswerOf。
 
 /** 折叠判定所需的行形态(比 TurnRowCarrier 多出分段与流式标记,仍是纯数据、可单测) */
 export interface FoldRowCarrier extends TurnRowCarrier {
@@ -108,7 +113,7 @@ export interface FoldRowCarrier extends TurnRowCarrier {
   /** 重试状态行(role='notice' 且带 retry) */
   retry?: unknown;
   /** 消息分段:正文 / 思考 / 工具 */
-  segments?: ReadonlyArray<{ kind?: string }>;
+  segments?: ReadonlyArray<{ kind?: string; text?: string; tools?: ReadonlyArray<unknown> }>;
 }
 
 /** 一行(消息)在本轮折叠里的角色。同一轮的所有行共用同一个 owner / foldable。 */
@@ -121,13 +126,110 @@ export interface TurnFoldRow {
   readonly hasProcess: boolean;
   /** 折叠闭合时这一整行要收起(重试提示行就是这种"过程内容") */
   readonly hideWhenFolded: boolean;
+  /** 本轮**最终答案**所在行(在过程范围之外,收起时仍留在外面);-1 = 本轮没有定稿答案 */
+  readonly answerRow: number;
+  /** 最终答案在该行的 segments 下标;answerRow < 0 时为 -1 */
+  readonly answerSegment: number;
 }
 
-const NO_FOLD: TurnFoldRow = { owner: -1, foldable: false, hasProcess: false, hideWhenFolded: false };
+const NO_FOLD: TurnFoldRow = {
+  owner: -1, foldable: false, hasProcess: false, hideWhenFolded: false, answerRow: -1, answerSegment: -1
+};
 
 /** 这一段会不会形成过程组(判据与 utils/processGroups 的 planGroups 一致:思考段 / 工具段) */
 function hasProcessSegments(m: FoldRowCarrier | undefined): boolean {
   return (m?.segments || []).some((s) => s.kind === 'reasoning' || s.kind === 'tools');
+}
+
+// ---- 最终答案边界(对齐 dsh 的 turn-process latestAnswer / processSpec)----
+//
+// dsh 把一轮拆成「过程范围」与「定稿答案」两半:`processStartSeq` 到 `answerAnchorSeq`
+// 之间的一切(思考、工具调用、**以及答话之前的中间叙述**)都是过程,整轮折叠时全部收起;
+// 只有 `answerAnchorSeq` 那条定稿回复不受影响(ChatNodeSeat 的 processMember 判定)。
+// 答案的判据同样来自 dsh:取该轮**最后一个 step** 的助手产出,它必须有正文,
+// 且**不含工具调用**;最后一步还在调工具(或被停止在工具执行中)时,这一轮就没有答案,
+// 整轮内容都属于过程(`answerAnchorSeq === null`)。
+//
+// 我们的 segments 是按到达顺序铺平的 [正文 / 思考 / 工具组 …],一次 step 的产出顺序是
+// 思考 → 正文 → 工具组,所以「最后一个 step 不含工具调用」等价于:**本条消息的最后一个
+// 实质段是正文**。最后一个实质段是工具组(还在干活)或只有思考时,这一轮没有答案。
+
+/** 段是不是"实质内容":空白正文、空思考、空工具组都不算(dsh 的 blockIsVisible 同口径) */
+function substantiveSegment(seg: { kind?: string; text?: string; tools?: ReadonlyArray<unknown> }): boolean {
+  if (seg.kind === 'tools') return (seg.tools?.length ?? 0) > 0;
+  if (seg.kind === 'text' || seg.kind === 'reasoning') return String(seg.text ?? '').trim() !== '';
+  return false; // 未知段型:既不渲染、也不构成"最后一步"
+}
+
+/** 该行最后一个实质段(下标 + 类型);没有实质段(空气泡)时返回 null */
+function lastSubstantiveSegment(m: FoldRowCarrier | undefined): { index: number; kind: string } | null {
+  const segs = m?.segments || [];
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const seg = segs[i];
+    if (seg && substantiveSegment(seg)) return { index: i, kind: String(seg.kind || '') };
+  }
+  return null;
+}
+
+/**
+ * 本轮最终答案的位置;没有定稿答案时返回 null。
+ *
+ * 只看本轮**最后一条有实质内容的** assistant 行(空气泡不算:流式没流出内容、或重试分界
+ * 留下的空行,在 dsh 里根本不会被投影成节点),而该行的最后一个实质段必须是正文。
+ */
+function finalAnswerOf(
+  msgs: readonly FoldRowCarrier[], from: number, to: number
+): { row: number; segment: number } | null {
+  for (let k = to; k >= from; k--) {
+    const m = msgs[k];
+    if (!m || m.role !== 'assistant') continue;
+    const last = lastSubstantiveSegment(m);
+    if (!last) continue; // 空气泡:跳过,答案仍可能在前一行
+    if (last.kind !== 'text') return null; // 最后一步是工具/思考 → 本轮没有定稿答案
+    return { row: k, segment: last.index };
+  }
+  return null;
+}
+
+/**
+ * 收起状态下,这一条正文段要不要跟着过程一起收起来。
+ *
+ * dsh 的 ChatNodeSeat:`processHidden = foldable && processMember && !processOpen`,
+ * 而"过程成员"包括定稿答案之前的所有正文行。所以收起后留在外面的只有最终答案那一段,
+ * 过程里的中间叙述("我换个思路…")跟着工具行一起收进去。
+ * @param fold - 该行所属轮的折叠角色(planTurnFold 的结果)
+ * @param row - 该正文段所在行下标
+ * @param segment - 该正文段在行内的 segments 下标
+ * @param open - 整轮过程是否处于展开状态
+ * @returns 是否隐藏这一段正文
+ */
+export function foldedTextHidden(fold: TurnFoldRow, row: number, segment: number, open: boolean): boolean {
+  if (!fold.foldable || open) return false;
+  return !(fold.answerRow === row && fold.answerSegment === segment);
+}
+
+/**
+ * 「下条消息时收起」口径下,哪一轮算**最新一轮**(它的过程默认敞着)。
+ *
+ * dsh 的 collapseTiming = next-input 时,`turnProcessOpen(..., defaultOpen)` 的 defaultOpen
+ * 由"该节点是否位于对话底部"给出:最新一轮保持展开,收到下一条输入后与更早的轮一起收起。
+ * 我们的对话流里等价判定是:从末尾往前第一条 assistant 段所属轮的折叠宿主;
+ * 若它**之后**已经出现新一轮的输入(用户消息 / 轮首通知行),说明新一轮已开始,
+ * 上一轮不再"最新" —— 返回 -1,全部按收起处理,直到新一轮的 assistant 段出现。
+ * @param msgs - 渲染消息数组
+ * @param plan - planTurnFold(msgs) 的结果
+ * @returns 最新一轮的折叠宿主下标;没有符合条件的轮时为 -1
+ */
+export function latestFoldOwner(
+  msgs: readonly FoldRowCarrier[], plan: readonly TurnFoldRow[]
+): number {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (!m) continue;
+    if (m.role === 'assistant') return plan[i]?.owner ?? -1;
+    if (startsNewTurn(m)) return -1;
+  }
+  return -1;
 }
 
 /**
@@ -137,7 +239,8 @@ function hasProcessSegments(m: FoldRowCarrier | undefined): boolean {
  *   - 折叠行的宿主 = 本轮**第一段** assistant(轮首那一段),整轮只此一处;
  *   - 折叠与否看**整轮**:任何一段还在流式就不折,轮内没有任何工具/思考也不折(纯文本回复);
  *   - 重试提示行(命中失败点拆段的那种)是过程内容:折叠闭合时整行收起,
- *     展开后仍留在它发生的位置上;非重试的 notice 行(⚠ 中断原因等)不收起。
+ *     展开后仍留在它发生的位置上;非重试的 notice 行(⚠ 中断原因等)不收起;
+ *   - 最终答案边界(answerRow/answerSegment):收起时只有它留在外面,过程正文一并收起。
  */
 export function planTurnFold(msgs: readonly FoldRowCarrier[]): TurnFoldRow[] {
   const out: TurnFoldRow[] = msgs.map(() => NO_FOLD);
@@ -154,6 +257,7 @@ export function planTurnFold(msgs: readonly FoldRowCarrier[]): TurnFoldRow[] {
       if (hasProcessSegments(m)) hasProcess = true;
     }
     const foldable = owner >= 0 && !live && hasProcess;
+    const answer = finalAnswerOf(msgs, from, to);
     for (let k = from; k <= to; k++) {
       const m = msgs[k];
       out[k] = {
@@ -161,6 +265,8 @@ export function planTurnFold(msgs: readonly FoldRowCarrier[]): TurnFoldRow[] {
         foldable,
         hasProcess,
         hideWhenFolded: foldable && m?.retry !== undefined && m?.retry !== null,
+        answerRow: answer?.row ?? -1,
+        answerSegment: answer?.segment ?? -1,
       };
     }
   };

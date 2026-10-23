@@ -108,8 +108,12 @@ function ensureConn(rec) {
       ws: null,
       /** 该服务端下发的快照脚本:按连接保存,两个服务端版本不同时内容可能不一样 */
       snapshotScript: '',
+      /** v2:函数源码(未执行),调用时带上 scope/root/text 参数 */
+      snapshotScriptSrc: '',
       reconnectDelay: RECONNECT_MIN,
       reconnectTimer: null,
+      /** true = 服务端不支持子协议 token,退回 ?token= 老写法 */
+      useQueryToken: false,
       lastError: ''
     };
     conns.set(rec.base, conn);
@@ -181,10 +185,16 @@ function sendTo(conn, obj) {
 
 function connectConn(conn) {
   if (conn.ws && (conn.ws.readyState === 0 || conn.ws.readyState === 1)) return;
-  const url = conn.wsUrl + (conn.wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(conn.token);
+  // 优先把 token 放进 WebSocket 子协议(不进 URL,不会被访问日志/代理记下来);
+  // 老版本服务端不认子协议时,握手会失败 → 自动退回 ?token= 的老写法(只退一次)。
+  const useProto = !conn.useQueryToken;
+  const url = useProto
+    ? conn.wsUrl
+    : conn.wsUrl + (conn.wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(conn.token);
   let sock;
+  let opened = false;
   try {
-    sock = new WebSocket(url);
+    sock = useProto ? new WebSocket(url, ['tf.' + conn.token]) : new WebSocket(url);
   } catch (e) {
     conn.lastError = `WebSocket 地址不合法:${conn.wsUrl}(${(e && e.message) || e})`;
     scheduleReconnect(conn);
@@ -193,6 +203,7 @@ function connectConn(conn) {
   conn.ws = sock;
 
   sock.onopen = async () => {
+    opened = true;
     conn.reconnectDelay = RECONNECT_MIN;
     conn.lastError = '';
     let iid = '';
@@ -204,17 +215,25 @@ function connectConn(conn) {
       token: conn.token,
       instanceId: iid,
       version: chrome.runtime.getManifest().version,
+      protocol: 2,
       browser: detectBrowser(),
-      capabilities: ['tabs', 'cdp', 'screenshot', 'evaluate']
+      capabilities: ['tabs', 'cdp', 'screenshot', 'evaluate', 'batch', 'act', 'snapshot-v2', 'frames', 'actionability']
     });
   };
   sock.onmessage = (ev) => { void onMessage(conn, ev); };
   sock.onclose = () => {
-    if (conn.ws === sock) {
-      conn.ws = null;
-      conn.snapshotScript = '';
-      scheduleReconnect(conn);
+    if (conn.ws !== sock) return;
+    conn.ws = null;
+    conn.snapshotScript = '';
+    conn.snapshotScriptSrc = '';
+    if (!opened && useProto) {
+      // 握手阶段就失败:多半是服务端还不支持子协议 token,退回查询参数再试一次
+      conn.useQueryToken = true;
+      conn.lastError = '';
+      setTimeout(() => { if (!conn.ws) connectConn(conn); }, 300);
+      return;
     }
+    scheduleReconnect(conn);
   };
   sock.onerror = () => {
     conn.lastError = '连接失败:确认 Teleforge 正在运行,且配对 token 没有失效';
@@ -312,6 +331,8 @@ function buildStatus() {
     kind: c.kind || '',
     connected: !!(c.ws && c.ws.readyState === 1),
     connecting: !!(c.ws && c.ws.readyState === 0),
+    /** 服务端协议版本(2 = 支持 batch / snapshot v2);0 = 还没握手 */
+    protocol: Number(c.protocol) || 0,
     error: c.lastError || ''
   }));
   return {
@@ -336,6 +357,8 @@ async function onMessage(conn, ev) {
   if (msg.type === 'ext_ping') { sendTo(conn, { type: 'ext_pong' }); return; }
   if (msg.type === 'ext_welcome') {
     conn.snapshotScript = String(msg.snapshotScript || '');
+    conn.snapshotScriptSrc = String(msg.snapshotScriptSrc || '');
+    conn.protocol = Number(msg.protocol) || 1;
     conn.lastError = '';
     return;
   }
@@ -352,6 +375,8 @@ async function onMessage(conn, ev) {
     sendTo(conn, { type: 'ext_result', id, ok: true, data });
   } catch (e) {
     sendTo(conn, { type: 'ext_result', id, ok: false, error: String((e && e.message) || e) });
+  } finally {
+    updateBadge();
   }
 }
 
@@ -365,7 +390,15 @@ async function listTabs() {
   const tabs = await chrome.tabs.query({});
   return tabs
     .filter((t) => t.id != null)
-    .map((t) => ({ tabId: t.id, url: t.url || t.pendingUrl || '', title: t.title || '', active: t.active === true }));
+    .map((t) => ({
+      tabId: t.id,
+      url: t.url || t.pendingUrl || '',
+      title: t.title || '',
+      active: t.active === true,
+      // 这个标签是从哪个标签打开的(链接 target=_blank / window.open):
+      // 服务端据此把「AI 标签里点开的子标签」也认作 AI 自建,否则新标签会没授权。
+      openerTabId: Number.isFinite(t.openerTabId) ? t.openerTabId : null
+    }));
 }
 
 async function waitTabComplete(tabId, timeoutMs = 30000) {
@@ -382,7 +415,8 @@ async function waitTabComplete(tabId, timeoutMs = 30000) {
 async function openTab(p) {
   const url = String(p.url || '').trim();
   if (!url) throw new Error('url 不能为空');
-  const tab = await chrome.tabs.create({ url, active: p.active !== false });
+  // 默认后台打开:AI 干活不该抢走用户正在看的标签(focus=true 才切前台)
+  const tab = await chrome.tabs.create({ url, active: p.active === true });
   const t = (await waitTabComplete(tab.id)) || tab;
   return { tabId: tab.id, url: t.url || url, title: t.title || '' };
 }
@@ -402,7 +436,32 @@ async function activateTab(tabId) {
   return { tabId: id, url: (t && t.url) || '', title: (t && t.title) || '' };
 }
 
+// ---------------- 每标签串行队列 ----------------
+// 同一个标签上的指令必须按顺序落地:batch 跑到一半插进来一个 click,页面状态就不可解释了。
+// 不同标签之间仍然并发(多任务并行不受影响)。
+const tabQueues = new Map();
+
+function withTabLock(tabId, fn) {
+  const prev = tabQueues.get(tabId) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.then(() => {}, () => {});
+  tabQueues.set(tabId, tail);
+  tail.finally(() => {
+    if (tabQueues.get(tabId) === tail) tabQueues.delete(tabId);
+  }).catch(() => {});
+  return run;
+}
+
+function updateBadge() {
+  try {
+    const n = attachedTabs().length;
+    chrome.action.setBadgeText({ text: n ? String(n) : '' });
+    chrome.action.setBadgeBackgroundColor({ color: '#ff3b6b' });
+  } catch { /* 忽略 */ }
+}
+
 async function handleCall(method, p, conn) {
+  // 标签级操作
   switch (method) {
     case 'tabs.list':
       return listTabs();
@@ -410,33 +469,51 @@ async function handleCall(method, p, conn) {
       return openTab(p);
     case 'tabs.close':
       await closeTab(p.tabId);
+      updateBadge();
       return { ok: true };
     case 'tabs.activate':
       return activateTab(p.tabId);
-    case 'navigate':
-      return ops.navigate(needTab(p.tabId), String(p.url || ''));
-    case 'snapshot':
-      return ops.snapshot(needTab(p.tabId), conn.snapshotScript);
-    case 'click':
-      return ops.click(needTab(p.tabId), p);
-    case 'type':
-      return ops.type(needTab(p.tabId), p);
-    case 'press':
-      return ops.press(needTab(p.tabId), String(p.key || 'Enter'));
-    case 'scroll':
-      return ops.scroll(needTab(p.tabId), p);
-    case 'wait':
-      return ops.wait(needTab(p.tabId), p);
-    case 'evaluate':
-      return ops.evaluate(needTab(p.tabId), String(p.expression || ''));
-    case 'screenshot':
-      return ops.screenshot(needTab(p.tabId), p);
-    case 'debug.detach':
-      await detach(needTab(p.tabId));
-      return { ok: true };
     default:
-      throw new Error(`未知方法:${method}`);
+      break;
   }
+
+  const id = needTab(p.tabId);
+  await ops.init(id);
+  return withTabLock(id, async () => {
+    switch (method) {
+      case 'navigate':
+        return ops.navigate(id, String(p.url || ''));
+      case 'snapshot':
+        // v2:下发的是函数源码,带上 scope/root/text;旧服务端只会给已自执行的表达式(直接求值)
+        if (conn.snapshotScriptSrc) return ops.snapshot(id, conn.snapshotScriptSrc, p);
+        if (!conn.snapshotScript) throw new Error('快照脚本还没下发(扩展刚连接上),请稍后重试');
+        return ops.evaluate(id, conn.snapshotScript);
+      case 'click':
+        return ops.click(id, p);
+      case 'type':
+        return ops.type(id, { ...p, text: String(p.text == null ? '' : p.text) });
+      case 'press':
+        return ops.press(id, String(p.key || 'Enter'));
+      case 'scroll':
+        return ops.scroll(id, p);
+      case 'wait':
+        return ops.wait(id, p);
+      case 'evaluate':
+        return ops.evaluate(id, String(p.expression || ''));
+      case 'screenshot':
+        return ops.screenshot(id, p);
+      case 'act':
+        return ops.act(id, String(p.action || ''), p);
+      case 'batch':
+        return ops.batch(id, p.steps, p, conn.snapshotScriptSrc || '');
+      case 'debug.detach':
+        await detach(id);
+        updateBadge();
+        return { ok: true };
+      default:
+        throw new Error(`未知方法:${method}`);
+    }
+  });
 }
 
 // ---------------- 标签变化上报 ----------------

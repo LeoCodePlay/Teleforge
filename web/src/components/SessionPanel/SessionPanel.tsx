@@ -9,6 +9,8 @@ import { orderGroups } from '../../utils/sessionGroupOrder';
 import { usesRemoteWorkspace } from '../../utils/sessionLock';
 import { showsInTaskList } from '../../utils/sessionVisibility';
 import { scrollMovesPanel } from '../../utils/scrollClose';
+import { writeClipboard } from '../../dsh/ui-primitives/clipboard.ts';
+import { useFeedback } from '../../context/feedback';
 import DirBrowser from '../DirBrowser/DirBrowser';
 import LocalDirBrowser from '../DirBrowser/LocalDirBrowser';
 import { IconCloud16, IconFolder16, IconSearchOutline16 } from '../icons/icons';
@@ -376,6 +378,8 @@ function SectionHead({ label, query, onQuery, open, onOpenChange, addLabel, onAd
 //   只有「会话行」按最近活跃排序。
 // - 分组头右键(桌面)/长按(触屏)弹分组菜单:删除分组 = 该组全部对话记录 + 该工作区历史记录。
 export default function SessionPanel({ sessions = [], activeId, busyIds = [], askPendingIds = [], termRunningIds = [], scopeLabel, scopeKey, onNew, onNewInWorkspace, onSwitchForeign, onSwitch, onRename, onDelete, onDeleteGroup, onRevealGroup, remoteHome, localHome, remoteWorkspace, localWorkspace, onAddRemoteWorkspace, onAddLocalWorkspace }: SessionPanelProps) {
+  // 全局提示:复制会话 ID 的成功/失败反馈(dsh 的 sessionIdCopied / sessionIdCopyFailed 两条 toast)
+  const { toast } = useFeedback();
   // 分区工具行的状态:每个分区各自的搜索词/展开态,以及各自的「添加工作区」目录弹窗。
   // 分开存是刻意的:远程与本地两侧互不影响,收起远程的搜索不会把本地的词也清掉。
   const [remoteQuery, setRemoteQuery] = useState('');
@@ -579,6 +583,17 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
   };
   const closeMenu = () => setMenu(null);
 
+  // 复制会话 ID(dsh 0.2.1-rc 的 SessionIdMenuItem:38c700f08e / b2dd2bf75b):
+  // 点菜单项直接复制**完整 ID** 并关菜单 —— 不打开对话框、不发 RPC、不加载历史;
+  // 成功/失败都走全局提示,失败时可以再点一次。剪贴板写不进去时提示手动选中
+  // (菜单顶部本来就展示了完整 ID,见 .ctx-sid)。
+  const copySessionId = async (id: string) => {
+    closeMenu();
+    const ok = await writeClipboard(id);
+    if (ok) toast.success('Session ID 已复制');
+    else toast.error('复制失败,请手动选择菜单里的 ID');
+  };
+
   // 分组菜单「拖动排序」:先收菜单,再把该分组交给拖拽 hook 起拖
   // (触屏此时没有按住状态,靠之后的指针移动跟手;桌面按住分组头即可拖,故菜单项在桌面隐藏,见 SCSS)
   const doReorderGroup = () => {
@@ -761,7 +776,12 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
       {/* 三点下拉菜单:portal 到 body,与右键菜单同款悬浮厚玻璃 */}
       {menu && createPortal(
         <div ref={menuRef} className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
+          {/* 会话 ID:完整展示、可选中(dsh 0.2.1-rc 的 668b7f9746「完整 ID 可选中复制」),
+              下面再给一个直接复制的菜单项 —— 两处读的是同一个 id,不会漂移 */}
+          <div className="ctx-sid" title="会话 ID">{menu.session.id}</div>
+          <div className="ctx-sep" />
           <button onClick={() => openRename(menu.session)}>重命名</button>
+          <button onClick={() => { void copySessionId(menu.session.id); }}>复制会话 ID</button>
           <div className="ctx-sep" />
           <button className="danger" data-tip={busyIds.includes(menu.session.id) ? '任务进行中,不能删除' : undefined}
             disabled={busyIds.includes(menu.session.id)}

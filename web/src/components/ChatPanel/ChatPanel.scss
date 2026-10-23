@@ -684,3 +684,26 @@
   .wsbar-row .tb-model { min-width: 0; }
   .bubble { max-width: 92%; }
 }
+
+/* ---- 界面字号联动(dsh 0.2.1-rc 的 0c6968b649:正文 / 代码 / 终端一起缩放)----
+   对话区里的工具卡、命令卡、文件变更卡把字号写死成 11/12/13/14px,不消费 --chat-scale;
+   字号调大后它们会显得越来越小,和正文脱节。这里按各自基准补一轮 calc 覆盖
+   (同优先级、后置生效,不改各组件自己的样式文件);侧栏 / 顶栏 / 设置面板等 chrome
+   保持原尺寸 —— 与上游"只调内容字号"的口径一致。 */
+.dsh-inspectButton, .dsh-presentPath, .dsh-term-pill, .dsh-skill-header, .dsh-web-meta, .fcc-kind {
+  font-size: calc(11px * var(--chat-scale, 1));
+}
+.dsh-ioLabel, .dsh-rowAction, .dsh-presentRunning, .dsh-term-header, .dsh-term-output,
+.dsh-read-banner, .dsh-read-body, .dsh-diff, .dsh-search-fileHeader, .dsh-search-line,
+.dsh-web-rank, .dsh-web-snippet, .dsh-skill-body, .fcc-path, .fcc-delta {
+  font-size: calc(12px * var(--chat-scale, 1));
+}
+.dsh-presentItem { font-size: calc(12.5px * var(--chat-scale, 1)); }
+.dsh-ioText, .dsh-web-title, .dsh-command-body, .dsh-compaction-body, .fcc-head {
+  font-size: calc(13px * var(--chat-scale, 1));
+}
+.dsh-fileLink, .dsh-thinking-body, .plan-preview-doc { font-size: calc(14px * var(--chat-scale, 1)); }
+/* 过程组组头与回合折叠行:「已完成,用时 X」「已读取文件」这些行也属于对话内容 */
+.dsh-pg-title, .pf { font-size: calc(14px * var(--chat-scale, 1)); }
+/* 工具行标题与摘要(「本机命令 · npm test」那一行) */
+.dsh-title, .dsh-summary { font-size: calc(13px * var(--chat-scale, 1)); }

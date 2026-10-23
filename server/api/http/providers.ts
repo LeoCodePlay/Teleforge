@@ -3,7 +3,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { aiProviders, type AiProvider } from '../../store/ai-providers-store.ts';
 import { uiState } from '../../store/ui-state-store.ts';
-import { setImageToolConfig, imageToolSummary, IMAGE_QUALITIES, IMAGE_SIZE_OPTIONS } from '../../store/settings-store.ts';
+import { IMAGE_QUALITIES, IMAGE_SIZE_OPTIONS } from '../../store/settings-store.ts';
+import { imageProviders } from '../../store/image-providers-store.ts';
 import { describeFetchError, outboundFetch } from '../../core/net.ts';
 import { authHeaders, modelsEndpoint, normalizeProtocol, parseModelList } from '../../agent/llm.ts';
 
@@ -111,33 +112,70 @@ export default async function registerProviders(app: FastifyInstance) {
     return { userProviders: aiProviders.list() };
   });
 
-  // ---- 「生图工具」独立配置(generate_image 工具与 imageGen 生图对话的端点来源)----
-  // 与对话提供商解耦:对话可以是任意文本模型,生图另指一个图像端点(可指向 OpenAI
-  // 官方 gpt-image-1、或任意 OpenAI 兼容网关的 gpt-image-2 等)。
-  app.get('/api/image-tool', () => ({
-    imageTool: imageToolSummary(),
+  // ---- 「生图模型商」独立配置(generate_image 工具与生图端点的来源)----
+  // 与对话提供商解耦:可以像 AI 配置那样添加多条图像端点,activeId 指向当前使用中的一条。
+  // (imageGen 纯图像端点模型走的是 AI 提供商自己的端点配置,不吃这里。)
+  const imageProvidersPayload = () => ({
+    providers: imageProviders.list(),
+    activeId: imageProviders.activeId()
+  });
+
+  app.get('/api/image-providers', () => ({
+    ...imageProvidersPayload(),
     // 尺寸直接下发 {value,label}:标签是给人看的口径(1K 方图…),避免前端再抄一份枚举
     options: { qualities: IMAGE_QUALITIES, sizes: IMAGE_SIZE_OPTIONS }
   }));
 
-  app.put('/api/image-tool', (request: FastifyRequest, reply: FastifyReply) => {
+  // 新增一条。默认切换为使用中(「保存并使用」);body.activate=false 用于复制这类不抢焦点的场景。
+  app.post('/api/image-providers', (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      setImageToolConfig((request.body as any)?.imageTool);
-      return { imageTool: imageToolSummary() };
+      const b = (request.body as any) || {};
+      imageProviders.add(b, { activate: b.activate !== false });
+      return imageProvidersPayload();
     } catch (e: any) {
       return reply.code(400).send({ error: e.message });
     }
   });
 
-  // 清除配置(回到"未配置":generate_image 工具会提示用户去配置)
-  app.delete('/api/image-tool', () => {
-    setImageToolConfig(null);
-    return { imageTool: null };
+  app.patch('/api/image-providers/:id', (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const updated = imageProviders.update(String((request.params as any)?.id || ''), (request.body as any) || {});
+      if (!updated) return reply.code(404).send({ error: '生图模型商不存在' });
+      return imageProvidersPayload();
+    } catch (e: any) {
+      return reply.code(400).send({ error: e.message });
+    }
   });
 
-  // 用当前配置做一次连通性自检(拉图像模型列表,顺带验证 key):生图端点没有 /models
+  // 切换使用中(界面点卡片 / 点「使用」)
+  app.post('/api/image-providers/:id/use', (request: FastifyRequest, reply: FastifyReply) => {
+    if (!imageProviders.setActive(String((request.params as any)?.id || ''))) {
+      return reply.code(404).send({ error: '生图模型商不存在' });
+    }
+    return imageProvidersPayload();
+  });
+
+  // 清除某 Key(或全部 Key)的不可用标记:充值 / 换好 Key 后点「重置」
+  app.post('/api/image-providers/:id/reset-key', (request: FastifyRequest, reply: FastifyReply) => {
+    const id = String((request.params as any)?.id || '');
+    if (!imageProviders.find(id)) return reply.code(404).send({ error: '生图模型商不存在' });
+    const key = String((request.body as any)?.key || '').trim();
+    if (key) imageProviders.resetKey(id, key);
+    else imageProviders.resetAllKeys(id); // 未指定 Key = 全部重置
+    return imageProvidersPayload();
+  });
+
+  // 删除一条;若删的是使用中的那条,store 会自动落到第一条
+  app.delete('/api/image-providers/:id', (request: FastifyRequest, reply: FastifyReply) => {
+    if (!imageProviders.remove(String((request.params as any)?.id || ''))) {
+      return reply.code(404).send({ error: '生图模型商不存在' });
+    }
+    return imageProvidersPayload();
+  });
+
+  // 用当前填写的端点做一次连通性自检(拉图像模型列表,顺带验证 key):生图端点没有 /models
   // 也能工作,所以这里失败只作提示、不阻断保存。
-  app.post('/api/image-tool/test', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/image-providers/test', async (request: FastifyRequest, reply: FastifyReply) => {
     const b = (request.body as any) || {};
     const baseUrl = String(b.baseUrl || '').trim().replace(/\/+$/, '');
     const apiKey = String(b.apiKey || '').trim();

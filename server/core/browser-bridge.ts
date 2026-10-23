@@ -32,6 +32,8 @@ export interface ExtTabRaw {
   url: string;
   title: string;
   active: boolean;
+  /** 这个标签是从哪个标签里打开的(链接 target=_blank / window.open);用来把 AI 开的子标签也归给 AI */
+  openerTabId?: number | null;
 }
 
 /** 对外(前端/工具层)看到的标签:带上本端算出的授权判定 */
@@ -57,6 +59,8 @@ export interface BridgeConnection {
   connectedAt: number | null;
   mode: BridgeMode;
   tabCount: number;
+  /** 扩展协议版本(2 = 支持 batch / snapshot-v2 / act;1 = 旧版) */
+  protocol: number;
 }
 
 export interface BridgeStatus {
@@ -75,6 +79,10 @@ export interface BridgeStatus {
   onlineCount: number;
   /** 全部在线连接(多浏览器时前端/工具据此列出可选项) */
   connections: BridgeConnection[];
+  /** 默认目标的扩展协议版本(null = 没连上) */
+  protocolVersion: number | null;
+  /** 域名白/黑名单(用户级策略,存在 browser-bridge.json) */
+  domains: { allowed: string[]; blocked: string[] };
 }
 
 /** 扩展上线时回传的自我介绍 */
@@ -83,6 +91,8 @@ interface ExtHello {
   token?: string;
   version?: string;
   browser?: string;
+  /** 协议版本:2 支持 batch / snapshot-v2 / act(旧扩展没有这个字段) */
+  protocol?: number;
   /** 浏览器实例 id:扩展首次配对时生成并写进 chrome.storage.local,重连不变 */
   instanceId?: string;
   capabilities?: string[];
@@ -98,6 +108,26 @@ const HELLO_TIMEOUT_MS = 10_000;
 interface PairRecord {
   token: string;
   createdAt: number;
+  /** 只允许 AI 访问这些域(为空 = 不限制);支持 *.example.com */
+  allowedDomains?: string[];
+  /** 禁止 AI 访问这些域(优先级高于 allowedDomains) */
+  blockedDomains?: string[];
+  /**
+   * 按浏览器实例持久化的授权状态。
+   * 为什么必须落盘:AI 用 browser_open 开的标签如果只记在内存里,服务端一重启、
+   * 或扩展被 MV3 回收后重连,这些标签就全变成"没有授权",用户下次读页面直接失败。
+   */
+  auth?: Record<string, { mode: BridgeMode; grantedTabs: number[]; aiTabs: number[] }>;
+}
+
+/** 域名规则匹配:精确、后缀(*.example.com)与裸域等价 */
+function domainMatches(host: string, rule: string): boolean {
+  const h = String(host || '').toLowerCase().trim();
+  let r = String(rule || '').toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
+  if (!h || !r) return false;
+  if (r.startsWith('*.')) r = r.slice(2);
+  if (r.startsWith('.')) r = r.slice(1);
+  return h === r || h.endsWith('.' + r);
 }
 
 /** 内核名 → 界面/工具里显示的名字(多浏览器时用来区分"哪一台") */
@@ -124,6 +154,8 @@ class ExtConn {
   labeled = false;
   browser = 'chrome';
   version: string | null = null;
+  /** 扩展协议版本(旧扩展不上报,按 1 处理) */
+  protocol = 1;
   connectedAt: number | null = null;
   mode: BridgeMode = 'ai-tabs';
   grantedTabs = new Set<number>();
@@ -207,6 +239,119 @@ class BrowserBridge extends EventEmitter {
     return t;
   }
 
+  // ---------------- 域名策略 ----------------
+
+  /** 读整份配对记录(token + 域名策略);文件损坏时退回内存里的那份 */
+  private pairRecord(): PairRecord | null {
+    try {
+      if (fs.existsSync(PAIR_FILE)) {
+        const raw = JSON.parse(fs.readFileSync(PAIR_FILE, 'utf8'));
+        if (raw && typeof raw.token === 'string' && raw.token.length >= 16) return raw as PairRecord;
+      }
+    } catch { /* 下面回退 */ }
+    return this.pair;
+  }
+
+  domains(): { allowed: string[]; blocked: string[] } {
+    const rec = this.pairRecord();
+    const list = (v: unknown) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
+    return { allowed: list(rec?.allowedDomains), blocked: list(rec?.blockedDomains) };
+  }
+
+  /**
+   * 设置域名白/黑名单(用户级策略)。
+   * allowed 非空 = 只允许这些域;blocked 永远优先。空数组 = 不限制。
+   */
+  setDomains(next: { allowed?: string[]; blocked?: string[] }): { allowed: string[]; blocked: string[] } {
+    const rec: PairRecord = this.pairRecord() || { token: this.token(), createdAt: Date.now() };
+    const clean = (v: unknown) => (Array.isArray(v) ? v.map((s) => String(s).trim()).filter(Boolean).slice(0, 200) : []);
+    rec.allowedDomains = clean(next?.allowed);
+    rec.blockedDomains = clean(next?.blocked);
+    this.pair = rec;
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(PAIR_FILE, JSON.stringify(rec, null, 2), 'utf8');
+      try { fs.chmodSync(PAIR_FILE, 0o600); } catch { /* Windows 上忽略 */ }
+    } catch { /* 落盘失败仍生效于本次运行 */ }
+    this.emit('change', this.status());
+    return this.domains();
+  }
+
+  /** 某次导航/操作是否被域名策略允许 */
+  checkDomain(url: string): { ok: true } | { ok: false; reason: string } {
+    const { allowed, blocked } = this.domains();
+    if (!allowed.length && !blocked.length) return { ok: true };
+    let host = '';
+    try { host = new URL(String(url || '')).hostname; } catch { return { ok: true }; }
+    if (!host) return { ok: true };
+    if (blocked.some((r) => domainMatches(host, r))) {
+      return { ok: false, reason: `域名 ${host} 在禁止清单里(浏览器桥接的域名策略),AI 不能操作它` };
+    }
+    if (allowed.length && !allowed.some((r) => domainMatches(host, r))) {
+      return { ok: false, reason: `域名 ${host} 不在允许清单里(当前只允许:${allowed.join('、')})` };
+    }
+    return { ok: true };
+  }
+
+  // ---------------- 授权状态持久化 ----------------
+
+  private authSaveTimer: NodeJS.Timeout | null = null;
+
+  /** 把一条连接的授权记进内存快照(断开后仍保留),并节流落盘 */
+  private rememberAuth(conn: ExtConn): void {
+    if (!conn.labeled) return; // 旧扩展没有稳定实例 id:落盘后 tabId 也不可靠
+    this.authByInstance.set(conn.id, {
+      mode: conn.mode,
+      grantedTabs: new Set(conn.grantedTabs),
+      aiTabs: new Set(conn.aiTabs)
+    });
+    if (this.authByInstance.size > 32) {
+      const oldest = this.authByInstance.keys().next().value;
+      if (oldest !== undefined && oldest !== conn.id) this.authByInstance.delete(oldest);
+    }
+    this.scheduleAuthFlush();
+  }
+
+  private scheduleAuthFlush(): void {
+    if (this.authSaveTimer) return;
+    this.authSaveTimer = setTimeout(() => {
+      this.authSaveTimer = null;
+      this.flushAuth();
+    }, 300);
+    this.authSaveTimer.unref?.();
+  }
+
+  /** 立刻把内存里的授权写进 browser-bridge.json(保留 token / 域名策略 / 其它实例的历史授权) */
+  private flushAuth(): void {
+    const rec: PairRecord = this.pairRecord() || { token: this.token(), createdAt: Date.now() };
+    // 与磁盘上的旧记录合并,而不是整体覆盖:内存里可能只是"暂时没有这个实例"
+    // (服务端刚重启、连接还没握手),整体覆盖会把上次落盘的 AI 标签授权抹掉。
+    const auth: NonNullable<PairRecord['auth']> = { ...(rec.auth || {}) };
+    for (const [id, a] of this.authByInstance) {
+      auth[id] = { mode: a.mode, grantedTabs: [...a.grantedTabs], aiTabs: [...a.aiTabs] };
+    }
+    rec.auth = auth;
+    this.pair = rec;
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(PAIR_FILE, JSON.stringify(rec, null, 2), 'utf8');
+      try { fs.chmodSync(PAIR_FILE, 0o600); } catch { /* Windows 上忽略 */ }
+    } catch { /* 落盘失败仍保留内存状态 */ }
+  }
+
+  /** 从磁盘恢复某实例的授权(连接握手时用) */
+  private diskAuth(id: string): { mode: BridgeMode; grantedTabs: Set<number>; aiTabs: Set<number> } | null {
+    try {
+      const a = this.pairRecord()?.auth?.[id];
+      if (!a) return null;
+      return {
+        mode: a.mode === 'all' ? 'all' : 'ai-tabs',
+        grantedTabs: new Set((a.grantedTabs || []).filter(Number.isFinite)),
+        aiTabs: new Set((a.aiTabs || []).filter(Number.isFinite))
+      };
+    } catch { return null; }
+  }
+
   // ---------------- 连接与鉴权 ----------------
 
   /**
@@ -218,6 +363,13 @@ class BrowserBridge extends EventEmitter {
     try {
       token = new URL(String(req.url || '/ws/ext'), 'http://127.0.0.1').searchParams.get('token') || '';
     } catch { return false; }
+    if (!token) {
+      // 新扩展把 token 放在子协议里(Sec-WebSocket-Protocol: tf.<token>):
+      // 不落在 URL 上,就不会被访问日志 / 代理 / 截图里的地址栏记下来。
+      const proto = String((req.headers as any)?.['sec-websocket-protocol'] || '');
+      const m = /(?:^|,)\s*tf\.([A-Za-z0-9_-]{16,})\s*(?:,|$)/.exec(proto);
+      if (m) token = m[1];
+    }
     if (!token) return false;
     let expected: string;
     try { expected = this.token(); } catch { return false; }
@@ -281,17 +433,7 @@ class BrowserBridge extends EventEmitter {
     conn.pending.clear();
     // 同一个实例被新连接替换时,map 里已经是新连接了,不能顺手删掉(也不能盖掉新连接的授权)
     if (this.conns.get(conn.id) === conn) {
-      if (conn.labeled) {
-        this.authByInstance.set(conn.id, {
-          mode: conn.mode,
-          grantedTabs: new Set(conn.grantedTabs),
-          aiTabs: new Set(conn.aiTabs)
-        });
-        if (this.authByInstance.size > 32) {
-          const oldest = this.authByInstance.keys().next().value;
-          if (oldest !== undefined && oldest !== conn.id) this.authByInstance.delete(oldest);
-        }
-      }
+      if (conn.labeled) this.rememberAuth(conn);
       this.conns.delete(conn.id);
     }
     if (this.activeId === conn.id && !this.conns.has(conn.id)) {
@@ -331,6 +473,15 @@ class BrowserBridge extends EventEmitter {
       conn.grantedTabs = prev.grantedTabs;
       conn.aiTabs = prev.aiTabs;
       this.closeConn(prev, 4409, 'replaced by a newer connection');
+    } else if (!kept) {
+      // 服务端重启过(内存里的 authByInstance 没了):从磁盘把"AI 开过的标签 / 用户授权的标签"捞回来。
+      // 不这么做的话,重启前 AI 自己开的标签会在重启后变成"没有授权",读页面直接失败。
+      const disk = this.diskAuth(id);
+      if (disk) {
+        conn.mode = disk.mode;
+        conn.grantedTabs = new Set(disk.grantedTabs);
+        conn.aiTabs = new Set(disk.aiTabs);
+      }
     }
 
     if (conn.helloTimer) { clearTimeout(conn.helloTimer); conn.helloTimer = null; }
@@ -340,6 +491,7 @@ class BrowserBridge extends EventEmitter {
     conn.ready = true;
     conn.browser = String(hello.browser || 'chrome');
     conn.version = String(hello.version || 'unknown');
+    conn.protocol = Number(hello.protocol) || 1;
     conn.connectedAt = Date.now();
     conn.lastError = null;
     this.lastError = null;
@@ -356,7 +508,11 @@ class BrowserBridge extends EventEmitter {
         ok: true,
         heartbeatMs: PING_MS,
         mode: conn.mode,
-        snapshotScript: `(${SNAPSHOT_SCRIPT.toString()})()`
+        protocol: 2,
+        // 兼容旧扩展:它们只会 eval 这段"已自执行"的表达式(拿不到 scope 参数)
+        snapshotScript: `(${SNAPSHOT_SCRIPT.toString()})()`,
+        // 新扩展用这个:调用时带 { scope, root, text, max },与内置预览跑同一份脚本
+        snapshotScriptSrc: `(${SNAPSHOT_SCRIPT.toString()})`
       }));
     } catch { /* 忽略 */ }
     this.emit('change', this.status());
@@ -398,6 +554,28 @@ class BrowserBridge extends EventEmitter {
         try {
           const list = await this.callConn<ExtTabRaw[]>(conn, 'tabs.list', {});
           conn.tabs = Array.isArray(list) ? list : [];
+          // AI(或用户授权)的标签里点开的子标签 —— 链接 target=_blank、window.open —— 自动归 AI 所有。
+          // 否则 AI 点一下链接开了新标签,下一步去读它就会"没有授权",用户看到的就是"AI 开的标签也没权限"。
+          let changed = false;
+          for (let pass = 0; pass < 4; pass += 1) {
+            for (const t of conn.tabs) {
+              if (conn.aiTabs.has(t.tabId)) continue;
+              const opener = Number(t.openerTabId);
+              if (!Number.isFinite(opener)) continue;
+              if (conn.aiTabs.has(opener) || conn.grantedTabs.has(opener)) {
+                conn.aiTabs.add(t.tabId);
+                changed = true;
+              }
+            }
+          }
+          // 关掉的标签会一直留在集合里:只裁剪"已经不在清单里"的,避免 tabId 被复用时误授权
+          if (conn.aiTabs.size > 500) {
+            for (const id of [...conn.aiTabs]) {
+              if (conn.aiTabs.size <= 500) break;
+              if (!conn.tabs.some((t) => t.tabId === id)) conn.aiTabs.delete(id);
+            }
+          }
+          if (changed) this.rememberAuth(conn);
           this.emit('change', this.status());
         } catch { /* 拉取失败不影响连接本身 */ }
         resolve();
@@ -473,6 +651,33 @@ class BrowserBridge extends EventEmitter {
     return this.resolveConn(hint)?.id ?? null;
   }
 
+  /**
+   * 在当前/指定浏览器里开一个新标签,并**原子地**把它记为 AI 自建。
+   *
+   * 为什么放在桥接层:标签是在哪条连接上开的,只有 `tabs.open` 的应答现场知道。
+   * 交给上层拿 tabId 反查连接,在"标签清单还没刷新"或"同时开着 Chrome + Edge"时会标到错的连接上,
+   * 表现就是"AI 刚开的标签没有授权"。
+   */
+  async openTab(url: string, opts: { instance?: string | null; active?: boolean } = {}): Promise<{ tabId: number; url: string; title: string; instance: string }> {
+    const conn = this.resolveConn(opts.instance);
+    if (!conn) {
+      throw new Error('真机浏览器未连接:请在浏览器里打开扩展 popup 完成配对(或改用 target=preview 走内置预览)');
+    }
+    const r = await this.callConn<any>(conn, 'tabs.open', { url, active: opts.active === true }, 60_000);
+    const tabId = Number(r?.tabId);
+    if (Number.isFinite(tabId)) {
+      conn.aiTabs.add(tabId);
+      this.noteOpenedTabOn(conn, tabId, {
+        url: String(r?.url || url),
+        title: String(r?.title || ''),
+        active: opts.active === true
+      });
+      this.rememberAuth(conn);
+      void this.refreshTabs(conn);
+    }
+    return { tabId, url: String(r?.url || url), title: String(r?.title || ''), instance: conn.id };
+  }
+
   listConnections(): BridgeConnection[] {
     return this.onlineConns().map((c) => ({
       id: c.id,
@@ -482,7 +687,8 @@ class BrowserBridge extends EventEmitter {
       online: true,
       connectedAt: c.connectedAt,
       mode: c.mode,
-      tabCount: c.tabs.length
+      tabCount: c.tabs.length,
+      protocol: c.protocol
     }));
   }
 
@@ -500,7 +706,9 @@ class BrowserBridge extends EventEmitter {
       id: conn?.id ?? null,
       label: conn?.label ?? null,
       onlineCount: connections.length,
-      connections
+      connections,
+      protocolVersion: conn ? conn.protocol : null,
+      domains: this.domains()
     };
   }
 
@@ -544,19 +752,24 @@ class BrowserBridge extends EventEmitter {
     return { ...t, owned, granted, allowed: conn.mode === 'all' || owned || granted };
   }
 
-  /** AI 是否可以操作该标签(工具层调用前必须过这一关) */
+  /** AI 是否可以操作该标签(工具层调用前必须过这一关):标签授权 + 域名策略 */
   canOperate(tabId: number, hint?: string | null): { ok: true } | { ok: false; reason: string } {
     const conn = this.connForTab(tabId, hint);
     if (!conn) {
       return { ok: false, reason: '真机浏览器未连接:请在浏览器里打开扩展 popup 完成配对(或改用 target=preview 走内置预览)' };
     }
-    if (conn.mode === 'all') return { ok: true };
-    if (conn.aiTabs.has(tabId) || conn.grantedTabs.has(tabId)) return { ok: true };
-    return {
-      ok: false,
-      reason: `标签 ${tabId}(${conn.label})没有授权给 AI(当前模式:仅 AI 自建 + 用户授权)。`
-        + '请在浏览器扩展 popup 或前端「真机浏览器」面板里把该标签交给 AI,或让 AI 用 browser_open 新开一个标签。'
-    };
+    const tab = conn.tabs.find((t) => t.tabId === tabId);
+    const allowed = conn.mode === 'all' || conn.aiTabs.has(tabId) || conn.grantedTabs.has(tabId);
+    if (!allowed) {
+      return {
+        ok: false,
+        reason: `标签 ${tabId}(${conn.label})没有授权给 AI(当前模式:仅 AI 自建 + 用户授权)。`
+          + '请在浏览器扩展 popup 或前端「真机浏览器」面板里把该标签交给 AI,或让 AI 用 browser_open 新开一个标签。'
+      };
+    }
+    const dom = this.checkDomain(tab?.url || '');
+    if (!dom.ok) return dom;
+    return { ok: true };
   }
 
   /** AI 自己创建的标签(自动可操作) */
@@ -565,6 +778,7 @@ class BrowserBridge extends EventEmitter {
     const conn = this.connForTab(tabId, hint);
     if (!conn) return;
     conn.aiTabs.add(tabId);
+    this.rememberAuth(conn);
     void this.refreshTabs(conn);
   }
 
@@ -575,14 +789,21 @@ class BrowserBridge extends EventEmitter {
    */
   noteOpenedTab(tabId: number, hint?: string | null, tab?: Partial<ExtTabRaw>): void {
     if (!Number.isFinite(tabId)) return;
-    const conn = this.connForTab(tabId, hint);
-    if (!conn || conn.tabs.some((t) => t.tabId === tabId)) return;
-    for (const t of conn.tabs) t.active = false;
+    this.noteOpenedTabOn(this.connForTab(tabId, hint), tabId, tab);
+  }
+
+  private noteOpenedTabOn(conn: ExtConn | null, tabId: number, tab?: Partial<ExtTabRaw>): void {
+    if (!conn || !Number.isFinite(tabId)) return;
+    if (conn.tabs.some((t) => t.tabId === tabId)) return;
+    // 后台打开的标签不会抢走 active:只有真的切到前台才清掉其它标签的 active
+    const active = tab?.active === true;
+    if (active) for (const t of conn.tabs) t.active = false;
     conn.tabs.push({
       tabId,
       url: String(tab?.url || ''),
       title: String(tab?.title || ''),
-      active: tab?.active !== false
+      active,
+      openerTabId: tab?.openerTabId ?? null
     });
     this.emit('change', this.status());
   }
@@ -602,6 +823,7 @@ class BrowserBridge extends EventEmitter {
     const conn = this.connForTab(tabId, hint);
     if (!conn) return;
     conn.grantedTabs.add(tabId);
+    this.rememberAuth(conn);
     this.emit('change', this.status());
   }
 
@@ -610,6 +832,7 @@ class BrowserBridge extends EventEmitter {
     if (!conn) return;
     conn.grantedTabs.delete(tabId);
     conn.aiTabs.delete(tabId);
+    this.rememberAuth(conn);
     this.emit('change', this.status());
   }
 
@@ -622,6 +845,7 @@ class BrowserBridge extends EventEmitter {
     const targets = want ? (picked ? [picked] : []) : this.onlineConns();
     for (const conn of targets) {
       conn.mode = next;
+      this.rememberAuth(conn);
       try { conn.ws.send(JSON.stringify({ type: 'ext_config', mode: next })); } catch { /* 忽略 */ }
     }
     this.emit('change', this.status());

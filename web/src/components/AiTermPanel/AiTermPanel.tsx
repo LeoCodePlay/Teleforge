@@ -20,6 +20,7 @@ import { StateDot } from '../StateDot/StateDot';
 import { IconApiOutline14 } from '../icons/icons';
 import type { AiTermInfo } from '../../types';
 import { readTermInventory } from '../../utils/termInventory';
+import { onChatFontChange, scaledFont } from '../../utils/chatFont';
 import '@xterm/xterm/css/xterm.css';
 import './AiTermPanel.scss';
 
@@ -103,6 +104,17 @@ export default function AiTermPanel({ active, embedded = false, onCounts, sid }:
     api.send('ai_term_resize', { id, cols: x.term.cols, rows: x.term.rows });
   }, []);
 
+  // 界面字号联动(dsh 0.2.1-rc 的 0c6968b649:正文 / 代码 / 终端字号一起步进)。
+  // xterm 的字号是 JS 选项、CSS 缩放管不到,必须显式改写并重新 fit ——
+  // 字号变了列数/行数一定跟着变,所以清掉缓存的 size 让 fitBox 重新上报 PTY 尺寸。
+  useEffect(() => onChatFontChange(() => {
+    for (const [id, x] of xterms.current) {
+      x.term.options.fontSize = scaledFont(12.5);
+      x.size = '';
+      fitBox(id);
+    }
+  }), [fitBox]);
+
   // 把已缓存的历史日志一次性写入终端(只在拿到日志后标记 hydrated,避免丢字/重字)
   const hydrate = useCallback((id: string) => {
     const x = xterms.current.get(id);
@@ -128,7 +140,8 @@ export default function AiTermPanel({ active, embedded = false, onCounts, sid }:
       const term = new Terminal({
         theme: CAMPBELL,
         fontFamily: '"Cascadia Mono", Consolas, "JetBrains Mono", monospace',
-        fontSize: 12.5,
+        // 界面字号联动:与对话正文同一倍率(dsh 0.2.1-rc 的 0c6968b649)
+        fontSize: scaledFont(12.5),
         cursorBlink: false,
         // 只读:不接受键盘输入;文本仍可选中复制
         disableStdin: true,

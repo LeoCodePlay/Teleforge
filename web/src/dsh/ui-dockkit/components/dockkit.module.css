@@ -220,16 +220,16 @@
   outline: none;
 }
 
-/* A 38px row whose 28px content band sits at its bottom: chips fill the band,
-   so they end flush with the strip's bottom edge, and the 28px add control, the
-   28px split control, and the embedder's 28px chrome centre on the band's one
-   centre line, so chip text and control glyphs never sit at different heights.
-   The 10px above is the strip's own top margin, inside its box so the hit
-   area stays one element; the 10px at the start is the first chip's inset
-   from the edge, and the 6px at the end puts the last control's glyph 12px
-   from the edge. The strip draws no border: a body
-   that wants a rule under it draws its own. A floating panel's header is
-   this same row.
+/* A 40px row whose 28px content band sits 6px above and below it: chips fill
+   the band, so they get equal breathing gaps before the strip's top and the
+   pane body, and the 28px add control, the 28px split control, and the
+   embedder's 28px chrome centre on the band's one centre line, so chip text
+   and control glyphs never sit at different heights. The 6px above and below
+   are the strip's own insets, inside its box so the hit area stays one
+   element; the 10px start and end insets keep the first chip and the last
+   control optically level with the surface's content gutters. The strip draws
+   no border: a body that wants a rule under it draws its own. A floating
+   panel's header is this same row.
 
    The strip never clips: the chip box below is its one shrinking part, and
    every control after it is `flex: none`, so a narrow pane costs chips, never
@@ -239,17 +239,17 @@
   flex: none;
   gap: 4px;
   align-items: center;
-  /* The row is the 38px band the comment above describes (10px top margin +
-     28px content). It has to be stated as the full outer height because an
-     embedder's global `box-sizing: border-box` reset makes the height include
-     the padding: at 28px the content band collapses to 18px, the 28px chips
-     overflow 5px past the strip, and the pane body — positioned, so painted
-     above the static strip — covers them with its own content. */
-  height: 38px;
+  /* The row is the 40px band the comment above describes (6px top + 28px
+     content + 6px bottom). It has to be stated as the full outer height because
+     an embedder's global `box-sizing: border-box` reset makes the height
+     include the padding: at 28px the content band collapses to 16px, the 28px
+     chips overflow 6px past the strip, and the pane body — positioned, so
+     painted above the static strip — covers them with its own content. */
+  height: 40px;
   /* The start inset is a published variable so a host that pins the surface
      against window chrome (the right sidebar fullscreen under macOS traffic
      lights) can widen it per pane; the fallback is the design's own 10px. */
-  padding: 10px 6px 0 var(--dsh-dockkit-strip-inline-start, 10px);
+  padding: 6px 10px 6px var(--dsh-dockkit-strip-inline-start, 10px);
   touch-action: none;
 }
 

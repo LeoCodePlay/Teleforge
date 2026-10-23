@@ -52,7 +52,8 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   background: var(--code-bg-solid);
   color: var(--code-ink);
   font-family: var(--mono);
-  font-size: 12.5px;
+  /* 界面字号联动(dsh 0.2.1-rc 的 0c6968b649:正文 / 代码 / 终端一起缩放) */
+  font-size: calc(12.5px * var(--chat-scale, 1));
 }
 .fviewer .cm-editor.cm-focused { outline: none; }
 .fviewer .cm-scroller { line-height: 1.55; padding: 8px 0 20px; }

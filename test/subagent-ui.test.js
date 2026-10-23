@@ -123,6 +123,18 @@ try {
   check('折叠时工具行存在但不可见',
     (await page.locator('[data-tool="subagent"]').count()) >= 1
     && !(await page.locator('[data-tool="subagent"]').first().isVisible()));
+  // 过程正文也随整轮折叠一起收起(dsh 的 processMember:定稿答案之前的一切都算过程)。
+  // 旧实现只收工具行 → 用户看到「工具收起来了、过程中的话还在外面」,完成自动折叠时
+  // 过程叙述还与总结贴成一段。收起后气泡里最多只剩最终答案那一段正文。
+  const segState = (nested) => page.evaluate((sel) => {
+    const bubble = document.querySelector(sel) || document.querySelector('.ai-bubble');
+    if (!bubble) return null;
+    const segs = [...bubble.querySelectorAll(':scope > .dsh-ai-text')];
+    return { total: segs.length, visible: segs.filter((el) => !el.hasAttribute('hidden')).length };
+  }, nested);
+  const foldedSegs = await segState('.ai-bubble');
+  check('折叠时过程正文与工具行一起收起(最多只剩最终答案)',
+    foldedSegs !== null && foldedSegs.visible <= 1, JSON.stringify(foldedSegs));
 
   // 展开:外层是"回合折叠行",内层是"过程组组头"(dsh 的两层结构)。
   // 点开外层 → 出现组头(「已读取文件…」),工具行还在组头下面收着;
@@ -134,6 +146,10 @@ try {
   await groupHead.waitFor({ timeout: 10000 });
   check('展开外层后出现过程组组头(一段工具活动一个组头)', await groupHead.isVisible());
   check('组头文案是「已…」这类活动账', /^已/.test((await groupHead.innerText()).trim()), (await groupHead.innerText()).trim());
+  // 展开后过程正文全部恢复可见(只收 DOM 可见性,内容始终在:页内查找仍能命中)
+  const expandedSegs = await segState('.ai-bubble');
+  check('展开后过程正文全部恢复可见',
+    expandedSegs !== null && expandedSegs.visible === expandedSegs.total, JSON.stringify(expandedSegs));
   check('组头收起时工具行仍不可见(要再点一次组头)',
     !(await page.locator('[data-tool="subagent"]').first().isVisible()));
   await groupHead.click();

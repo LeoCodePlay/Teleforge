@@ -46,7 +46,7 @@ export type { DropTarget, HalvesFit, PaneMeasure, Rect, Size, SplitMinimums } fr
 
 // Intent planning: the shared decisions, as pure functions.
 export {
-  activeDockPaneId, findContentTab, findPaneContentTab, planAddTab, planDropTab, planDuplicateTab, planFloatTab,
+  activeDockPaneId, findContentTab, findPaneContentTab, planAddTab, planClosePane, planDropTab, planDuplicateTab, planFloatTab,
   planOpenContent, planPlaceTab, planResizeSplit, planSetExpanded, planSetMode,
   planSettle, planSplitPane, planUnfloatPane,
 } from './engine/planner.ts'

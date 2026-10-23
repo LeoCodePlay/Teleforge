@@ -49,6 +49,13 @@ const writeClipboard = async (text: string) => {
 const ERR_EXISTS = '目标已存在';
 // 删除可能很慢(尤其递归删大目录),放宽请求超时
 const DELETE_TIMEOUT = 600000;
+// 上传并发通道数:浏览器对同源 HTTP/1.1 最多只开 6 条连接,再高也只是在浏览器里排队
+const UPLOAD_LANES = 6;
+// 单文件失败重传次数(写入是覆盖语义,整个文件重传是安全的)
+const UPLOAD_RETRIES = 3;
+// 状态栏右侧的圆环进度:半径与周长(SVG 里的 stroke-dasharray 用)
+const RING_R = 6.2;
+const RING_C = 2 * Math.PI * RING_R;
 
 interface FileManagerProps {
   workspace?: string | null;
@@ -78,6 +85,15 @@ interface DeletingInfo {
 interface WriteState {
   done: number;
   total: number;
+}
+// 上传进度:同时给出字节数和文件计数(多文件并发时单看百分比看不出还要传几个文件)
+interface UploadState {
+  doneFiles: number;
+  totalFiles: number;
+  sentBytes: number;
+  totalBytes: number;
+  current: string[]; // 正在传输的文件(相对路径),悬浮提示用
+  retries: number;   // 已经发生的重传次数
 }
 
 // 文件列表单行:独立子组件以便在每行内调用 useLongPress(hook 不能在 map 循环中调用)。
@@ -173,7 +189,10 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   const [clipboard, setClipboard] = useState<Clipboard | null>(null); // {items: [path], op}
   const [msg, setMsg] = useState('');
   const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [upState, setUpState] = useState<UploadState | null>(null); // 上传进度:字节 + 文件计数
+  const [statusOpen, setStatusOpen] = useState(false); // 底部状态栏展开详情
+  const mountedRef = useRef(true);
+  const uploadXhrs = useRef<Set<XMLHttpRequest>>(new Set()); // 在途上传请求:卸载时中止,不留孤儿连接
   const [deleting, setDeleting] = useState<DeletingInfo | null>(null); // 删除进度
   const [wrState, setWrState] = useState<WriteState | null>(null); // 服务端写入远程进度
   const [transferring, setTransferring] = useState(false); // 传到本地进行中
@@ -404,6 +423,16 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 卸载(断开服务器等)时中止在途上传:否则请求会继续占着 SSH 通道往远程写
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const x of uploadXhrs.current) { try { x.abort(); } catch {} }
+      uploadXhrs.current.clear();
+    };
+  }, []);
+
   // ---- 选区操作 ----
   const doDelete = async () => {
     if (opCount === 0 || deleting) return;
@@ -532,44 +561,120 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
     refresh();
   };
 
-  // ---- 上传到当前目录 ----
-  const uploadFiles = (fileList: FileList | null) => {
+  // ---- 上传到当前目录:多文件并发 + 单文件流式 ----
+  // 每个文件一条 /api/upload/file 请求,请求体就是文件本身:服务端边收边写远程。
+  // 比原来"整批塞一个 multipart、服务端先全部收进内存再串行写"强在两点:
+  //   ① 内存占用与文件大小无关(大文件不再把进程顶爆 → 传到一半断);
+  //   ② 一个文件卡住只影响它自己那条通道,不会拖死整批。
+  const uploadFiles = async (fileList: FileList | null) => {
     const files = Array.from(fileList || []);
     if (!files.length) return;
-    const fd = new FormData();
-    for (const f of files) {
-      const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-      fd.append('files', f, rel);
+    const dir = path;
+    const items = files.map((f) => ({
+      file: f,
+      // 文件夹上传时 webkitRelativePath 带子目录,服务端按它还原目录结构
+      rel: (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
+    }));
+    const totalBytes = items.reduce((n, it) => n + it.file.size, 0);
+    const sent = new Array<number>(items.length).fill(0); // 每个文件已发出的字节
+    const active = new Set<number>(); // 正在传输的文件下标(悬浮提示展示文件名)
+    const failed: string[] = [];
+    let doneFiles = 0;
+    let retries = 0;
+    let flushAt = 0;
+    // 进度回调每个文件每秒可能来上百条:节流到 ~8 次/s 再进 React,避免上传时界面卡顿
+    const report = (force = false) => {
+      if (!mountedRef.current) return;
+      const now = Date.now();
+      if (!force && now - flushAt < 120) return;
+      flushAt = now;
+      setUpState({
+        doneFiles, totalFiles: items.length,
+        sentBytes: sent.reduce((n, v) => n + v, 0), totalBytes,
+        current: [...active].map((i) => items[i].rel),
+        retries
+      });
+    };
+
+    setError(''); setStatusOpen(false); setUploading(true);
+    setUpState({ doneFiles: 0, totalFiles: items.length, sentBytes: 0, totalBytes, current: [], retries: 0 });
+    try {
+      // 1) 预建目录:几百个文件也只建一轮(逐文件 mkdirp 会把同一串父目录重复 stat 上百次)
+      const pr = await fetch('/api/upload/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir, rels: items.map((it) => it.rel) })
+      });
+      if (!pr.ok) {
+        const body = await pr.json().catch(() => null);
+        throw new Error(body?.error || `HTTP ${pr.status}`);
+      }
+      // 2) 按通道并发上传:每个通道串行领下一个文件,通道之间互不阻塞
+      let cursor = 0;
+      const putOne = (idx: number) => new Promise<void>((resolve, reject) => {
+        const it = items[idx];
+        let attempt = 0;
+        const send = () => {
+          // 重传是走 setTimeout 排的:组件已卸载(断开服务器)就别再发新请求
+          if (!mountedRef.current) { reject(new Error('已取消')); return; }
+          if (attempt > 0) retries += 1;
+          const xhr = new XMLHttpRequest();
+          uploadXhrs.current.add(xhr);
+          active.add(idx);
+          let settled = false;
+          const finish = (err?: Error) => {
+            if (settled) return;
+            settled = true;
+            uploadXhrs.current.delete(xhr);
+            active.delete(idx);
+            if (!mountedRef.current) { reject(new Error('已取消')); return; }
+            if (!err) { sent[idx] = it.file.size; report(true); resolve(); return; }
+            attempt += 1;
+            sent[idx] = 0;
+            report(true);
+            if (attempt <= UPLOAD_RETRIES) { setTimeout(send, 300 * attempt); return; } // 退避后整个文件重传
+            failed.push(`${it.rel}: ${err.message}`);
+            reject(err);
+          };
+          // size 传给服务端:它写完会核对字节数,对不上就不落成目标文件
+          xhr.open('POST', `/api/upload/file?dir=${encodeURIComponent(dir)}&rel=${encodeURIComponent(it.rel)}&size=${it.file.size}`);
+          // 必须显式指定:否则浏览器按 File.type(text/plain 等)发送,服务端要按类型单独解析
+          xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+          xhr.upload.onprogress = (e) => { if (e.lengthComputable) { sent[idx] = e.loaded; report(); } };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) { finish(); return; }
+            let text = `HTTP ${xhr.status}`;
+            try { const body = JSON.parse(xhr.responseText); if (body?.error) text = String(body.error); } catch {}
+            finish(new Error(text));
+          };
+          xhr.onerror = () => finish(new Error('网络错误'));
+          xhr.onabort = () => finish(new Error('已取消'));
+          xhr.ontimeout = () => finish(new Error('超时'));
+          xhr.send(it.file);
+        };
+        send();
+      });
+      const lane = async () => {
+        while (cursor < items.length) {
+          const idx = cursor++;
+          try { await putOne(idx); } catch { /* 已记入 failed */ }
+          doneFiles += 1;
+          report(true);
+        }
+      };
+      await Promise.all([...Array(Math.min(UPLOAD_LANES, items.length))].map(() => lane()));
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setUploading(false); setUpState(null);
+      setError(`✕ 上传失败: ${(e as Error).message}`);
+      return;
     }
-    setUploading(true); setProgress(0); setWrState(null); setError('');
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/upload?dir=${encodeURIComponent(path)}`);
-    // 阶段1:浏览器→服务器 的 body 传输(上限 99,避免 body 传完但服务端还没开始写入时虚报 100%)
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100)); };
-    // 阶段2:服务端按文件回传写入进度(NDJSON 流),读到即切到写入阶段,显示真实进度
-    xhr.onprogress = () => {
-      const text = xhr.responseText;
-      if (!text) return;
-      for (const ln of text.split('\n')) {
-        let m; try { m = JSON.parse(ln); } catch { continue; }
-        if (m && m.type === 'progress' && m.total) setWrState({ done: m.done, total: m.total });
-      }
-    };
-    xhr.onload = () => {
-      setUploading(false);
-      let r: any = null;
-      const lastLn = xhr.responseText.split('\n').filter(Boolean).pop();
-      if (lastLn) { try { r = JSON.parse(lastLn); } catch {} }
-      if (xhr.status === 200 && r) {
-        refresh(); // 先刷新列表,避免"上传成功但目录里看不到"的错觉
-        if (r.failed > 0) setError(`⬆ 已上传 ${r.uploaded} 个文件,但 ${r.failed} 个失败: ${(r.errors || []).slice(0, 5).join('; ')}`);
-        else flash(`⬆ 已上传 ${r.uploaded} 个文件(${fmtSize(r.bytes)})`);
-      } else {
-        setError(`✕ 上传失败: ${r?.error || xhr.statusText}`);
-      }
-    };
-    xhr.onerror = () => { setUploading(false); setError('✕ 网络错误,上传失败'); };
-    xhr.send(fd);
+    if (!mountedRef.current) return;
+    setUploading(false); setUpState(null);
+    refresh(); // 先刷新列表(refresh→load 开头会清空 error),再显示错误,避免失败原因被静默吞掉
+    const ok = items.length - failed.length;
+    if (failed.length) setError(`⬆ 已上传 ${ok} 个文件,${failed.length} 个失败: ${failed.slice(0, 5).join('; ')}`);
+    else flash(`⬆ 已上传 ${ok} 个文件(${fmtSize(totalBytes)})`);
   };
 
   // 「上传」按钮:一个按钮同时支持选文件/选文件夹(浏览器单个 file input 只能二选一,故点击弹菜单)
@@ -636,12 +741,44 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
   // 面包屑
   const crumbs = path.split('/').filter(Boolean);
 
-  const statusText = deleting
-    ? `正在删除 ${deleting.index + 1}/${deleting.total}: ${deleting.name}…已删 ${deleting.done} 项`
-    : uploading ? (wrState ? `写入远程 ${wrState.done}/${wrState.total}` : `上传中 ${Math.min(progress, 99)}%`)
-      : transferring ? (wrState ? `传到本地 ${wrState.done}/${wrState.total}` : '传到本地…')
-        : msg ? msg
-          : selection.size > 1 ? `已选 ${selection.size} 项` : '';
+  // ---- 底部状态栏:固定占位(高度恒定),进度 / 结果 / 报错全在这里显示,点一下展开细节 ----
+  // (进度放列表顶部会把列表整体下推;悬浮在列表里又会挡住文件,所以统一挪到提示行下面。)
+  const busy = uploading || !!deleting || transferring;
+  // 上传进度按「已发出字节 / 总字节」:服务端边收边写,背压把发送速率压到真实写入速率,
+  // 所以它就是"写进远程了多少"的量度。封顶 99,避免尾部还在落盘时虚报完成。
+  const upPct = upState && upState.totalBytes > 0
+    ? Math.min(99, Math.round((upState.sentBytes / upState.totalBytes) * 100))
+    : 0;
+  const busyPct = deleting ? 100
+    : uploading ? upPct
+      : transferring ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : 100) : 0;
+  const busyIndet = !!deleting; // 删除只有"已删 N 项",没有总量:走不确定转圈
+  const busyLabel = deleting
+    ? `删除中 ${deleting.index + 1}/${deleting.total}`
+    : uploading ? `上传中 ${upState?.doneFiles ?? 0}/${upState?.totalFiles ?? 0}`
+      : transferring ? (wrState ? `传到本地 ${wrState.done}/${wrState.total}` : '传到本地中') : '';
+  // 一行状态:错误 > 进行中 > 操作结果 > 选中数量
+  const statusText = error ? `✕ ${error}` : busy ? busyLabel
+    : msg ? msg : selection.size > 1 ? `已选 ${selection.size} 项` : '';
+  // 悬浮提示:进行中给出正在传的文件名,出错时给出完整原因
+  const statusTip = uploading && upState && upState.current.length
+    ? `正在上传:${upState.current.slice(0, 4).join('、')}${upState.current.length > 4 ? ` 等 ${upState.current.length} 个文件` : ''}`
+    : deleting ? `正在删除:${deleting.current || deleting.name}`
+      : error ? error : undefined;
+  // 展开的详情(只有"比一行文案更多信息"的状态才可展开)
+  const statusDetail: string[] = error ? [`✕ ${error}`]
+    : deleting ? [
+      `正在删除 ${deleting.index + 1}/${deleting.total}:${deleting.name}`,
+      `已删除 ${deleting.done} 项${deleting.current ? `;当前:${deleting.current}` : ''}`
+    ]
+      : uploading && upState ? [
+        `上传中 ${upState.doneFiles}/${upState.totalFiles} 个文件`,
+        `已发送 ${fmtSize(upState.sentBytes)} / ${fmtSize(upState.totalBytes)}(${upPct}%)`,
+        upState.current.length ? `正在上传:${upState.current.join('、')}` : '',
+        upState.retries ? `已重传 ${upState.retries} 次` : ''
+      ].filter(Boolean)
+        : transferring ? [`传到本地:${wrState ? `${wrState.done}/${wrState.total}` : '进行中'}`]
+          : [];
 
   return (
     <div className="fm" ref={rootRef}>
@@ -705,74 +842,61 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
         <button className="ghost sm icon-btn" disabled={transferring || opCount === 0 || !localCwd}
           onClick={doLocalTransfer}
           data-tip={!localCwd ? '请先在本地面板选择一个目录' : `把选中项传到本地当前目录 ${localCwd}(同名覆盖)`}><IconTransfer16 size={13} />传到本地</button>
-        <span className="muted sm fm-status"
-          data-tip={deleting ? `正在删除: ${deleting.current || deleting.name}` : selection.size > 1 ? `已选 ${selection.size} 项,点空白处取消` : msg}>
-          {statusText}
-        </span>
       </div>
-      {(uploading || deleting || transferring) && (
-        <div className="progress">
-          <div className={`progress-bar ${deleting && !uploading && !transferring ? 'indet' : ''}`}
-            style={{ width: uploading
-              ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : Math.min(progress, 99)) + '%'
-              : transferring
-                ? (wrState ? Math.round((wrState.done / Math.max(wrState.total, 1)) * 100) : 100) + '%'
-                : '100%' }} />
-        </div>
-      )}
-      {error && <div className="error" onClick={() => setError('')}>✕ {error}</div>}
 
-      <div className="fmlist" ref={listRef} tabIndex={-1}
-        onClick={(e) => { if (e.target === e.currentTarget) { clearSelection(); e.currentTarget.focus(); } }}
-        onKeyDown={handleListKey}
-        onContextMenu={(e) => openMenu(e, null)}>
-        {/* 加载中且列表为空:在列表区明显显示加载中(避免状态文字不显眼/被挡住);进入子目录只行内转圈,不影响列表 */}
-        {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
-        {!loading && entries.length === 0 && !creating && <div className="muted fmph">(空目录)</div>}
-        {entries.map((e) => (
-          <FmRow
-            key={e.name}
-            entry={e}
-            selected={selection.has(e.name)}
-            navLoading={entryPath(e.name) === navLoading}
-            renaming={renaming === e.name}
-            renameBusy={renameBusy}
-            renameDraft={renameDraft}
-            onRenameDraft={setRenameDraft}
-            onCommitRename={commitRename}
-            onCancelRename={() => { setRenaming(null); setRenameDraft(''); }}
-            onRowClick={handleRowClick}
-            onOpen={openEntry}
-            onMenu={openMenu}
-            onLongPress={(x, y, item) => openMenuAt(x, y, item)}
-          />
-        ))}
-        {creating && (
-          <div className="fmrow">
-            <span className="fm-ico">{creating === 'dir' ? <IconFolder16 size={14} /> : '📄'}</span>
-            <span className="fm-name fm-hide" />
-            <span className="fm-time fm-hide" />
-            <input className="fm-rename" autoFocus value={createDraft}
-              spellCheck={false}
-              onChange={(ev) => setCreateDraft(ev.target.value)}
-              onFocus={(ev) => {
-                // 默认选中不含扩展名的部分,方便直接输入新名
-                const dot = ev.target.value.lastIndexOf('.');
-                if (dot > 0) ev.target.setSelectionRange(0, dot);
-                else ev.target.select();
-              }}
-              onClick={(ev) => ev.stopPropagation()}
-              onDoubleClick={(ev) => ev.stopPropagation()}
-              onContextMenu={(ev) => ev.preventDefault()}
-              onKeyDown={(ev) => {
-                ev.stopPropagation();
-                if (ev.nativeEvent.isComposing) return;
-                if (ev.key === 'Enter') commitCreate();
-                else if (ev.key === 'Escape') cancelCreate();
-              }}
-              onBlur={commitCreate} />
-          </div>
-        )}
+      <div className="fm-listwrap">
+        <div className="fmlist" ref={listRef} tabIndex={-1}
+          onClick={(e) => { if (e.target === e.currentTarget) { clearSelection(); e.currentTarget.focus(); } }}
+          onKeyDown={handleListKey}
+          onContextMenu={(e) => openMenu(e, null)}>
+          {/* 加载中且列表为空:在列表区明显显示加载中(避免状态文字不显眼/被挡住);进入子目录只行内转圈,不影响列表 */}
+          {loading && entries.length === 0 && <div className="muted fmph">加载中…</div>}
+          {!loading && entries.length === 0 && !creating && <div className="muted fmph">(空目录)</div>}
+          {entries.map((e) => (
+            <FmRow
+              key={e.name}
+              entry={e}
+              selected={selection.has(e.name)}
+              navLoading={entryPath(e.name) === navLoading}
+              renaming={renaming === e.name}
+              renameBusy={renameBusy}
+              renameDraft={renameDraft}
+              onRenameDraft={setRenameDraft}
+              onCommitRename={commitRename}
+              onCancelRename={() => { setRenaming(null); setRenameDraft(''); }}
+              onRowClick={handleRowClick}
+              onOpen={openEntry}
+              onMenu={openMenu}
+              onLongPress={(x, y, item) => openMenuAt(x, y, item)}
+            />
+          ))}
+          {creating && (
+            <div className="fmrow">
+              <span className="fm-ico">{creating === 'dir' ? <IconFolder16 size={14} /> : '📄'}</span>
+              <span className="fm-name fm-hide" />
+              <span className="fm-time fm-hide" />
+              <input className="fm-rename" autoFocus value={createDraft}
+                spellCheck={false}
+                onChange={(ev) => setCreateDraft(ev.target.value)}
+                onFocus={(ev) => {
+                  // 默认选中不含扩展名的部分,方便直接输入新名
+                  const dot = ev.target.value.lastIndexOf('.');
+                  if (dot > 0) ev.target.setSelectionRange(0, dot);
+                  else ev.target.select();
+                }}
+                onClick={(ev) => ev.stopPropagation()}
+                onDoubleClick={(ev) => ev.stopPropagation()}
+                onContextMenu={(ev) => ev.preventDefault()}
+                onKeyDown={(ev) => {
+                  ev.stopPropagation();
+                  if (ev.nativeEvent.isComposing) return;
+                  if (ev.key === 'Enter') commitCreate();
+                  else if (ev.key === 'Escape') cancelCreate();
+                }}
+                onBlur={commitCreate} />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 多选模式操作条:触屏批量操作入口(复制/传到本地/下载/删除) */}
@@ -786,7 +910,39 @@ export default function FileManager({ workspace, home, connId, localCwd, onCwdCh
         </div>
       )}
 
-      <div className="muted sm" style={{ paddingTop: 6 }}>单击选中 · Ctrl/Shift 多选 · 双击打开 · F2 重命名 · 右键操作 · 上传到当前目录</div>
+      <div className="muted sm fm-hint">Ctrl/Shift 多选</div>
+
+      {/* 底部状态栏:固定占位(高度恒定),进度 / 结果 / 报错都在这里显示,不会挡住文件也不会抖动;
+          点一下展开详情(进度明细、完整报错) */}
+      <div className="fm-statusbar">
+        <div className="fm-status-row"
+          onClick={() => { if (statusDetail.length) setStatusOpen((v) => !v); }}
+          data-tip={statusTip} data-clickable={statusDetail.length ? '1' : undefined}>
+          <span className={`fm-status-text${error ? ' err' : ''}`}>{statusText}</span>
+          {busy && (
+            <span className="fm-ring-wrap">
+              <svg className={`fm-ring${busyIndet ? ' indet' : ''}`} viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+                <circle className="fm-ring-track" cx="8" cy="8" r={RING_R} />
+                <circle className="fm-ring-bar" cx="8" cy="8" r={RING_R}
+                  style={busyIndet ? undefined : { strokeDasharray: RING_C, strokeDashoffset: RING_C * (1 - busyPct / 100) }} />
+              </svg>
+              {!busyIndet && <span className="fm-ring-pct">{busyPct}%</span>}
+            </span>
+          )}
+          {statusDetail.length > 0 && <span className="fm-caret">{statusOpen ? '▾' : '▸'}</span>}
+        </div>
+        {statusOpen && statusDetail.length > 0 && (
+          /* 绝对定位浮在状态栏上方:展开/收起不改变面板高度,列表也不会被顶动 */
+          <div className="fm-status-detail" onClick={() => setStatusOpen(false)}>
+            {statusDetail.map((line, i) => <div key={i}>{line}</div>)}
+            {error && (
+              <div className="fm-status-detail-actions">
+                <button className="ghost sm" onClick={(ev) => { ev.stopPropagation(); setError(''); setStatusOpen(false); }}>关闭</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {menu && createPortal(
         <div ref={menuRef} className="ctxmenu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>

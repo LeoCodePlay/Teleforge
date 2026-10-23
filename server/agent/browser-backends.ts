@@ -15,10 +15,11 @@
 // 快照格式刻意统一:真机侧只回传 SNAPSHOT_SCRIPT 的原始 JSON,由服务端复用 formatSnapshot 渲染,
 // 两种后端给模型的文本逐字一致 —— 模型不需要学两套页面描述。
 import { browserManager, formatSnapshot } from '../core/browser-manager.ts';
+import type { BatchResult, BatchStep, SnapshotOptions } from '../core/browser-manager.ts';
 import { browserBridge } from '../core/browser-bridge.ts';
 import type { BridgeStatus, ExtTab } from '../core/browser-bridge.ts';
 
-export type BackendKind = 'native' | 'preview';
+export type BackendKind = 'native' | 'preview' | 'ego';
 
 /** 与 BrowserState 取交集的最小状态(两种后端都能提供) */
 export interface TargetState {
@@ -34,17 +35,21 @@ export interface BrowserOps {
   /** 当前目标标签(仅 native 有意义;未指定时为 null,执行时回落到活动标签) */
   tabId: number | null;
   state(): TargetState | null;
-  openUrl(url: string, opts?: { width?: number; height?: number }): Promise<TargetState>;
+  openUrl(url: string, opts?: { width?: number; height?: number; focus?: boolean }): Promise<TargetState>;
   navigate(url: string): Promise<TargetState>;
-  snapshot(): Promise<string>;
+  snapshot(opts?: SnapshotOptions): Promise<string>;
   click(t: { ref?: string; selector?: string; text?: string }): Promise<string>;
   fill(t: { ref?: string; selector?: string; text: string; submit?: boolean; clear?: boolean }): Promise<string>;
   press(key: string): Promise<string>;
   scroll(o: { direction?: string; amount?: number }): Promise<string>;
   waitFor(o: { text?: string; selector?: string; url?: string; timeoutMs?: number }): Promise<string>;
   evaluate(expression: string): Promise<string>;
-  screenshot(o?: { fullPage?: boolean }): Promise<Buffer>;
+  screenshot(o?: { fullPage?: boolean; overlay?: boolean }): Promise<Buffer>;
   close(): Promise<void>;
+  /** 通用动作(hover/dblclick/rightClick/select/upload/dialog/console/networkIdle/text/assert);两种后端同一套 action 名 */
+  act(action: string, params?: Record<string, unknown>): Promise<string>;
+  /** 一次跑多步:真机走扩展的一条 batch 指令(一次 WS 往返),预览在本机循环 */
+  batch(steps: BatchStep[], opts?: { stopOnError?: boolean; snapshot?: 'always' | 'on_error' | 'never' }): Promise<BatchResult>;
 }
 
 /** 真机浏览器的目标标识(带前缀,和预览 id 一眼可分) */
@@ -77,7 +82,7 @@ export function previewOps(id: string, sid: string | null): BrowserOps {
       const st = await browserManager.navigate(id, url, sid);
       return { url: st.url, title: st.title, error: st.error };
     },
-    snapshot: () => browserManager.snapshot(id, sid),
+    snapshot: (opts) => browserManager.snapshot(id, sid, opts),
     click: (t) => browserManager.click(id, t, sid),
     fill: (t) => browserManager.fill(id, t, sid),
     press: (k) => browserManager.press(id, k, sid),
@@ -85,7 +90,34 @@ export function previewOps(id: string, sid: string | null): BrowserOps {
     waitFor: (o) => browserManager.waitFor(id, o, sid),
     evaluate: (e) => browserManager.evaluate(id, e, sid),
     screenshot: (o) => browserManager.screenshot(id, o || {}, sid),
-    close: () => browserManager.close(id, sid)
+    close: () => browserManager.close(id, sid),
+    async act(action, params = {}) {
+      switch (String(action || '').toLowerCase()) {
+        case 'hover': return browserManager.hover(id, params as any, sid);
+        case 'dblclick': return browserManager.dblclick(id, params as any, sid);
+        case 'rightclick': return browserManager.rightClick(id, params as any, sid);
+        case 'select': return browserManager.selectOption(id, params as any, sid);
+        case 'upload': return browserManager.uploadFiles(id, params as any, sid);
+        case 'dialog': return browserManager.dialog(id, params as any, sid);
+        case 'console': case 'logs': return browserManager.logs(id, sid);
+        case 'networkidle': return browserManager.networkIdle(id, params as any, sid);
+        case 'text': return browserManager.pageText(id, params as any, sid);
+        case 'assert': return browserManager.assertText(id, params as any, sid);
+        case 'click': return browserManager.click(id, params as any, sid);
+        case 'type': case 'fill': return browserManager.fill(id, params as any, sid);
+        case 'press': return browserManager.press(id, String((params as any)?.key || 'Enter'), sid);
+        case 'scroll': return browserManager.scroll(id, params as any, sid);
+        default: throw new Error(`未知动作:${action}`);
+      }
+    },
+    async batch(steps, opts = {}) {
+      const r = await browserManager.batch(id, steps, sid, { stopOnError: opts.stopOnError !== false });
+      const policy = opts.snapshot || 'on_error';
+      if (policy === 'always' || (policy === 'on_error' && !r.ok)) {
+        r.snapshot = await browserManager.snapshot(id, sid, {}).catch((e) => `(快照失败:${e?.message || e})`);
+      }
+      return r;
+    }
   };
 }
 
@@ -203,6 +235,15 @@ export function nativeOpsFor(tabId: number | null, sid: string | null = null, in
     if (missReason) return Promise.reject(new Error(missReason));
     return browserBridge.call<T>(method, params, { timeoutMs, instance: inst });
   };
+  /** 协议版本闸门:新服务端 + 旧扩展时给出"去更新扩展"的明确说明,而不是"未知方法:batch" */
+  const ensureProtocol = (min: number, what: string) => {
+    const st = browserBridge.status(inst);
+    const p = Number(st.protocolVersion) || 1;
+    if (p < min) {
+      throw new Error(`${what}需要浏览器扩展 1.1.0+(协议 v${min}),当前连接的是 v${st.version || '未知'}(协议 v${p})。`
+        + '请到 chrome://extensions(Edge 是 edge://extensions)点 Teleforge Auto 卡片上的「重新加载」,或重新下载最新版扩展。');
+    }
+  };
 
   const ops = {
     kind: 'native' as const,
@@ -213,28 +254,37 @@ export function nativeOpsFor(tabId: number | null, sid: string | null = null, in
       const t = cur != null ? st.tabs.find((x) => x.tabId === cur) : (st.tabs.find((x) => x.active) || null);
       return t ? { url: t.url, title: t.title, error: null } : null;
     },
-    async openUrl(url: string): Promise<TargetState> {
-      const r = await send<any>('tabs.open', { url, active: true }, 60_000);
+    async openUrl(url: string, opts?: { focus?: boolean }): Promise<TargetState> {
+      if (missReason) throw new Error(missReason);
+      // 开标签 + 标记"AI 自建" + 落盘授权,在桥接层一次做完(见 BrowserBridge.openTab)。
+      // 不在上层用 tabId 反查连接:那样在清单未刷新 / 多浏览器并存时会标错连接,
+      // 结果就是"AI 刚开的标签没有授权"。
+      const r = await browserBridge.openTab(url, { instance: inst, active: opts?.focus === true });
       const newId = Number(r?.tabId);
       if (Number.isFinite(newId)) {
         cur = newId;
-        // 先把新标签记进本地清单(刷新有 200ms 去抖),再标记为 AI 自建、绑定到本对话
-        browserBridge.noteOpenedTab(newId, inst, { url: String(r?.url || url), title: String(r?.title || ''), active: true });
-        browserBridge.markAiTab(newId, inst);
         // 这个对话从此固定操控这个标签:用户之后怎么切标签都不会改变 AI 的目标
         rememberNativeTab(sid, newId, inst);
       }
-      return { url: String(r?.url || url), title: String(r?.title || ''), error: null };
+      return { url: r.url, title: r.title, error: null };
     },
     async navigate(url: string): Promise<TargetState> {
       const id = needTab();
       const r = await send<any>('navigate', { tabId: id, url }, 60_000);
       return { url: String(r?.url || url), title: String(r?.title || ''), error: r?.error ? String(r.error) : null };
     },
-    async snapshot(): Promise<string> {
+    async snapshot(opts?: SnapshotOptions): Promise<string> {
       const id = needTab();
-      const raw = await send<any>('snapshot', { tabId: id }, 30_000);
-      return formatSnapshot(raw);
+      const raw = await send<any>('snapshot', {
+        tabId: id,
+        scope: opts?.scope,
+        root: opts?.root,
+        text: opts?.text,
+        max: opts?.max,
+        frames: opts?.frames
+      }, 30_000);
+      // 新扩展回结构化数据(v2);万一遇到只回文本的旧扩展,原样透传,不至于变成 "[object Object]"
+      return typeof raw === 'string' ? raw : formatSnapshot(raw);
     },
     async click(t: { ref?: string; selector?: string; text?: string }): Promise<string> {
       const id = needTab();
@@ -266,10 +316,31 @@ export function nativeOpsFor(tabId: number | null, sid: string | null = null, in
       // 与内置预览保持一致:返回 JSON 字符串
       return typeof r === 'string' ? r : JSON.stringify(r ?? null);
     },
-    async screenshot(o?: { fullPage?: boolean }): Promise<Buffer> {
+    async screenshot(o?: { fullPage?: boolean; overlay?: boolean }): Promise<Buffer> {
       const id = needTab();
-      const b64 = String(await send('screenshot', { tabId: id, fullPage: o?.fullPage === true }, 45_000));
+      const b64 = String(await send('screenshot', { tabId: id, fullPage: o?.fullPage === true, overlay: o?.overlay === true }, 45_000));
       return Buffer.from(b64, 'base64');
+    },
+    /** 通用动作:扩展侧的 act 分发(hover/dblclick/rightClick/select/upload/dialog/console/networkIdle/text/assert) */
+    async act(action: string, params: Record<string, unknown> = {}): Promise<string> {
+      const id = needTab();
+      ensureProtocol(2, '通用动作(browser_act)');
+      const r = await send<any>('act', { tabId: id, action: String(action || ''), ...params }, 45_000);
+      return typeof r === 'string' ? r : JSON.stringify(r ?? '');
+    },
+    /** 批处理:整段流程只走一次 WS 往返(这是相对"一步一次工具调用"最大的提速点) */
+    async batch(steps: BatchStep[], opts: { stopOnError?: boolean; snapshot?: 'always' | 'on_error' | 'never' } = {}): Promise<BatchResult> {
+      const id = needTab();
+      ensureProtocol(2, '批处理(browser_batch)');
+      const r = await send<any>('batch', {
+        tabId: id, steps, stopOnError: opts.stopOnError !== false, snapshot: opts.snapshot || 'on_error'
+      }, 180_000);
+      // 扩展只回原始快照数据(与内置预览跑同一份脚本),文本统一在服务端渲染
+      if (r && r.snapshotData) {
+        r.snapshot = formatSnapshot(r.snapshotData);
+        delete r.snapshotData;
+      }
+      return r as BatchResult;
     },
     async close(): Promise<void> {
       const id = needTab();

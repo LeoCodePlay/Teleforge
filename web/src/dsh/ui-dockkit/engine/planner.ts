@@ -163,6 +163,27 @@ export function planSplitPane(
 }
 
 /**
+ * Close one docked pane and the tabs it holds.
+ *
+ * Every tab is destroyed first — `merge` refuses a non-empty pane — and the
+ * emptied pane is then merged away, collapsing its split onto the surviving
+ * sibling. Closing either half of a two-pane split therefore works: the
+ * sibling is promoted to the root when the closed pane's split was the root.
+ * A floating pane, or the only remaining docked pane, plans nothing.
+ * @param state - current layout.
+ * @param paneId - the pane to close.
+ * @returns the operations, or none when the pane is floating or is the last pane.
+ */
+export function planClosePane(state: LayoutState, paneId: PaneId): readonly LayoutOp[] {
+  const pane = getPane(state, paneId)
+  if (pane.host !== 'dock') return NOTHING
+  if (dockPaneIds(state).length <= 1) return NOTHING
+  const ops: LayoutOp[] = pane.tabs.map(tabId => ({ type: 'closeTab', tabId }))
+  ops.push({ type: 'merge', paneId })
+  return ops
+}
+
+/**
  * Seat the embedder's seeded tab at the end of a docked pane's strip.
  * @param state - current layout.
  * @param mint - id source for the new tab.

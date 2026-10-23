@@ -6,11 +6,12 @@ import React, { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLlm } from '../../context/llm-context';
 import { PROVIDERS, getDefaultModelContext } from '../../data/llm-providers';
-import type { LlmProvider, ProviderDraft, ModelContextConfig, KeyState, LlmProtocol } from '../../types';
+import { keyUnusable, type LlmProvider, type ProviderDraft, type ModelContextConfig, type LlmProtocol } from '../../types';
 import { REASONING_LEVELS, levelsSummary, supportedLevels } from '../../utils/reasoningLevels';
 import { parseCountInput, formatCountInput } from '../../utils/tokens';
-import { IconTrashOutline14, IconEye16, IconEyeOff16 } from '../icons/icons';
+import { keyList, keyStateTip, maskKey } from '../../utils/apiKeys';
 import GlassSelect from '../GlassSelect/GlassSelect';
+import ApiKeyList from '../ApiKeyList/ApiKeyList';
 import './AiConfigPanel.scss';
 
 export default function AiConfigPanel() {
@@ -75,21 +76,6 @@ export default function AiConfigPanel() {
   );
 }
 
-/** 该提供商配置的全部 Key(去重、去空);首位为主 Key(apiKey) */
-function keyList(p: LlmProvider): string[] {
-  return [...new Set([p.apiKey, ...(p.apiKeys || [])].map((k) => String(k || '').trim()).filter(Boolean))] as string[];
-}
-
-/** Key 是否已被判定不可用(余额不足 / 鉴权失败):两种标记的徽标文案不同,但都不参与轮询 */
-function keyUnusable(st?: KeyState): boolean {
-  return st?.exhausted === true || st?.invalid === true;
-}
-
-/** 展示用脱敏:只露头尾,避免整串 Key 出现在界面上 */
-function maskKey(k: string): string {
-  return k.length <= 12 ? k : `${k.slice(0, 6)}…${k.slice(-4)}`;
-}
-
 // ---- 提供商卡片:名称/地址/模型数 + 编辑/复制/删除 ----
 interface ProviderCardProps {
   p: LlmProvider;
@@ -129,7 +115,7 @@ function ProviderCard({ p, active, onUse, onEdit, onCopy, onDelete, onResetKey }
                 {bad
                   ? (
                     <>
-                      <span className="badge warn" data-tip={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
+                      <span className="badge warn" data-tip={keyStateTip(st)}>
                         {st?.invalid ? '失效' : '无余额'}
                       </span>
                       <button className="sm" onClick={() => onResetKey(k)}>重置</button>
@@ -201,10 +187,6 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
   );
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  // 明文显示的行(按行下标记录,与 apiKeys 数组同序)。默认全部遮罩:
-  // Key 是密码级信息,滚动/截屏时不应默认外露;要看时点行尾眼睛显式露出。
-  // 增删 Key 后下标会错位,但最坏只是某行延续了相邻行的显隐状态,不影响输入与保存。
-  const [revealed, setRevealed] = useState<Set<number>>(() => new Set());
   // 数字输入框的文本草稿(键 = 模型名 + 字段):值支持 1M / 128k 这类带单位写法。
   // 若不保留草稿、直接受控于解析后的数字,"1.5M" 在敲到 "1." 时就会被打断改写。
   const [numDraft, setNumDraft] = useState<Record<string, string>>({});
@@ -399,45 +381,7 @@ function ProviderModal({ editProvider, onClose, onSave }: ProviderModalProps) {
           </div>
           <div className="field">
             <label>API Key(可填多个:某个 Key 不可用时自动切换到下一个;仅存本机)</label>
-            <div className="key-list">
-              {apiKeys.map((k, i) => {
-                const st = isEdit ? editProvider.keyStates?.[k.trim()] : undefined;
-                const bad = keyUnusable(st);
-                const shown = revealed.has(i);
-                return (
-                  <div key={i} className={'key-row' + (bad ? ' exhausted' : '')}>
-                    <input type={shown ? 'text' : 'password'} value={k}
-                      placeholder={i === 0 ? 'sk-…(主 Key)' : 'sk-…(备用 Key)'}
-                      onChange={(e) => setApiKeys((cur) => cur.map((v, j) => (j === i ? e.target.value : v)))} />
-                    {bad && (
-                      <span className="badge warn" data-tip={st?.reason || (st?.invalid ? '该 Key 鉴权失败(无效/过期/被撤销)' : '该 Key 余额不足')}>
-                        {st?.invalid ? '失效' : '无余额'}
-                      </span>
-                    )}
-                    {/* 显隐切换:点眼睛在明文/遮罩之间切换(仅影响显示,不改动值) */}
-                    <button type="button" className="key-reveal action-icon"
-                      aria-label={shown ? '隐藏 Key' : '显示 Key 明文'}
-                      aria-pressed={shown}
-                      onClick={() => setRevealed((cur) => {
-                        const next = new Set(cur);
-                        if (next.has(i)) next.delete(i); else next.add(i);
-                        return next;
-                      })}>
-                      {shown ? <IconEyeOff16 size={16} /> : <IconEye16 size={16} />}
-                    </button>
-                    {/* 单 Key 行不给删除:删空后无从恢复「主 Key」输入位,由上方「＋ 添加 Key」重新加行 */}
-                    {apiKeys.length > 1 && (
-                      <button type="button" className="key-del action-icon danger"
-                        aria-label="删除该 Key"
-                        onClick={() => setApiKeys((cur) => cur.filter((_, j) => j !== i))}>
-                        <IconTrashOutline14 size={14} />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-              <button type="button" className="sm" onClick={() => setApiKeys((cur) => [...cur, ''])}>＋ 添加 Key</button>
-            </div>
+            <ApiKeyList keys={apiKeys} onChange={setApiKeys} states={isEdit ? editProvider.keyStates : undefined} />
           </div>
 
           {/* 模型区:手动输入 + 获取模型列表勾选 */}

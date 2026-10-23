@@ -1,25 +1,32 @@
+/* Match the host's global tooltip (`.tip-host`, components/Tooltip/Tooltip.scss)
+   so dsh surfaces do not read as a second tooltip style: solid pop surface,
+   hairline border, the host's radius, type scale, and shadow. The bubble stays
+   inline-flex so optional shortcut keycaps still sit beside the label. */
 .bubble {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   position: fixed;
-  z-index: 100;
+  z-index: 500;
   /* Fixed-position shrink-to-fit measures only the space from `left` to the
      viewport edge, so anchors near the right edge would wrap early;
-     max-content sizes by the label alone, capped at half the viewport. */
+     max-content sizes by the label alone, capped like the host's tooltip. */
   width: max-content;
-  max-width: 50vw;
-  padding: 3px 7px;
-  border-radius: var(--dsw-radius-sm);
-  background: var(--dsw-alias-tooltip-bg);
-  color: var(--dsw-static-neutral-bluish-00);
-  font-size: 13px;
-  line-height: 20px;
-  white-space: pre-line;
+  max-width: min(320px, 80vw);
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--pop-bg-strong);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: var(--glass-shadow);
+  white-space: normal;
+  word-break: break-word;
   /* Unbreakable tokens (URLs, paths) must not push past max-width. */
   overflow-wrap: break-word;
   pointer-events: none;
-  animation: tooltip-in 150ms var(--ds-ease-in-out);
+  animation: tooltip-in 140ms var(--ds-ease-in-out);
 }
 
 .bubble[data-portal] { z-index: 1100; }

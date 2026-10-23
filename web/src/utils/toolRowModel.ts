@@ -55,6 +55,7 @@ const TOOL_TITLES: Record<string, string> = {
   browser_click: '预览点击', browser_type: '预览输入', browser_press: '预览按键',
   browser_scroll: '预览滚动', browser_wait: '等待页面', browser_screenshot: '页面截图',
   browser_eval: '页面脚本', browser_close: '关闭预览',
+  browser_batch: '批量操作', browser_act: '页面动作', browser_memory: '站点经验',
   transfer_to_local: '下载到本机', transfer_to_remote: '上传到远程',
 };
 

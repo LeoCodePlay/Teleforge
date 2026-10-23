@@ -10,6 +10,7 @@ import { ToolRow } from '../ToolRow/ToolRow';
 import { StateDot } from '../StateDot/StateDot';
 import { IconApiOutline14 } from '../icons/icons';
 import { toolRowModel } from '../../utils/toolRowModel';
+import { CommandText } from './CommandText';
 import './TerminalRow.scss';
 
 function parseArgs(argsRaw?: string | null): Record<string, unknown> {
@@ -43,7 +44,12 @@ export function TerminalCard({ call }: { call: ToolCallInfo }) {
       <div className="dsh-terminal" data-running={st === 'running' || undefined}>
         <div className="dsh-term-header">
           <StateDot state={st === 'running' ? 'ongoing' : st === 'failed' ? 'error' : 'done'} />
-          <span className="dsh-term-prompt">{shortDir(cwd)} <b>{command}</b></span>
+          {/* 后台运行终端的启动命令也完整展示(上游 9f435e1592:卡片里看得到真正跑的命令),
+              不再是 nowrap + 省略号 */}
+          <span className="dsh-term-prompt">
+            <span className="dsh-term-cwd">{shortDir(cwd)}</span>
+            <CommandText className="dsh-term-command" text={command} label="后台启动命令" />
+          </span>
           <span className="dsh-term-pill" data-error={st === 'failed' || undefined}>
             {st === 'running' ? '后台运行 · 右上角「运行终端」' : st === 'failed' ? '已中止' : '已结束'}
           </span>
@@ -63,7 +69,8 @@ export function TerminalCard({ call }: { call: ToolCallInfo }) {
       <div className="dsh-term-header">
         <StateDot state={running ? 'ongoing' : failed ? 'error' : 'done'} />
         <span className="dsh-term-prompt">
-          {shortDir(cwd)} <b>{command}</b>
+          <span className="dsh-term-cwd">{shortDir(cwd)}</span>
+          <CommandText className="dsh-term-command" text={command} label="命令全文" />
         </span>
         {!running && (exitCode != null || signal || timedOut) && (
           <span className="dsh-term-pill" data-error={failed || undefined}>

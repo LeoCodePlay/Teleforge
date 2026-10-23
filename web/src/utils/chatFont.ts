@@ -1,9 +1,12 @@
-// 对话字号:设置面板 + 快捷键共用的一处实现。
+// 界面字号:设置面板 + 快捷键共用的一处实现。
 //
-// 对齐 dsh 0.2.1-rc 的 `8096e18504 feat(web): add desktop conversation font size shortcuts`:
-// 对话正文/代码/工具卡片的字号可整体缩放,并支持 Cmd/Ctrl + = / - 实时调整。
+// 对齐 dsh 0.2.1-rc 的 `8096e18504`(对话字号快捷键)与 `0c6968b649`
+// (桌面快捷键**同时**调整正文 / 代码 / 终端字号 —— 上游把 text / code / terminal
+// 三个角色一起步进)。本项目只有一份字号偏好,消费方是:
+//   - CSS:`--chat-scale` 驱动对话正文、Markdown 代码块、工具卡片、代码编辑器;
+//   - JS:终端(xterm 的 fontSize 是 JS 选项,CSS 缩放管不到)用 scaledFont() 换算。
 // 与浏览器自带缩放的区别:
-//   - 只放大**内容**(对话正文与卡片),侧栏/顶栏等 chrome 尺寸不变,布局不会挤爆;
+//   - 只放大**内容**(对话正文、代码、终端),侧栏/顶栏等 chrome 尺寸不变,布局不会挤爆;
 //   - 偏好持久化在本机,重装/刷新后一致(浏览器缩放是每站点每窗口的临时状态)。
 //
 // 实现方式:在 <html> 上写两个变量,样式表统一用 calc(基准px * var(--chat-scale)) 消费。
@@ -19,6 +22,18 @@ const MAX = CHAT_FONT_SIZES[CHAT_FONT_SIZES.length - 1];
 
 /** 样式表里所有对话字号都以这个基准写 calc,改这里要同步改 CSS 的基准值 */
 export const CHAT_FONT_BASE = 14;
+
+/**
+ * 把**非对话区**的字号基准(终端 13 / 代码 12.5 …)按同一倍率换算。
+ *
+ * dsh 0.2.1-rc 的 0c6968b649:桌面快捷键同时调整 text / code / terminal 三类字号。
+ * 这里保留 0.5px 精度:终端字符格按像素排布,整数化会把 12.5 直接变成 13(跳档)或 12(变细)。
+ * @param basePx - 该表面在默认档位下的字号
+ * @returns 当前倍率下的字号(0.5 的整数倍)
+ */
+export function scaledFont(basePx: number): number {
+  return Math.round((basePx * current) / CHAT_FONT_BASE * 2) / 2;
+}
 
 const listeners = new Set<(px: number) => void>();
 let current = CHAT_FONT_DEFAULT;

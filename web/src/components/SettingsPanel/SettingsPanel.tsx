@@ -3,6 +3,7 @@
 // 后续设置项在 MENUS 中追加即可。菜单图标是 components/icons/icons.tsx 的内联 SVG
 //(与全站同一套 16 号网格),不用 emoji —— 竖排菜单里 emoji 的彩色与字宽差异最扎眼
 import React, { useState } from 'react';
+import GeneralPanel from '../GeneralPanel/GeneralPanel';
 import AiConfigPanel from '../AiConfigPanel/AiConfigPanel';
 import ImageGenPanel from '../ImageGenPanel/ImageGenPanel';
 import SkillsPanel from '../SkillsPanel/SkillsPanel';
@@ -11,10 +12,12 @@ import McpPanel from '../McpPanel/McpPanel';
 import PromptInjectPanel from '../PromptInjectPanel/PromptInjectPanel';
 import ThemePanel from '../ThemePanel/ThemePanel';
 import AboutPanel from '../AboutPanel/AboutPanel';
-import { IconClipboard16, IconHub16, IconImage16, IconInfo16, IconPlug16, IconPuzzle16, IconRobot16, IconTheme16 } from '../icons/icons';
+import { IconClipboard16, IconHub16, IconImage16, IconInfo16, IconPlug16, IconPuzzle16, IconRobot16, IconSidebar16, IconTheme16 } from '../icons/icons';
 import './SettingsPanel.scss';
 
 const MENUS: { id: string; icon: React.ReactNode; label: string }[] = [
+  // 「通用」= dsh 的 settings.general:界面字号 / 过程收起时机这类跨会话显示偏好
+  { id: 'general', icon: <IconSidebar16 size={15} />, label: '通用' },
   { id: 'ai', icon: <IconRobot16 size={15} />, label: 'AI 配置' },
   { id: 'image', icon: <IconImage16 size={15} />, label: '生图配置' },
   { id: 'theme', icon: <IconTheme16 size={15} />, label: '主题' },
@@ -52,6 +55,7 @@ export default function SettingsPanel({ onClose, connected = false, initialTab =
             ))}
           </div>
           <div className="settings-content">
+            {active === 'general' && <GeneralPanel />}
             {active === 'ai' && <AiConfigPanel />}
             {active === 'image' && <ImageGenPanel />}
             {active === 'theme' && <ThemePanel />}

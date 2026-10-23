@@ -5,6 +5,7 @@ import { FeedbackProvider } from './context/feedback';
 import { LlmProvider } from './context/llm-context';
 import { initOverlayScrollbar } from './utils/scrollbar-ui';
 import { applyChatFont, installChatFontShortcuts, readChatFont } from './utils/chatFont';
+import { applyProcFoldTiming, readProcFoldTiming } from './utils/procFold';
 import { applyActiveTheme } from './theme/themes';
 import './styles.scss';
 
@@ -13,6 +14,8 @@ applyActiveTheme();
 // 对话字号同理:先写 CSS 变量再首帧,避免文字"跳一下"。快捷键是全局的,装一次即可。
 applyChatFont(readChatFont(), false);
 installChatFontShortcuts();
+// 过程收起时机(completion / next-input):把持久化值装进内存态,首帧就按用户偏好渲染
+applyProcFoldTiming(readProcFoldTiming(), false);
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('找不到 #root 挂载节点');

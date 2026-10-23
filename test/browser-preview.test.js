@@ -147,7 +147,7 @@ async function engineTest() {
 
   const snap = await browserManager.snapshot('test');
   check('快照包含页面标题', snap.includes('预览冒烟'), snap.split('\n')[0]);
-  check('快照包含可交互元素与 ref', /\[e\d+\] <button>/.test(snap) && /\[e\d+\] <input>/.test(snap));
+  check('快照包含可交互元素与 ref', / button "点我"/.test(snap) && / textbox "你的名字"/.test(snap), snap.split('\n').slice(4, 8).join(' | '));
   check('页面文本进入快照', snap.includes('Hello 预览'));
 
   // 用文本点击 → 页面 JS 生效
@@ -157,7 +157,7 @@ async function engineTest() {
 
   // ref 定位输入
   const snap2 = await browserManager.snapshot('test');
-  const ref = /\[(e\d+)\] <input>/.exec(snap2)?.[1];
+  const ref = /(\w+)\s+textbox "你的名字"/.exec(snap2)?.[1];
   check('快照给出 input 的 ref', !!ref, ref || '');
   if (ref) {
     await browserManager.fill('test', { ref, text: '张三' });

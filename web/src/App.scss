@@ -116,72 +116,104 @@ body.splitting { cursor: row-resize; user-select: none; }
 body.splitting * { cursor: row-resize !important; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: clip; }
 
-/* ---- 标签页条:浏览器式标签(左侧固定页:AI 编程助手/命令台;右侧文件页:可拖拽排序/关闭) ----
+/* ---- 标签页条:与右栏(dockkit)标签条同一套规格 ----
+   40px 行高 = 6px 上留白 + 28px 标签 + 6px 下留白;左右各 10px,四周对称。
+   标签是整圆角 chip,不再画下边框;6px 底部是标签与正文之间的呼吸位。
    固定段与滚动段分离:固定页永远显示;文件页多时只滚动文件段。
    滚动条用项目悬浮引擎(scrollbar-ui.ts):绝对定位悬浮,不占布局空间,标签条高度恒定;
    原生滚动条彻底隐藏(不参与布局,高度绝不变化);悬浮拇指走全站统一规格(见 styles.scss) */
 .tabstrip {
-  display: flex; align-items: flex-end; gap: 2px;
-  flex: none; padding: 8px 10px 0;
+  display: flex; align-items: center; gap: 4px;
+  flex: none; height: 40px; padding: 6px 10px;
   background: var(--surface);
-  border-bottom: 1px solid var(--line);
 }
-/* 固定段:不参与滚动,始终完整可见 */
-.tabstrip-pinned { display: flex; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
+/* 固定段:不参与滚动,始终完整可见。标签间距 = dockkit 标签之间的 10px 分隔槽 */
+.tabstrip-pinned { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 /* 滚动段:文件标签横向滚动区域;原生滚动条隐藏(滚动能力保留,布局高度不变) */
 .tabstrip-scroll {
-  display: flex; align-items: flex-end; gap: 2px;
+  display: flex; align-items: center; gap: 10px;
   flex: 1 1 auto; min-width: 0;
   overflow-x: auto; overflow-y: hidden;
   scrollbar-width: none;               /* Firefox:隐藏原生滚动条 */
 }
 .tabstrip-scroll::-webkit-scrollbar { display: none; }  /* Chrome/Safari/Edge:隐藏原生滚动条 */
 /* 「＋」手动打开浏览器预览:与浏览器「新建标签」同位置,固定在滚动段右侧,不随标签滚动
-   同样要清掉全局 button 的 padding/阴影(border-box 下会吃掉内容盒) */
+   几何与 dockkit 的 ＋(28×28、6px 圆角、无描边)一致,同样要清掉全局 button 的 padding/阴影 */
 .tabstrip-add {
-  flex: none; width: 30px; height: 32px; padding: 0; box-shadow: none; margin-left: 4px;
+  flex: none; width: 28px; height: 28px; padding: 0; margin-left: 0; box-shadow: none;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid transparent; border-bottom: none;
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
-  background: transparent; color: var(--muted); cursor: pointer;
-  font-size: 16px; line-height: 1; user-select: none;
-  transition: background .15s, color .15s, border-color .15s;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-2); cursor: pointer;
+  font-size: 14px; line-height: 1; user-select: none;
+  transition: background .15s, color .15s;
 }
-.tabstrip-add:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--line-soft); }
-.tabstrip-add:active { transform: translateY(1px); }
+.tabstrip-add:hover { color: var(--text); background: var(--hover-bg-hard); }
+/* 右侧栏开合按钮是标签条末端的宿主控件:与 kit 自带控件一样再退开 4px(合计 8px) */
+.tabstrip-add.rsb-toggle { margin-left: 4px; }
 .btab {
-  display: flex; align-items: center; gap: 6px;
-  flex: 0 0 auto; height: 32px; min-width: 0; max-width: 200px;
-  padding: 0 12px; overflow: hidden;
-  font-weight: 600; font-size: 12.5px; line-height: 1.2;
-  border: 1px solid transparent; border-bottom: none;
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
-  background: transparent; color: var(--muted); cursor: pointer;
+  position: relative;
+  display: flex; align-items: center; gap: 5px;
+  flex: 0 0 auto; height: 28px; min-width: 80px; max-width: 170px;
+  padding: 0 10px;
+  font-weight: 400; font-size: 13px; line-height: 1;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-2); cursor: pointer;
   user-select: none; white-space: nowrap;
   transition: background .15s, color .15s;
 }
-.btab:hover:not(.active) { background: var(--glass-bg-hover); color: var(--text); }
-.btab.active {
-  color: var(--accent-2); background: var(--accent-fill);
-  border-color: var(--accent-border);
+/* 分隔槽:每个标签左侧 5px 处一条 14px 发丝线(dockkit 的 slot 同规格);
+   激活标签两侧的线隐去,让实心标签自己形成边界 */
+.btab + .btab::before {
+  content: ''; position: absolute; top: 7px; left: -5.25px;
+  width: .5px; height: 14px;
+  background: var(--line-strong);
 }
-.btab.pinned { color: var(--text); }
+.tabstrip-pinned > .btab:first-child::before,
+.tabstrip-scroll > .btab:first-child::before { display: none; }
+.btab.active::before,
+.btab.active + .btab::before { background: transparent; }
+/* 固定段与滚动段之间也是同一个分隔槽(只有滚动段真有标签时才占位并画线) */
+.tabstrip-pinned:has(+ .tabstrip-scroll > .btab) { margin-right: 6px; }
+.tabstrip-pinned > .btab:last-child::after {
+  content: ''; position: absolute; top: 7px; right: -5.25px;
+  width: .5px; height: 14px;
+  background: var(--line-strong);
+}
+.tabstrip-pinned:not(:has(+ .tabstrip-scroll > .btab)) > .btab:last-child::after { display: none; }
+.tabstrip-pinned > .btab:last-child.active::after,
+.tabstrip-pinned:has(+ .tabstrip-scroll > .btab:first-child.active) > .btab:last-child::after { background: transparent; }
+.btab:hover:not(.active) { background: var(--hover-bg-hard); }
+.btab.active { color: var(--text); background: var(--accent-fill); }
 /* 图标槽:内联 SVG 与字形(文件标签的媒体类型字形)共用一格,flex 居中对齐
    position:relative —— .btab-dot 的定位基准(此前没有定位祖先,红点会被甩到布局右上角) */
 .btab-icon { position: relative; flex: none; font-size: 12px; display: flex; align-items: center; justify-content: center; }
 .btab-icon svg { display: block; }
 .btab-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 关闭钮:与 dockkit 一样绝对定位在标签右上角(20×20、内缩 4px),只在悬停/激活/有改动时出现;
+   不占布局宽度,所以标签在悬停时不会变宽。文字在它下面淡出,避免被圆钮生硬截断。 */
 .btab-close {
-  flex: none; display: flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; padding: 0; margin: 0 -5px 0 -2px;
-  border: none;
+  position: absolute; top: 4px; right: 4px;
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; margin: 0;
+  border: none; border-radius: var(--r-sm);
   background: transparent; box-shadow: none;
-  font-size: 11px; line-height: 1; color: var(--muted); cursor: pointer;
-  opacity: 0; transition: opacity .12s, background .12s;
+  font-size: 11px; line-height: 1; color: var(--text-faint); cursor: pointer;
+  opacity: 0; pointer-events: none;
+  transition: opacity .12s, background .12s, color .12s;
 }
-.btab:hover .btab-close, .btab.active .btab-close, .btab.dirty .btab-close { opacity: .8; }
+.btab:hover .btab-close, .btab:focus-within .btab-close,
+.btab.active .btab-close, .btab.dirty .btab-close {
+  opacity: 1; pointer-events: auto;
+}
+.btab:has(> .btab-close):hover .btab-label,
+.btab:has(> .btab-close):focus-within .btab-label,
+.btab:has(> .btab-close).active .btab-label,
+.btab:has(> .btab-close).dirty .btab-label {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
 .btab .btab-close:hover {
-  opacity: 1; background: var(--glass-bg-hover); color: var(--text);
+  opacity: 1; background: var(--hover-bg-hard); color: var(--text);
   border-color: transparent; box-shadow: none; transform: none;
 }
 .btab.dirty .btab-close { color: var(--amber); }
@@ -248,12 +280,16 @@ body.splitting * { cursor: row-resize !important; }
   }
   .phone-brand .brand-logo { width: 22px; height: 22px; flex: none; }
   .conn-chip { max-width: 44vw; overflow: hidden; text-overflow: ellipsis; }
-  .tabstrip { padding: 4px 6px 0; }
   .tabstrip-pinned { display: none; }
   /* 文件标签横滚条:解锁触屏横滑(iOS 对 overflow-x:auto+overflow-y:hidden 锁纵向轴) */
   .tabstrip-scroll { touch-action: pan-x; -webkit-overflow-scrolling: touch; }
-  .btab { height: 34px; padding: 0 10px; max-width: 150px; }
-  .btab-close { opacity: .85; }            /* 触屏常显关闭钮(桌面仍是 hover 显现) */
+  .btab { height: 28px; max-width: 150px; }
+  /* 触屏常显关闭钮(桌面仍是 hover 显现);文字始终避开圆钮 */
+  .btab-close { opacity: 1; pointer-events: auto; }
+  .btab:has(> .btab-close) .btab-label {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
   .mobile-pane { padding: 0; }             /* 移动端全高面板(会话/文件管理) */
 
   /* 会话抽屉:略窄于平板(84vw),避让底部栏高度与键盘顶升。
@@ -268,7 +304,11 @@ body.splitting * { cursor: row-resize !important; }
 
 /* 触屏兜底:文件标签关闭钮、会话行时间/菜单常显(不依赖 hover) */
 @media (hover: none) and (pointer: coarse) {
-  .btab-close { opacity: .85; }
+  .btab-close { opacity: 1; pointer-events: auto; }
+  .btab:has(> .btab-close) .btab-label {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
 }
 
 /* 与本地服务的连接断开(后端进程退出/WS 断线):顶部常驻提示,重连成功后自动消失。

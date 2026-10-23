@@ -4,6 +4,7 @@
 // 网页触发预检后拿不到响应)。若把它放进这条无鉴权的 /ws 通道,
 // 任意本机网页都能连上把 token 读走,进而冒充扩展接管用户浏览器。
 import { browserBridge } from '../../core/browser-bridge.ts';
+import { readAudit } from '../../core/browser-audit.ts';
 import type { RpcModule } from './router.ts';
 
 export function registerExtension(rpc: RpcModule) {
@@ -31,10 +32,26 @@ export function registerExtension(rpc: RpcModule) {
     reply({ type: 'ext_status', ...browserBridge.status(msg?.browser) });
   });
 
-  // 操作模式:'ai-tabs'(默认,只碰 AI 自建 + 用户授权的标签)| 'all'(放开全部)。
+// 操作模式:'ai-tabs'(默认,只碰 AI 自建 + 用户授权的标签)| 'all'(放开全部)。
   // 不指定 browser 时对全部在线浏览器生效(它是用户级策略,不是单台浏览器的偏好)。
   rpc.register('ext_set_mode', async (msg, { reply }) => {
     browserBridge.setMode(msg.mode === 'all' ? 'all' : 'ai-tabs', msg?.browser);
     reply({ type: 'ext_status', ...browserBridge.status(msg?.browser) });
+  });
+
+  // 域名白/黑名单:allowed 非空 = 只允许这些域;blocked 永远优先。
+  // 这是"AI 别在我公司内网后台乱点"的兜底,按域名而不是按标签,免得用户切个标签就绕过。
+  rpc.register('ext_domains', async (msg, { reply }) => {
+    if (msg?.set) {
+      const d = browserBridge.setDomains({ allowed: msg.allowed, blocked: msg.blocked });
+      reply({ type: 'ext_domains', ...d });
+      return;
+    }
+    reply({ type: 'ext_domains', ...browserBridge.domains() });
+  });
+
+  // 最近的浏览器操作审计(只读;输入内容从不落盘,只记长度)
+  rpc.register('ext_audit', async (msg, { reply }) => {
+    reply({ type: 'ext_audit', entries: readAudit(Number(msg?.limit) || 100) });
   });
 }

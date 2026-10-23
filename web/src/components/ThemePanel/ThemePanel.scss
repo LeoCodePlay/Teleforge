@@ -28,14 +28,8 @@
   display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px;
   margin-bottom: 14px;
 }
-/* 对话字号:一行档位按钮,当前档用强调色标出(视觉上等价于"选中的胶囊") */
-.font-size-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-.font-size-row button { min-width: 34px; padding: 4px 8px; font-size: 12px; }
-.font-size-row button.on {
-  color: var(--accent-2); border-color: var(--accent-border);
-  background: var(--accent-fill);
-}
-.font-size-row button:disabled { opacity: .4; cursor: not-allowed; }
+/* 界面字号 / 过程收起时机已移到「通用」设置页(GeneralPanel),
+   主题页只保留配色相关的内容,不再混放显示偏好。 */
 .theme-card {
   display: flex; flex-direction: column; gap: 9px; cursor: pointer;
   padding: 12px 13px; border-radius: var(--r-md);

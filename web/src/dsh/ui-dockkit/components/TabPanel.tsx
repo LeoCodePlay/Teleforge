@@ -20,12 +20,12 @@
  * `canAddTab` allows), the pane's split control, and the embedder's chrome keep
  * their width and their place at the strip's end.
  */
-import { Fragment, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import clsx from 'clsx'
 import { IconCloseFillRegular, IconPlusOutlineRegular, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { DockZone, LayoutState, PaneNode, TabId } from '../contract/types.ts'
-import { getTab } from '../engine/tree.ts'
+import { dockPaneIds, getTab } from '../engine/tree.ts'
 import type { PaneCallbacks, SplitBlock } from './render.ts'
 import { TabMenu } from './TabMenu.tsx'
 import { TabTitle } from './TabTitle.tsx'
@@ -44,6 +44,16 @@ function SplitGlyph(): ReactNode {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path d="M13.5 1.5H2.5C1.94772 1.5 1.5 1.94772 1.5 2.5V13.5C1.5 14.0523 1.94772 14.5 2.5 14.5H13.5C14.0523 14.5 14.5 14.0523 14.5 13.5V2.5C14.5 1.94772 14.0523 1.5 13.5 1.5Z" stroke="currentColor" />
       <path d="M8 1.5V14.5" stroke="currentColor" />
+    </svg>
+  )
+}
+
+/** Close-pane glyph: the split control's frame with an X, so the two gestures read as a pair. */
+function ClosePaneGlyph(): ReactNode {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M13.5 1.5H2.5C1.94772 1.5 1.5 1.94772 1.5 2.5V13.5C1.5 14.0523 1.94772 14.5 2.5 14.5H13.5C14.0523 14.5 14.5 14.0523 14.5 13.5V2.5C14.5 1.94772 14.0523 1.5 13.5 1.5Z" stroke="currentColor" />
+      <path d="M5.8 5.8L10.2 10.2M10.2 5.8L5.8 10.2" stroke="currentColor" />
     </svg>
   )
 }
@@ -218,6 +228,26 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
   const stripTabs = useRef<HTMLDivElement | null>(null)
   useStripScrollFades(stripTabs, pane.tabs)
   useActiveChipInView(stripTabs, chips, pane.tabs, pane.activeTabId)
+  // Wheel over the chip run scrolls it horizontally, matching the host's top
+  // tab strip. The strip's smooth scroll is bypassed for the wheel so one tick
+  // is one step rather than an animation.
+  useEffect(() => {
+    const strip = stripTabs.current
+    if (strip === null) return undefined
+    const onWheel = (event: WheelEvent): void => {
+      if (strip.scrollWidth <= strip.clientWidth + 1) return
+      const dominant = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+      if (dominant === 0) return
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? strip.clientWidth : 1
+      event.preventDefault()
+      const behavior = strip.style.scrollBehavior
+      strip.style.scrollBehavior = 'auto'
+      strip.scrollLeft += dominant * unit
+      strip.style.scrollBehavior = behavior
+    }
+    strip.addEventListener('wheel', onWheel, { passive: false })
+    return () => { strip.removeEventListener('wheel', onWheel) }
+  }, [])
   const block = callbacks.splitBlock(pane.id)
   const target = callbacks.dropTarget
   const stripIndex = target !== undefined && target.kind === 'strip' && target.paneId === pane.id
@@ -386,6 +416,26 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
               <SplitGlyph />
             </button>
           </span>
+        </Tooltip>
+      )}
+      {/* A pane is closable only while another docked pane survives it: the last
+          one is the whole surface, which the embedder's own chrome collapses.
+          The control lives beside split, the gesture that creates its pair. */}
+      {pane.host === 'dock' && dockPaneIds(state).length > 1
+        && callbacks.onClosePane !== undefined && callbacks.labels.closePane !== undefined && (
+        <Tooltip label={callbacks.labels.closePane} side="bottom" delayMs={500}>
+          <button
+            type="button"
+            className={css.iconButton}
+            aria-label={callbacks.labels.closePane}
+            data-dockkit-close-pane={pane.id}
+            onClick={(event) => {
+              event.stopPropagation()
+              callbacks.onClosePane?.(pane.id)
+            }}
+          >
+            <ClosePaneGlyph />
+          </button>
         </Tooltip>
       )}
       {/* The embedder's surface-wide controls, in the top-right pane only: the

@@ -141,7 +141,7 @@ try {
   check('新栏被宿主种子化(不是空白,宿主给的是终端标签)', (await aside.locator('[data-dockkit-tab]').count()) === 2,
     String(await aside.locator('[data-dockkit-tab]').count()));
   // 关掉第二栏唯一的标签:栏**不消失**(dsh 同行为:空栏留着并给出空栏提示),
-  // 第一栏的内容一点不受影响。真正收回栏位靠把标签拖走或撤销,不是"关标签"。
+  // 第一栏的内容一点不受影响。收回栏位走每栏标签条上的「关闭此栏」入口(下面 [六] 覆盖)。
   {
     const second = aside.locator('[data-dockkit-pane]').nth(1);
     for (let i = await second.locator('[data-dockkit-tab-close]').count(); i > 0; i--) {
@@ -179,7 +179,23 @@ try {
   check('刷新后分隔条仍在', (await aside2.locator('[data-dockkit-divider]').count()) === 1,
     String(await aside2.locator('[data-dockkit-divider]').count()));
 
-  console.log('\n[六] 无 JS 异常');
+  console.log('\n[六] 分栏后可直接关闭其中一栏');
+  {
+    const panes = await aside2.locator('[data-dockkit-pane]').count();
+    const closers = aside2.locator('[data-dockkit-close-pane]');
+    check('每一栏都有「关闭此栏」入口', (await closers.count()) === panes,
+      `${await closers.count()} 个入口 / ${panes} 栏`);
+    // 右栏此时是空栏;关掉它,左栏的交付物标签必须原样留下。
+    await closers.last().click();
+    await page.waitForTimeout(300);
+    check('关闭后只剩一栏', (await aside2.locator('[data-dockkit-pane]').count()) === 1,
+      String(await aside2.locator('[data-dockkit-pane]').count()));
+    check('幸存栏的标签还在', (await aside2.locator('[data-dockkit-tab]').count()) >= 1,
+      String(await aside2.locator('[data-dockkit-tab]').count()));
+    check('只剩一栏时关闭入口消失', (await aside2.locator('[data-dockkit-close-pane]').count()) === 0);
+  }
+
+  console.log('\n[七] 无 JS 异常');
   check('整段流程没有页面异常', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (e) {
   fail++;

@@ -18,6 +18,9 @@
 // ## 折叠策略(对齐 dsh 的 stepGrouping / foldCompletedTurns)
 //   - 正在进行的回合:**完全展开**(用户要看着它干活);
 //   - 回合结束后:折叠成一行;且若之后还有别的正文回复,整组可以进一步隐藏(foldCompletedTurns)。
+//   - 收起时收掉的是**整段过程**:思考、工具调用,以及**定稿答案之前的叙述正文**
+//     (dsh 的 processMember:答案边界之前的一切都算过程),只留最终答案。
+//     边界判定在 utils/turnTail 的 planTurnFold / foldedTextHidden,渲染层只消费结果。
 //
 // 本模块**无 React 依赖**,可单测。
 import type { ToolCallInfo } from '../types';
