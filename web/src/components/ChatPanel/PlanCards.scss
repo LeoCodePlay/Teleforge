@@ -83,6 +83,7 @@
 }
 .plan-preview-close {
   flex: none; width: 26px; height: 26px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: none; border-radius: var(--r-sm);
   color: var(--muted); cursor: pointer; font-size: var(--fs-md);
 }

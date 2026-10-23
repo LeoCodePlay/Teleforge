@@ -400,6 +400,65 @@ export function IconSchedule16(props: IconProps) {
   );
 }
 
+// ---- 长期目标 / 任务计划:与上面的 LINE 图标同源(16 号网格、1.6 描边、圆端点) ----
+
+/** 长期目标:旗标。 */
+export function IconGoal16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M3.6 14V2.5" />
+      <path d="M3.6 3.5h7.4l-1.3 2.5 1.3 2.5H3.6" />
+    </svg>
+  );
+}
+
+/** 暂停目标:两条竖线。 */
+export function IconPause16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M6 3.8v8.4M10 3.8v8.4" />
+    </svg>
+  );
+}
+
+/** 恢复目标:播放三角。 */
+export function IconPlay16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <path d="M5.6 3.7 12 8l-6.4 4.3Z" />
+    </svg>
+  );
+}
+
+/** 计划项已完成:圆环 + 勾。 */
+export function IconCheckCircle16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8" r="6.2" />
+      <path d="M5.2 8.1 7.1 10 10.9 6.2" />
+    </svg>
+  );
+}
+
+/** 计划项进行中:淡环 + 亮弧(由 CSS 旋转)。 */
+export function IconProgressCircle16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8" r="6.2" opacity=".35" />
+      <path d="M8 1.8a6.2 6.2 0 0 1 6.2 6.2" />
+    </svg>
+  );
+}
+
+/** 计划项待办:虚线圆环。 */
+export function IconPendingCircle16(props: IconProps) {
+  return (
+    <svg {...LINE(props)} xmlns="http://www.w3.org/2000/svg">
+      <circle cx="8" cy="8" r="6.2" strokeDasharray="2.4 2.4" />
+    </svg>
+  );
+}
+
 // ---- 设置面板菜单图标(同一套 16 号网格,一枚一概念,互不重形) ----
 // 原来的 🤖🖼️🎨🧩🔌🔗📌ℹ️ 换成下面这组:菜单项挨在一起竖排,emoji 的彩色/
 // 字形差异带来的高低不齐在这列里最扎眼,换成同族线性图标后整列基线一致。

@@ -7,28 +7,8 @@
 //   提示这一下点下去是**关闭**计划模式(`/plan off`)。
 // - 点击走 `/plan off`;失败时 chip 保持可见并显示「退出计划模式失败」(title 是错误原文)。
 import React, { useState } from 'react';
+import { IconChecklistOutline14, IconClose16 } from '../icons/icons';
 import './PlanChip.scss';
-
-/** 计划轮廓图(harness IconPlanOutlineRegular 同形) */
-function PlanGlyph() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M3.5 14V2.5h6.2l-1 2.2 1 2.2H3.5" stroke="currentColor" strokeWidth="1.3"
-        strokeLinejoin="round" strokeLinecap="round" />
-      <path d="M3.5 2.5v11.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** 圆圈叉(harness IconCloseCircleFillRegular 同形):悬停/聚焦时替换计划图 */
-function CloseCircleGlyph() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="8" cy="8" r="6.2" fill="currentColor" />
-      <path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2" stroke="var(--surface, #fff)" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 export default function PlanChip({ active, pending, leaving, error, onExit }: {
   /** 日志里生效的计划模式(harness plan.active) */
@@ -61,7 +41,7 @@ export default function PlanChip({ active, pending, leaving, error, onExit }: {
         onClick={onExit}
       >
         <span className="plan-chip-glyph" aria-hidden>
-          {hover && !disabled ? <CloseCircleGlyph /> : <PlanGlyph />}
+          {hover && !disabled ? <IconClose16 size={14} /> : <IconChecklistOutline14 size={14} />}
         </span>
         计划
       </button>

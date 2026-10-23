@@ -561,9 +561,13 @@ function tokenizeInput(text: string): OverlaySeg[] {
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    if (m.index > last) {
-      // 前导空白归入文本段(不高亮),只高亮 token 本身
-      out.push({ t: 'text', v: text.slice(last, m.index + (m[0].length - m[1].length)) });
+    // 前导空白归入文本段(不高亮),只高亮 token 本身。
+    // 注意用「token 起点」而不是匹配起点判断:连续两个 token 之间只有一个空格时,
+    // 第二个匹配的 m.index 正好等于 last,若按 m.index 判断会把空格吞掉,
+    // 叠加层里两个高亮框就会粘在一起(与 textarea 的文本也不再对齐)。
+    const tokenStart = m.index + (m[0].length - m[1].length);
+    if (tokenStart > last) {
+      out.push({ t: 'text', v: text.slice(last, tokenStart) });
     }
     out.push({ t: m[1].startsWith('/') ? 'skill' : 'mention', v: m[1] });
     last = m.index + m[0].length;

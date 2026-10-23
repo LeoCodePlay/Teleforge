@@ -29,7 +29,7 @@
 .plan-chip:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 .plan-chip:disabled { opacity: .6; cursor: default; }
 
-/* 一个 14px 图标位:静止=计划图,悬停/聚焦=圆圈叉(示意"这一下是关掉") */
+/* 一个 14px 图标位:静止=计划清单,悬停/聚焦=关闭叉(示意"这一下是关掉") */
 .plan-chip-glyph {
   display: inline-flex;
   flex: 0 0 auto;
@@ -37,6 +37,7 @@
   height: 14px;
   color: currentColor;
 }
+.plan-chip-glyph svg { display: block; }
 
 .plan-chip-error {
   color: var(--red);

@@ -10,7 +10,7 @@
 // 计划正文就在日志的 tool/call arguments 里(不需要额外事件),所以卡片与全文都能从历史恢复。
 import React, { useMemo, useState } from 'react';
 import type { ChatMessage } from '../../types';
-import { IconFile16 } from '../icons/icons';
+import { IconClose16, IconFile16 } from '../icons/icons';
 import { renderMarkdown } from './assistantText';
 import './PlanCards.scss';
 
@@ -85,7 +85,9 @@ export function PlanPreviewPanel({ plan, onClose, onJump }: {
         <header className="plan-preview-head">
           <span className="plan-preview-icon" aria-hidden><IconFile16 size={16} /></span>
           <h2 className="plan-preview-title">{plan.title}</h2>
-          <button type="button" className="plan-preview-close" aria-label="关闭计划预览" onClick={onClose}>✕</button>
+          <button type="button" className="plan-preview-close" aria-label="关闭计划预览" onClick={onClose}>
+            <IconClose16 size={14} />
+          </button>
         </header>
         <div className="plan-preview-body">
           {/* 计划是 markdown 文档:与助手正文同一套渲染(marked + DOMPurify) */}

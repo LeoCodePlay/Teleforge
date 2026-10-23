@@ -38,6 +38,7 @@
   color: var(--muted); font-size: var(--fs-sm); line-height: 1; cursor: pointer;
   box-shadow: none; transition: background .15s, color .15s;
 }
+.goal-icon-btn svg { display: block; }
 .goal-icon-btn:hover:not(:disabled) { background: var(--glass-bg-hover); color: var(--text); }
 .goal-icon-btn.danger:hover:not(:disabled) { color: var(--red); }
 .goal-icon-btn:disabled { opacity: .45; cursor: default; }

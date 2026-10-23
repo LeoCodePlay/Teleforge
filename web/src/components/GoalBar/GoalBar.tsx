@@ -4,18 +4,10 @@
 // 阶段语义与 harness 的 zh 词条一致:进行中的目标 / 已暂停的目标 / 受阻的目标。
 import React, { useEffect, useRef, useState } from 'react';
 import type { GoalInfo } from '../../types';
+import {
+  IconCheck16, IconClose16, IconGoal16, IconPause16, IconPencil16, IconPlay16, IconTrashOutline14
+} from '../icons/icons';
 import './GoalBar.scss';
-
-/** 目标图标(旗标):与 harness IconGoalOutlineRegular 同形的极简轮廓 */
-function GoalGlyph() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M3.6 14V2.4h7.2l-1.2 2.6 1.2 2.6H3.6" stroke="currentColor" strokeWidth="1.3"
-        strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx="3.6" cy="2.4" r="1" fill="currentColor" />
-    </svg>
-  );
-}
 
 /** 阶段标签:active 还要看进程内授权(未激活 = 不会自动续跑) */
 function phaseLabel(goal: GoalInfo): string {
@@ -65,7 +57,7 @@ export default function GoalBar({ goal, onEdit, onPause, onResume, onClear, pend
 
   return (
     <div className="goal-bar" data-phase={goal.phase}>
-      <span className="goal-glyph"><GoalGlyph /></span>
+      <span className="goal-glyph"><IconGoal16 size={14} /></span>
       <span className="goal-phase">{phaseLabel(goal)}</span>
       {editing ? (
         <span className="goal-edit">
@@ -82,9 +74,9 @@ export default function GoalBar({ goal, onEdit, onPause, onResume, onClear, pend
             }}
           />
           <button type="button" className="goal-icon-btn" data-tip="保存目标" aria-label="保存目标" disabled={pending || !draft.trim()}
-            onClick={submitEdit}>✓</button>
+            onClick={submitEdit}><IconCheck16 size={14} /></button>
           <button type="button" className="goal-icon-btn" data-tip="取消编辑" aria-label="取消编辑" disabled={pending}
-            onClick={() => setEditing(false)}>✕</button>
+            onClick={() => setEditing(false)}><IconClose16 size={14} /></button>
         </span>
       ) : (
         <>
@@ -94,16 +86,16 @@ export default function GoalBar({ goal, onEdit, onPause, onResume, onClear, pend
           <span className="goal-actions">
             {goal.phase === 'active' && goal.activation === 'armed' && (
               <button type="button" className="goal-icon-btn" data-tip="暂停目标" aria-label="暂停目标" disabled={pending}
-                onClick={() => { void onPause(); }}>⏸</button>
+                onClick={() => { void onPause(); }}><IconPause16 size={14} /></button>
             )}
             {showResume && (
               <button type="button" className="goal-icon-btn" data-tip="恢复目标" aria-label="恢复目标" disabled={pending}
-                onClick={() => { void onResume(); }}>▶</button>
+                onClick={() => { void onResume(); }}><IconPlay16 size={14} /></button>
             )}
             <button type="button" className="goal-icon-btn" data-tip="编辑目标" aria-label="编辑目标" disabled={pending}
-              onClick={() => { setDraft(goal.objective); setEditing(true); }}>✎</button>
+              onClick={() => { setDraft(goal.objective); setEditing(true); }}><IconPencil16 size={14} /></button>
             <button type="button" className="goal-icon-btn danger" data-tip="清除目标" aria-label="清除目标" disabled={pending}
-              onClick={() => { void onClear(); }}>🗑</button>
+              onClick={() => { void onClear(); }}><IconTrashOutline14 size={14} /></button>
           </span>
         </>
       )}

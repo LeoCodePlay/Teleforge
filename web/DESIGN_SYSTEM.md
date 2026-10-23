@@ -433,6 +433,19 @@ Tauri 启动时必须关闭 WebView2 默认菜单(见 `src-tauri/src/lib.rs` 的
 `SetAreDefaultContextMenusEnabled(false)`),全站只保留 `.ctxmenu` / dsh `Menu` 这一套自绘菜单。
 新增窗口或 webview 时也要应用同一设置;禁止再引入第二套原生菜单。
 
+### 5.8 图标(Icons)
+
+全站功能性图标统一走 `web/src/components/icons/icons.tsx`,不各自在面板里画临时 SVG:
+
+- **网格 / 描边**:16 号画板、`stroke-width: 1.6`、`stroke-linecap/linejoin: round`、`currentColor`;
+  面板图标用 `size={14}`,按钮内的图标盒 22–28px。
+- **禁止用 emoji / 文字符号当功能图标**:`⏸ ▶ ✎ 🗑 ✓ ✕` 一律换成 `IconPause16` /
+  `IconPlay16` / `IconPencil16` / `IconTrashOutline14` / `IconCheck16` / `IconClose16`。
+- 目标条用 `IconGoal16`;任务计划面板用 `IconChecklistOutline14`,任务状态用
+  `IconCheckCircle16` / `IconProgressCircle16` / `IconPendingCircle16`;计划 chip 用
+  `IconChecklistOutline14`,关闭态用 `IconClose16`;计划全文的关闭钮同样用 `IconClose16`。
+- 缺图标时先补进 `icons.tsx`(与上面同一套参数),再在面板里引用,不要复制一份局部 SVG。
+
 ---
 
 ## 六、例外(唯一)
