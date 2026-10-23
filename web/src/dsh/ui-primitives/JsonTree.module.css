@@ -32,7 +32,7 @@
   width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 6px 8px 8px 8px;
+  padding: var(--space-3) var(--space-4) var(--space-4) var(--space-4);
   white-space: pre;
 }
 
@@ -40,7 +40,7 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 6px 8px 8px 14px;
+  padding: var(--space-3) var(--space-4) var(--space-4) var(--space-7);
 }
 
 .expandedTopLevel:has(> .topLevelBracket[data-json-root-row]:hover),
@@ -69,7 +69,7 @@
   min-width: 0;
   min-height: 16px;
   margin: 0;
-  padding: 0 0 0 10px;
+  padding: 0 0 0 var(--space-5);
   list-style: none;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -117,14 +117,14 @@
 .stringText {
   display: block;
   max-height: calc(var(--json-tree-collapsed-lines) * 16px);
-  padding-left: 12px;
+  padding-left: var(--space-6);
   overflow: hidden;
   text-indent: -12px;
   word-break: break-all;
 }
 
 .stringRaw {
-  margin: 4px 0 0 12px;
+  margin: var(--space-2) 0 0 var(--space-6);
   overflow: auto;
   color: var(--dsw-alias-label-primary);
   font: inherit;
@@ -140,7 +140,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: var(--space-2);
   width: fit-content;
   height: 16px;
 }
@@ -161,7 +161,7 @@
   float: right;
   align-items: flex-end;
   height: calc(var(--json-tree-collapsed-lines) * 16px);
-  margin-left: 2px;
+  margin-left: var(--space-1);
   shape-outside: inset(calc((var(--json-tree-collapsed-lines) - 1) * 16px) 0 0);
   pointer-events: none;
 }
@@ -169,7 +169,7 @@
 .stringToggle {
   display: inline-flex;
   align-items: baseline;
-  gap: 2px;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   border: 0;
@@ -251,7 +251,7 @@
 }
 
 .row:has(> .copySlot) > .stringField .stringToggleSlot {
-  padding-right: 24px;
+  padding-right: var(--space-12);
 }
 
 .row:hover:not(:has(.row:hover)) > .copySlot,

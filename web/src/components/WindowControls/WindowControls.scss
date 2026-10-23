@@ -3,9 +3,9 @@
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  margin-left: 8px;
+  margin-left: var(--space-4);
   border-left: 1px solid var(--line-soft);
-  padding-left: 8px;
+  padding-left: var(--space-4);
 }
 
 .winctl {
@@ -34,5 +34,5 @@
 /* 关闭按钮悬停:主题危险色(与 --btn-danger-* 主按钮一致),区分危险操作 */
 .winctl-close:hover {
   color: var(--btn-danger-text);
-  background: linear-gradient(135deg, var(--btn-danger-a), var(--btn-danger-b));
+  background: var(--btn-danger-a);
 }

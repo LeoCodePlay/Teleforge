@@ -13,8 +13,8 @@
   display: inline-grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  gap: 2px;
-  padding: 4px;
+  gap: var(--space-1);
+  padding: var(--space-2);
   border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -39,13 +39,13 @@
   position: relative;
   z-index: 1;
   height: 28px;
-  padding: 0 16px;
+  padding: 0 var(--space-8);
   border: 0;
   border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 20px;
   font-weight: 500;
   white-space: nowrap;

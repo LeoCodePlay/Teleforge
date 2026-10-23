@@ -1,8 +1,8 @@
 .block {
   --dsl-web-radius: var(--dsw-radius-lg);
 
-  margin: 16px 0;
-  padding: 12px 14px;
+  margin: var(--space-8) 0;
+  padding: var(--space-6) var(--space-7);
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-markdown-code-block);
   border-radius: var(--dsl-web-radius);
@@ -11,7 +11,7 @@
 /* The provider answer reads as body prose above the citation list; its own
    MarkdownText margins are trimmed so the list sits tight under it. */
 .answer {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-4);
 }
 
 .answer > :global(div) > :first-child {
@@ -42,7 +42,7 @@
   padding-left: 2.5em;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-5);
   max-height: 320px;
   overflow-y: auto;
 }
@@ -53,7 +53,7 @@
 
 .sourceLink {
   color: var(--dsw-alias-link);
-  font-size: 14px;
+  font-size: var(--fs-lg);
   font-weight: 500;
   line-height: 20px;
   word-break: break-word;
@@ -76,21 +76,21 @@
 }
 
 .snippet {
-  margin-top: 2px;
+  margin-top: var(--space-1);
   color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 19px;
   word-break: break-word;
 }
 
 .published {
-  margin-top: 2px;
+  margin-top: var(--space-1);
   color: var(--dsw-alias-label-tertiary);
   font: var(--dsw-font-xs-13);
 }
 
 .truncated {
-  margin-top: 8px;
+  margin-top: var(--space-4);
   color: var(--dsw-alias-label-tertiary);
   font: var(--dsw-font-xs-13);
 }
@@ -104,13 +104,13 @@
 .fetch {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .fetchUrl {
   color: var(--dsw-alias-link);
   font-family: var(--ds-font-family-code);
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 500;
   line-height: 19px;
   word-break: break-all;
@@ -126,7 +126,7 @@
 .fetchMeta {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: var(--space-6);
 }
 
 .status {

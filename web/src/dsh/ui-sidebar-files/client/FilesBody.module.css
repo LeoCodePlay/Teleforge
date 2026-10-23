@@ -8,7 +8,7 @@
   height: 100%;
   min-height: 0;
   color: var(--dsw-alias-label-primary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   line-height: 1.5;
 }
 
@@ -19,17 +19,17 @@
 .header {
   display: flex;
   flex: 0 0 auto;
-  gap: 4px;
+  gap: var(--space-2);
   align-items: center;
   box-sizing: border-box;
   height: 38px;
-  padding: 0 6px 0 16px;
+  padding: 0 var(--space-3) 0 var(--space-8);
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
 
 /* The margin plus the header's gap keeps the path 16px clear of reload. */
 .path {
-  margin-right: 12px;
+  margin-right: var(--space-6);
 }
 
 .body {
@@ -39,8 +39,8 @@
      `.list`): the bar sits 2px clear of the pane's edge, and the stable gutter
      stands in for the right padding so the rows keep their inset whether or
      not the tree overflows. */
-  margin-right: 2px;
-  padding: 8px 0 8px 8px;
+  margin-right: var(--space-1);
+  padding: var(--space-4) 0 var(--space-4) var(--space-4);
   overflow: auto;
   scrollbar-gutter: stable;
 }
@@ -48,7 +48,7 @@
 /* The bar also stops 2px short of the body's ends, matching its 2px edge
    offset. WebKit-only: the Firefox path has no track to inset. */
 .body::-webkit-scrollbar-track {
-  margin: 2px;
+  margin: var(--space-1);
 }
 
 .level {
@@ -69,13 +69,13 @@
 
 .row {
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
   width: 100%;
   min-width: 0;
   /* Rows abut, so the hover fill is the whole row; the tree's air is this
      inset, not a gap between rows. */
-  padding: 5px 10px;
+  padding: 5px var(--space-5);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -120,21 +120,21 @@
 
 .note {
   margin: 0;
-  padding: 3px 10px;
+  padding: 3px var(--space-5);
   color: var(--dsw-alias-label-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .status {
   display: flex;
   flex-direction: column;
-  padding: 12px 10px;
+  padding: var(--space-6) var(--space-5);
 }
 
 .statusLine {
   margin: 0;
   color: var(--dsw-alias-label-secondary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   line-height: 1.6;
 }
 
@@ -147,7 +147,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 6px;
+  padding: var(--space-3);
   color: var(--dsw-alias-label-secondary);
   line-height: 1;
   background: transparent;

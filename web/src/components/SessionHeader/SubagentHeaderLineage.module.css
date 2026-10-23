@@ -2,13 +2,13 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
   min-width: 0;
 }
 
 .switcherRoot {
   min-width: 0;
-  margin-left: 6px;
+  margin-left: var(--space-3);
 }
 
 .trigger,
@@ -16,22 +16,22 @@
   display: inline-flex;
   align-items: center;
   min-height: 28px;
-  padding: 3px 2px;
+  padding: 3px var(--space-1);
   border: 0;
   border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 18px;
   cursor: pointer;
 }
 
 .trigger {
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .switcherTrigger {
-  gap: 4px;
+  gap: var(--space-2);
   min-width: 0;
   max-width: 244px;
   color: var(--dsw-alias-label-primary);
@@ -140,16 +140,16 @@
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--space-3);
   box-sizing: border-box;
   width: 100%;
   min-height: 44px;
-  padding: 6px 7px 6px 9px;
+  padding: var(--space-3) 7px var(--space-3) 9px;
   border: 0;
   border-radius: var(--dsw-radius-lg);
   background: transparent;
   color: var(--dsw-alias-label-primary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 17px;
   text-align: left;
   cursor: pointer;
@@ -167,10 +167,10 @@
   flex: 1;
   align-self: stretch;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--space-3);
   min-width: 0;
   margin: -6px -7px -6px;
-  padding: 6px 7px;
+  padding: var(--space-3) 7px;
   border-radius: var(--dsw-radius-lg);
 }
 
@@ -244,7 +244,7 @@
 .summary,
 .metrics {
   color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   line-height: 15px;
 }
 
@@ -273,8 +273,8 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  margin: 4px 0;
-  padding: 6px;
+  margin: var(--space-2) 0;
+  padding: var(--space-3);
   border: 0;
   border-radius: var(--dsw-radius-sm);
   background: transparent;
@@ -290,7 +290,7 @@
 
 .children {
   position: relative;
-  margin-left: 16px;
+  margin-left: var(--space-8);
   padding-left: 3px;
 }
 
@@ -333,9 +333,9 @@
 
 .notice,
 .error {
-  padding: 8px 10px;
+  padding: var(--space-4) var(--space-5);
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 16px;
 }
 
@@ -343,7 +343,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-5);
   color: var(--dsw-alias-state-error-primary);
 }
 

@@ -5,15 +5,15 @@
   bottom: 14px;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   box-sizing: border-box;
-  padding: 4px 6px;
+  padding: var(--space-2) var(--space-3);
   border: 0.5px solid var(--dsw-alias-border-l3);
   border-radius: var(--dsw-radius-lg);
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-layer-1);
   box-shadow: 0 8px 24px light-dark(#0000001a, #00000060), 0 2px 5px light-dark(#00000009, #00000035);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 18px;
   opacity: 0;
   pointer-events: none;
@@ -31,7 +31,7 @@
 
 .controlAnchor { display: flex; }
 .zoomButton { width: 28px; padding: 0; flex: none; }
-.percent { display: inline-flex; align-items: center; justify-content: center; gap: 2px; min-width: 58px; padding-inline: 6px; font-variant-numeric: tabular-nums; }
+.percent { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); min-width: 58px; padding-inline: 6px; font-variant-numeric: tabular-nums; }
 .zoomMenu { min-width: 112px; }
 
 @media (hover: none), (pointer: coarse) {

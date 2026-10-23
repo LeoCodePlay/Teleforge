@@ -7,11 +7,11 @@
   pointer-events: auto;
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: max(24px, var(--dsh-frame-overlay-top, 24px)) 24px;
+  padding: max(var(--space-12), var(--dsh-frame-overlay-top, var(--space-12))) var(--space-12);
 }
 
 /* Only paint excludes the native caption; the root still blocks background clicks. */
@@ -36,9 +36,9 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--space-10);
   width: min(380px, 100%);
-  padding: 0 0 24px;
+  padding: 0 0 var(--space-12);
   overflow: hidden;
   border: 0;
   border-radius: var(--dsw-radius-panel);
@@ -72,13 +72,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 22px 14px 12px 24px;
+  gap: var(--space-4);
+  padding: 22px var(--space-7) var(--space-6) var(--space-12);
 }
 
 .title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--fs-xl);
   line-height: 24px;
   font-weight: 500; /* figma wt510, rendered 500 */
   color: var(--dsw-alias-label-primary);
@@ -105,8 +105,8 @@
 /* Description and body share the 332px content column (24px side pads). */
 .description {
   margin: 0;
-  padding: 0 24px;
-  font-size: 14px;
+  padding: 0 var(--space-12);
+  font-size: var(--fs-lg);
   line-height: 22px;
   font-weight: 400;
   color: var(--dsw-alias-label-primary);
@@ -116,14 +116,14 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  margin-top: 20px;
-  padding: 0 24px;
+  margin-top: var(--space-10);
+  padding: 0 var(--space-12);
 }
 
 .footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 0 24px;
+  gap: var(--space-4);
+  padding: 0 var(--space-12);
 }

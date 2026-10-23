@@ -1,7 +1,7 @@
 /* ---- SkillRow 独有样式:技能指令卡(标题栏 + 指令正文) ---- */
-.dsh-skill { margin: 4px 0 4px 4px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg); overflow: hidden; }
-.dsh-skill-header { padding: 8px 12px; border-bottom: 1px solid var(--line-strong); background: var(--code-bg-soft); font-size: 11px; font-weight: 500; line-height: 16px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
-.dsh-skill-body { min-height: 0; margin: 0; padding: 10px 12px 12px; max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 18px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); }
+.dsh-skill { margin: var(--space-2) 0 var(--space-2) var(--space-2); border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg); overflow: hidden; }
+.dsh-skill-header { padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--line-strong); background: var(--code-bg-soft); font-size: var(--fs-xs); font-weight: 500; line-height: 16px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.dsh-skill-body { min-height: 0; margin: 0; padding: var(--space-5) var(--space-6) var(--space-6); max-height: 260px; overflow: auto; font-family: var(--mono); font-size: var(--fs-sm); line-height: 18px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); }
 .dsh-skill-body[data-error] { color: var(--red); }
 /* 这里原先有一条 ::-webkit-scrollbar-track{ margin } 的搬运残留:全站原生条宽为 0,
    那条规则永远画不出来;本卡片的滚动条由悬浮引擎按统一规格绘制(见 styles.scss) */

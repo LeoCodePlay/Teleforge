@@ -7,13 +7,13 @@
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--surface);
   border-top: 1px solid var(--line);
-  z-index: 30;
+  z-index: var(--z-panel);
 }
 .bb-item {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px; min-height: 44px; padding: 6px 4px;
+  gap: var(--space-1); min-height: 44px; padding: var(--space-3) var(--space-2);
   background: transparent; border: none; box-shadow: none; border-radius: var(--r-md);
-  color: var(--muted); font-size: 11px; cursor: pointer;
+  color: var(--muted); font-size: var(--fs-xs); cursor: pointer;
   transition: color .15s, background .15s;
 }
 .bb-item.on {
@@ -27,8 +27,8 @@
 .bb-ico svg { display: block; }
 .bb-badge {
   position: absolute; top: -4px; right: -10px;
-  min-width: 15px; height: 15px; padding: 0 4px;
+  min-width: 15px; height: 15px; padding: 0 var(--space-2);
   border-radius: var(--r-pill);
-  background: var(--accent); color: var(--btn-text); font-size: 9px; line-height: 15px; text-align: center;
+  background: var(--accent); color: var(--btn-text); font-size: var(--fs-2xs); line-height: 15px; text-align: center;
 }
 .bb-label { line-height: 1; }

@@ -11,15 +11,15 @@
    行高 30px,与 33px 的会话行同密度,不额外吃高度;sticky 吸在列表顶部,
    滚长列表时搜索入口不会跟着滚走。 */
 .s-sec-head {
-  display: flex; align-items: center; gap: 4px;
-  height: 30px; padding: 0 10px;
+  display: flex; align-items: center; gap: var(--space-2);
+  height: 30px; padding: 0 var(--space-5);
   position: sticky; top: 0; z-index: 5;
   background: var(--bar-tint-a);
 }
 .s-sec-label {
   flex: none; max-width: 45%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11px; color: var(--muted); letter-spacing: .2px;
+  font-size: var(--fs-xs); color: var(--muted); letter-spacing: .2px;
 }
 /* 搜索:收起时只占一个图标位(26px),展开时铺满标题与右上按钮之间的空档 */
 .s-search {
@@ -30,7 +30,7 @@
   transition: max-width .18s ease, background-color .18s ease, border-color .18s ease, box-shadow .16s ease;
 }
 .s-search.open {
-  max-width: 100%; padding-right: 2px;
+  max-width: 100%; padding-right: var(--space-1);
   background: var(--glass-bg-inset); border-color: var(--line);
 }
 .s-search.open:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
@@ -38,14 +38,14 @@
 /* 输入框本体无框无底:视觉上的「槽」由外层 .s-search.open 提供,避免双层描边 */
 .s-search-input {
   flex: 1; width: 0; min-width: 0;
-  background: transparent; border: none; border-radius: 0; padding: 0 2px 0 0;
-  font-size: 12.5px;
+  background: transparent; border: none; border-radius: 0; padding: 0 var(--space-1) 0 0;
+  font-size: var(--fs-sm);
   opacity: 0; pointer-events: none;
   transition: opacity .12s ease;
 }
 .s-search-input:focus { background: transparent; border: none; box-shadow: none; }
 .s-search.open .s-search-input { opacity: 1; pointer-events: auto; }
-.s-search-clear { flex: none; width: 20px; height: 20px; margin-right: 2px; }
+.s-search-clear { flex: none; width: 20px; height: 20px; margin-right: var(--space-1); }
 /* 右上「添加工作区」:搜索展开时整块收起让位(与 dsh 一致,不给输入框留夹缝)。
    收起用 visibility 一并摘掉键盘可达性,否则 Tab 还能走到一个看不见的按钮上 */
 .s-sec-actions {
@@ -58,17 +58,17 @@
   transition: max-width .18s ease, opacity .12s ease, visibility 0s linear .18s;
 }
 .s-sec-add { flex: none; width: 26px; height: 26px; }
-.s-sec-empty { font-size: 12px; color: var(--muted); padding: 2px 10px 0; }
-.s-scope { margin-top: 6px; font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-sec-empty { font-size: var(--fs-sm); color: var(--muted); padding: var(--space-1) var(--space-5) 0; }
+.s-scope { margin-top: var(--space-3); font-size: var(--fs-sm); color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 工作区分组头:折叠箭头 + 图标 + 路径名 + 计数 + 组内新建 ---- */
-.s-group { margin-top: 2px; }
+.s-group { margin-top: var(--space-1); }
 .s-group-header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 10px; margin-top: 4px;
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-5); margin-top: var(--space-2);
   border-radius: var(--r-md); border: 1px solid transparent;
   cursor: pointer; user-select: none;
-  font-size: 12px; color: var(--text);
+  font-size: var(--fs-sm); color: var(--text);
   transition: all .18s ease;
 }
 .s-group-header:hover { background: var(--glass-bg-hover); border-color: var(--glass-border); }
@@ -89,7 +89,7 @@
   transition: opacity .16s ease, transform .18s ease;
 }
 .s-group-header.open .s-group-caret { transform: rotate(90deg); }
-.s-group-header .s-group-ico { font-size: 12px; transition: opacity .16s ease; }
+.s-group-header .s-group-ico { font-size: var(--fs-sm); transition: opacity .16s ease; }
 /* 悬停:交叉淡入淡出——箭头浮现、文件夹图标隐藏;移开恢复 */
 .s-group-header:hover .s-group-caret { opacity: 1; }
 .s-group-header:hover .s-group-ico { opacity: 0; }
@@ -109,7 +109,7 @@
 .s-group-header .s-run { color: var(--green); width: 6px; height: 6px; }
 .s-group-header .s-group-count {
 .s-group-header .s-run.term { color: var(--running); }
-  flex: none; font-size: 10px; color: var(--muted); background: var(--glass-bg-hover);
+  flex: none; font-size: var(--fs-2xs); color: var(--muted); background: var(--glass-bg-hover);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 0 5px; line-height: 15px;
 }
 /* ---- 尾部槽:静止显示「运行状态点 + 任务数」,悬停整组时交叉让位给「在此工作区新建会话」按钮。
@@ -144,12 +144,12 @@
 .s-group-header .s-group-add:focus-visible { opacity: 1; transform: none; pointer-events: auto; }
 .s-group-header .s-group-add:hover:not(:disabled) {
   color: var(--accent); border-color: var(--accent);
-  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill));
-  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 14px var(--accent-soft), 0 2px 10px var(--shadow-1);
+  background: var(--accent-fill);
+  box-shadow: none;
 }
 .s-group-header .s-group-add:active:not(:disabled) {
   transform: none; color: var(--accent-2);
-  background: linear-gradient(135deg, var(--accent-fill-soft), var(--accent-fill-soft));
+  background: var(--accent-fill-soft);
 }
 
 /* ---- 分组内会话行:常驻 DOM,展开/收起高度过渡(grid-template-rows 0fr↔1fr) ---- */
@@ -164,7 +164,7 @@
 }
 .s-group-body-clip { overflow: hidden; min-height: 0; }
 .s-group-body {
-  display: flex; flex-direction: column; gap: 4px; margin-top: 4px;
+  display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2);
   opacity: 0; transform: translateY(-3px);   /* 展开时内容轻微下滑淡入 */
   transition: opacity .16s ease, transform .2s ease;
 }
@@ -178,23 +178,23 @@
        只写 .s-group-more 会被 button.link 的 padding 反盖 ---- */
 .s-group-body .s-group-more {
   align-self: flex-start; text-align: left;
-  margin-left: 24px; padding: 2px 0;
-  font: inherit; font-size: 12px; line-height: 18px;
+  margin-left: var(--space-12); padding: var(--space-1) 0;
+  font: inherit; font-size: var(--fs-sm); line-height: 18px;
 }
 .session-item {
-  display: flex; align-items: center; gap: 6px; padding: 7px 10px;
+  display: flex; align-items: center; gap: var(--space-3); padding: 7px var(--space-5);
   height: 33px; box-sizing: border-box;   /* 固定行高:列表行距统一稳定 */
   border-radius: var(--r-md); border: 1px solid transparent;
-  cursor: pointer; font-size: 12.5px; transition: all .18s ease;
+  cursor: pointer; font-size: var(--fs-sm); transition: all .18s ease;
 }
 .session-item:hover { background: var(--glass-bg-hover); border-color: var(--glass-border); }
 .session-item.active {
-  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  background: var(--accent-fill);
   border-color: var(--accent-border);
-  box-shadow: inset 0 1px 0 var(--btn-sheen), 0 0 16px var(--accent-soft);
+  box-shadow: none;
 }
 .session-item .s-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.session-item .s-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.session-item .s-meta { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
 /* 会话运行中徽标(多会话并行:该会话有任务正在后台执行) */
 .session-item .s-run { color: var(--green); }
 /* 待用户操作(模型提问挂起):运行点变黄,提示切回该会话作答/取消 */
@@ -203,9 +203,9 @@
 .session-item .s-run.term { color: var(--running); }
 .session-item .s-run.idle { visibility: hidden; animation: none; }
 @keyframes s-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-.session-item .s-actions { display: flex; gap: 2px; }
+.session-item .s-actions { display: flex; gap: var(--space-1); }
 /* 三点更多按钮:复用 .action-icon 的透明底/无边框/hover 反馈,仅调字号与留白 */
-.session-item .s-more { font-size: 15px; line-height: 1; padding: 0 5px; }
+.session-item .s-more { font-size: var(--fs-xl); line-height: 1; padding: 0 5px; }
 /* 时间与三点操作按钮默认隐藏,悬停该行时才浮现(opacity 过渡,仍占位、行宽不变,避免抖动) */
 .session-item .s-meta,
 .session-item .s-actions {
@@ -221,13 +221,13 @@
 .s-rename-modal { width: 360px; }
 
 /* 其他服务器后台运行的会话(跨服务器可见,运行期间显示,点击切回该服务器) */
-.s-foreign { margin-top: 10px; border-top: 1px dashed var(--glass-border); padding-top: 8px; }
-.s-foreign-title { font-size: 11px; color: var(--muted); margin-bottom: 4px; padding: 0 10px; }
+.s-foreign { margin-top: var(--space-5); border-top: 1px dashed var(--glass-border); padding-top: var(--space-4); }
+.s-foreign-title { font-size: var(--fs-xs); color: var(--muted); margin-bottom: var(--space-2); padding: 0 var(--space-5); }
 .s-foreign .session-item { border-color: var(--glass-border); background: var(--accent-fill-hover); }
 .s-foreign .session-item:hover { background: var(--accent-fill); }
-.s-foreign .s-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.s-foreign .s-title { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .s-foreign-badge {
-  flex: none; font-size: 10px; color: var(--accent);
+  flex: none; font-size: var(--fs-2xs); color: var(--accent);
   background: var(--accent-fill); border: 1px solid var(--accent-border);
   border-radius: var(--r-sm); padding: 1px 5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px;
@@ -235,12 +235,12 @@
 
 /* ---- 移动端(<768):触控行高加大 ---- */
 @media (max-width: 767px) {
-  .session-item { min-height: 46px; padding: 8px 12px; height: auto; }
-  .s-panel { padding: 10px 12px; }
-  .s-group-header { padding: 8px 12px; }
-  .s-sec-head { padding: 0 12px; height: 34px; }
+  .session-item { min-height: 46px; padding: var(--space-4) var(--space-6); height: auto; }
+  .s-panel { padding: var(--space-5) var(--space-6); }
+  .s-group-header { padding: var(--space-4) var(--space-6); }
+  .s-sec-head { padding: 0 var(--space-6); height: 34px; }
   /* 触控:会话行内边距加大到 12px,同列偏移跟着重算(1+12+7+6),并给足点按高度 */
-  .s-group-body .s-group-more { margin-left: 26px; padding: 4px 0; }
+  .s-group-body .s-group-more { margin-left: 26px; padding: var(--space-2) 0; }
 }
 
 /* 触屏设备:hover 不存在,时间与 ⋮ 操作常显(桌面仍是悬停浮现) */
@@ -249,7 +249,7 @@
   .session-item .s-actions { opacity: 1; }
   /* 触屏无悬停:尾部槽不再叠放切换,状态/计数与新建按钮并排常显,触控位加大到 26px */
   /* 选择器多带一层 .s-group-tail 抬到与 .s-group-header:hover … 同权重,靠后置顺序稳定覆盖 */
-  .s-group-header .s-group-tail { display: inline-flex; gap: 6px; height: auto; }
+  .s-group-header .s-group-tail { display: inline-flex; gap: var(--space-3); height: auto; }
   .s-group-header .s-group-tail .s-group-meta { opacity: 1; transform: none; pointer-events: auto; }
   .s-group-header .s-group-tail .s-group-add { opacity: 1; transform: none; width: 26px; height: 26px; }
   /* 触屏无 hover:箭头常显(占住图标位),保留展开状态指示 */
@@ -305,10 +305,10 @@
    等宽小字便于逐字符核对;不截断 —— 长 id 折行而不是被省略号吃掉,排障时要的正是完整值。 */
 .ctxmenu .ctx-sid {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.45;
   color: var(--muted);
-  padding: 4px 10px 5px;
+  padding: var(--space-2) var(--space-5) 5px;
   max-width: 320px;
   overflow-wrap: anywhere;
   user-select: text;

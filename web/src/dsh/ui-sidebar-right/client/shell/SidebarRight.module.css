@@ -118,7 +118,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 6px;
+  padding: var(--space-3);
   color: var(--dsw-alias-label-secondary);
   line-height: 1;
   background: transparent;
@@ -149,9 +149,9 @@
 
 .unavailable {
   margin: 0;
-  padding: 12px;
+  padding: var(--space-6);
   color: var(--dsw-alias-label-tertiary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
 }
 
 /* Keep the title's icon and text in dockkit's flex row while retaining occurrence markers. */

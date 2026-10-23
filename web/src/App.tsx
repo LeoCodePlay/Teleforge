@@ -1132,6 +1132,32 @@ export default function App() {
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeTabId, tabs.length]);
 
+  // 标签条溢出时两端虚化(样式见 App.scss 的 .tabstrip-scroll[data-strip-scroll=...],
+  // 与右栏 dockkit 标签条同一套 24px mask):哪一侧还有被卷出去的标签就给哪一侧上遮罩,
+  // 滚到最左/最右时那一侧自然恢复不透明。直接写 DOM 属性而不是 setState——滚动位置
+  // 每一帧都在变,而它只影响绘制、不影响任何渲染结果,走 state 会让整个 App 每帧重渲染。
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const apply = () => {
+      // 亚像素滚动位置:超过一个整像素才算这一侧真的藏了标签
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      const sides = start && end ? 'start end' : start ? 'start' : end ? 'end' : undefined;
+      if (sides === undefined) delete el.dataset.stripScroll;
+      else el.dataset.stripScroll = sides;
+    };
+    apply();
+    el.addEventListener('scroll', apply, { passive: true });
+    // 面板宽度变化(拖右侧栏/缩窗口)会改 clientWidth,而不一定改 tabs
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(apply);
+    observer?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', apply);
+      observer?.disconnect();
+    };
+  }, [tabs]);
+
   // ---- 按服务器保存的工作区历史:key = "host:port",每个服务器记住添加/打开过的工作区 ----
   const WS_KEY = 'sshai.wsByHost';
   const loadWsByHost = (): Record<string, string[]> => {

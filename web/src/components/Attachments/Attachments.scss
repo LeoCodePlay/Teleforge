@@ -2,9 +2,9 @@
    64px 圆角缩略图卡、悬停露出删除钮、端部箭头翻页)+ 消息附件 + 灯箱 ---- */
 
 // ---- 输入框上方草稿轨道 ----
-.att-rail { position: relative; min-width: 0; margin-bottom: 8px; }
+.att-rail { position: relative; min-width: 0; margin-bottom: var(--space-4); }
 .att-rail-track {
-  display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 2px;
+  display: flex; gap: var(--space-5); overflow-x: auto; overflow-y: hidden; padding: var(--space-1);
   scrollbar-width: none; /* 溢出由端部箭头翻页,滚动条隐藏 */
 }
 .att-rail-track::-webkit-scrollbar { display: none; }
@@ -28,9 +28,9 @@
 /* 文件(非图)卡:图标 + 扩展名徽标,纵向排布 */
 .att-file-card {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px; color: var(--muted); width: 100%; height: 100%;
+  gap: var(--space-1); color: var(--muted); width: 100%; height: 100%;
 }
-.att-file-ext { font-size: 9px; font-family: var(--mono); letter-spacing: .04em; color: var(--text); }
+.att-file-ext { font-size: var(--fs-2xs); font-family: var(--mono); letter-spacing: .04em; color: var(--text); }
 /* 删除钮:默认隐藏,悬停/聚焦露出(触屏无 hover:媒体查询常显)。
    颜色与全站行内删除同一口径:静止 --muted、悬浮 --red(原先用 --text 白字,与别处不一致) */
 .att-remove {
@@ -45,7 +45,7 @@
 /* 文件/错误项的名字:覆盖在 tile 底部内侧(轨道 overflow hidden,不能探出 tile) */
 .att-name {
   position: absolute; left: 3px; right: 3px; bottom: 3px; z-index: 1;
-  font-size: 9px; line-height: 1.3; text-align: center;
+  font-size: var(--fs-2xs); line-height: 1.3; text-align: center;
   color: var(--code-ink); background: var(--code-bg-solid); border-radius: var(--r-sm); padding: 1px 3px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
 }
@@ -70,8 +70,8 @@
 .att-arrow-r { right: -4px; }
 
 /* ---- 用户消息内附件 ---- */
-.msg-att { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-bottom: 6px; }
-.msg-att-gallery { display: flex; flex-wrap: wrap; gap: 10px; max-width: 100%; }
+.msg-att { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; margin-bottom: var(--space-3); }
+.msg-att-gallery { display: flex; flex-wrap: wrap; gap: var(--space-5); max-width: 100%; }
 .msg-att-img {
   display: grid; place-items: center; overflow: hidden; padding: 0; cursor: zoom-in;
   border: 1px solid var(--glass-border); border-radius: var(--r-lg);
@@ -90,18 +90,18 @@
   min-width: 44px; min-height: 44px;
 }
 .msg-att-img.single img { position: absolute; inset: 0; }
-.msg-att-loading { font-size: 12px; line-height: 1; color: var(--muted); }
+.msg-att-loading { font-size: var(--fs-sm); line-height: 1; color: var(--muted); }
 .msg-att-file {
-  display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
-  padding: 7px 12px; border-radius: var(--r-md); text-decoration: none;
+  display: inline-flex; align-items: center; gap: var(--space-4); max-width: 100%;
+  padding: 7px var(--space-6); border-radius: var(--r-md); text-decoration: none;
   border: 1px solid var(--glass-border); background: var(--glass-bg);
   color: var(--text); transition: border-color .15s, background .15s;
 }
 .msg-att-file:hover { border-color: var(--accent-border); background: var(--glass-bg-hover); }
 .msg-att-file svg { color: var(--muted); flex: none; }
 .msg-att-file-main { display: flex; flex-direction: column; min-width: 0; }
-.msg-att-file-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.msg-att-file-meta { font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+.msg-att-file-name { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-att-file-meta { font-size: var(--fs-2xs); color: var(--muted); font-family: var(--mono); }
 
 /* ---- 灯箱(点击缩略图/消息图片放大;滚轮/双击缩放,放大后可拖拽平移) ---- */
 .lightbox {
@@ -133,7 +133,7 @@
 /* 底部缩放工具条:− / 百分比(点击=适应) / + / 适应窗口 */
 .lightbox-toolbar {
   position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 2px; padding: 4px;
+  display: flex; align-items: center; gap: var(--space-1); padding: var(--space-2);
   cursor: default;
   border: 1px solid var(--line);
   background: var(--glass-bg-strong); color: var(--text);
@@ -147,7 +147,7 @@
 }
 .lightbox-toolbar button:hover { background: var(--glass-bg-hover); }
 .lightbox-pct {
-  font-size: 12px; font-family: var(--mono); min-width: 56px;
+  font-size: var(--fs-sm); font-family: var(--mono); min-width: 56px;
   text-align: center; font-variant-numeric: tabular-nums;
 }
 
@@ -156,7 +156,7 @@
 .composer-add {
   width: 26px; height: 26px; padding: 0; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 15px; line-height: 1; cursor: pointer; flex: none;
+  font-size: var(--fs-xl); line-height: 1; cursor: pointer; flex: none;
   background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--muted);
   transition: all .18s;
 }
@@ -174,14 +174,14 @@
   background: var(--pop-bg);
   border: 1px solid var(--line); border-radius: var(--r-md);
   box-shadow: var(--glass-shadow);
-  display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column; gap: var(--space-1);
   animation: pop-in .16s ease-out;
 }
 .add-menu-item {
   display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer;
+  padding: 7px var(--space-5); border-radius: var(--r-sm); cursor: pointer;
   background: transparent; border: none; color: var(--text);
-  font-size: 12.5px; text-align: left; transition: background .15s;
+  font-size: var(--fs-sm); text-align: left; transition: background .15s;
   /* 全局 button 自带玻璃底+投影(msm-cell 同款必须显式压掉,否则静止态每行都带阴影卡) */
   box-shadow: none;
 }
@@ -190,8 +190,8 @@
    悬停投影不做压制:与 msm 行一致,由全局 button:hover 提供抬升投影 */
 .add-menu-item:hover .am-main > span:first-child { color: var(--accent-2); }
 .add-menu-item .am-ico { width: 26px; height: 26px; flex: none; border-radius: var(--r-sm);
-  display: grid; place-items: center; font-size: 13px;
+  display: grid; place-items: center; font-size: var(--fs-md);
   background: var(--glass-bg-inset); border: 1px solid var(--glass-border); }
 .add-menu-item .am-main { display: flex; flex-direction: column; min-width: 0; }
-.add-menu-item .am-desc { font-size: 10.5px; color: var(--muted); }
+.add-menu-item .am-desc { font-size: var(--fs-2xs); color: var(--muted); }
 .add-menu-item.disabled { opacity: .5; cursor: not-allowed; }

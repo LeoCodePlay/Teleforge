@@ -9,17 +9,17 @@
 
 /* ---------- 工具条 ---------- */
 .bp-toolbar {
-  position: relative; display: flex; align-items: center; gap: 8px; flex: none;
-  padding: 8px 10px; border-bottom: 1px solid var(--line-soft);
+  position: relative; display: flex; align-items: center; gap: var(--space-4); flex: none;
+  padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line-soft);
   background: var(--surface);
 }
 
 /* 导航簇:后退/前进/刷新合成一个分段控件 */
 .bp-nav {
-  flex: none; display: flex; align-items: center; gap: 1px; padding: 2px;
-  border-radius: 11px; border: 1px solid var(--line-soft); background: var(--glass-bg);
+  flex: none; display: flex; align-items: center; gap: 1px; padding: var(--space-1);
+  border-radius: var(--r-md); border: 1px solid var(--line-soft); background: var(--glass-bg);
 }
-.bp-nav .bp-ico { width: 27px; height: 26px; border-radius: 8px; }
+.bp-nav .bp-ico { width: 27px; height: 26px; border-radius: var(--r-sm); }
 
 /* 通用图标按钮(导航簇内 / 右侧动作共用)
    注意:样式表里有全局 `button { padding: 7px 13px; box-shadow: ... }`,
@@ -28,7 +28,7 @@
 .bp-ico {
   flex: none; width: 30px; height: 30px; padding: 0; box-shadow: none;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 9px; border: 1px solid transparent; background: transparent;
+  border-radius: var(--r-sm); border: 1px solid transparent; background: transparent;
   color: var(--muted); cursor: pointer;
   transition: color .15s, background .15s, border-color .15s;
 }
@@ -45,8 +45,8 @@
 
 /* 地址栏:前导 http/https 标识 + 输入框 + 条件出现的「前往」 */
 .bp-addr {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
-  height: 34px; padding: 0 6px 0 10px; border-radius: 11px;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-4);
+  height: 36px; padding: 0 var(--space-3) 0 var(--space-5); border-radius: var(--r-md);
   background: var(--glass-bg); border: 1px solid var(--line-soft);
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
@@ -63,10 +63,14 @@
    而它打包在组件样式之后、特异性又与本块相同,会把下面的重置覆盖掉,
    结果就是「外壳一个框 + 里面 input 又一个框」。这里连 :focus 一起显式压掉,
    让输入框与外壳始终是一体的(聚焦反馈只由 .bp-addr:focus-within 统一给)。 */
+/* 光标高度只跟字体的 em 高走(≈1.13×字号),行高再大也只撑高行盒、不撑高光标;
+   原来 12.5px 的字在 34px 的栏里只画出一条 14px 的小竖线,看着像"没有光标"。
+   所以字号提到 15px(光标 ≈18px),并让 input 撑满栏高 —— 整条地址栏都是
+   可点/可聚焦的输入区,而不是中间夹着一条 18px 的细缝。 */
 .bp-addr input {
-  flex: 1; min-width: 0; width: auto; border: 0; background: transparent; box-shadow: none;
+  flex: 1; min-width: 0; width: auto; height: 100%; border: 0; background: transparent; box-shadow: none;
   color: var(--text);
-  font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-xl); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   outline: none; padding: 0;
 }
 .bp-addr input:focus { border: 0; background: transparent; box-shadow: none; }
@@ -74,7 +78,7 @@
 .bp-go {
   flex: none; width: 24px; height: 24px; padding: 0; box-shadow: none;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 8px; border: 0; cursor: pointer; color: var(--text);
+  border-radius: var(--r-sm); border: 0; cursor: pointer; color: var(--text);
   background: var(--accent-fill);
 }
 .bp-go:hover { filter: brightness(1.18); }
@@ -93,7 +97,7 @@
 
 /* 隧道提示:远程项目经 SSH 端口转发到本机预览(仅远程预览出现) */
 .bp-note {
-  flex: none; padding: 5px 12px; font-size: 11.5px; line-height: 1.45;
+  flex: none; padding: 5px var(--space-6); font-size: var(--fs-xs); line-height: 1.45;
   color: var(--amber-bright);
   background: var(--warn-bg);
   border-bottom: 1px solid var(--warn-border);
@@ -124,7 +128,7 @@
 /* 操作反馈气泡:复制/粘贴看不到结果,必须给一句回执 */
 .bp-tip {
   position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 5;
-  max-width: 80%; padding: 6px 12px; border-radius: 999px; font-size: 12px;
+  max-width: 80%; padding: var(--space-3) var(--space-6); border-radius: 999px; font-size: var(--fs-sm);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
   color: var(--text); background: var(--pop-bg-strong);
   border: 1px solid var(--line); box-shadow: var(--glass-shadow);
@@ -133,63 +137,63 @@
 /* 右键 / 长按菜单(预览是图片,原生右键菜单没有意义) */
 .bp-menu-mask { position: absolute; inset: 0; z-index: 4; }
 .bp-menu {
-  position: absolute; z-index: 5; min-width: 168px; padding: 4px;
+  position: absolute; z-index: 5; min-width: 168px; padding: var(--space-2);
   display: flex; flex-direction: column; gap: 1px;
   border-radius: var(--r-md); border: 1px solid var(--line-soft);
   background: var(--pop-bg-strong); box-shadow: var(--glass-shadow);
 }
 /* 全局 button 有 padding/渐变/阴影,这里必须逐项覆盖 */
 .bp-menu button {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  width: 100%; padding: 7px 10px; border: 0; border-radius: 7px;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-6);
+  width: 100%; padding: 7px var(--space-5); border: 0; border-radius: var(--r-sm);
   background: transparent; box-shadow: none; color: var(--text);
-  font-size: 12.5px; text-align: left; cursor: pointer;
+  font-size: var(--fs-sm); text-align: left; cursor: pointer;
 }
 .bp-menu button:hover:not(:disabled) { background: var(--glass-bg-hover); box-shadow: none; }
 .bp-menu button:disabled { opacity: .4; cursor: default; }
-.bp-menu-k { flex: none; font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.bp-menu-sep { height: 1px; margin: 4px 6px; background: var(--line-soft); }
+.bp-menu-k { flex: none; font-size: var(--fs-xs); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.bp-menu-sep { height: 1px; margin: var(--space-2) var(--space-3); background: var(--line-soft); }
 
 /* ---------- 空态:手动打开入口 ---------- */
 .bp-empty {
   position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 8px; padding: 24px; text-align: center; color: var(--muted);
+  gap: var(--space-4); padding: var(--space-12); text-align: center; color: var(--muted);
 }
 .bp-empty-ico { display: inline-flex; color: var(--muted); opacity: .55; }
-.bp-empty-title { font-size: 15px; font-weight: 600; color: var(--text); }
-.bp-empty-desc { font-size: 12.5px; line-height: 1.7; max-width: 460px; }
+.bp-empty-title { font-size: var(--fs-xl); font-weight: 600; color: var(--text); }
+.bp-empty-desc { font-size: var(--fs-sm); line-height: 1.7; max-width: 460px; }
 
 .bp-empty-form {
-  display: flex; align-items: center; gap: 6px; margin-top: 8px;
-  width: min(460px, 92%); padding: 4px 4px 4px 12px;
-  border-radius: 12px; border: 1px solid var(--line-soft); background: var(--glass-bg);
+  display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-4);
+  width: min(460px, 92%); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-6);
+  border-radius: var(--r-md); border: 1px solid var(--line-soft); background: var(--glass-bg);
   transition: border-color .15s, box-shadow .15s;
 }
 .bp-empty-form:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
 .bp-empty-form-ico { flex: none; display: inline-flex; color: var(--muted); }
 .bp-empty-form input {
-  flex: 1; min-width: 0; width: auto; padding: 6px 0; border: 0; background: transparent; box-shadow: none;
+  flex: 1; min-width: 0; width: auto; padding: var(--space-3) 0; border: 0; background: transparent; box-shadow: none;
   color: var(--text);
-  font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; outline: none;
+  font-size: var(--fs-md); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; outline: none;
 }
 .bp-empty-form input:focus { border: 0; background: transparent; box-shadow: none; }
 .bp-empty-form input::placeholder { color: var(--muted); }
 .bp-empty-form button {
-  flex: none; padding: 7px 14px; border: 1px solid var(--line); box-shadow: none;
+  flex: none; padding: 7px var(--space-7); border: 1px solid var(--line); box-shadow: none;
   background: var(--accent-fill);
-  color: var(--text); font-size: 13px; cursor: pointer;
+  color: var(--text); font-size: var(--fs-md); cursor: pointer;
 }
 .bp-empty-form button:hover { filter: brightness(1.12); }
 
 /* 最近地址:手动打开时给几个可直接点的候选 */
 .bp-empty-sug {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px;
-  margin-top: 10px; max-width: min(520px, 92%);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-3);
+  margin-top: var(--space-5); max-width: min(520px, 92%);
 }
-.bp-empty-sug-label { font-size: 11.5px; opacity: .85; }
+.bp-empty-sug-label { font-size: var(--fs-xs); opacity: .85; }
 .bp-sug {
-  padding: 4px 10px; cursor: pointer; box-shadow: none;
-  font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: var(--space-2) var(--space-5); cursor: pointer; box-shadow: none;
+  font-size: var(--fs-sm); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--text); background: var(--glass-bg); border: 1px solid var(--line);
 }
 .bp-sug:hover { border-color: var(--line-strong); background: var(--glass-bg-hover); }
@@ -197,16 +201,16 @@
 /* 打开失败浮层:给出原因 + 重试 */
 .bp-overlay-err {
   position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 2;
-  display: flex; align-items: flex-start; gap: 10px;
+  display: flex; align-items: flex-start; gap: var(--space-5);
   max-width: min(760px, 94%);
-  padding: 9px 12px; border-radius: 10px;
-  background: var(--err-bg); color: var(--err-text); font-size: 12.5px;
+  padding: 9px var(--space-6); border-radius: var(--r-md);
+  background: var(--err-bg); color: var(--err-text); font-size: var(--fs-sm);
   line-height: 1.55; border: 1px solid var(--err-border);
   box-shadow: var(--glass-shadow);
 }
 .bp-overlay-err span { flex: 1; min-width: 0; word-break: break-word; }
 .bp-retry {
-  flex: none; padding: 4px 11px; border-radius: var(--r-sm); cursor: pointer; font-size: 12px; box-shadow: none;
+  flex: none; padding: var(--space-2) 11px; border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-sm); box-shadow: none;
   color: var(--err-text); background: var(--danger-soft); border: 1px solid var(--line);
 }
 .bp-retry:hover { background: var(--danger-soft-strong); }
@@ -215,9 +219,9 @@
 /* 结构:状态点 · 状态文字 · 归属会话(左下角) · spacer · 页面标题 · AI 徽标
    不换行、不定宽,靠各段自己的 max-width + 省略号兜住窄面板(否则两枚 pill 会互相挤压) */
 .bp-status {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 5px 12px; border-top: 1px solid var(--line-soft);
-  font-size: 11.5px; color: var(--muted); min-height: 28px;
+  flex: none; display: flex; align-items: center; gap: var(--space-4);
+  padding: 5px var(--space-6); border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-xs); color: var(--muted); min-height: 28px;
   overflow: hidden; white-space: nowrap;
   background: var(--fill-1);
 }
@@ -235,8 +239,8 @@
    归属会话不是当前会话时用琥珀色 + 锁图标,不改布局只换颜色,一眼能分辨。 */
 .bp-owner {
   flex: 0 1 auto; display: inline-flex; align-items: center; gap: 5px;
-  min-width: 0; max-width: min(300px, 46%); padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; color: var(--muted);
+  min-width: 0; max-width: min(300px, 46%); padding: var(--space-1) var(--space-4); border-radius: 999px;
+  font-size: var(--fs-xs); color: var(--muted);
   border: 1px solid var(--line-soft); background: var(--glass-bg);
 }
 /* 锁定态对比度:琥珀文字压深一档,11px 上仍能看清 */
@@ -245,15 +249,15 @@
 .bp-owner-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-owner-btn {
   flex: none; padding: 1px 7px; cursor: pointer; box-shadow: none;
-  font-size: 10.5px; color: var(--text);
+  font-size: var(--fs-2xs); color: var(--text);
   border: 1px solid var(--line); background: var(--glass-bg-strong);
 }
 .bp-owner-btn:hover { border-color: var(--line-strong); }
 
 /* 锁定提示条:能看画面但操作不了时,说明"属于谁"并给出改绑出口 */
 .bp-lockbar {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; font-size: 11.5px; line-height: 1.5;
+  flex: none; display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-6); font-size: var(--fs-xs); line-height: 1.5;
   color: var(--amber-bright);
   background: var(--warn-bg);
   border-bottom: 1px solid var(--warn-border);
@@ -261,8 +265,8 @@
 .bp-lockbar svg { flex: none; }
 .bp-lockbar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-lockbar-btn {
-  flex: none; padding: 3px 10px; cursor: pointer; box-shadow: none;
-  font-size: 11px; color: var(--text);
+  flex: none; padding: 3px var(--space-5); cursor: pointer; box-shadow: none;
+  font-size: var(--fs-xs); color: var(--text);
   border: 1px solid var(--line); background: var(--warn-bg);
 }
 .bp-lockbar-btn:hover { filter: brightness(1.15); }
@@ -271,7 +275,7 @@
 .bp.locked .bp-frame { cursor: not-allowed; }
 
 .bp-ai {
-  flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+  flex: none; padding: var(--space-1) var(--space-4); border-radius: 999px; font-size: var(--fs-xs);
   color: var(--accent); border: 1px solid var(--accent-border);
   background: var(--accent-fill-soft);
 }
@@ -282,27 +286,27 @@
 
 /* ---------- 手机端:更紧凑,隐藏前进/复制/状态栏,把高度留给画面 ---------- */
 @media (max-width: 767px) {
-  .bp-toolbar { padding: 6px 8px; gap: 6px; }
+  .bp-toolbar { padding: var(--space-3) var(--space-4); gap: var(--space-3); }
   .bp-ico { width: 32px; height: 32px; }
-  .bp-nav { padding: 2px; }
+  .bp-nav { padding: var(--space-1); }
   .bp-nav .bp-ico { width: 30px; height: 30px; }
   .bp-fwd { display: none; }
   .bp-copy { display: none; }
-  .bp-addr { height: 32px; padding: 0 5px 0 9px; gap: 6px; }
+  .bp-addr { height: 32px; padding: 0 5px 0 9px; gap: var(--space-3); }
   /* ≥16px:否则 iOS Safari 聚焦输入框时会自动放大整个页面 */
-  .bp-addr input { font-size: 16px; }
+  .bp-addr input { font-size: var(--fs-xl); }
   /* 手机上状态栏精简为"一行归属 + 状态点":标题/AI 徽标等噪声隐掉,
      但「已连接的会话」是这一版的核心信息,必须一直看得见(见 .bp-owner) */
-  .bp-status { padding: 4px 9px; gap: 6px; min-height: 24px; font-size: 11px; }
+  .bp-status { padding: var(--space-2) 9px; gap: var(--space-3); min-height: 24px; font-size: var(--fs-xs); }
   .bp-title, .bp-ai { display: none; }
   .bp-owner { max-width: 78%; }
   /* 状态栏在手机上只剩一行,归属会话说明仍要看得到 */
-  .bp-lockbar { padding: 5px 9px; font-size: 11px; gap: 6px; }
+  .bp-lockbar { padding: 5px 9px; font-size: var(--fs-xs); gap: var(--space-3); }
   .bp-lockbar-text { white-space: normal; }
-  .bp-note { padding: 4px 10px; font-size: 11px; }
-  .bp-empty { padding: 16px; gap: 6px; }
-  .bp-empty-desc { font-size: 12.5px; line-height: 1.6; }
+  .bp-note { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
+  .bp-empty { padding: var(--space-8); gap: var(--space-3); }
+  .bp-empty-desc { font-size: var(--fs-sm); line-height: 1.6; }
   .bp-empty-form { width: min(100%, 420px); }
-  .bp-empty-form input { font-size: 16px; }
-  .bp-overlay-err { top: 8px; font-size: 12px; padding: 8px 10px; }
+  .bp-empty-form input { font-size: var(--fs-xl); }
+  .bp-overlay-err { top: 8px; font-size: var(--fs-sm); padding: var(--space-4) var(--space-5); }
 }

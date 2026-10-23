@@ -10,7 +10,7 @@
   --dsl-terminal-gutter: 30px;
 
   position: relative;
-  margin: 16px 0;
+  margin: var(--space-8) 0;
   /* The gutter is the card's OWN padding, not a margin: every consumer rewrites
      `margin` wholesale (each render site sets its own indent), which silently
      cancelled the reservation and let the dot fall outside the card into a
@@ -32,13 +32,13 @@
 .header {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-6);
   /* Pulled back across the card's gutter padding so the banner spans the FULL
      surface, then re-inset by the same amount so the prompt text and the dot
      keep their positions. The banner shares the card's own surface (no banner
      token): the l2 divider below is the section boundary. */
   margin-left: calc(-1 * var(--dsl-terminal-gutter));
-  padding: 9px 14px 9px var(--dsl-terminal-gutter);
+  padding: 9px var(--space-7) 9px var(--dsl-terminal-gutter);
   border-top-left-radius: var(--dsl-terminal-radius);
   border-top-right-radius: var(--dsl-terminal-radius);
   /* A long multi-line command scrolls inside the banner (same cap as the
@@ -55,7 +55,7 @@
 }
 
 .header::-webkit-scrollbar-track {
-  margin: 6px;
+  margin: var(--space-3);
 }
 
 /* Full-width l2 hairline between the command banner and the body — the same
@@ -79,7 +79,7 @@
   position: relative;
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-4);
   min-width: 0;
   line-height: var(--dsl-terminal-line-height);
 }
@@ -158,7 +158,7 @@
    Unset, the max-height is none and the auto overflow never engages. */
 .output {
   max-height: var(--dsl-terminal-output-max-height, none);
-  padding: 12px 14px 12px 0;
+  padding: var(--space-6) var(--space-7) var(--space-6) 0;
   font: var(--dsl-terminal-font);
   overflow-x: auto;
   overflow-y: auto;
@@ -176,7 +176,7 @@
 /* Track end-margins keep the thumb's travel out of the card's rounded
    corners in both directions. */
 .output::-webkit-scrollbar-track {
-  margin: 6px;
+  margin: var(--space-3);
 }
 
 /* Default `pre`: alignment is the payload of terminal output. Hosts opt
@@ -206,7 +206,7 @@
 }
 
 .empty {
-  padding: 12px 14px 12px 0;
+  padding: var(--space-6) var(--space-7) var(--space-6) 0;
   font: var(--dsl-terminal-font);
   color: var(--dsw-alias-label-tertiary);
 }

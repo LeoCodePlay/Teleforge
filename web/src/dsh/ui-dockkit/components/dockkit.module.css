@@ -237,19 +237,19 @@
 .tabStrip {
   display: flex;
   flex: none;
-  gap: 4px;
+  gap: var(--space-2);
   align-items: center;
   /* The row is the 40px band the comment above describes (6px top + 28px
      content + 6px bottom). It has to be stated as the full outer height because
      an embedder's global `box-sizing: border-box` reset makes the height
-     include the padding: at 28px the content band collapses to 16px, the 28px
+     include the padding: at 28px the content band collapses to var(--space-8), the 28px
      chips overflow 6px past the strip, and the pane body — positioned, so
      painted above the static strip — covers them with its own content. */
   height: 40px;
   /* The start inset is a published variable so a host that pins the surface
      against window chrome (the right sidebar fullscreen under macOS traffic
      lights) can widen it per pane; the fallback is the design's own 10px. */
-  padding: 6px 10px 6px var(--dsh-dockkit-strip-inline-start, 10px);
+  padding: var(--space-3) var(--space-5) var(--space-3) var(--dsh-dockkit-strip-inline-start, var(--space-5));
   touch-action: none;
 }
 
@@ -302,10 +302,10 @@
 .stripChrome {
   display: flex;
   flex: none;
-  gap: 8px;
+  gap: var(--space-4);
   align-items: center;
   height: 28px;
-  margin-left: 4px;
+  margin-left: var(--space-2);
 }
 
 /* macOS desktop: an embedder may pin this surface at the window's top edge (the
@@ -372,9 +372,9 @@
   min-width: 80px;
   max-width: 170px;
   height: 28px;
-  padding: 0 10px;
+  padding: 0 var(--space-5);
   color: var(--dsw-alias-label-secondary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   line-height: 1;
   white-space: nowrap;
   border-radius: var(--dsw-radius-sm);
@@ -521,7 +521,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 6px;
+  padding: var(--space-3);
   color: var(--dsw-alias-label-secondary);
   line-height: 1;
   background: transparent;
@@ -556,7 +556,7 @@
   display: flex;
   flex-direction: column;
   min-width: 96px;
-  padding: 4px;
+  padding: var(--space-2);
   border: 0.5px solid var(--dsw-alias-border-l2);
 }
 
@@ -565,9 +565,9 @@
 }
 
 .menuItem {
-  padding: 4px 7px;
+  padding: var(--space-2) 7px;
   color: var(--dsw-alias-label-primary);
-  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  font-size: calc(var(--dsh-content-font-size-secondary, var(--fs-md)) - 1px);
   text-align: left;
   background: transparent;
   border: none;
@@ -596,9 +596,9 @@
 
 .empty {
   margin: 0;
-  padding: 12px;
+  padding: var(--space-6);
   color: var(--dsw-alias-label-tertiary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
 }
 
 /* The drop hint is a scrim and, over it, one box pair per landing region.
@@ -622,7 +622,6 @@
      is a lighter bluish step than the column's `bg-base`, which tinted the
      whole scrim away from the content beneath it. */
   background: color-mix(in srgb, var(--dsw-alias-bg-base) 72%, transparent);
-  backdrop-filter: blur(6px);
   animation: dockScrimIn 140ms ease-out;
 }
 
@@ -631,7 +630,7 @@
   z-index: 10;
   display: flex;
   box-sizing: border-box;
-  padding: 8px;
+  padding: var(--space-4);
   pointer-events: none;
 }
 
@@ -655,24 +654,24 @@
 
 [data-dockkit-drop-zones='horizontal'] .dockHint[data-dockkit-dock-zone='left'] {
   width: 50%;
-  padding-right: 4px;
+  padding-right: var(--space-2);
 }
 
 [data-dockkit-drop-zones='horizontal'] .dockHint[data-dockkit-dock-zone='right'] {
   width: 50%;
-  padding-left: 4px;
+  padding-left: var(--space-2);
 }
 
 .dockHintCard {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-4);
   align-items: center;
   justify-content: center;
   min-width: 0;
   min-height: 0;
-  padding: 12px;
+  padding: var(--space-6);
   overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
   border: 1.5px dashed var(--dsw-alias-border-l2);
@@ -700,7 +699,7 @@
 .dockHintLabel {
   max-width: 100%;
   overflow: hidden;
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;

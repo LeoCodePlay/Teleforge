@@ -5,20 +5,20 @@
 .bubble {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   position: fixed;
-  z-index: 500;
+  z-index: var(--z-tooltip);
   /* Fixed-position shrink-to-fit measures only the space from `left` to the
      viewport edge, so anchors near the right edge would wrap early;
      max-content sizes by the label alone, capped like the host's tooltip. */
   width: max-content;
   max-width: min(320px, 80vw);
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: var(--pop-bg-strong);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   box-shadow: var(--glass-shadow);
   white-space: normal;
@@ -29,7 +29,7 @@
   animation: tooltip-in 140ms var(--ds-ease-in-out);
 }
 
-.bubble[data-portal] { z-index: 1100; }
+.bubble[data-portal] { z-index: var(--z-tooltip-portal); }
 .bubble[data-pinned] { pointer-events: auto; }
 .label { min-width: 0; }
 

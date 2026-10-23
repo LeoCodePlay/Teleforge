@@ -2,13 +2,13 @@
 .fviewer { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* 头部固定高度:保存按钮/已保存提示随编辑状态出现消失时,不再造成高度变化与页面抖动 */
 .fviewer-head {
-  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  height: 42px; padding: 0 14px;
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--space-6);
+  height: 42px; padding: 0 var(--space-7);
   border-bottom: 1px solid var(--line-soft);
-  background: linear-gradient(160deg, var(--fill-1), var(--fill-1-lo));
+  background: var(--fill-1);
 }
 .fviewer-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.fviewer-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+.fviewer-actions { flex: none; display: flex; align-items: center; gap: var(--space-4); }
 /* 动作区元素统一高度并垂直居中,保证任意增删/文字变化头部高度恒定 */
 .fviewer-actions a.btn-link,
 .fviewer-actions button.sm {
@@ -17,12 +17,12 @@
 }
 .fviewer-actions .okline { margin: 0; height: 26px; display: inline-flex; align-items: center; }
 .fviewer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; }
-.fviewer-msg { padding: 16px; }
-.fviewer-foot { flex: none; padding: 6px 14px; border-top: 1px solid var(--line-soft); }
+.fviewer-msg { padding: var(--space-8); }
+.fviewer-foot { flex: none; padding: var(--space-3) var(--space-7); border-top: 1px solid var(--line-soft); }
 
 /* 媒体预览:图片/视频/音频/PDF 内嵌展示 */
 .fviewer-body.media {
-  align-items: center; justify-content: center; padding: 16px; overflow: auto;
+  align-items: center; justify-content: center; padding: var(--space-8); overflow: auto;
   background: var(--code-bg-solid);
 }
 .fviewer-body.media.pdf-mode { padding: 0; align-items: stretch; }
@@ -36,8 +36,8 @@
 
 /* 下载链接按钮样式 */
 a.btn-link {
-  display: inline-block; padding: 4px 11px; font-size: 12px; color: var(--text);
-  background: linear-gradient(135deg, var(--fill-2), var(--fill-2-lo));
+  display: inline-block; padding: var(--space-2) 11px; font-size: var(--fs-sm); color: var(--text);
+  background: var(--fill-2);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm);
   box-shadow: inset 0 1px 0 var(--glass-hi);
   text-decoration: none; cursor: pointer; transition: all .18s;
@@ -53,24 +53,24 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   color: var(--code-ink);
   font-family: var(--mono);
   /* 界面字号联动(dsh 0.2.1-rc 的 0c6968b649:正文 / 代码 / 终端一起缩放) */
-  font-size: calc(12.5px * var(--chat-scale, 1));
+  font-size: calc(var(--fs-sm) * var(--chat-scale, 1));
 }
 .fviewer .cm-editor.cm-focused { outline: none; }
-.fviewer .cm-scroller { line-height: 1.55; padding: 8px 0 20px; }
+.fviewer .cm-scroller { line-height: 1.55; padding: var(--space-4) 0 var(--space-10); }
 .fviewer .cm-content { caret-color: var(--accent); }
-.fviewer .cm-line { padding: 0 12px; }
+.fviewer .cm-line { padding: 0 var(--space-6); }
 
 /* 行号 gutter:最小宽度按总行数位数固定(--fviewer-digits),个位/两位切换不再抖动 */
 .fviewer .cm-gutters {
   color: var(--text-faint);
-  border-right: 1px solid var(--line-soft); padding-right: 4px;
+  border-right: 1px solid var(--line-soft); padding-right: var(--space-2);
   /* 行号列近实底(z-index 200 在代码之上):半透明表色叠加成近实底,遮挡横向滚动时穿行的代码 */
   background-color: var(--code-bg-solid);
   background-image: linear-gradient(var(--code-bg-solid), var(--code-bg-solid));
 }
 .fviewer .cm-lineNumbers .cm-gutterElement {
   min-width: calc(var(--fviewer-digits, 2) * 1ch + 12px);
-  padding: 0 4px 0 8px;
+  padding: 0 var(--space-2) 0 var(--space-4);
 }
 .fviewer .cm-activeLineGutter { background: transparent; color: var(--accent-2); }
 .fviewer .cm-activeLine { background: var(--hover-bg); }
@@ -82,14 +82,14 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 
 /* 编辑器右键菜单:复用全局 .ctxmenu 玻璃样式;快捷键提示右对齐 */
 .ctxmenu .ctx-key {
-  margin-left: auto; font-size: 11px; color: var(--text-faint);
-  opacity: .8; padding-left: 14px; letter-spacing: .3px; white-space: nowrap;
+  margin-left: auto; font-size: var(--fs-xs); color: var(--text-faint);
+  opacity: .8; padding-left: var(--space-7); letter-spacing: .3px; white-space: nowrap;
 }
 
 /* 折叠占位 */
 .fviewer .cm-foldPlaceholder {
   background: var(--glass-bg); border: 1px solid var(--line-soft);
-  border-radius: var(--r-pill); color: var(--muted); padding: 0 4px;
+  border-radius: var(--r-pill); color: var(--muted); padding: 0 var(--space-2);
 }
 
 /* 折叠箭头:不用默认字符,用 CSS 伪元素画 chevron,并垂直居中 */
@@ -137,15 +137,14 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cm-panels-top,
 .fviewer .cm-panels-bottom {
   background: var(--code-bg-solid);
-  background-image: linear-gradient(180deg, var(--code-bg-solid), var(--code-bg));
 }
 .fviewer .cm-panels-top { border-bottom: 1px solid var(--line); }
 .fviewer .cm-panels-bottom { border-top: 1px solid var(--line); }
 .fviewer .cm-panel.cm-search {
   display: flex; flex-wrap: wrap; align-items: center;
-  gap: 6px 8px;
+  gap: var(--space-3) var(--space-4);
   /* 上下留白 + 右侧避让关闭钮,不再沿用原生的 2px 紧凑内边距 */
-  padding: 9px 10px;
+  padding: 9px var(--space-5);
   background: transparent;
   font-family: var(--font-ui);
 }
@@ -153,11 +152,11 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 /* 搜索框:玻璃内嵌暗槽,聚焦时描边点亮 */
 .fviewer .cm-panel.cm-search input.cm-textfield[name=search] {
   flex: 1 1 200px; min-width: 140px; width: auto;
-  height: 28px; margin: 0; padding: 0 10px 0 30px;
+  height: 28px; margin: 0; padding: 0 var(--space-5) 0 30px;
   background: var(--glass-bg-inset);
   background-image: linear-gradient(transparent, transparent);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm);
-  color: var(--text); font-size: 12.5px; font-family: var(--mono);
+  color: var(--text); font-size: var(--fs-sm); font-family: var(--mono);
   outline: none; transition: border-color .16s, box-shadow .16s, background .16s;
 }
 .fviewer .cm-panel.cm-search input.cm-textfield[name=search]::placeholder { color: var(--placeholder); }
@@ -181,8 +180,8 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 /* 第二行的「匹配」前缀:视觉分组标签,由 CSS 生成不占 DOM */
 .fviewer .cm-panel.cm-search::after {
   content: '匹配'; order: 9; flex: none;
-  margin-left: 2px; margin-right: -3px;
-  font-size: 11px; letter-spacing: .5px; color: var(--text-faint);
+  margin-left: var(--space-1); margin-right: -3px;
+  font-size: var(--fs-xs); letter-spacing: .5px; color: var(--text-faint);
 }
 
 /* 面板内按钮:次按钮(上一个/下一个/替换)与主按钮(全部/全部替换)区分 */
@@ -192,7 +191,7 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   display: inline-flex; align-items: center;
   background: var(--fill-2);
   border: 1px solid var(--glass-border);
-  color: var(--text-2); font-size: 12px; font-family: inherit; line-height: 1;
+  color: var(--text-2); font-size: var(--fs-sm); font-family: inherit; line-height: 1;
   cursor: pointer; transition: background .16s, border-color .16s, color .16s;
 }
 .fviewer .cm-panel.cm-search button.cm-button:hover {
@@ -224,7 +223,7 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
   display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: 1px solid transparent;
   box-shadow: none; color: var(--text-faint);
-  font-size: 15px; font-family: inherit; line-height: 1; cursor: pointer;
+  font-size: var(--fs-xl); font-family: inherit; line-height: 1; cursor: pointer;
   transition: color .16s, background .16s, border-color .16s;
 }
 .fviewer .cm-panel.cm-search button[name=close]:hover {
@@ -236,11 +235,11 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
    选中状态也始终可见;支持 :has() 时再叠加整颗 chip 的强调色底 —— 渐进增强而非唯一依靠。 */
 .fviewer .cm-panel.cm-search label {
   order: 10; flex: none;
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 24px; margin: 0; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: var(--space-3);
+  height: 24px; margin: 0; padding: 0 var(--space-5);
   background: var(--glass-bg); border: 1px solid var(--line);
   border-radius: var(--r-pill);
-  color: var(--muted); font-size: 11.5px; line-height: 1;
+  color: var(--muted); font-size: var(--fs-xs); line-height: 1;
   white-space: pre; cursor: pointer;
   transition: color .16s, background .16s, border-color .16s;
 }
@@ -269,11 +268,11 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cm-panel.cm-search br { display: none; }
 .fviewer .cm-panel.cm-search input.cm-textfield[name=replace] {
   order: 20; flex: 1 1 160px; min-width: 120px; width: auto;
-  height: 28px; margin: 0; padding: 0 10px;
+  height: 28px; margin: 0; padding: 0 var(--space-5);
   background: var(--glass-bg-inset);
   background-image: linear-gradient(transparent, transparent);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm);
-  color: var(--text); font-size: 12.5px; font-family: var(--mono);
+  color: var(--text); font-size: var(--fs-sm); font-family: var(--mono);
   outline: none; transition: border-color .16s, box-shadow .16s, background .16s;
 }
 .fviewer .cm-panel.cm-search input.cm-textfield[name=replace]::placeholder { color: var(--placeholder); }
@@ -299,14 +298,14 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 .fviewer .cm-selectionMatch { background: var(--accent-soft); border-radius: 2px; }
 .fviewer .cm-searchMatch .cm-selectionMatch { background: transparent; }
 .fviewer .cm-tooltip {
-  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo)); color: var(--text);
+  background: var(--pop-bg); color: var(--text);
   border: 1px solid var(--glass-border-hover); border-radius: var(--r-sm);
   box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
 }
-.fviewer .cm-tooltip-autocomplete ul li { padding: 2px 8px; }
+.fviewer .cm-tooltip-autocomplete ul li { padding: var(--space-1) var(--space-4); }
 .fviewer .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent-soft); color: var(--accent-2); }
 .fviewer .cm-tooltip .cm-completionLabel { font-family: var(--mono); }
-.fviewer .cm-completionDetail { color: var(--muted); margin-left: 8px; }
+.fviewer .cm-completionDetail { color: var(--muted); margin-left: var(--space-4); }
 
 /* 语法 token 配色(全部来自主题令牌,深浅主题自动翻转) */
 .fviewer .cmx-key { color: var(--accent-2); font-weight: 600; }
@@ -330,13 +329,13 @@ a.btn-link:hover { border-color: var(--glass-border-hover); color: var(--accent-
 
 /* ---- 移动端(<768):头部加高容纳返回钮,编辑器触控友好 ---- */
 @media (max-width: 767px) {
-  .fviewer-head { height: 44px; padding: 0 8px; }
-  .fviewer-foot { padding: 6px 10px; }
+  .fviewer-head { height: 44px; padding: 0 var(--space-4); }
+  .fviewer-foot { padding: var(--space-3) var(--space-5); }
   .fviewer-back { min-height: 36px; }
   /* CodeMirror 触控:加大点击目标与字号(编辑器内部由 CM 自己处理触摸) */
-  .fviewer .cm-line { padding: 0 8px; }
+  .fviewer .cm-line { padding: 0 var(--space-4); }
   /* 搜索面板:输入框独占整行,按钮/开关自动换行,触控目标加高 */
-  .fviewer .cm-panel.cm-search { padding: 8px; gap: 6px; }
+  .fviewer .cm-panel.cm-search { padding: var(--space-4); gap: var(--space-3); }
   .fviewer .cm-panel.cm-search input.cm-textfield[name=search],
   .fviewer .cm-panel.cm-search input.cm-textfield[name=replace] { flex: 1 1 100%; }
   .fviewer .cm-panel.cm-search button.cm-button { height: 30px; padding: 0 13px; }

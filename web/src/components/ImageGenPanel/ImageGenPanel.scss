@@ -6,34 +6,34 @@
 .image-gen-panel .ig-off { color: var(--red); }
 
 /* 一句话说明:紧跟标题,把"这页在配什么"讲清楚 */
-.ig-lead { margin: -4px 0 12px; line-height: 1.6; }
+.ig-lead { margin: -4px 0 var(--space-6); line-height: 1.6; }
 
 /* ---- 添加 / 编辑模型商弹窗:与 AI 配置的提供商弹窗同宽,长表单在弹窗内滚动 ---- */
 .modal.image-provider-modal { width: 620px; }
 .modal.image-provider-modal .modal-body { max-height: 64vh; overflow-y: auto; }
 
 /* 质量 + 尺寸并排一行:两者都是短枚举,竖排会白占两倍高度 */
-.ig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.ig-msg { font-size: 12px; line-height: 1.5; padding: 6px 9px; border-radius: var(--r-sm); }
+.ig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); }
+.ig-msg { font-size: var(--fs-sm); line-height: 1.5; padding: var(--space-3) 9px; border-radius: var(--r-sm); }
 .ig-msg.ok { color: var(--green); background: var(--ok-bg); }
 .ig-msg.err { color: var(--err-text); background: var(--err-bg); }
 
 /* ---- 生图链路说明:左右两卡;首卡是推荐路径,用 accent 竖条标出主次 ---- */
-.ig-paths-title { margin: 18px 0 8px; }
-.ig-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ig-paths-title { margin: 18px 0 var(--space-4); }
+.ig-paths { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); }
 .ig-path {
-  padding: 11px 12px; border: 1px solid var(--glass-border); border-radius: var(--r-sm);
+  padding: 11px var(--space-6); border: 1px solid var(--glass-border); border-radius: var(--r-sm);
   background: var(--glass-bg-inset); box-shadow: inset 0 1px 0 var(--ins-hl);
 }
 .ig-path:first-child { border-left: 2px solid var(--accent-border); }
 .ig-path-head { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
 .ig-path-tag {
-  flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: var(--r-pill);
+  flex: none; font-size: var(--fs-2xs); padding: 1px 7px; border-radius: var(--r-pill);
   color: var(--accent-2); border: 1px solid var(--accent-border); background: var(--accent-fill-soft);
 }
 .ig-path-tag.alt { color: var(--muted); border-color: var(--glass-border); background: var(--fill-1); }
-.ig-path-name { font-size: 12.5px; font-weight: 600; }
-.ig-path-desc { font-size: 11.5px; line-height: 1.65; color: var(--muted); }
+.ig-path-name { font-size: var(--fs-sm); font-weight: 600; }
+.ig-path-desc { font-size: var(--fs-xs); line-height: 1.65; color: var(--muted); }
 
 /* 窄屏(移动端设置页):两卡与两列字段各自堆叠,避免出现横向滚动 */
 @media (max-width: 767px) {

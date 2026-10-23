@@ -7,10 +7,10 @@
 
 /* ---- 组头:整行可点 ---- */
 .dsh-pg-title {
-  display: flex; max-width: 100%; align-items: center; gap: 6px;
+  display: flex; max-width: 100%; align-items: center; gap: var(--space-3);
   padding: 0; border: 0; background: none;
   color: var(--dsw-alias-label-tertiary);
-  font: inherit; font-size: 14px;
+  font: inherit; font-size: var(--fs-lg);
   text-align: left; cursor: pointer;
   transition: color 100ms ease;
 }
@@ -63,8 +63,7 @@
 .dsh-pg-body.fade-top { mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 100%); }
 .dsh-pg-body.fade-bottom { mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 24px), transparent 100%); }
 .dsh-pg-body.fade-top.fade-bottom {
-  mask-image: linear-gradient(to bottom,
-    transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
 }
 
 .dsh-pg-content { display: flex; flex-direction: column; }
@@ -72,7 +71,7 @@
 /* 相邻非空子项之间给 6px(dsh 的 --dsh-chat-flow-gap):工具行本身是 24px 行高,
    不补间隙会挤成一片。用 dsh 原样的选择器:隐藏节点与空节点都不参与 */
 .dsh-pg-content > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty) {
-  margin-top: var(--dsh-chat-flow-gap, 6px);
+  margin-top: var(--dsh-chat-flow-gap, var(--space-3));
 }
 
 @media (prefers-reduced-motion: reduce) {

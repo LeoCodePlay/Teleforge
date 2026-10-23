@@ -6,8 +6,8 @@
   align-items: center;
   border-radius: 999px;
   corner-shape: round;
-  padding: 1px 8px;
-  font-size: 11px;
+  padding: 1px var(--space-4);
+  font-size: var(--fs-xs);
   line-height: 17px;
   font-weight: 500;
   white-space: nowrap;

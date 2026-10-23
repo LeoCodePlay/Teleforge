@@ -5,7 +5,7 @@
 .body {
   display: grid;
   grid-template-columns: minmax(max-content, 1fr);
-  padding: 6px 0 20px;
+  padding: var(--space-3) 0 var(--space-10);
   font: var(--dsw-font-markdown-code-block);
   overflow-x: auto;
 }

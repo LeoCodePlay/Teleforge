@@ -1,8 +1,8 @@
 /* ---- ModelMenu 独有样式:模型选择器 ----- */
 .msm { position: relative; display: inline-flex; flex: none; }
 .msm-trigger {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 240px;
-  padding: 4px 11px; font-size: 12px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: var(--space-3); max-width: 240px;
+  padding: var(--space-2) 11px; font-size: var(--fs-sm); cursor: pointer;
   background: var(--glass-bg-inset); color: var(--text);
   border: 1px solid var(--line);
   transition: border-color .16s, background .16s, box-shadow .16s;
@@ -16,7 +16,7 @@
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--mono);
 }
-.msm-effort { flex: none; font-size: 10.5px; color: var(--muted); }
+.msm-effort { flex: none; font-size: var(--fs-2xs); color: var(--muted); }
 /* 提供商色点(对齐 dsh 0.2.1-rc 的 provider-aware 模型标签):色相由提供商 id 稳定散列,
    同一提供商在触发按钮 / 分组标题 / 模型行里同色,多个网关下同名模型也能一眼区分。
    只做"标识"不做"信息":亮度受控,避免抢走模型名的注意力。 */
@@ -37,42 +37,42 @@
   border: 1px solid var(--line); border-radius: var(--r-md);
   padding: 5px; box-shadow: var(--glass-shadow);
   animation: pop-in .16s ease-out;
-  display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column; gap: var(--space-1);
 }
 /* 根菜单两行:模型 / 推理等级,右侧显示当前值 + 下钻箭头 */
 .msm-cell {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  display: flex; align-items: center; gap: var(--space-4); width: 100%; text-align: left;
   padding: 9px 11px; border-radius: var(--r-sm);
-  background: transparent; border: none; color: var(--text); font-size: 12.5px;
+  background: transparent; border: none; color: var(--text); font-size: var(--fs-sm);
   cursor: pointer; box-shadow: none; transition: background .15s;
 }
 .msm-cell:hover { background: var(--glass-bg-hover); color: var(--accent-2); }
 .msm-cell-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msm-cell-value {
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--muted); font-size: 11.5px;
+  color: var(--muted); font-size: var(--fs-xs);
 }
-.msm-cell-chev { flex: none; color: var(--muted); font-size: 11px; }
+.msm-cell-chev { flex: none; color: var(--muted); font-size: var(--fs-xs); }
 /* 下钻列表:可滚动分组 */
 .msm-groups {
-  display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column; gap: var(--space-1);
   max-height: min(340px, 58vh); overflow-y: auto;
 }
-.msm-group + .msm-group { margin-top: 4px; }
+.msm-group + .msm-group { margin-top: var(--space-2); }
 /* 提供商名:仅作分组标题(不可选),吸顶以区分相邻提供商。
    吸顶面用实色内嵌槽(--code-bg-soft)+ 底部发丝线,不依赖 blur 也能保证文字可读 */
 .msm-group-title {
   position: sticky; top: 0; z-index: 1;
-  display: flex; align-items: center; gap: 6px;
-  font-size: 10.5px; color: var(--muted); letter-spacing: .5px;
+  display: flex; align-items: center; gap: var(--space-3);
+  font-size: var(--fs-2xs); color: var(--muted); letter-spacing: .5px;
   padding: 5px 9px 3px; user-select: none;
   background: var(--code-bg-soft);
   box-shadow: inset 0 -1px 0 var(--line-faint);
 }
 .msm-option {
   display: flex; align-items: center; gap: 7px;
-  width: 100%; text-align: left; padding: 7px 10px; border-radius: var(--r-sm);
-  background: transparent; border: none; color: var(--text); font-size: 12.5px;
+  width: 100%; text-align: left; padding: 7px var(--space-5); border-radius: var(--r-sm);
+  background: transparent; border: none; color: var(--text); font-size: var(--fs-sm);
   cursor: pointer; box-shadow: none; transition: background .15s;
 }
 .msm-option:hover { background: var(--glass-bg-hover); color: var(--accent-2); }
@@ -83,5 +83,5 @@
 }
 .msm-option .msm-custom { color: var(--muted); font-family: inherit; }
 .msm-option.on .msm-custom { color: var(--accent-2); }
-.msm-check { flex: none; color: var(--green); font-size: 12px; }
-.msm-empty { padding: 6px 10px; font-size: 11px; color: var(--muted); }
+.msm-check { flex: none; color: var(--green); font-size: var(--fs-sm); }
+.msm-empty { padding: var(--space-3) var(--space-5); font-size: var(--fs-xs); color: var(--muted); }

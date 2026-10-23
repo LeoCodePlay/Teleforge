@@ -6,7 +6,7 @@
   justify-content: flex-end;
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 

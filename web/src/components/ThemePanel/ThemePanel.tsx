@@ -112,12 +112,6 @@ export default function ThemePanel() {
           ))}
         </div>
       )}
-      <div className="hint">
-        自定义主题只要选 <b>6 个颜色</b>(背景 / 表面 / 文字 / 强调 / 成功 / 危险),
-        其余全部颜色(描边、悬浮态、按钮、阴影、状态底色…)由这 6 色自动派生。
-        主题保存在本机浏览器,可随时新建 / 编辑 / 删除。
-      </div>
-
       {/* 新建 / 编辑主题弹窗 */}
       {editor && (
         <ThemeEditor

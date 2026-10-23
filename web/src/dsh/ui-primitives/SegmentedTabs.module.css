@@ -1,7 +1,7 @@
 .tabs {
   position: relative;
   display: grid;
-  padding: 4px;
+  padding: var(--space-2);
   border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-module-platform);
 }
@@ -21,9 +21,9 @@
   position: relative;
   justify-content: center;
   height: 34px;
-  padding: 0 12px;
+  padding: 0 var(--space-6);
   border-radius: var(--dsw-radius-md);
-  font-size: 14px;
+  font-size: var(--fs-lg);
   line-height: 20px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);

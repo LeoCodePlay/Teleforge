@@ -4,15 +4,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: var(--space-2);
   border: none;
   border-radius: var(--dsw-radius-md);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-lg);
   line-height: 22px;
   color: var(--dsw-alias-label-primary);
   background: transparent;
-  padding: 0 14px;
+  padding: 0 var(--space-7);
 }
 
 .button:disabled {
@@ -27,9 +27,9 @@
 /* Compact controls retain their dimensions across filled and outlined variants. */
 .sm {
   height: 28px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 18px;
-  padding: 0 10px;
+  padding: 0 var(--space-5);
   border-radius: var(--dsw-radius-sm);
 }
 

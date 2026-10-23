@@ -15,7 +15,7 @@
      inline chip shares the consumer's baseline by construction. */
   display: inline;
   max-width: 100%;
-  margin: 0 2px;
+  margin: 0 var(--space-1);
   color: var(--dsw-alias-state-business-primary);
   font-weight: 500;
   white-space: inherit;
@@ -39,7 +39,7 @@
 .refIcon {
   width: 1em;
   height: 1em;
-  margin-right: 4px;
+  margin-right: var(--space-2);
   /* Optical centering against the text: drops the glyph below the baseline by
      a font-relative amount, so it holds across the font axis. */
   vertical-align: -0.125em;

@@ -6,47 +6,48 @@
 /* ---- 顶栏:实色条,靠发丝描边与主区分开 ---- */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  height: 48px; padding: 0 16px;
+  height: 48px; padding: 0 var(--space-8);
   background: var(--bar-tint-a);
   border-bottom: 1px solid var(--line);
-  position: relative; z-index: 20;
+  position: relative; z-index: var(--z-topbar);
 }
 /* 桌面壳自定义标题栏:中部拖拽带撑满空白区(拖动窗口,不影响两侧按钮) */
 .topbar-dragpad { flex: 1 1 auto; align-self: stretch; min-width: 24px; }
+/* 品牌字标渐变:内容标识,属于 DESIGN_SYSTEM.md 4.2 允许的机能性渐变,不是界面表面 */
 .brand {
-  font-weight: 700; letter-spacing: .5px; font-size: 14px;
+  font-weight: 700; letter-spacing: .5px; font-size: var(--fs-lg);
   display: flex; align-items: center; gap: 7px;
   background: linear-gradient(120deg, var(--brand-a) 30%, var(--accent-2) 70%, var(--brand-b));
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .brand-logo { width: 28px; height: 28px; display: block; }
-.topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: var(--space-5); }
 .edge-toggle {
-  padding: 4px 8px; font-size: 11px; color: var(--muted);
+  padding: var(--space-2) var(--space-4); font-size: var(--fs-xs); color: var(--muted);
   border-radius: var(--r-sm); background: transparent; border: 1px solid transparent;
 }
 /* 右上角设置图标:放大显示 */
-.settings-btn { font-size: 17px; line-height: 1; padding: 2px 6px; }
+.settings-btn { font-size: var(--fs-xl); line-height: 1; padding: var(--space-1) var(--space-3); }
 /* 右上角更新角标:发现新版本时高亮提示(点击直达「关于与更新」) */
 .update-chip {
-  font-size: 12px; font-weight: 600; white-space: nowrap;
+  font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
   color: var(--amber); border-color: var(--warn-border);
   background: var(--warn-bg);
 }
 .update-chip:hover:not(:disabled) { color: var(--amber); background: var(--warn-bg); border-color: var(--warn-border); }
 /* 「检测到项目地址」提示 chip:命令输出出现 localhost:端口 / AI 打开预览时顶栏出现,点击即在预览标签打开 */
 .preview-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: var(--space-3);
+  font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
   color: var(--accent); border-color: var(--accent-border);
   background: var(--accent-fill-soft);
 }
 .preview-chip:hover:not(:disabled) { color: var(--text); border-color: var(--accent-border); }
-.preview-chip-x { font-size: 10px; opacity: .6; }
+.preview-chip-x { font-size: var(--fs-2xs); opacity: .6; }
 .preview-chip-x:hover { opacity: 1; }
 /* 手机端:顶栏空间紧张,预览 chip 限宽省略,✕ 收起(点 chip 本身就会打开并消失) */
 @media (max-width: 767px) {
-  .preview-chip { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; display: block; padding: 4px 8px; }
+  .preview-chip { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; display: block; padding: var(--space-2) var(--space-4); }
   .preview-chip-x { display: none; }
 }
 /* 标签条上「自动化任务」的小红点:有"到点却没跑"的任务时亮起(入口就在「终端」右边) */
@@ -62,7 +63,7 @@
 
 /* 右上角 SSH 连接状态入口(可点击打开连接弹窗) */
 .conn-chip {
-  padding: 5px 13px; font-size: 12px; cursor: pointer;
+  padding: 5px 13px; font-size: var(--fs-sm); cursor: pointer;
   background: var(--glass-bg); border: 1px solid var(--line); color: var(--muted);
   white-space: nowrap;
   transition: background .16s ease, border-color .16s ease, color .16s ease;
@@ -123,20 +124,37 @@ body.splitting * { cursor: row-resize !important; }
    滚动条用项目悬浮引擎(scrollbar-ui.ts):绝对定位悬浮,不占布局空间,标签条高度恒定;
    原生滚动条彻底隐藏(不参与布局,高度绝不变化);悬浮拇指走全站统一规格(见 styles.scss) */
 .tabstrip {
-  display: flex; align-items: center; gap: 4px;
-  flex: none; height: 40px; padding: 6px 10px;
+  display: flex; align-items: center; gap: var(--space-2);
+  flex: none; height: 40px; padding: var(--space-3) var(--space-5);
   background: var(--surface);
 }
 /* 固定段:不参与滚动,始终完整可见。标签间距 = dockkit 标签之间的 10px 分隔槽 */
-.tabstrip-pinned { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.tabstrip-pinned { display: flex; align-items: center; gap: var(--space-5); flex: 0 0 auto; }
 /* 滚动段:文件标签横向滚动区域;原生滚动条隐藏(滚动能力保留,布局高度不变) */
 .tabstrip-scroll {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: var(--space-5);
   flex: 1 1 auto; min-width: 0;
   overflow-x: auto; overflow-y: hidden;
   scrollbar-width: none;               /* Firefox:隐藏原生滚动条 */
 }
 .tabstrip-scroll::-webkit-scrollbar { display: none; }  /* Chrome/Safari/Edge:隐藏原生滚动条 */
+/* 滚动段两端虚化:哪一侧还藏着被卷出去的标签,哪一侧就渐隐 24px——
+   规格与右栏 dockkit 标签条(.stripTabs[data-dockkit-strip-scroll])完全一致:
+   同一段 mask-image、同样 24px 渐变,标签看起来是"继续延伸进边里",而不是被硬切一刀。
+   遮罩只影响绘制,不参与布局:标签条高度、滚动位置、悬浮滚动条都不受影响。
+   哪一侧要遮由 App.tsx 写 data-strip-scroll(start / end / start end)决定。 */
+.tabstrip-scroll[data-strip-scroll='end'] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+.tabstrip-scroll[data-strip-scroll='start'] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 24px);
+  mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+.tabstrip-scroll[data-strip-scroll='start end'] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+}
 /* 「＋」手动打开浏览器预览:与浏览器「新建标签」同位置,固定在滚动段右侧,不随标签滚动
    几何与 dockkit 的 ＋(28×28、6px 圆角、无描边)一致,同样要清掉全局 button 的 padding/阴影 */
 .tabstrip-add {
@@ -144,18 +162,18 @@ body.splitting * { cursor: row-resize !important; }
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: var(--r-sm);
   background: transparent; color: var(--text-2); cursor: pointer;
-  font-size: 14px; line-height: 1; user-select: none;
+  font-size: var(--fs-lg); line-height: 1; user-select: none;
   transition: background .15s, color .15s;
 }
 .tabstrip-add:hover { color: var(--text); background: var(--hover-bg-hard); }
 /* 右侧栏开合按钮是标签条末端的宿主控件:与 kit 自带控件一样再退开 4px(合计 8px) */
-.tabstrip-add.rsb-toggle { margin-left: 4px; }
+.tabstrip-add.rsb-toggle { margin-left: var(--space-2); }
 .btab {
   position: relative;
   display: flex; align-items: center; gap: 5px;
   flex: 0 0 auto; height: 28px; min-width: 80px; max-width: 170px;
-  padding: 0 10px;
-  font-weight: 400; font-size: 13px; line-height: 1;
+  padding: 0 var(--space-5);
+  font-weight: 400; font-size: var(--fs-md); line-height: 1;
   border: 0; border-radius: var(--r-sm);
   background: transparent; color: var(--text-2); cursor: pointer;
   user-select: none; white-space: nowrap;
@@ -173,7 +191,7 @@ body.splitting * { cursor: row-resize !important; }
 .btab.active::before,
 .btab.active + .btab::before { background: transparent; }
 /* 固定段与滚动段之间也是同一个分隔槽(只有滚动段真有标签时才占位并画线) */
-.tabstrip-pinned:has(+ .tabstrip-scroll > .btab) { margin-right: 6px; }
+.tabstrip-pinned:has(+ .tabstrip-scroll > .btab) { margin-right: var(--space-3); }
 .tabstrip-pinned > .btab:last-child::after {
   content: ''; position: absolute; top: 7px; right: -5.25px;
   width: .5px; height: 14px;
@@ -186,7 +204,7 @@ body.splitting * { cursor: row-resize !important; }
 .btab.active { color: var(--text); background: var(--accent-fill); }
 /* 图标槽:内联 SVG 与字形(文件标签的媒体类型字形)共用一格,flex 居中对齐
    position:relative —— .btab-dot 的定位基准(此前没有定位祖先,红点会被甩到布局右上角) */
-.btab-icon { position: relative; flex: none; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+.btab-icon { position: relative; flex: none; font-size: var(--fs-sm); display: flex; align-items: center; justify-content: center; }
 .btab-icon svg { display: block; }
 .btab-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 关闭钮:与 dockkit 一样绝对定位在标签右上角(20×20、内缩 4px),只在悬停/激活/有改动时出现;
@@ -197,7 +215,7 @@ body.splitting * { cursor: row-resize !important; }
   width: 20px; height: 20px; padding: 0; margin: 0;
   border: none; border-radius: var(--r-sm);
   background: transparent; box-shadow: none;
-  font-size: 11px; line-height: 1; color: var(--text-faint); cursor: pointer;
+  font-size: var(--fs-xs); line-height: 1; color: var(--text-faint); cursor: pointer;
   opacity: 0; pointer-events: none;
   transition: opacity .12s, background .12s, color .12s;
 }
@@ -267,15 +285,15 @@ body.splitting * { cursor: row-resize !important; }
    注意:不隐藏 .edge-toggle——右上角 ⚙ 设置按钮同挂该类,侧栏开关已由 React 按档移除 */
 @media (max-width: 767px) {
   .sidebar-left { display: none; }
-  .topbar { height: 48px; padding: 0 8px; }
+  .topbar { height: 48px; padding: 0 var(--space-4); }
   /* ≡ 会话抽屉按钮(唯一入口) + 品牌展示(纯静态,不可点) */
   .phone-menu-btn {
-    font-size: 24px; line-height: 1; min-width: 44px; min-height: 44px;
-    padding: 0 8px; color: var(--text);
+    font-size: var(--fs-2xl); line-height: 1; min-width: 44px; min-height: 44px;
+    padding: 0 var(--space-4); color: var(--text);
   }
   .phone-brand {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
-    padding: 8px 6px; font-size: 15px; font-weight: 700; color: var(--text);
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-4) var(--space-3); font-size: var(--fs-xl); font-weight: 700; color: var(--text);
     letter-spacing: .3px; user-select: none;
   }
   .phone-brand .brand-logo { width: 22px; height: 22px; flex: none; }
@@ -316,9 +334,9 @@ body.splitting * { cursor: row-resize !important; }
 .backend-down {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 12px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--amber);
   background: var(--warn-bg);
@@ -339,7 +357,7 @@ body.splitting * { cursor: row-resize !important; }
 
 /* ---- AI 电脑操控进行中指示(顶栏):AI 能看屏/动手时这里常驻可见 ---- */
 .cu-chip {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: var(--space-3);
   color: var(--text); background: var(--warn-bg);
   border: 1px solid var(--warn-border);
 }

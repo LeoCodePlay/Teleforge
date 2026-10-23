@@ -12,7 +12,7 @@
   min-width: 300px;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, var(--bar-tint-a), var(--bar-tint-b));
+  background: var(--bar-tint-a);
   border-left: 1px solid var(--line);
   box-shadow: inset 1px 0 0 var(--glass-hi);
 }
@@ -28,8 +28,8 @@
 
 /* 不支持的类型等宿主的兜底文案 */
 .rsb-empty {
-  padding: 16px;
-  font-size: 13px;
+  padding: var(--space-8);
+  font-size: var(--fs-md);
   color: var(--muted);
 }
 
@@ -53,7 +53,7 @@
   width: 28px; height: 28px; padding: 0;
   border: 0; border-radius: var(--r-sm);
   background: transparent; color: var(--muted);
-  font-size: 14px; line-height: 1; cursor: pointer;
+  font-size: var(--fs-lg); line-height: 1; cursor: pointer;
 }
 .rsb-collapse:hover,
 .rsb-term:hover { color: var(--text); background: var(--hover-bg-hard); }

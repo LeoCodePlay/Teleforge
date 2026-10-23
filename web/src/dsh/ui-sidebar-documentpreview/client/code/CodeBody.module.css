@@ -38,12 +38,12 @@
 }
 
 .renderer .code > [data-code-block-content]::-webkit-scrollbar-track {
-  margin: 2px;
+  margin: var(--space-1);
 }
 
 .renderer .code pre {
   box-sizing: border-box;
-  padding: 16px;
+  padding: var(--space-8);
   min-width: 100%;
   overflow: visible;
   white-space: pre;

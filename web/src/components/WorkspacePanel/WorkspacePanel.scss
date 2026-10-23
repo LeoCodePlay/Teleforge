@@ -1,9 +1,9 @@
 /* ---- WorkspacePanel 独有样式:远程/本地文件管理 Tab 切换 ---- */
-.fm-tab { border: 1px solid transparent; background: transparent; padding: 2px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.fm-tab { border: 1px solid transparent; background: transparent; padding: var(--space-1) var(--space-5); border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-md); color: var(--muted); }
 .fm-tab.on { color: var(--text-2); background: var(--glass-bg-hover); border-color: var(--glass-border); }
 
 /* 面板根节点:填满下分栏,Tab 标题固定,文件管理器区独立滚动 */
-.ws-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: none; padding-bottom: 10px; }
+.ws-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-bottom: none; padding-bottom: var(--space-5); }
 .ws-panel .panel-title { flex: none; }
 .ws-panel .fm-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ws-panel .fm-pane.hide { display: none; }
@@ -13,4 +13,4 @@
 .ws-panel .fm > :not(.fm-listwrap) { flex: none; }
 
 /* 移动端(<768):远程/本地 Tab 切换加大触控目标 */
-@media (max-width: 767px) { .fm-tab { min-height: 44px; padding: 8px 12px; } }
+@media (max-width: 767px) { .fm-tab { min-height: 44px; padding: var(--space-4) var(--space-6); } }

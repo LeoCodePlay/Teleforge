@@ -1,11 +1,11 @@
 /* ---- TerminalRow 独有样式:终端卡 ---- */
-.dsh-terminal { margin: 4px 0 4px 4px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg); overflow: hidden; }
-.dsh-term-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.dsh-terminal { margin: var(--space-2) 0 var(--space-2) var(--space-2); border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg); overflow: hidden; }
+.dsh-term-header { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--line-soft); font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted); }
 /* 命令区:目录名固定,命令**完整显示**(单行横向滚动、不截断 —— dsh 的 e8b9e119da)。
    以前这里是 nowrap + ellipsis,长命令只留前半截,连自己跑了什么都核对不了。 */
-.dsh-term-prompt { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.dsh-term-prompt { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: var(--space-3); }
 .dsh-term-cwd { flex: none; }
 .dsh-term-command { flex: 1 1 auto; min-width: 0; color: var(--text-2); font-weight: 600; }
-.dsh-term-pill { flex: none; padding: 0 8px; border-radius: 999px; font-size: 11px; line-height: 18px; color: var(--green); background: var(--ok-bg); border: 1px solid var(--ok-border); }
+.dsh-term-pill { flex: none; padding: 0 var(--space-4); border-radius: 999px; font-size: var(--fs-xs); line-height: 18px; color: var(--green); background: var(--ok-bg); border: 1px solid var(--ok-border); }
 .dsh-term-pill[data-error] { color: var(--red); background: var(--err-bg); border-color: var(--err-border); }
-.dsh-term-output { padding: 10px 12px; max-height: 224px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 18px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); }
+.dsh-term-output { padding: var(--space-5) var(--space-6); max-height: 224px; overflow: auto; font-family: var(--mono); font-size: var(--fs-sm); line-height: 18px; white-space: pre-wrap; word-break: break-word; color: var(--text-2); }

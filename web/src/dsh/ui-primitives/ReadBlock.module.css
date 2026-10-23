@@ -7,7 +7,7 @@
 .gutter {
   flex: none;
   width: var(--dsl-read-gutter);
-  margin-right: 12px;
+  margin-right: var(--space-6);
   text-align: right;
   color: var(--dsw-alias-label-tertiary);
   user-select: none;
@@ -29,7 +29,7 @@
 .expand {
   display: block;
   width: 100%;
-  padding: 0 0 0 calc(var(--dsl-read-gutter) + 12px);
+  padding: 0 0 0 calc(var(--dsl-read-gutter) + var(--space-6));
   border: none;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);

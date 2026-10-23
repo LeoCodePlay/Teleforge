@@ -8,7 +8,7 @@
 .submenu {
   /* min-widths below are the design's outer card widths — include the pad. */
   box-sizing: border-box;
-  padding: 4px;
+  padding: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -95,15 +95,15 @@
 .item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   width: 100%;
   min-height: 34px;
-  padding: 6px 8px;
+  padding: var(--space-3) var(--space-4);
   border: none;
   border-radius: var(--dsw-radius-md);
   background: transparent;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
   text-align: left;
@@ -133,15 +133,15 @@
 .list.compactList,
 .submenu.compactList {
   min-width: 156px;
-  padding: 4px;
+  padding: var(--space-2);
 }
 
 .compactList .item {
   min-height: 24px;
   gap: 5px;
-  padding: 2px 6px;
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--dsw-radius-sm);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 17px;
 }
 
@@ -151,12 +151,12 @@
 }
 
 .compactList .separator {
-  margin: 2px;
+  margin: var(--space-1);
 }
 
 .compactList .label {
-  padding: 3px 6px;
-  font-size: 10px;
+  padding: 3px var(--space-3);
+  font-size: var(--fs-2xs);
   line-height: 15px;
 }
 
@@ -202,7 +202,7 @@
 
 .shortcut .shortcutKeys {
   color: var(--dsw-alias-label-caption);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 16px;
 }
 
@@ -242,8 +242,8 @@
 
 /* Heading row: non-interactive small grey text, padding aligned with items. */
 .label {
-  padding: 6px 8px;
-  font-size: 11px;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--fs-xs);
   line-height: 15px;
   color: var(--dsw-alias-label-tertiary);
 }
@@ -252,7 +252,7 @@
  * l1, for the same reason as .footer: l1 is near-invisible on this surface. */
 .separator {
   height: 0.5px;
-  margin: 3px 2px;
+  margin: 3px var(--space-1);
   background: var(--dsw-alias-border-l2);
 }
 

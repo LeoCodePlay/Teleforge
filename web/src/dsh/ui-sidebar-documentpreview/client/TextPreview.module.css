@@ -20,28 +20,28 @@
 .header {
   display: flex;
   flex: 0 0 auto;
-  gap: 4px;
+  gap: var(--space-2);
   align-items: center;
   box-sizing: border-box;
   height: 38px;
-  padding: 0 6px 0 16px;
+  padding: 0 var(--space-3) 0 var(--space-8);
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
 
 .path {
-  margin-right: 12px;
+  margin-right: var(--space-6);
 }
 
 /* Announced, not applied: the reader keeps the text they are looking at. */
 .changed {
   display: flex;
   flex: 0 0 auto;
-  gap: 10px;
+  gap: var(--space-5);
   align-items: center;
   margin: 0;
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   background: var(--dsw-alias-bg-layer-2);
   border-bottom: 0.5px solid var(--dsw-alias-border-l1);
 }
@@ -59,7 +59,7 @@
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
   color: var(--dsw-alias-label-primary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   font-family: var(--dsw-font-mono, ui-monospace, monospace);
   line-height: 1.6;
   white-space: pre;
@@ -68,7 +68,7 @@
 /* Keep the scrollbar track 2px clear of the body's ends. WebKit-only: the
    Firefox path has no track to inset. */
 .body::-webkit-scrollbar-track {
-  margin: 2px;
+  margin: var(--space-1);
 }
 
 .body:has([data-code-preview]) {
@@ -92,7 +92,7 @@
   box-sizing: border-box;
   min-width: 100%;
   min-height: 100%;
-  padding: 8px;
+  padding: var(--space-4);
 }
 
 /* One page of lines; pages abut so the file reads as one. */
@@ -104,7 +104,7 @@
 
 /* The files tree row's 10px side inset, so a line's text sits where a row's does. */
 .line {
-  padding: 0 10px;
+  padding: 0 var(--space-5);
 }
 
 .lineTarget {
@@ -118,14 +118,14 @@
 .empty {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-8);
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
   height: 100%;
-  padding: 0 24px;
+  padding: 0 var(--space-12);
   color: var(--dsw-alias-label-secondary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   font-family: var(--dsw-font-family);
   line-height: 1.6;
   text-align: center;
@@ -156,12 +156,12 @@
 .retry {
   display: inline-flex;
   flex: none;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
   height: 32px;
-  padding: 0 14px 0 12px;
+  padding: 0 var(--space-7) 0 var(--space-6);
   color: var(--dsw-alias-label-primary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   font-family: inherit;
   background: transparent;
   border: 0.5px solid var(--dsw-alias-border-l2);
@@ -181,12 +181,12 @@
 
 .statusLine {
   display: flex;
-  gap: 10px;
+  gap: var(--space-5);
   align-items: center;
   margin: 0;
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
   color: var(--dsw-alias-label-secondary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   line-height: 1.6;
   white-space: normal;
 }
@@ -196,18 +196,18 @@
 .status {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-4);
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
   height: 100%;
-  padding: 12px 10px;
+  padding: var(--space-6) var(--space-5);
 }
 
 .action {
-  padding: 4px 10px;
+  padding: var(--space-2) var(--space-5);
   color: var(--dsw-alias-label-primary);
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   font-family: var(--dsw-font, inherit);
   white-space: normal;
   background: var(--dsw-alias-bg-layer-2);
@@ -223,10 +223,10 @@
 /* The next page, asked for where the loaded text ends. */
 .more {
   display: block;
-  margin: 8px 10px;
-  padding: 4px 10px;
+  margin: var(--space-4) var(--space-5);
+  padding: var(--space-2) var(--space-5);
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--dsw-font, inherit);
   white-space: normal;
   background: var(--dsw-alias-bg-layer-2);
@@ -255,7 +255,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 6px;
+  padding: var(--space-3);
   color: var(--dsw-alias-label-secondary);
   line-height: 1;
   background: transparent;
@@ -282,10 +282,10 @@
   flex: none;
   width: auto;
   max-width: 160px;
-  padding: 0 6px;
+  padding: 0 var(--space-3);
   overflow: hidden;
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
   text-overflow: ellipsis;
 }

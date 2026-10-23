@@ -1,7 +1,7 @@
 /* ---- Tooltip 独有样式:全局自定义 tooltip(替代原生 title 提示;由 TooltipHost 统一渲染) ---- */
 .tip-host {
-  position: fixed; z-index: 500; max-width: min(320px, 80vw);
-  padding: 6px 10px; border-radius: var(--r-sm); font-size: 12px; line-height: 1.5;
+  position: fixed; z-index: var(--z-tooltip); max-width: min(320px, 80vw);
+  padding: var(--space-3) var(--space-5); border-radius: var(--r-sm); font-size: var(--fs-sm); line-height: 1.5;
   color: var(--text); background: var(--pop-bg-strong);
   border: 1px solid var(--line);
   box-shadow: var(--glass-shadow);

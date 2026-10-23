@@ -1,15 +1,15 @@
 /* The owner supplies scrolling; Markdown uses prose whitespace inside its source-oriented container. */
 .document {
   min-width: 0;
-  padding: 10px 12px;
+  padding: var(--space-5) var(--space-6);
   font-family: var(--dsw-font, inherit);
   white-space: normal;
 }
 
 /* Leading YAML frontmatter: a bordered metadata box above the body, never heading text. */
 .frontmatter {
-  margin: 0 0 16px;
-  padding: 10px 12px;
+  margin: 0 0 var(--space-8);
+  padding: var(--space-5) var(--space-6);
   border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-bg-layer-1);

@@ -3,8 +3,8 @@
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px 0;
+  gap: var(--space-3);
+  padding: var(--space-6) 0;
 }
 
 .field + .field {
@@ -14,13 +14,13 @@
 .head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .label {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 500;
   line-height: 1.5;
   color: var(--dsw-alias-label-primary);
@@ -29,7 +29,7 @@
 .labelGroup {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   flex: 1;
   min-width: 0;
 }
@@ -65,8 +65,8 @@
 }
 
 .help {
-  padding: 10px 0 0;
-  font-size: 12px;
+  padding: var(--space-5) 0 0;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   color: var(--dsw-alias-label-secondary);
 }
@@ -76,13 +76,13 @@
 }
 
 .help > p + p {
-  margin-top: 8px;
+  margin-top: var(--space-4);
 }
 
 .badges {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .reset {
@@ -90,7 +90,7 @@
   background: none;
   padding: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
@@ -106,12 +106,12 @@
 
 .input {
   height: 34px;
-  padding: 0 12px;
+  padding: 0 var(--space-6);
   border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-bg-layer-3);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 1.5;
   color: var(--dsw-alias-label-primary);
 }
@@ -132,14 +132,14 @@
 
 .invalid {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--dsw-alias-state-error-primary);
 }
 
 .hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }

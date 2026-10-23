@@ -1,9 +1,9 @@
 /* 通用设置页:界面字号与过程收起时机共用同一行胶囊按钮的排版。
    与 dsh 通用设置里的偏好行同一类:标题在左、选项在右,当前值只由高亮表达。 */
 .gp-row {
-  display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-5); flex-wrap: wrap;
 }
-.gp-row button { min-width: 34px; padding: 4px 8px; font-size: 12px; }
+.gp-row button { min-width: 34px; padding: var(--space-2) var(--space-4); font-size: var(--fs-sm); }
 .gp-row button.on {
   color: var(--accent-2); border-color: var(--accent-border);
   background: var(--accent-fill);

@@ -31,6 +31,41 @@
   --r-lg: 14px;
   --r-pill: 999px;
 
+  /* ---- 字号梯度(半像素值统一收敛到最近的档位) ---- */
+  --fs-2xs: 10px;   /* 极小标签 / 角标 */
+  --fs-xs: 11px;    /* 辅助说明 / 元信息 */
+  --fs-sm: 12px;    /* 紧凑正文 / 表单 / 菜单 */
+  --fs-md: 13px;    /* 按钮 / 正文 */
+  --fs-lg: 14px;    /* 页面正文 */
+  --fs-xl: 16px;    /* 区块标题 */
+  --fs-2xl: 24px;   /* 页面大标题 */
+
+  /* ---- 间距梯度(2px 基准,覆盖现有 2–32px 的常用档) ---- */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-10: 20px;
+  --space-12: 24px;
+  --space-16: 32px;
+
+  /* ---- 全局层级(组件内部的 1–20 局部层仍可保留裸值) ---- */
+  --z-behind: -1;
+  --z-topbar: 20;
+  --z-panel: 30;
+  --z-scrollbar: 45;
+  --z-mask: 50;
+  --z-popover: 60;
+  --z-context-menu: 200;
+  --z-tooltip: 500;
+  --z-tooltip-portal: 1100;
+  --z-modal: 1000;
+  --z-toast: 1100;
+
   /* ---- 模糊:实色设计不使用任何毛玻璃,统一置 none ---- */
   --blur-sm: none;
   --blur-md: none;
@@ -40,7 +75,7 @@
   --font-mono: var(--mono);
   /* 界面正文字体(按钮/标签/面板等 UI 文字);编辑器等代码表面用 --mono */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
-  font-size: 14px;
+  font-size: var(--fs-lg);
 
   /* ---- 其余派生令牌(text-2 / line-* / code-bg / btn-* / shadow-* 等)全部由
      themes.ts applyTheme 按 6 色实时写入,此处不再硬编码,
@@ -67,7 +102,7 @@ body::before {
   content: '';
   position: fixed;
   inset: 0;
-  z-index: -1;
+  z-index: var(--z-behind);
   pointer-events: none;
   background: radial-gradient(ellipse 120% 55% at 50% -12%, var(--accent-fill-hover), transparent 68%);
 }
@@ -77,7 +112,7 @@ code, pre, textarea.codeedit { font-family: var(--mono); }
 
 /* ---- 胶囊 chips:实色小标签 ---- */
 .chip {
-  padding: 3px 11px; border-radius: var(--r-pill); font-size: 12px;
+  padding: 3px 11px; border-radius: var(--r-pill); font-size: var(--fs-sm);
   border: 1px solid var(--glass-border); color: var(--muted);
   background: var(--glass-bg);
 }
@@ -85,18 +120,18 @@ code, pre, textarea.codeedit { font-family: var(--mono); }
 .chip.warn { color: var(--amber); border-color: var(--warn-border); background: var(--warn-bg); }
 
 /* 面板 */
-.panel { padding: 14px; border-bottom: 1px solid var(--line-faint); }
-.panel-title { font-weight: 700; margin-bottom: 10px; color: var(--text-2); font-size: 13px; letter-spacing: .3px; }
-.panel + .panel .panel-title { margin-top: 6px; }
-hr { border: none; border-top: 1px solid var(--line-soft); margin: 16px 0; }
+.panel { padding: var(--space-7); border-bottom: 1px solid var(--line-faint); }
+.panel-title { font-weight: 700; margin-bottom: var(--space-5); color: var(--text-2); font-size: var(--fs-md); letter-spacing: .3px; }
+.panel + .panel .panel-title { margin-top: var(--space-3); }
+hr { border: none; border-top: 1px solid var(--line-soft); margin: var(--space-8) 0; }
 
 /* ---- 表单控件:实色内嵌槽 ---- */
-.field { margin-bottom: 8px; }
-.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.field { margin-bottom: var(--space-4); }
+.field label { display: block; font-size: var(--fs-sm); color: var(--muted); margin-bottom: var(--space-2); }
 input, textarea, select {
   background: var(--glass-bg-inset); color: var(--text);
   border: 1px solid var(--glass-border);
-  border-radius: var(--r-sm); padding: 7px 10px; font-size: 13px; width: 100%;
+  border-radius: var(--r-sm); padding: 7px var(--space-5); font-size: var(--fs-md); width: 100%;
   outline: none; transition: border-color .16s, background .16s, box-shadow .16s;
 }
 input::placeholder, textarea::placeholder { color: var(--placeholder); }
@@ -108,14 +143,14 @@ input:focus, textarea:focus, select:focus {
 textarea { resize: vertical; }
 textarea.codeedit {
   width: 100%; height: 100%; min-height: 320px;
-  background: var(--code-bg-solid); border: none; padding: 12px;
-  line-height: 1.5; font-size: calc(12.5px * var(--chat-scale, 1)); white-space: pre;
+  background: var(--code-bg-solid); border: none; padding: var(--space-6);
+  line-height: 1.5; font-size: calc(var(--fs-sm) * var(--chat-scale, 1)); white-space: pre;
   color: var(--code-ink);
 }
-.row { display: flex; gap: 6px; align-items: center; }
+.row { display: flex; gap: var(--space-3); align-items: center; }
 .row.grow > .grow, .grow { flex: 1; }
 .w70 { width: 70px; }
-.gap { gap: 6px; }
+.gap { gap: var(--space-3); }
 
 /* ---- 按钮体系:实色扁平,无投影、无内高光 ----
    交互反馈用「底色 + 叠加层」两层模型:底色是静止态实色,悬浮/按下时在它上面叠一层
@@ -125,7 +160,7 @@ button {
   background-color: var(--fill-2);
   background-image: none;
   color: var(--text); border: 1px solid var(--line);
-  border-radius: var(--r-sm); padding: 7px 13px; font-size: 13px; cursor: pointer;
+  border-radius: var(--r-sm); padding: 7px 13px; font-size: var(--fs-md); cursor: pointer;
   transition: background-color .16s ease, background-image .16s ease, border-color .16s ease, color .16s ease;
 }
 button:hover:not(:disabled) {
@@ -167,14 +202,14 @@ button.ghost { background: transparent; border-color: transparent; }
 button.ghost:hover:not(:disabled) {
   background: var(--glass-bg-hover); border-color: var(--line);
 }
-button.ghost.sm, button.chip-btn { padding: 3px 9px; font-size: 12px; }
+button.ghost.sm, button.chip-btn { padding: 3px 9px; font-size: var(--fs-sm); }
 /* 图标 + 文字的按钮:图标已是内联 SVG,交给按钮自己居中排版 —— 走行内基线的话图标会顶高一行 */
 button.icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
-button.link { background: transparent; border: none; color: var(--accent-2); padding: 4px 0; }
+button.link { background: transparent; border: none; color: var(--accent-2); padding: var(--space-2) 0; }
 button.link:hover:not(:disabled) {
   background: transparent; border: none; color: var(--accent);
 }
-button.sm { padding: 4px 11px; font-size: 12px; }
+button.sm { padding: var(--space-2) 11px; font-size: var(--fs-sm); }
 
 /* ---- 全站按钮:不画任何投影(实色设计的层次靠描边与底色) ----
    各面板还有一批组件级 button 阴影规则,特异性高于元素选择器 —— 统一用 !important
@@ -191,7 +226,7 @@ button:focus { box-shadow: none !important; }
    圆形(50%)或各种 8~12px 圆角 —— 这里用 !important 一次性收口,
    顺序上必须放在组件样式之前(本文件在 styles.scss,先于各组件 scss 加载),
    因此组件里同一属性的覆盖会被这条压住,保证「看不到第二个形状」。
-   仅两处结构件例外,见下方。 */
+   仅三处结构件例外,见下方;标签 chip 见 DESIGN_SYSTEM.md 5.5。 */
 button { border-radius: var(--r-sm) !important; }
 /* 例外 1:文件管理器的页签(结构件),保留与标签条同宽的上圆角。
    顶部主标签条已对齐右栏 dockkit 的圆角 chip,`.btab` / `.tabstrip-add` 不再走上圆角。 */
@@ -238,7 +273,7 @@ button.action-icon { border-color: transparent; }
 
 /* 分段按钮:选中项为实色强调块 */
 .seg {
-  display: flex; gap: 5px; margin: 8px 0;
+  display: flex; gap: 5px; margin: var(--space-4) 0;
   padding: 3px; border-radius: var(--r-sm);
   background: var(--glass-bg-inset); border: 1px solid var(--line-soft);
 }
@@ -251,30 +286,30 @@ button.action-icon { border-color: transparent; }
   border-color: transparent; color: var(--accent-2);
 }
 
-.check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin: 8px 0; cursor: pointer; }
+.check { display: flex; align-items: center; gap: var(--space-3); font-size: var(--fs-sm); color: var(--muted); margin: var(--space-4) 0; cursor: pointer; }
 .check input { width: auto; accent-color: var(--accent); }
 
 /* ---- 提示条 ---- */
 .error {
   background: var(--err-bg); border: 1px solid var(--err-border);
-  color: var(--err-text); padding: 8px 11px; border-radius: var(--r-sm);
-  margin: 8px 0; font-size: 12px; cursor: pointer; word-break: break-word;
+  color: var(--err-text); padding: var(--space-4) 11px; border-radius: var(--r-sm);
+  margin: var(--space-4) 0; font-size: var(--fs-sm); cursor: pointer; word-break: break-word;
   /* 后端错误文案里带「换行 + 提示:…」的可操作指引,保留换行让它单独成行可见 */
   white-space: pre-wrap;
 }
-.okline { color: var(--green); font-size: 12px; margin-top: 6px; }
-.muted { color: var(--muted); font-size: 12px; }
+.okline { color: var(--green); font-size: var(--fs-sm); margin-top: var(--space-3); }
+.muted { color: var(--muted); font-size: var(--fs-sm); }
 .muted2 { color: var(--muted); }
-.sm { font-size: 12px; }
-.hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+.sm { font-size: var(--fs-sm); }
+.hint { color: var(--muted); font-size: var(--fs-xs); margin-top: var(--space-3); }
 
 /* ---- 右键菜单:实色浮层 ---- */
 .ctxmenu {
-  position: fixed; z-index: 200; min-width: 175px;
+  position: fixed; z-index: var(--z-context-menu); min-width: 175px;
   background: var(--pop-bg);
   border: 1px solid var(--line); border-radius: var(--r-md);
   padding: 5px; box-shadow: var(--glass-shadow);
-  display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column; gap: var(--space-1);
   animation: pop-in .14s ease-out;
 }
 @keyframes pop-in {
@@ -283,7 +318,7 @@ button.action-icon { border-color: transparent; }
 }
 .ctxmenu button {
   background: transparent; border: none; text-align: left; padding: 7px 11px;
-  border-radius: var(--r-sm); font-size: 12.5px; display: flex; align-items: center; gap: 8px;
+  border-radius: var(--r-sm); font-size: var(--fs-sm); display: flex; align-items: center; gap: var(--space-4);
   color: var(--text); box-shadow: none; transition: background .14s, color .14s;
 }
 .ctxmenu button:hover:not(:disabled) {
@@ -299,13 +334,13 @@ button.action-icon { border-color: transparent; }
 /* 图标列固定宽度,统一的文字起点(编辑器/文件管理器右键菜单共用)。
    图标已从 emoji 换成内联 SVG:用 inline-flex 让 18px 槽内垂直+水平都居中 */
 .ctxmenu .ctx-ico {
-  flex: none; width: 18px; margin-right: 2px;
+  flex: none; width: 18px; margin-right: var(--space-1);
   display: inline-flex; align-items: center; justify-content: center;
 }
 
 /* ---- 弹窗:压暗遮罩 + 实色面板 ---- */
 .modal-overlay {
-  position: fixed; inset: 0; z-index: 50;
+  position: fixed; inset: 0; z-index: var(--z-mask);
   background: var(--mask-bg);
   display: flex; align-items: center; justify-content: center;
   animation: overlay-in .16s ease-out;
@@ -414,18 +449,18 @@ button.action-icon { border-color: transparent; }
 }
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 13px 16px; border-bottom: 1px solid var(--line); font-weight: 600;
+  padding: 13px var(--space-8); border-bottom: 1px solid var(--line); font-weight: 600;
 }
-.modal-body { padding: 14px 16px; }
-.modal-foot { padding: 13px 16px; border-top: 1px solid var(--line); }
+.modal-body { padding: var(--space-7) var(--space-8); }
+.modal-foot { padding: 13px var(--space-8); border-top: 1px solid var(--line); }
 
 /* 通用旋转动画(spinner/fm-loading/app-boot 等共用) */
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* 代码块:内嵌实色槽 */
 pre {
-  background: var(--code-bg); padding: 10px 12px; border-radius: var(--r-sm);
-  overflow-x: auto; font-size: 12.5px; line-height: 1.5;
+  background: var(--code-bg); padding: var(--space-5) var(--space-6); border-radius: var(--r-sm);
+  overflow-x: auto; font-size: var(--fs-sm); line-height: 1.5;
   border: 1px solid var(--code-bor);
   color: var(--code-ink);
 }
@@ -435,18 +470,18 @@ pre code { background: none !important; }
 /* 行标题/摘要/后缀用的是 dsh 的 **secondary** 尺寸(13/24),不是正文的 14px。
    这一号之差就是"过程"与"结论"的层级区分:工具行与思考行比助手正文小一号。
    改前请对照 dsh 的 --dsh-content-font-size-secondary(在 size=14 时求值为 13)。 */
-.dsh-sep { flex: none; width: 2px; height: 2px; border-radius: 1px; margin: 0 8px; background: var(--text-faint); }
-.dsh-summary { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 24px; color: var(--muted); }
+.dsh-sep { flex: none; width: 2px; height: 2px; border-radius: 1px; margin: 0 var(--space-4); background: var(--text-faint); }
+.dsh-summary { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-md); line-height: 24px; color: var(--muted); }
 .dsh-summary[data-follow-end] { text-overflow: clip; }
 /* 状态靠摘要文字颜色表达(dsh 的 .errorSummary / .stoppedSummary),不换前导图标:
    失败时摘要位已被失败首行取代 → 红;已中断保留原摘要 → 琥珀 */
 .dsh-summary[data-error] { color: var(--red); }
 .dsh-summary[data-stopped] { color: var(--amber); }
-.dsh-summarySuffix { flex: none; margin-left: 4px; white-space: nowrap; font-size: 13px; line-height: 24px; color: var(--muted); }
+.dsh-summarySuffix { flex: none; margin-left: var(--space-2); white-space: nowrap; font-size: var(--fs-md); line-height: 24px; color: var(--muted); }
 
 /* 搜索结果卡底/顶栏(SearchRow 与 WebSearchRow 共用) */
-.dsh-search { margin: 4px 0 4px 4px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg); overflow: hidden; }
-.dsh-search-header { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--muted); }
+.dsh-search { margin: var(--space-2) 0 var(--space-2) var(--space-2); border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg); overflow: hidden; }
+.dsh-search-header { padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--line-soft); font-size: var(--fs-sm); color: var(--muted); }
 
 /* 屏幕阅读器隐藏文本 */
 .dsh-visuallyHidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -460,7 +495,7 @@ pre code { background: none !important; }
 .tb-model { flex: none; min-width: 140px; }
 /* 自定义模型输入(mock 提示/自定义名):与模型触发器同款胶囊 */
 .wsbar-row input.tb-model {
-  width: auto; max-width: 200px; padding: 4px 11px; font-size: 12px;
+  width: auto; max-width: 200px; padding: var(--space-2) 11px; font-size: var(--fs-sm);
   background: var(--glass-bg-inset); color: var(--text);
   border: 1px solid var(--glass-border); border-radius: var(--r-pill);
   font-family: var(--mono);
@@ -477,7 +512,7 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 /* 状态徽标(连接/模型/主题等处共用):语义只靠**文字色**,描边保持中性 ——
    绿字 + 绿框的"发光小胶囊"是上一版的遗留,和全站「不用彩色描边」的规则打架 */
 .badge {
-  flex: none; font-size: 11px; padding: 1px 9px; border-radius: var(--r-pill);
+  flex: none; font-size: var(--fs-xs); padding: 1px 9px; border-radius: var(--r-pill);
   border: 1px solid var(--line-soft); color: var(--muted);
   /* 凹陷档而不是卡片档:badge 基本都长在卡片上,用 --glass-bg(与卡片同色)会只剩一圈描边,
      看着像"没填色的空框";用凹陷档才读得出是一个贴上去的标签。 */
@@ -487,7 +522,7 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 .badge.warn { color: var(--amber); }
 
 /* ---- AI 配置:我的提供商列表:实色卡片(AiConfigPanel/SkillsPanel/PluginsPanel 共用) ---- */
-.provider-list { display: flex; flex-direction: column; gap: 8px; }
+.provider-list { display: flex; flex-direction: column; gap: var(--space-4); }
 .provider-card {
   border: 1px solid var(--line); border-radius: var(--r-md); padding: 11px 13px;
   cursor: pointer;
@@ -502,31 +537,31 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
   border-color: var(--accent-border);
   background: var(--card-hover);
 }
-.pc-head { display: flex; align-items: center; gap: 8px; }
-.pc-name { font-weight: 600; font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-head { display: flex; align-items: center; gap: var(--space-4); }
+.pc-name { font-weight: 600; font-size: var(--fs-md); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-url {
-  color: var(--muted); font-size: 11.5px; margin-top: 3px; font-family: var(--mono);
+  color: var(--muted); font-size: var(--fs-xs); margin-top: 3px; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pc-meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 11px; margin-top: 3px; }
+.pc-meta { display: flex; gap: var(--space-6); flex-wrap: wrap; color: var(--muted); font-size: var(--fs-xs); margin-top: 3px; }
 /* 按钮整行换行而非自身文字被挤成两行 */
-.pc-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pc-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
 .pc-actions button { white-space: nowrap; }
 .provider-add {
   border: 1px dashed var(--line-dash); border-radius: var(--r-md); padding: 11px;
-  color: var(--muted); background: transparent; font-size: 13px; box-shadow: none;
+  color: var(--muted); background: transparent; font-size: var(--fs-md); box-shadow: none;
 }
 .provider-add:hover:not(:disabled) {
   border-color: var(--accent-border); color: var(--accent-2);
   background: var(--hover-bg);
 }
-.provider-add .pa-icon { font-size: 15px; }
-.provider-empty { border: 1px dashed var(--line-dash); border-radius: var(--r-md); padding: 14px; text-align: center; color: var(--muted); font-size: 12px; }
+.provider-add .pa-icon { font-size: var(--fs-xl); }
+.provider-empty { border: 1px dashed var(--line-dash); border-radius: var(--r-md); padding: var(--space-7); text-align: center; color: var(--muted); font-size: var(--fs-sm); }
 
 /* ---- 多 API Key:弹窗里的 Key 列表编辑器(AI 配置 / 生图配置共用) ---- */
-.key-list { display: flex; flex-direction: column; gap: 6px; }
-.key-row { display: flex; align-items: center; gap: 6px; }
-.key-row input { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 12px; }
+.key-list { display: flex; flex-direction: column; gap: var(--space-3); }
+.key-row { display: flex; align-items: center; gap: var(--space-3); }
+.key-row input { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: var(--fs-sm); }
 /* 去掉 input[type=password] 自带的显隐小眼睛(Edge/WebView2 的 ::-ms-reveal 会渲染在输入框内部,
    与本行行尾的显隐按钮重复:两个眼睛一个能点一个点不动,反而不知道按哪个)。
    显隐只由 .key-reveal 负责,输入框内一律不再出现浏览器控件 */
@@ -545,14 +580,14 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 .key-list > button.sm { align-self: flex-start; }
 
 /* ---- 多 API Key:卡片上的 Key 状态行(无余额徽标 + 重置;AI 配置 / 生图配置共用) ---- */
-.pc-keys { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.pc-key { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.pc-keys { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.pc-key { display: flex; align-items: center; gap: var(--space-3); font-size: var(--fs-xs); }
 .pc-key-mask {
   flex: 1 1 auto; min-width: 0; font-family: var(--mono); color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .pc-key.exhausted .pc-key-mask { color: var(--amber); }
-.pc-key button.sm { padding: 1px 7px; font-size: 11px; }
+.pc-key button.sm { padding: 1px 7px; font-size: var(--fs-xs); }
 
 /* ============================================================
    滚动条:全站唯一规格(要改粗细/配色只改这一处)
@@ -577,7 +612,7 @@ select optgroup option { background: var(--code-bg-solid); color: var(--text); }
 /* 2) 覆盖式悬浮拇指(scrollbar-ui.ts 动态创建) */
 .ob-thumb {
   position: absolute;
-  z-index: 45;
+  z-index: var(--z-scrollbar);
   cursor: pointer;
   border-radius: var(--r-pill);
   background: var(--scroll-thumb);
@@ -647,8 +682,8 @@ textarea::-webkit-scrollbar-thumb:hover,
     border-radius: 0; border: none;
   }
   .modal-head, .modal-body, .modal-foot {
-    padding-left: max(16px, env(safe-area-inset-left));
-    padding-right: max(16px, env(safe-area-inset-right));
+    padding-left: max(var(--space-8), env(safe-area-inset-left));
+    padding-right: max(var(--space-8), env(safe-area-inset-right));
   }
   .modal-foot { padding-bottom: max(13px, env(safe-area-inset-bottom)); }
   /* 刘海屏:弹窗头部避开状态栏/刘海 */
@@ -658,7 +693,7 @@ textarea::-webkit-scrollbar-thumb:hover,
   .modal-head button,
   .settings-head button {
     min-width: 44px; min-height: 44px; flex: none;
-    font-size: 16px; line-height: 1;
+    font-size: var(--fs-xl); line-height: 1;
   }
   .settings-head { padding-top: max(13px, env(safe-area-inset-top)); }
 }

@@ -1,38 +1,38 @@
 /* ---- ThemePanel 独有样式:预设/自定义主题卡片 + 6 色编辑器 ---- */
 .theme-preview {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px; margin-bottom: 14px; border-radius: var(--r-md);
+  display: flex; align-items: center; gap: var(--space-6);
+  padding: var(--space-6) var(--space-7); margin-bottom: var(--space-7); border-radius: var(--r-md);
   border: 1px solid var(--line); overflow: hidden;
   box-shadow: var(--glass-shadow);
 }
-.tp-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.tp-name { font-weight: 600; font-size: 13.5px; }
-.tp-desc { font-size: 11.5px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.tp-name { font-weight: 600; font-size: var(--fs-md); }
+.tp-desc { font-size: var(--fs-xs); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 预览条里的迷你界面:用该主题的 6 色实时画出「窗口 + 主/次按钮」 */
 .tp-window {
-  flex: none; width: 132px; padding: 7px 8px; border-radius: var(--r-sm);
+  flex: none; width: 132px; padding: 7px var(--space-4); border-radius: var(--r-sm);
   border: 1px solid transparent;
   display: flex; flex-direction: column; gap: 5px;
 }
-.tp-bar { display: flex; align-items: center; gap: 4px; height: 12px; padding: 0 5px; border-radius: 3px; }
+.tp-bar { display: flex; align-items: center; gap: var(--space-2); height: 12px; padding: 0 5px; border-radius: 3px; }
 .tp-bar i { width: 5px; height: 5px; border-radius: 50%; display: block; }
 .tp-line { height: 5px; border-radius: 3px; display: block; }
 .tp-btns { display: flex; gap: 5px; margin-top: 1px; }
 .tp-btns b {
-  flex: 1; text-align: center; font-size: 9.5px; font-weight: 600;
+  flex: 1; text-align: center; font-size: var(--fs-2xs); font-weight: 600;
   padding: 3px 0; border-radius: 4px; line-height: 1.2;
 }
 
 .theme-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px;
-  margin-bottom: 14px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-5);
+  margin-bottom: var(--space-7);
 }
 /* 界面字号 / 过程收起时机已移到「通用」设置页(GeneralPanel),
    主题页只保留配色相关的内容,不再混放显示偏好。 */
 .theme-card {
   display: flex; flex-direction: column; gap: 9px; cursor: pointer;
-  padding: 12px 13px; border-radius: var(--r-md);
+  padding: var(--space-6) 13px; border-radius: var(--r-md);
   background: var(--glass-bg); border: 1px solid var(--line);
   transition: background .16s ease, border-color .16s ease;
 }
@@ -40,22 +40,22 @@
 .theme-card.active {
   border-color: var(--accent-border); background: var(--card-hover);
 }
-.tc-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.tc-name { font-weight: 600; font-size: 13px; color: var(--text); }
-.tc-swatches { display: flex; gap: 6px; }
+.tc-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.tc-name { font-weight: 600; font-size: var(--fs-md); color: var(--text); }
+.tc-swatches { display: flex; gap: var(--space-3); }
 .tc-swatches .sw {
   width: 18px; height: 18px; border-radius: 5px;
   border: 1px solid var(--line-strong);
 }
-.tc-actions { display: flex; gap: 6px; margin-top: auto; }
+.tc-actions { display: flex; gap: var(--space-3); margin-top: auto; }
 
-.theme-color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-bottom: 14px; }
-.theme-color-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.theme-color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5) var(--space-7); margin-bottom: var(--space-7); }
+.theme-color-field { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-sm); color: var(--muted); }
 .theme-color-field .tcf-label { font-weight: 600; color: var(--text-2); }
-.theme-color-field .tcf-hint { font-size: 10.5px; color: var(--muted); }
+.theme-color-field .tcf-hint { font-size: var(--fs-2xs); color: var(--muted); }
 .theme-color-field .tc-input {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; border-radius: var(--r-sm);
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-5); border-radius: var(--r-sm);
   background: var(--glass-bg-inset); border: 1px solid var(--line);
   transition: border-color .16s ease, box-shadow .16s ease;
 }
@@ -66,7 +66,7 @@
 }
 .theme-color-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 .theme-color-field input[type="color"]::-webkit-color-swatch { border: 1px solid var(--line-strong); border-radius: 4px; }
-.theme-color-field code { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-color-field code { font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .theme-modal { width: 560px; }
 
 @media (max-width: 767px) {

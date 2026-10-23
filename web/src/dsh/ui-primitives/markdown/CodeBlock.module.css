@@ -11,7 +11,7 @@
   --dsl-code-block-background: var(--dsw-alias-markdown-code-block);
 
   position: relative;
-  margin: 16px 0;
+  margin: var(--space-8) 0;
   color: var(--dsw-alias-label-primary);
   background: var(--dsl-code-block-background);
   border-radius: var(--dsl-code-block-border-radius);
@@ -32,11 +32,11 @@
 
 .banner {
   background: var(--dsl-code-block-banner-background-color);
-  padding: 9px 14px;
+  padding: 9px var(--space-7);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-6);
   font: var(--dsl-code-block-banner-font);
   border-top-left-radius: var(--dsl-code-block-border-radius);
   border-top-right-radius: var(--dsl-code-block-border-radius);
@@ -45,7 +45,7 @@
 .infostring {
   color: var(--dsw-alias-label-primary);
   font-family: var(--ds-font-family-code);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 18px;
   min-width: 0;
   overflow: hidden;
@@ -77,7 +77,7 @@
 
 .block :where(pre) {
   font: var(--dsl-code-block-content-font);
-  padding: 16px;
+  padding: var(--space-8);
   margin: 0 !important;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -105,7 +105,7 @@
 }
 
 .card :where(pre) {
-  padding: 6px 22px 20px;
+  padding: var(--space-3) 22px var(--space-10);
   word-break: normal;
   overflow-wrap: anywhere;
 }

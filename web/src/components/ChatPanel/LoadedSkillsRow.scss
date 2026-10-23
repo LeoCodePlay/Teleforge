@@ -5,9 +5,9 @@
 .loaded-skills { align-self: stretch; width: 100%; }
 
 .loaded-skills-card {
-  margin: 4px 0 4px 4px;
+  margin: var(--space-2) 0 var(--space-2) var(--space-2);
   border: 1px solid var(--line-soft);
-  border-radius: 12px;
+  border-radius: var(--r-md);
   background: var(--code-bg);
   overflow: hidden;
 }
@@ -16,11 +16,11 @@
 .loaded-skills-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--line-strong);
   background: var(--code-bg-soft);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 16px;
 }
 .loaded-skills-name { flex: none; font-family: var(--mono); font-weight: 500; color: var(--text-2); }
@@ -35,11 +35,11 @@
 .loaded-skills-body {
   min-height: 0;
   margin: 0;
-  padding: 10px 12px 6px;
+  padding: var(--space-5) var(--space-6) var(--space-3);
   max-height: 260px;
   overflow: auto;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 18px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -47,4 +47,4 @@
 }
 /* 这里原先有一条 ::-webkit-scrollbar-track{ margin } 的搬运残留:全站原生条宽为 0,
    那条规则永远画不出来;本卡片的滚动条由悬浮引擎按统一规格绘制(见 styles.scss) */
-.loaded-skills-note { padding: 0 12px 10px; font-size: 11px; line-height: 16px; color: var(--text-faint); }
+.loaded-skills-note { padding: 0 var(--space-6) var(--space-5); font-size: var(--fs-xs); line-height: 16px; color: var(--text-faint); }

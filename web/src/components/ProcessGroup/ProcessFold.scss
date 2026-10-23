@@ -10,7 +10,7 @@
   border: none;
   background: none;
   color: var(--dsw-alias-label-tertiary);
-  font: inherit; font-size: var(--dsh-content-font-size, 14px);
+  font: inherit; font-size: var(--dsh-content-font-size, var(--fs-lg));
   cursor: pointer;
   text-align: left;
   transition: color 100ms ease;
@@ -30,7 +30,7 @@
 .pf-num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .pf-chevron {
-  flex: none; width: 14px; height: 14px; margin-left: 4px;
+  flex: none; width: 14px; height: 14px; margin-left: var(--space-2);
   color: inherit; transition: transform 100ms ease;
 }
 /* 展开时箭头翻转(dsh 的 .root[data-open] .chevron) */

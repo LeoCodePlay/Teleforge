@@ -7,20 +7,20 @@
 
 /* ---- 表头 ---- */
 .cr-head {
-  display: flex; flex: 0 0 auto; align-items: center; gap: 6px; box-sizing: border-box;
-  height: 38px; padding: 0 6px 0 8px; border-bottom: .5px solid var(--line);
+  display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-3); box-sizing: border-box;
+  height: 38px; padding: 0 var(--space-3) 0 var(--space-4); border-bottom: .5px solid var(--line);
 }
 .cr-selector { position: relative; flex: 0 1 auto; min-width: 0; }
 .cr-selector-btn {
-  display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; max-width: 100%;
-  height: 28px; padding: 0 6px 0 8px; border: 0; border-radius: var(--r-sm);
-  background: transparent; color: var(--text); font: inherit; font-size: 12px; line-height: 20px;
+  display: inline-flex; align-items: center; gap: var(--space-2); box-sizing: border-box; max-width: 100%;
+  height: 28px; padding: 0 var(--space-3) 0 var(--space-4); border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text); font: inherit; font-size: var(--fs-sm); line-height: 20px;
   cursor: pointer;
 }
 .cr-selector-btn:hover, .cr-selector-btn[aria-expanded='true'] { background: var(--hover-bg-hard); }
-.cr-selector-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.cr-caret { flex: none; font-size: 10px; opacity: .7; }
-.cr-counts { display: inline-flex; flex: none; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; line-height: 20px; color: var(--text-faint); }
+.cr-selector-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+.cr-caret { flex: none; font-size: var(--fs-2xs); opacity: .7; }
+.cr-counts { display: inline-flex; flex: none; align-items: center; gap: var(--space-3); font-family: var(--mono); font-size: var(--fs-sm); line-height: 20px; color: var(--text-faint); }
 .cr-added { color: var(--green); }
 .cr-deleted { color: var(--red); }
 .cr-kind { color: var(--text-faint); }
@@ -29,23 +29,23 @@
 .cr-pick {
   position: absolute; top: 32px; left: 0; z-index: 20; min-width: 260px;
   max-width: min(560px, 72vw); max-height: 320px; overflow: auto;
-  margin: 0; padding: 4px; list-style: none;
+  margin: 0; padding: var(--space-2); list-style: none;
   background: var(--code-bg-solid); border: 1px solid var(--glass-border-hover);
   border-radius: var(--r-md); box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
 }
 .cr-pick-item {
-  display: flex; gap: 12px; align-items: center; justify-content: space-between;
-  width: 100%; min-width: 0; padding: 5px 8px; border: 0; border-radius: var(--r-sm);
-  background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+  display: flex; gap: var(--space-6); align-items: center; justify-content: space-between;
+  width: 100%; min-width: 0; padding: 5px var(--space-4); border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text); font: inherit; font-size: var(--fs-sm); cursor: pointer;
 }
 .cr-pick-item:hover { background: var(--hover-bg-hard); }
 .cr-pick-item.on { background: var(--accent-soft); }
 .cr-pick-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
 
-.cr-tools { display: inline-flex; flex: none; gap: 2px; align-items: center; margin-left: auto; }
+.cr-tools { display: inline-flex; flex: none; gap: var(--space-1); align-items: center; margin-left: auto; }
 .cr-tool {
   display: inline-flex; flex: none; align-items: center; justify-content: center;
-  width: 28px; height: 28px; padding: 6px; border: 0; border-radius: var(--r-sm);
+  width: 28px; height: 28px; padding: var(--space-3); border: 0; border-radius: var(--r-sm);
   background: transparent; color: var(--muted); cursor: pointer;
 }
 .cr-tool:hover { color: var(--text); background: var(--hover-bg-hard); }
@@ -56,11 +56,11 @@
 
 /* ---- 正文与状态 ---- */
 .cr-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.cr-status { margin: 0; padding: 16px; font-size: 13px; color: var(--muted); }
-.cr-status-error { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.cr-status { margin: 0; padding: var(--space-8); font-size: var(--fs-md); color: var(--muted); }
+.cr-status-error { display: flex; flex-direction: column; gap: var(--space-5); align-items: flex-start; }
 .cr-retry {
-  padding: 4px 12px; border: 1px solid var(--line);
-  background: var(--glass-bg); color: var(--text); font-size: 12px; cursor: pointer;
+  padding: var(--space-2) var(--space-6); border: 1px solid var(--line);
+  background: var(--glass-bg); color: var(--text); font-size: var(--fs-sm); cursor: pointer;
 }
 .cr-retry:hover { border-color: var(--line-strong); background: var(--glass-bg-hover); }
 
@@ -69,22 +69,22 @@
   --cr-empty-fill: color-mix(in srgb, var(--hover-bg-hard) 50%, transparent);
   display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
 }
-.cr-note { margin: 0; padding: 4px 16px 8px; font-size: 12px; color: var(--text-faint); }
+.cr-note { margin: 0; padding: var(--space-2) var(--space-8) var(--space-4); font-size: var(--fs-sm); color: var(--text-faint); }
 .cr-body {
-  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 0 16px;
-  font-family: var(--mono); font-size: 12px;
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-4) 0 var(--space-8);
+  font-family: var(--mono); font-size: var(--fs-sm);
 }
-.cr-hunk { margin-bottom: 8px; }
-.cr-hunk-head { padding: 4px 16px; color: var(--text-faint); white-space: pre; }
+.cr-hunk { margin-bottom: var(--space-4); }
+.cr-hunk-head { padding: var(--space-2) var(--space-8); color: var(--text-faint); white-space: pre; }
 
 /* 统一视图的一行:旧行号 / 新行号 / 符号 / 正文 */
 .cr-line {
   display: grid; grid-template-columns: 3.5em 3.5em 1.2em minmax(0, 1fr);
   box-sizing: border-box; min-height: 22px; line-height: 22px; white-space: pre;
 }
-.cr-no { padding-right: 8px; color: var(--text-faint); text-align: right; user-select: none; }
+.cr-no { padding-right: var(--space-4); color: var(--text-faint); text-align: right; user-select: none; }
 .cr-sign { text-align: center; user-select: none; }
-.cr-text { padding-right: 16px; }
+.cr-text { padding-right: var(--space-8); }
 
 .cr-add { background: var(--diff-add-bg); }
 .cr-del { background: var(--diff-del-bg); }

@@ -1,8 +1,8 @@
 .checkbox {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 14px;
+  gap: var(--space-3);
+  font-size: var(--fs-lg);
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;

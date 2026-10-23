@@ -3,7 +3,7 @@
   --dsl-search-line-height: 22px;
 
   position: relative;
-  margin: 16px 0;
+  margin: var(--space-8) 0;
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-markdown-code-block);
   border-radius: var(--dsl-search-radius);
@@ -12,8 +12,8 @@
 .header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 9px 14px;
+  gap: var(--space-6);
+  padding: 9px var(--space-7);
   background: var(--dsw-alias-markdown-code-block-banner);
   border-top-left-radius: var(--dsl-search-radius);
   border-top-right-radius: var(--dsl-search-radius);
@@ -41,7 +41,7 @@
 }
 
 .body {
-  padding: 8px 14px 12px 0;
+  padding: var(--space-4) var(--space-7) var(--space-6) 0;
   font: var(--dsw-font-markdown-code-block);
   overflow-x: auto;
   overflow-y: hidden;
@@ -51,7 +51,7 @@
    sideways instead of folding. */
 .line {
   min-height: var(--dsl-search-line-height);
-  padding-left: 14px;
+  padding-left: var(--space-7);
   white-space: pre;
 }
 
@@ -66,10 +66,10 @@
 .fileHeader {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-4);
   width: 100%;
   min-height: var(--dsl-search-line-height);
-  padding: 0 14px;
+  padding: 0 var(--space-7);
   border: none;
   background-color: transparent;
   cursor: pointer;
@@ -92,7 +92,7 @@
 .expand {
   display: block;
   width: 100%;
-  padding: 0 14px;
+  padding: 0 var(--space-7);
   border: none;
   background-color: transparent;
   color: var(--dsw-alias-label-tertiary);
@@ -106,7 +106,7 @@
 }
 
 .empty {
-  padding: 12px 14px;
+  padding: var(--space-6) var(--space-7);
   font: var(--dsw-font-markdown-code-block);
   color: var(--dsw-alias-label-tertiary);
 }

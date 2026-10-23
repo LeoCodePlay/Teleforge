@@ -1,6 +1,6 @@
 .card {
   position: relative;
-  margin: 16px 0;
+  margin: var(--space-8) 0;
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-markdown-code-block);
   border-radius: var(--dsw-radius-lg);
@@ -11,8 +11,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 18px 8px 22px;
+  gap: var(--space-6);
+  padding: var(--space-5) 18px var(--space-4) 22px;
   background: var(--dsl-code-block-background, var(--dsw-alias-markdown-code-block));
   border-top-left-radius: inherit;
   border-top-right-radius: inherit;
@@ -23,7 +23,7 @@
 .heading {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: var(--space-6);
   min-width: 0;
 }
 
@@ -43,12 +43,12 @@
 .actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   flex: none;
 }
 
 .status {
-  margin-right: 8px;
+  margin-right: var(--space-4);
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
 }
@@ -77,7 +77,7 @@
 }
 
 .body {
-  padding: 6px 22px 20px;
+  padding: var(--space-3) 22px var(--space-10);
   font: var(--dsw-font-markdown-code-block);
   overflow-x: auto;
 }

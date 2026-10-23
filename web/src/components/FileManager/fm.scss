@@ -3,25 +3,25 @@
 /* 远程/本地文件管理器 Tab 常驻挂载,非激活 Tab 用 CSS 隐藏(避免切回时重新加载) */
 .fm-pane.hide { display: none; }
 /* 固定行高:面包屑与路径编辑输入框等高切换,进出编辑不抖动 */
-.fm-toolbar { display: flex; align-items: center; gap: 4px; height: 26px; }
+.fm-toolbar { display: flex; align-items: center; gap: var(--space-2); height: 26px; }
 /* 面包屑:长路径保持单行,横向滚动查看(滚动条由全局覆盖式引擎接管,不占空间) */
 .fm-crumbs {
   flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 1px;
-  font-size: 12.5px; overflow-x: auto;
+  font-size: var(--fs-sm); overflow-x: auto;
 }
 /* 横向溢出时点亮 grab 光标,提示可按住拖拽(useHorizontalScroller.ts 动态切换) */
 .fm-crumbs.dx-grab { cursor: grab; }
 .fm-crumbs.dx-scrolling { cursor: grabbing; user-select: none; }
 .crumb-wrap { flex: none; display: inline-flex; align-items: center; gap: 1px; }
-.crumb { flex: none; cursor: pointer; color: var(--accent-2); padding: 2px 6px; border-radius: var(--r-sm); white-space: nowrap; transition: background .15s, color .15s; }
+.crumb { flex: none; cursor: pointer; color: var(--accent-2); padding: var(--space-1) var(--space-3); border-radius: var(--r-sm); white-space: nowrap; transition: background .15s, color .15s; }
 .crumb:hover { background: var(--glass-bg-hover); }
 .crumb.cur { color: var(--text); font-weight: 600; }
 .crumb-sep { color: var(--muted); user-select: none; }
 /* 路径编辑输入框(点当前级面包屑进入,替代面包屑行):与工具栏同高(border-box 含边框),进出编辑零高度变化 */
-.fm-path-edit { flex: 1; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; font-size: 12.5px; }
+.fm-path-edit { flex: 1; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 var(--space-4); font-size: var(--fs-sm); }
 /* 操作行(上级/刷新/上传/传到本地):原内联 margin-top 收敛到类上;
    窄侧栏下允许换行,保证所有操作按钮完整可见 */
-.fm-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 8px; }
+.fm-actions { margin-top: var(--space-4); display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-4); }
 /* 操作行按钮的行盒只由字号决定(unitless line-height 不吃字形度量)。
    ▾ / emoji 这类字形 Arial 里没有,走回落字体,ascent/descent 比正文高:实测「上传 ▾」
    25.2px,同级「上级」「传到本地」24.4px。远程面板比本地面板多这一个按钮,于是两个面板的
@@ -36,7 +36,7 @@
 .fm-upload { position: relative; }
 .ctxmenu.fm-upload-menu { position: fixed; z-index: 220; min-width: 168px; }
 .fmlist {
-  margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-md);
+  margin-top: var(--space-4); border: 1px solid var(--line); border-radius: var(--r-md);
   background: var(--glass-bg-inset);
   flex: 1; min-height: 72px; overflow-x: hidden; overflow-y: auto;
 }
@@ -48,21 +48,21 @@
 .fm-listwrap > .fmlist { flex: 1; min-width: 0; }
 
 /* 底部提示行 */
-.fm-hint { padding-top: 6px; line-height: 1.4; }
+.fm-hint { padding-top: var(--space-3); line-height: 1.4; }
 
 /* ---- 底部状态栏:高度写死,任何状态(进度 / 结果 / 报错)出现都不改变布局 ---- */
-.fm-statusbar { position: relative; flex: none; margin-top: 2px; }
+.fm-statusbar { position: relative; flex: none; margin-top: var(--space-1); }
 .fm-status-row {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: var(--space-3);
   height: 18px; overflow: hidden;
-  font-size: 11.5px; color: var(--muted);
+  font-size: var(--fs-xs); color: var(--muted);
 }
 .fm-status-row[data-clickable] { cursor: pointer; }
 .fm-status-row[data-clickable]:hover { color: var(--text-2); }
 .fm-status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-status-text.err { color: var(--red); }
 /* 右端:圆圈进度 + 百分比(悬浮显示正在上传的文件名,由 data-tip 提供) */
-.fm-ring-wrap { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
+.fm-ring-wrap { flex: none; display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-2); }
 .fm-ring { display: block; transform: rotate(-90deg); }
 .fm-ring-track { fill: none; stroke: var(--progress-track); stroke-width: 2; }
 .fm-ring-bar {
@@ -72,22 +72,22 @@
 /* 无总量(删除项数未知)时用转圈表示"还在跑" */
 .fm-ring.indet { animation: fm-spin .9s linear infinite; }
 .fm-ring.indet .fm-ring-bar { stroke-dasharray: 10 40; }
-.fm-ring-pct { font-size: 11px; font-variant-numeric: tabular-nums; }
-.fm-caret { flex: none; font-size: 9px; opacity: .75; }
+.fm-ring-pct { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.fm-caret { flex: none; font-size: var(--fs-2xs); opacity: .75; }
 /* 展开的详情:绝对定位浮在状态栏上方,展开/收起不改变面板高度,也不推挤列表 */
 .fm-status-detail {
   position: absolute; left: 0; right: 0; bottom: 100%; z-index: 5;
-  max-height: 200px; overflow: auto; margin-bottom: 4px; padding: 8px 10px;
+  max-height: 200px; overflow: auto; margin-bottom: var(--space-2); padding: var(--space-4) var(--space-5);
   border: 1px solid var(--line); border-radius: var(--r-md);
   background: var(--pop-bg); box-shadow: var(--glass-shadow);
-  font-size: 11.5px; line-height: 1.5; color: var(--text-2);
+  font-size: var(--fs-xs); line-height: 1.5; color: var(--text-2);
   white-space: pre-wrap; word-break: break-word;
 }
-.fm-status-detail-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
-.fmph { padding: 14px 12px; }
+.fm-status-detail-actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-3); }
+.fmph { padding: var(--space-7) var(--space-6); }
 .fmrow {
   position: relative; /* 作为重命名输入框(绝对定位覆盖整行)的定位基准 */
-  display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12.5px;
+  display: flex; align-items: center; gap: var(--space-4); padding: 5px var(--space-5); font-size: var(--fs-sm);
   cursor: default; user-select: none;
   border-bottom: 1px solid var(--line-faint);
   transition: background .15s;
@@ -95,7 +95,7 @@
 .fmrow:last-child { border-bottom: none; }
 .fmrow:hover { background: var(--glass-bg-hover); }
 .fmrow.selected {
-  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  background: var(--accent-fill);
   box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 /* 图标固定槽位:各平台 emoji 字宽不一,定宽保证重命名输入框左偏移确定、各行文件名对齐。
@@ -105,7 +105,7 @@
 .fm-hide { visibility: hidden; }
 /* 文件名列:超长省略显示(悬停有完整名称 tooltip) */
 .fm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fm-time { flex: none; width: 108px; text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.fm-time { flex: none; width: 108px; text-align: right; color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 /* 多选操作条的按钮:图标换成 SVG 后自己撑起行内排版(图标 + 文字,不吃基线对齐) */
 .fm-selbar button { display: inline-flex; align-items: center; gap: 5px; }
 /* 重命名/新建输入框:绝对定位覆盖名称+时间区,左缘起于图标槽之后
@@ -117,15 +117,15 @@
    输入框会把列表横向滚动 ~10px,导致整个目录列表的左边距消失(本地/远程列表共用本类) */
 .fm-rename {
   position: absolute; left: 38px; right: 10px; top: 50%; transform: translateY(-50%);
-  width: auto; z-index: 1; box-sizing: border-box; height: 20px; padding: 0 6px;
+  width: auto; z-index: 1; box-sizing: border-box; height: 20px; padding: 0 var(--space-3);
   border: 1px solid var(--accent-border); border-radius: 5px;
-  background: var(--code-bg-solid); color: var(--text); font-size: 12.5px; line-height: normal;
+  background: var(--code-bg-solid); color: var(--text); font-size: var(--fs-sm); line-height: normal;
   outline: none; box-shadow: 0 0 0 2px var(--focus-ring);
 }
 /* 进入子目录时的行内加载(文件夹右侧转圈,不触发全局加载)。
    position:relative+z-index 使其在重命名提交时浮于整行输入框之上 */
 .fm-loading {
-  position: relative; z-index: 2; flex: none; width: 12px; height: 12px; margin-left: 4px;
+  position: relative; z-index: 2; flex: none; width: 12px; height: 12px; margin-left: var(--space-2);
   border: 2px solid var(--accent-soft); border-top-color: var(--accent);
   border-radius: 50%; animation: fm-spin .7s linear infinite;
 }
@@ -143,8 +143,8 @@
 
 /* ---- 移动端(<768):行加大触控目标,窄屏只留图标+文件名,多选操作条 ---- */
 @media (max-width: 767px) {
-  .fmrow { min-height: 44px; padding: 6px 12px; touch-action: manipulation; }
-  .fm-toolbar, .fm-actions { gap: 6px; }
+  .fmrow { min-height: 44px; padding: var(--space-3) var(--space-6); touch-action: manipulation; }
+  .fm-toolbar, .fm-actions { gap: var(--space-3); }
   .fm-actions button { min-height: 40px; }
   .fm-size, .fm-time { display: none; }        /* 窄屏只留图标+文件名,行可点区域最大化 */
   /* 移动端行 padding 为 12px:输入框左偏移同步后移(12+20+8=40px),不覆盖图标 */
@@ -152,14 +152,14 @@
   /* 面包屑横向行:解锁触屏横滑(iOS 对 overflow-x:auto+overflow-y:hidden 锁纵向轴) */
   .fm-crumbs { touch-action: pan-x; -webkit-overflow-scrolling: touch; }
   .fm-selbar {
-    flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    padding: 8px 10px; margin-top: 8px;
+    flex: none; display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+    padding: var(--space-4) var(--space-5); margin-top: var(--space-4);
     border: 1px solid var(--accent-border); border-radius: var(--r-md);
     background: var(--accent-soft);
   }
   .fm-selbar button { min-height: 40px; }
   /* 状态栏在触屏上也要好点:行高加到 26px */
-  .fm-status-row { height: 26px; font-size: 12px; }
+  .fm-status-row { height: 26px; font-size: var(--fs-sm); }
 }
 @media (hover: none) and (pointer: coarse) {
   .fmrow { -webkit-touch-callout: none; }

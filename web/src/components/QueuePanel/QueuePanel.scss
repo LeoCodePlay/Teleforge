@@ -8,7 +8,7 @@
 
 .queue-panel {
   position: relative;
-  background: linear-gradient(160deg, var(--pop-bg), var(--pop-bg-lo));
+  background: var(--pop-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo), var(--glass-shadow);
@@ -30,7 +30,7 @@
 .queue-head {
   display: flex; align-items: center; gap: 7px;
   /* 左内边距 25px:脉冲点中心落在 29.5px(1 边框 + 25 + 3.5),与下方待命轴(1+8+17+3.5)严格同轴 */
-  padding: 9px 12px 9px 25px;
+  padding: 9px var(--space-6) 9px 25px;
   border-bottom: 1px solid var(--line-soft);
 }
 .queue-pulse {
@@ -43,32 +43,32 @@
   60%      { box-shadow: 0 0 0 5px transparent; opacity: .65; }
 }
 .queue-title {
-  font-size: 12.5px; font-weight: 600; letter-spacing: .2px;
+  font-size: var(--fs-sm); font-weight: 600; letter-spacing: .2px;
   color: var(--text-2); white-space: nowrap;
 }
 /* 计数:等宽数字 + 极小字量词,不加底色不加边框 */
 .queue-count {
   flex: none;
-  font-family: var(--mono); font-size: 11px; font-weight: 400; line-height: 1;
+  font-family: var(--mono); font-size: var(--fs-xs); font-weight: 400; line-height: 1;
   color: var(--text-faint);
 }
 .queue-hint {
   margin-left: auto; min-width: 0;
-  font-size: 11px; font-weight: 400; color: var(--muted);
+  font-size: var(--fs-xs); font-weight: 400; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 /* ============ 列表:一条待命轴串起所有排队消息 ============ */
 .queue-list {
-  list-style: none; margin: 0; padding: 3px 8px 5px;
+  list-style: none; margin: 0; padding: 3px var(--space-4) 5px;
   max-height: min(30vh, 232px); overflow-y: auto;
 }
 .queue-item {
   position: relative;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--space-4);
   /* 左内边距 34px 是「待命轴槽」:轴心 29.5 + 节点半径 3.5 + 8 视觉间隙,
      文字一律从节点右侧起,任何主题/字号下都不会压到轴上 */
-  padding: 5px 8px 5px 34px;
+  padding: 5px var(--space-4) 5px 34px;
   border-radius: var(--r-sm);
   /* 行不用盒中盒描边:静止完全透明,悬浮才浮出一层薄底 */
   background: transparent;
@@ -107,7 +107,7 @@
 
 .queue-text {
   flex: 1 1 auto; min-width: 0;
-  font-size: 13px; line-height: 1.5; color: var(--text-2);
+  font-size: var(--fs-md); line-height: 1.5; color: var(--text-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transition: color .16s ease;
 }
@@ -116,7 +116,7 @@
 /* 附件:细线回形针 + 等宽数字,无边框无底色 */
 .queue-attach {
   flex: none; display: inline-flex; align-items: center; gap: 3px;
-  font-family: var(--mono); font-size: 11px; line-height: 1;
+  font-family: var(--mono); font-size: var(--fs-xs); line-height: 1;
   color: var(--muted);
 }
 
@@ -130,7 +130,7 @@
 .queue-item:hover .queue-actions,
 .queue-item:focus-within .queue-actions { opacity: 1; pointer-events: auto; }
 .queue-action {
-  width: 24px; height: 24px; border-radius: 8px; padding: 0;
+  width: 24px; height: 24px; border-radius: var(--r-sm); padding: 0;
   color: var(--text-faint);
 }
 /* 「立即执行」是打断当前轮的动作:悬浮给琥珀色而不是通用蓝 */

@@ -2,25 +2,25 @@
 
 /* ---- AI 配置:当前提供方卡片 ---- */
 .ai-cur {
-  border: 1px solid var(--glass-border); border-radius: var(--r-md); padding: 12px;
-  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  border: 1px solid var(--glass-border); border-radius: var(--r-md); padding: var(--space-6);
+  background: var(--fill-1);
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 4px 16px var(--shadow-1);
 }
-.ai-cur-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.ai-cur-name { font-weight: 600; font-size: 13.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-cur-head { display: flex; align-items: center; gap: var(--space-4); margin-bottom: var(--space-4); }
+.ai-cur-name { font-weight: 600; font-size: var(--fs-md); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 模型行内编辑器:每行一个模型,行内编辑上下文/最大输出 ---- */
-.model-config-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.model-config-list { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
 .model-config-row {
-  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-4);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm);
   background: var(--glass-bg-inset); box-shadow: inset 0 1px 0 var(--ins-hl);
 }
-.mc-name { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.mc-name { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: var(--fs-sm); word-break: break-all; }
 .mc-field { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
-.mc-field > span { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.mc-field input { width: 92px; padding: 3px 7px; font-size: 11.5px; font-family: var(--mono); }
-.mc-remove { flex: 0 0 auto; padding: 2px 8px; font-size: 11px; }
+.mc-field > span { font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
+.mc-field input { width: 92px; padding: 3px 7px; font-size: var(--fs-xs); font-family: var(--mono); }
+.mc-remove { flex: 0 0 auto; padding: var(--space-1) var(--space-4); font-size: var(--fs-xs); }
 /* 颜色与 hover/active 反馈由 .action-icon.danger 统一提供 */
 
 /* 每模型「支持的推理等级」:summary 常驻、弹层绝对定位(这一行已经放不下第三个输入框)。
@@ -28,7 +28,7 @@
 .mc-levels { position: relative; }
 .mc-levels > summary {
   list-style: none; cursor: pointer; white-space: nowrap;
-  font-size: 11px; color: var(--muted);
+  font-size: var(--fs-xs); color: var(--muted);
   padding: 3px 7px; border: 1px solid var(--glass-border); border-radius: var(--r-sm);
   background: var(--glass-bg-inset); font-family: var(--mono);
   max-width: 148px; overflow: hidden; text-overflow: ellipsis;
@@ -38,13 +38,13 @@
 .mc-levels[open] > summary { color: var(--accent-2); border-color: var(--accent-border); }
 .mc-levels-body {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
-  display: flex; flex-direction: column; gap: 2px; min-width: 128px;
+  display: flex; flex-direction: column; gap: var(--space-1); min-width: 128px;
   padding: 5px; background: var(--pop-bg); border: 1px solid var(--line);
   border-radius: var(--r-sm); box-shadow: var(--glass-shadow);
 }
 .mc-level {
-  display: flex; align-items: center; gap: 7px; padding: 4px 7px; border-radius: var(--r-sm);
-  font-size: 12px; color: var(--text); cursor: pointer;
+  display: flex; align-items: center; gap: 7px; padding: var(--space-2) 7px; border-radius: var(--r-sm);
+  font-size: var(--fs-sm); color: var(--text); cursor: pointer;
 }
 .mc-level:hover { background: var(--glass-bg-hover); }
 .mc-level.on { color: var(--accent-2); }
@@ -68,9 +68,9 @@
 .mc-switch:disabled { opacity: .35; cursor: not-allowed; }
 
 /* ---- AI 配置:预置提供商快速切换 chips ---- */
-.provider-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.provider-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .provider-chips button {
-  padding: 4px 12px; font-size: 12px;
+  padding: var(--space-2) var(--space-6); font-size: var(--fs-sm);
 }
 .provider-chips button.on {
   color: var(--accent-2); border-color: transparent;
@@ -80,25 +80,25 @@
 /* ---- AI 配置:添加/编辑提供商弹窗 ---- */
 .modal.provider-modal { width: 620px; }
 .modal.provider-modal .modal-body { max-height: 64vh; overflow-y: auto; }
-.model-section { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
-.ms-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.ms-title { font-size: 12px; color: var(--muted); }
-.model-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.model-section { border-top: 1px solid var(--line); margin-top: var(--space-5); padding-top: var(--space-5); }
+.ms-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); }
+.ms-title { font-size: var(--fs-sm); color: var(--muted); }
+.model-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
 .model-chip {
-  display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px 3px 11px;
-  border-radius: var(--r-pill); font-size: 11.5px;
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px var(--space-3) 3px 11px;
+  border-radius: var(--r-pill); font-size: var(--fs-xs);
   background: var(--glass-bg); border: 1px solid var(--glass-border);
   font-family: var(--mono); box-shadow: inset 0 1px 0 var(--glass-hi);
 }
-.model-chip button { padding: 0 5px; font-size: 11px; background: transparent; border: none; color: var(--muted); box-shadow: none; border-radius: 50%; }
+.model-chip button { padding: 0 5px; font-size: var(--fs-xs); background: transparent; border: none; color: var(--muted); box-shadow: none; border-radius: 50%; }
 .model-chip button:hover:not(:disabled) { color: var(--red); border: none; transform: none; box-shadow: none; }
-.model-picker { margin-top: 8px; border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 8px; background: var(--glass-bg-inset); }
-.model-rows { max-height: 220px; overflow-y: auto; margin-top: 6px; display: flex; flex-direction: column; gap: 1px; }
+.model-picker { margin-top: var(--space-4); border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: var(--space-4); background: var(--glass-bg-inset); }
+.model-rows { max-height: 220px; overflow-y: auto; margin-top: var(--space-3); display: flex; flex-direction: column; gap: 1px; }
 .model-row {
-  display: flex; align-items: center; gap: 8px; padding: 5px 7px; font-size: 12.5px;
+  display: flex; align-items: center; gap: var(--space-4); padding: 5px 7px; font-size: var(--fs-sm);
   cursor: pointer; border-radius: var(--r-sm); font-family: var(--mono); word-break: break-all;
   transition: background .15s;
 }
 .model-row:hover { background: var(--glass-bg-hover); }
 .model-row input { width: auto; flex: none; }
-.model-empty { padding: 12px; text-align: center; color: var(--muted); font-size: 12px; }
+.model-empty { padding: var(--space-6); text-align: center; color: var(--muted); font-size: var(--fs-sm); }

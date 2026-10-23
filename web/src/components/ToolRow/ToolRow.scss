@@ -4,40 +4,40 @@
 /* 失败/中断的颜色现在挂在 .dsh-summary 的 data 属性上(styles.scss),
    因为状态要按 dsh 的做法用文字颜色表达,而不是换前导图标 */
 .dsh-bodyWrap { display: flex; flex-direction: column; }
-.dsh-inspectButton { display: inline-flex; align-self: flex-start; align-items: center; gap: 4px; margin: 4px 0 2px 4px; padding: 2px 8px; border: 1px solid var(--line); background: transparent; color: var(--text-2); font-size: 11px; line-height: 16px; cursor: pointer; opacity: 0; transition: opacity 100ms ease; }
+.dsh-inspectButton { display: inline-flex; align-self: flex-start; align-items: center; gap: var(--space-2); margin: var(--space-2) 0 var(--space-1) var(--space-2); padding: var(--space-1) var(--space-4); border: 1px solid var(--line); background: transparent; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; cursor: pointer; opacity: 0; transition: opacity 100ms ease; }
 .dsh-tool:hover .dsh-inspectButton, .dsh-inspectButton:focus-visible { opacity: 1; }
 .dsh-inspectButton:hover { background: var(--glass-bg-hover); color: var(--text); }
 
 /* IN/OUT 通用卡(展开体) */
-.dsh-ioCard { display: flex; flex-direction: column; margin: 4px 0 4px 4px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg); }
-.dsh-ioSection { display: grid; grid-template-columns: max-content 1fr; column-gap: 14px; align-items: baseline; padding: 12px 16px; max-height: 150px; overflow-y: auto; }
-.dsh-ioLabel { position: sticky; top: 0; align-self: start; color: var(--text-faint); font-size: 12px; line-height: 22px; }
-.dsh-ioText { min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--text-2); font-size: 13px; line-height: 22px; }
+.dsh-ioCard { display: flex; flex-direction: column; margin: var(--space-2) 0 var(--space-2) var(--space-2); border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg); }
+.dsh-ioSection { display: grid; grid-template-columns: max-content 1fr; column-gap: var(--space-7); align-items: baseline; padding: var(--space-6) var(--space-8); max-height: 150px; overflow-y: auto; }
+.dsh-ioLabel { position: sticky; top: 0; align-self: start; color: var(--text-faint); font-size: var(--fs-sm); line-height: 22px; }
+.dsh-ioText { min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--text-2); font-size: var(--fs-md); line-height: 22px; }
 .dsh-ioText[data-error] { color: var(--red); }
 .dsh-ioDivider { border-top: 1px solid var(--line-soft); }
 
 /* 文件链接(可点击打开) */
-.dsh-fileLink { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; border: none; background: none; font: inherit; text-align: left; font-size: 14px; line-height: 24px; color: var(--text-2); text-decoration: underline; text-decoration-color: var(--placeholder); text-underline-offset: 3px; cursor: pointer; }
+.dsh-fileLink { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; border: none; background: none; font: inherit; text-align: left; font-size: var(--fs-lg); line-height: 24px; color: var(--text-2); text-decoration: underline; text-decoration-color: var(--placeholder); text-underline-offset: 3px; cursor: pointer; }
 .dsh-fileLink:hover { color: var(--text); text-decoration-color: currentColor; }
 /* 折叠态行尾入口(如子代理「查看会话」):不抢摘要的宽度,不触发行展开 */
-.dsh-rowAction { flex: none; margin-left: 2px; padding: 2px 9px; border: 1px solid var(--line); background: var(--glass-bg-inset); color: var(--text-2); font: inherit; font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer; transition: color .14s ease, border-color .14s ease, background .14s ease; }
+.dsh-rowAction { flex: none; margin-left: var(--space-1); padding: var(--space-1) 9px; border: 1px solid var(--line); background: var(--glass-bg-inset); color: var(--text-2); font: inherit; font-size: var(--fs-sm); line-height: 18px; white-space: nowrap; cursor: pointer; transition: color .14s ease, border-color .14s ease, background .14s ease; }
 .dsh-rowAction:hover { color: var(--text); background: var(--glass-bg-hover); border-color: var(--line-strong); }
 .dsh-rowAction:active { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) { .dsh-rowAction { transition: none; } }
 
 /* ---- present 专属行的交付清单(展开体)---- */
 .dsh-presentList {
-  list-style: none; margin: 4px 0 4px 4px; padding: 6px 12px;
-  border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg);
+  list-style: none; margin: var(--space-2) 0 var(--space-2) var(--space-2); padding: var(--space-3) var(--space-6);
+  border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--code-bg);
   display: flex; flex-direction: column; gap: 5px;
 }
-.dsh-presentItem { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; }
+.dsh-presentItem { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: var(--fs-sm); }
 .dsh-presentIcon { display: inline-flex; flex: none; color: var(--accent); }
 .dsh-presentName { flex: none; font-weight: 600; color: var(--text); white-space: nowrap; }
 /* 说明可压缩省略:它是附加信息,不能把路径挤没 */
 .dsh-presentDesc { flex: 0 1 auto; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dsh-presentPath { flex: 1 1 auto; min-width: 0; text-align: right; color: var(--text-faint); font-family: var(--mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
-.dsh-presentRunning { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0 6px 4px; color: var(--muted); font-size: 12px; }
+.dsh-presentPath { flex: 1 1 auto; min-width: 0; text-align: right; color: var(--text-faint); font-family: var(--mono); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
+.dsh-presentRunning { display: inline-flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0 var(--space-3) var(--space-2); color: var(--muted); font-size: var(--fs-sm); }
 
 @media (max-width: 767px) {
   .dsh-presentDesc, .dsh-presentPath { display: none; }

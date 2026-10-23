@@ -9,7 +9,7 @@
 
 .status {
   margin: 0;
-  padding: 10px;
+  padding: var(--space-5);
   color: var(--dsw-alias-label-secondary);
   white-space: normal;
 }

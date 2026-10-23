@@ -1,13 +1,13 @@
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   height: 24px;
-  padding: 0 8px;
+  padding: 0 var(--space-4);
   border: none;
   border-radius: 999px;
   corner-shape: round;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
   background: var(--dsw-alias-bg-layer-2);

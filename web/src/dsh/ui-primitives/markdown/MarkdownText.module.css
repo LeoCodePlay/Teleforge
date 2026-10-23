@@ -15,27 +15,27 @@
 
 .markdown h1 {
   font: var(--dsw-font-markdown-h1);
-  margin: 32px 0 16px;
+  margin: var(--space-16) 0 var(--space-8);
 }
 
 .markdown h2 {
   font: var(--dsw-font-markdown-h2);
-  margin: 32px 0 16px;
+  margin: var(--space-16) 0 var(--space-8);
 }
 
 .markdown h3 {
   font: var(--dsw-font-markdown-h3);
-  margin: 32px 0 16px;
+  margin: var(--space-16) 0 var(--space-8);
 }
 
 .markdown h4 {
   font: var(--dsw-font-markdown-h4);
-  margin: 16px 0;
+  margin: var(--space-8) 0;
 }
 
 .markdown :where(h5, h6) {
   font: var(--dsw-font-markdown-base-strong);
-  margin: 16px 0;
+  margin: var(--space-8) 0;
 }
 
 .markdown :where(h1, h2, h3, h4, h5, h6) strong {
@@ -43,16 +43,16 @@
 }
 
 .markdown p {
-  margin: 16px 0;
+  margin: var(--space-8) 0;
 }
 
 /* Tighten h4–h6 against a following list (design: 8px gap). */
 .markdown :where(h4, h5, h6) + :where(ul, ol) {
-  margin-top: 8px;
+  margin-top: var(--space-4);
 }
 
 .markdown :where(h4, h5, h6):has(+ :where(ul, ol)) {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-4);
 }
 
 .markdown a,
@@ -100,16 +100,16 @@
 }
 
 .markdown :where(ul, ol) {
-  margin: 16px 0;
+  margin: var(--space-8) 0;
   padding-left: 18px;
 }
 
 .markdown li:not(:first-child) {
-  margin-top: 6px;
+  margin-top: var(--space-3);
 }
 
 .markdown li > :where(ul, ol) {
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .markdown li::marker {
@@ -128,7 +128,7 @@
 }
 
 .markdown li > p {
-  margin: 8px 0;
+  margin: var(--space-4) 0;
 }
 
 .markdown li > *:first-child {
@@ -144,18 +144,18 @@
   display: block;
   border: none;
   height: 0.5px;
-  margin: 32px 0;
+  margin: var(--space-16) 0;
   background: var(--dsw-alias-border-l2);
 }
 
 .markdown blockquote {
   border-left: 2px solid var(--dsw-alias-label-caption);
-  margin: 16px 0 0;
-  padding-left: 14px;
+  margin: var(--space-8) 0 0;
+  padding-left: var(--space-7);
 }
 
 .markdown pre {
-  margin: 16px 0;
+  margin: var(--space-8) 0;
   font-family: var(--ds-font-family-code);
   overflow: auto;
 }
@@ -185,7 +185,7 @@
 }
 
 .markdown input[type='checkbox'] {
-  margin: 0 8px 0 0;
+  margin: 0 var(--space-4) 0 0;
   accent-color: var(--dsw-alias-label-secondary);
 }
 
@@ -243,7 +243,7 @@
 
 .tableScroll th {
   text-align: start;
-  padding: 10px 16px;
+  padding: var(--space-5) var(--space-8);
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   border-top: none;
   font: var(--dsw-font-markdown-table-head);
@@ -253,7 +253,7 @@
 }
 
 .tableScroll td {
-  padding: 10px 16px;
+  padding: var(--space-5) var(--space-8);
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   font: var(--dsw-font-markdown-table);
   max-width: 320px;
@@ -271,7 +271,7 @@
 }
 
 .tableScroll table code {
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .markdown > *:first-child,
@@ -330,28 +330,28 @@
 
 .compact {
   max-width: 100%;
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--dsh-content-font-size-secondary, var(--fs-md));
   line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
   color: var(--dsw-alias-label-tertiary);
 }
 
 .compact :is(h1, h2, h3, h4, h5, h6) {
-  margin: 8px 0 4px;
+  margin: var(--space-4) 0 var(--space-2);
   font: inherit;
   font-weight: 600;
   color: inherit;
 }
 
 .compact :is(p, ul, ol, blockquote) {
-  margin: 4px 0;
+  margin: var(--space-2) 0;
 }
 
 .compact li:not(:first-child) {
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 
 .compact li > p {
-  margin: 4px 0;
+  margin: var(--space-2) 0;
 }
 
 .compact li::marker {
@@ -360,11 +360,11 @@
 }
 
 .compact blockquote {
-  padding-left: 8px;
+  padding-left: var(--space-4);
 }
 
 .compact hr {
-  margin: 8px 0;
+  margin: var(--space-4) 0;
 }
 
 .compact a,
@@ -392,7 +392,7 @@
 }
 
 .markdown.compact :global(.md-code-block) {
-  margin: 4px 0;
+  margin: var(--space-2) 0;
   color: inherit;
 }
 
@@ -410,7 +410,7 @@
 .markdown.compact .tableScroll {
   width: 100%;
   max-width: 100%;
-  margin: 4px 0;
+  margin: var(--space-2) 0;
   padding-left: 0;
 }
 
@@ -419,7 +419,7 @@
 }
 
 .compact :is(th, td) {
-  padding: 4px 8px;
+  padding: var(--space-2) var(--space-4);
   font: inherit;
 }
 
@@ -440,7 +440,7 @@
 }
 
 .compact :global(.katex-display) {
-  margin: 4px 0;
+  margin: var(--space-2) 0;
 }
 
 .imageButton {
@@ -457,11 +457,11 @@
 .imageButton:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 3px; }
 .previewName {
   display: block;
-  margin-top: 8px;
+  margin-top: var(--space-4);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 18px;
 }

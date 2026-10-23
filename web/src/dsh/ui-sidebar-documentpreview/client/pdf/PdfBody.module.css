@@ -1,12 +1,12 @@
 .body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-6);
   box-sizing: border-box;
   width: 100%;
   min-height: 100%;
   min-width: 100%;
-  padding: 12px;
+  padding: var(--space-6);
   overflow: visible;
   background: var(--dsw-alias-bg-document-preview);
   font-family: var(--dsw-font, sans-serif);
@@ -134,11 +134,11 @@
 
 .status {
   display: flex;
-  gap: 8px;
+  gap: var(--space-4);
   align-items: center;
-  padding: 10px;
+  padding: var(--space-5);
   color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 

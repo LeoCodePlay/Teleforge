@@ -6,18 +6,18 @@
    与「文件已更改」的视觉区分:那张卡是"被动了什么"(中性、灰),这张是"交给你的东西"
    (强调色标题 + 眼睛图标),让用户一眼看出哪个是产物。 */
 .deliverables {
-  margin: 6px 0 2px;
+  margin: var(--space-3) 0 var(--space-1);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   background: var(--glass-bg);
   overflow: hidden;
 }
 .deliverables-head {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 10px 5px;
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) 5px;
 }
 .deliverables-title {
-  font-size: 12px; font-weight: 600;
+  font-size: var(--fs-sm); font-weight: 600;
   color: var(--accent);
   letter-spacing: .2px;
 }
@@ -32,10 +32,10 @@
 /* 次要入口:行内文字按钮 —— 无边框、无自己的背景、与行同高;
    与整行高亮同时出现,悬停自身只换文字色 */
 .deliverables-aside {
-  flex: none; align-self: center; margin: 0 8px 0 0; padding: 0 8px;
+  flex: none; align-self: center; margin: 0 var(--space-4) 0 0; padding: 0 var(--space-4);
   display: inline-flex; align-items: center; height: 20px;
   background: transparent; border: 0; border-radius: var(--r-sm);
-  color: var(--accent-2); font-size: 11.5px; line-height: 1;
+  color: var(--accent-2); font-size: var(--fs-xs); line-height: 1;
   cursor: pointer; white-space: nowrap;
   opacity: 0; transition: opacity .12s ease, color .12s ease;
 }
@@ -47,9 +47,9 @@
 .deliverables-row {
   display: flex; align-items: center; gap: 7px;
   width: 100%; min-width: 0;
-  padding: 5px 10px; min-height: 28px;
+  padding: 5px var(--space-5); min-height: 28px;
   color: var(--text);
-  font-size: 12.5px; text-align: left;
+  font-size: var(--fs-sm); text-align: left;
 }
 
 .deliverables-ico { display: inline-flex; flex: none; color: var(--accent); }
@@ -78,13 +78,13 @@
 }
 .deliverables-gap { flex: 1 1 auto; min-width: 8px; }
 .deliverables-kind {
-  flex: none; padding: 0 6px; height: 17px; line-height: 17px;
-  border-radius: var(--r-pill); font-size: 10.5px;
+  flex: none; padding: 0 var(--space-3); height: 17px; line-height: 17px;
+  border-radius: var(--r-pill); font-size: var(--fs-2xs);
   background: var(--glass-bg-inset); border: 1px solid var(--line-soft); color: var(--muted);
 }
 .deliverables-path {
   flex: 0 1 auto; max-width: 34%;
-  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted);
   direction: rtl; text-align: left; /* 路径过长时省略**开头**,保住文件名那段 */
 }
 .deliverables-path:hover {

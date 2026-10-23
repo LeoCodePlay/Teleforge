@@ -8,12 +8,12 @@
   --dsl-guide-entry-radius: var(--dsw-radius-xl);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-7);
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
   min-height: 100%;
-  padding: 0 24px;
+  padding: 0 var(--space-12);
 }
 
 /* The lift, as a share of the pane's height (a column flex basis resolves
@@ -31,7 +31,7 @@
    below it; the capsules keep the bare gap between them. */
 .hero {
   display: flex;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-8);
   color: var(--dsw-static-neutral-200);
 }
 
@@ -46,13 +46,13 @@
    padding. Long text ellipsizes inside rather than widening it. */
 .entry {
   display: flex;
-  gap: 14px;
+  gap: var(--space-7);
   align-items: center;
   box-sizing: border-box;
   width: 380px;
   max-width: 100%;
   min-height: 56px;
-  padding: 14px 20px;
+  padding: var(--space-7) var(--space-10);
   color: var(--dsw-alias-label-primary);
   font: inherit;
   text-align: left;
@@ -97,7 +97,7 @@
 
 .entryTitle {
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--fs-lg);
   line-height: 1.4;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -107,7 +107,7 @@
 .entryDescription {
   overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
   white-space: nowrap;
   text-overflow: ellipsis;

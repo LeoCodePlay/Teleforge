@@ -5,17 +5,17 @@
 .about {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-7);
 }
 
 /* ================= 版本卡 ================= */
 .about-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px;
+  gap: var(--space-7);
+  padding: var(--space-8);
   border-radius: var(--r-lg);
-  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  background: var(--fill-1);
   border: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 var(--glass-hi);
 }
@@ -38,14 +38,14 @@
   min-width: 0;
 }
 .about-name {
-  font-size: 16px;
+  font-size: var(--fs-xl);
   font-weight: 700;
   letter-spacing: .2px;
   color: var(--text);
 }
 .about-tagline {
   margin-top: 3px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   color: var(--muted);
   max-width: 58ch;
@@ -59,11 +59,11 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   margin: 0;
-  padding-top: 12px;
+  padding-top: var(--space-6);
   border-top: 1px solid var(--line-soft);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--muted);
 }
 .fact {
@@ -93,7 +93,7 @@
   background: none;
   border: none;
   box-shadow: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: inherit;
   color: var(--accent-2);
   cursor: pointer;
@@ -114,26 +114,26 @@
 .about-dir {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 .about-dir-label {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--muted);
 }
 .about-dir-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   min-width: 0;
 }
 .about-dir-row code {
   flex: 1;
   min-width: 0;
-  padding: 7px 10px;
+  padding: 7px var(--space-5);
   border-radius: var(--r-sm);
   background: var(--code-bg);
   border: 1px solid var(--line-soft);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--text);
   /* 路径过长时保留尾部(盘符 + 目录名),正文仍是 LTR 阅读顺序 */
   overflow: hidden;
@@ -144,7 +144,7 @@
   unicode-bidi: plaintext;
 }
 .about-dir-hint {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted);
 }
@@ -153,22 +153,22 @@
 .about-update {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: var(--space-6);
+  padding: var(--space-8);
   border-radius: var(--r-lg);
-  background: linear-gradient(135deg, var(--fill-1), var(--fill-1-lo));
+  background: var(--fill-1);
   border: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 var(--glass-hi);
 }
 .about-update-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
 }
 .about-update-title {
   flex: 1;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 700;
   letter-spacing: .3px;
   color: var(--text-2);
@@ -195,13 +195,13 @@
 }
 .up-status-text { flex: 1; min-width: 0; }
 .up-status-title {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
 }
 .up-status-desc {
   margin-top: 3px;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted);
   overflow-wrap: anywhere;
@@ -211,7 +211,7 @@
 /* 状态语义色(与全站状态语义一致:绿=无需操作,琥珀=待处理,红=失败) */
 .up-status.ready .up-status-icon { background: var(--green); box-shadow: 0 0 0 3px var(--ok-bg); }
 .up-status.downloaded .up-status-icon { background: var(--green); box-shadow: 0 0 0 3px var(--ok-bg); }
-.up-status.downloaded { border-color: var(--ok-border); background: linear-gradient(135deg, var(--ok-bg), transparent); }
+.up-status.downloaded { border-color: var(--ok-border); background: var(--ok-bg); }
 .up-status.error .up-status-icon { background: var(--red); box-shadow: 0 0 0 3px var(--err-bg); }
 .up-status.error { border-color: var(--err-border); }
 .up-status.error .up-status-desc { color: var(--err-text); }
@@ -234,7 +234,7 @@
 .up-migrate {
   display: flex;
   align-items: stretch;
-  gap: 12px;
+  gap: var(--space-6);
 }
 .up-ver {
   flex: 1;
@@ -242,28 +242,28 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 10px 12px;
+  padding: var(--space-5) var(--space-6);
   border-radius: var(--r-md);
   border: 1px solid var(--line-soft);
   background: var(--glass-bg-inset);
 }
 .up-ver-label {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 .up-ver b {
-  font-size: 15px;
+  font-size: var(--fs-xl);
   color: var(--text);
 }
 .up-ver.to {
   border-color: var(--accent-border);
-  background: linear-gradient(135deg, var(--accent-fill), var(--accent-fill-soft));
+  background: var(--accent-fill);
 }
 .up-ver.to b { color: var(--accent-2); }
 .up-arrow {
   align-self: center;
   flex: none;
-  font-size: 15px;
+  font-size: var(--fs-xl);
   color: var(--muted);
 }
 
@@ -278,8 +278,8 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 9px 12px;
-  font-size: 12.5px;
+  padding: 9px var(--space-6);
+  font-size: var(--fs-sm);
   color: var(--text);
   cursor: pointer;
   user-select: none;
@@ -291,7 +291,7 @@
 .up-notes-caret {
   flex: none;
   display: inline-block;
-  font-size: 13px;
+  font-size: var(--fs-md);
   color: var(--muted);
   transform: rotate(0deg);
   transition: transform .18s ease;
@@ -300,7 +300,7 @@
 .up-notes-file {
   margin-left: auto;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -309,9 +309,9 @@
 .up-notes-body {
   max-height: 260px;
   overflow-y: auto;
-  padding: 10px 13px 12px;
+  padding: var(--space-5) 13px var(--space-6);
   border-top: 1px solid var(--line-soft);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.65;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -319,7 +319,7 @@
 /* 正文复用全站 .md 排版,这里只覆盖需要更紧凑/更受限的部分 */
 .up-notes-body h1,
 .up-notes-body h2,
-.up-notes-body h3 { font-size: 13.5px; margin: 10px 0 5px; }
+.up-notes-body h3 { font-size: var(--fs-md); margin: var(--space-5) 0 5px; }
 .up-notes-body h1:first-child,
 .up-notes-body h2:first-child,
 .up-notes-body h3:first-child { margin-top: 0; }
@@ -327,9 +327,9 @@
 .up-notes-body li { margin: 3px 0; }
 .up-notes-body img { max-width: 100%; height: auto; }
 .up-notes-empty {
-  padding: 10px 13px 12px;
+  padding: var(--space-5) 13px var(--space-6);
   border-top: 1px solid var(--line-soft);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--muted);
 }
 
@@ -348,14 +348,14 @@
 .up-fill {
   height: 100%;
   border-radius: var(--r-pill);
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  background: var(--accent);
   transition: width .2s ease;
 }
 .up-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 11.5px;
+  gap: var(--space-5);
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 .up-meta .grow { flex: 1; }
@@ -371,12 +371,12 @@
   gap: 5px;
 }
 .up-fallback-title {
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text);
 }
 .up-fallback-desc {
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted);
 }
@@ -396,8 +396,8 @@
   .about-update { padding: 13px; }
   .up-status { flex-wrap: wrap; }
   .up-status button { width: 100%; }
-  .up-migrate { flex-direction: column; gap: 8px; }
-  .up-arrow { transform: rotate(90deg); align-self: flex-start; padding-left: 12px; }
+  .up-migrate { flex-direction: column; gap: var(--space-4); }
+  .up-arrow { transform: rotate(90deg); align-self: flex-start; padding-left: var(--space-6); }
   .up-notes-body { max-height: 200px; }
 }
 

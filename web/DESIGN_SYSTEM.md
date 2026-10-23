@@ -166,6 +166,7 @@
 | 项 | 规范 |
 |---|---|
 | 圆角梯度 | `--r-sm: 6px`(小控件、按钮)/ `--r-md: 10px`(面板、卡片)/ `--r-lg: 14px`(弹窗)/ `--r-pill: 999px`(仅非按钮的 chip/badge、开关) |
+| 微圆角例外 | 1–5px 仅允许用于行内 code、keycap、进度条、选区、≤24px 的图标盒;常规按钮、面板、卡片、输入框不得使用 |
 | 描边 | 一律 1px;分隔用 `--line-faint/soft`,组件边界用 `--line`,悬浮用 `--line-strong` |
 | 投影 | 只有浮层(弹窗 / 菜单 / 下拉 / Toast)有;按钮、卡片、输入框 **零投影** |
 | 焦点环 | `box-shadow: 0 0 0 2px var(--accent-soft)` + 描边 `--accent-border` |
@@ -206,6 +207,76 @@ button:hover:not(:disabled) {
 
 **验收标准**:任意可交互元素,悬浮态与静止态的底色差值 **ΔRGB ≥ 12**(当前实测最小 Δ20)。
 
+### 4.2 渐变使用边界
+
+Solid UI 的**表面一律实色**:卡片、面板、按钮、输入框、选中行、进度填充不得把
+可见的多段 `linear-gradient` 当底色。需要层次时用 `--fill-*` / `--glass-bg*` /
+`--pop-bg*` 的色阶差 + 1px 描边,不要靠渐变伪造光影。
+
+只允许以下**机能性渐变**:
+
+1. `mask-image` / `-webkit-mask-image` 的 alpha 渐隐(标签文字、滚动边缘、路径省略);
+2. 单色叠加层:`linear-gradient(同色, 同色)` 或 `transparent` 两层,视觉上仍是实色
+   (用于 hover scrim / 覆盖 code 背景);
+3. 1px 状态线或分隔线的两端淡出(如 QueuePanel 的琥珀线、dockkit 分隔线);
+4. 加载 / 扫描 / 文字 shimmer 的动画扫光;
+5. 品牌字标 `.brand` 的文字渐变(内容标识,不是界面表面)。
+
+除此之外新增 `linear-gradient` 视为违规;能用实色 token 就用实色。
+
+### 4.3 字号 / 间距 / 层级
+
+字号统一走 7 档(`styles.scss` 的 `:root`)。现有的半像素值按**最接近的一档**收敛:
+`10.5 → 10` / `11.5 → 11` / `12.5 → 12` / `13.5 → 13`。
+
+| token | 值 | 用途 |
+|---|---|---|
+| `--fs-2xs` | 10px | 极小标签 / 角标 |
+| `--fs-xs` | 11px | 辅助说明 / 元信息 |
+| `--fs-sm` | 12px | 紧凑正文 / 表单 / 菜单 |
+| `--fs-md` | 13px | 按钮 / 正文 |
+| `--fs-lg` | 14px | 页面正文 |
+| `--fs-xl` | 16px | 区块标题 |
+| `--fs-2xl` | 24px | 页面大标题 |
+
+间距用 2px 基准的固定梯度,新增布局不要再写裸数字:
+
+| token | 值 |
+|---|---|
+| `--space-1` | 2px |
+| `--space-2` | 4px |
+| `--space-3` | 6px |
+| `--space-4` | 8px |
+| `--space-5` | 10px |
+| `--space-6` | 12px |
+| `--space-7` | 14px |
+| `--space-8` | 16px |
+| `--space-10` | 20px |
+| `--space-12` | 24px |
+| `--space-16` | 32px |
+
+层级只收口**全局层**;组件内部为了局部叠放使用的 1–20 仍可保留裸值:
+
+| token | 值 | 用途 |
+|---|---|---|
+| `--z-behind` | -1 | 页面底光 / 背后层 |
+| `--z-topbar` | 20 | 顶栏 |
+| `--z-panel` | 30 | 悬浮入口 / 底部栏 |
+| `--z-scrollbar` | 45 | 覆盖式滚动条 |
+| `--z-mask` | 50 | 弹窗遮罩 |
+| `--z-popover` | 60 | 轻浮层(菜单 / 建议 / 统计) |
+| `--z-context-menu` | 200 | 右键菜单 |
+| `--z-tooltip` | 500 | 常规 tooltip |
+| `--z-modal` | 1000 | 模态浮层 |
+| `--z-tooltip-portal` | 1100 | portal 到 body 的 tooltip |
+| `--z-toast` | 1100 | Toast / 全局提示 |
+
+迁移状态:**全量完成**。全局基元、App 壳层与 `web/src` 下全部 SCSS / CSS 已按精确值
+完成字号与 `gap / margin / padding` 的 token 替换(360 处字号、1268 处间距)。
+剩余未 token 化的只有非刻度的 1–5px 微间距、7/9/11/13px 局部微调、负 margin
+(光学对齐)和 BottomBar 的 20px 图标字号,它们属于组件微调,不参与字号 / 间距梯度。
+新增代码必须先查这三张表。
+
 ---
 
 ## 五、组件规范
@@ -243,10 +314,12 @@ button:hover:not(:disabled) {
 
 结构件例外(共 3 处,已在 `styles.scss` 内联注明):
 
-1. 贴在标签条上的导航标签 `.btab` / `.tabstrip-add` / `.fm-tab` → 保留上圆角
-   `--r-sm --r-sm 0 0`;
+1. 文件管理器的页签 `.fm-tab` → 保留上圆角 `--r-sm --r-sm 0 0`;
 2. 附件缩略图按钮 `.msg-att-img` / `.att-thumb` → 跟随图片容器 `--r-lg`;
 3. 开关滑块轨道 `.mc-switch` / `.plugin-switch` → 形状本身即「开关」语义,保留 `--r-pill`。
+
+顶部主标签条与右栏标签条已统一为 28px 圆角 chip(见 5.5),`.btab` / `.tabstrip-add`
+不再走上圆角例外。
 
 实现方式:`button { border-radius: var(--r-sm) !important; }` —— 历史上 20+ 个组件
 各自把按钮写成胶囊/圆形/8~12px 圆角,`!important` 保证不再有漏网的第二种形状。
@@ -288,7 +361,7 @@ button:hover:not(:disabled) {
 | 组件 | 规范 |
 |---|---|
 | 顶栏 / 侧栏 / 底栏 | `--surface` 实色 + 1px `--line` 分隔 |
-| 标签页 `.btab.active` | `--accent-fill` 填充 + `--accent-border` 描边 |
+| 标签页 `.btab.active` | `--accent-fill` 实色填充,无描边(圆角 chip,见 5.5) |
 | 输入框 / 文本域 / 下拉 | `--glass-bg-inset` 内嵌实色槽 + `--line` 描边,焦点环 2px `--accent-soft` |
 | 弹窗 / 菜单 / 下拉 | `--pop-bg` 实色 + `--line` 描边 + `--glass-shadow` |
 | chip / badge(非按钮) | 允许胶囊形状 + 实色小标签 + 描边 |
@@ -311,10 +384,54 @@ button:hover:not(:disabled) {
 | 内容侧留白 | `--scroll-gutter` = 6px(内容会被悬浮拇指压住的容器加 `padding-right`) |
 | 原生例外 | 只有 xterm / `textarea` / `.md table` / `.fviewer .cm-scroller`;必须写 `scrollbar-width: auto`,写成 `thin` 会切回平台滚动条(实测 10px),就又变成第二套 |
 | 故意隐藏原生条 | 标签条、附件轨道、触摸横滑区等横向手势容器(各有交互理由,见各处注释) |
+| 横向滚轮 | 标签条等横向容器溢出时,鼠标滚轮直接横移;主标签条与右栏标签条使用同一行为 |
 
 新增滚动容器时默认什么都不用写(原生条已全局隐藏、拇指由引擎按同一规格绘制);
 只有「内容贴右边缘、且右端有圆角/描边/悬停底色」的列表,才需要
 `padding-right: var(--scroll-gutter)`,否则滚动时拇指会压在内容上。
+
+### 5.5 标签条(Tabs)
+
+顶部主标签条 `.tabstrip` 与右栏 dockkit `.tabStrip` **共用同一套规格**,
+改一处必须同步另一处,不允许再出现第二套标签形状:
+
+| 项 | 规格 |
+|---|---|
+| 行高 | 40px = 6px 上留白 + 28px 标签 + 6px 下留白 |
+| 内边距 | `6px 10px`(上下 6、左右 10,四周对称;右栏可用 `--dsh-dockkit-strip-inline-start` 单独加起始位) |
+| 标签 chip | 高 28px;主标签条 `min-width: 80px / max-width: 170px`,右栏按内容收缩;`padding: 0 10px`;圆角 `--r-sm`;字号 13px / 行高 1 |
+| 静止 / 悬浮 | 透明底 + `--text-2`;悬浮 `--hover-bg-hard` |
+| 选中 | `--text` + `--accent-fill` 实心填充;**不再加 `--accent-border` 描边** |
+| 分隔槽 | 标签间距 4px;每标签左侧 -5.25px 处 0.5px × 14px `--line-strong` 发丝线;首标签、激活标签两侧、固定段/滚动段交界按现有规则隐去 |
+| 关闭钮 | 20×20,绝对定位 `top/right: 4px`;仅悬停 / 键盘聚焦 / 激活 / dirty 时出现(移动端与触屏常显);标签文字用 mask 在右侧淡出 |
+| 固定段 / 滚动段 | 固定页永远显示且不可拖/不可关;文件 / 浏览器标签在滚动段内拖拽排序、可关闭;原生滚动条隐藏,溢出时滚轮横移 |
+| 右栏 | 新增 / 分屏 / 关闭栏等 chrome 控件同为 28px;浮动面板头部复用同一行 |
+
+**禁止**:回到「上圆角 `--r-sm --r-sm 0 0` + 下边框」的旧页签形状;禁止给标签加投影;
+禁止让主标签条与右栏标签条出现两套行高/内边距。
+
+### 5.6 Tooltip
+
+全站只有一套 tooltip 皮肤:项目组件用 `data-tip`,由 `components/Tooltip/Tooltip.tsx`
+的 `TooltipHost` 渲染 `.tip-host`;dsh 基础组件用 `Tooltip` 组件,但视觉必须映射到
+同一组 token 与几何,不允许另起一套「dsh 风格」气泡。
+
+| 项 | 规格 |
+|---|---|
+| 背景 / 文字 | `--pop-bg-strong` / `--text` |
+| 描边 / 圆角 | `1px solid var(--line)` / `--r-sm` |
+| 投影 | `--glass-shadow` |
+| 内边距 / 字号 | `6px 10px` / `12px`,`line-height: 1.5` |
+| 最大宽度 | `min(320px, 80vw)` |
+| 层级 | 常规 500;portal 到 body 的浮层提示 1100 |
+| 动效 | 140ms 淡入;不弹跳、不缩放 |
+
+### 5.7 桌面壳右键菜单
+
+桌面端(WebView2)默认自带一套原生右键菜单,会和前端自绘的 `.ctxmenu` 叠成两层。
+Tauri 启动时必须关闭 WebView2 默认菜单(见 `src-tauri/src/lib.rs` 的
+`SetAreDefaultContextMenusEnabled(false)`),全站只保留 `.ctxmenu` / dsh `Menu` 这一套自绘菜单。
+新增窗口或 webview 时也要应用同一设置;禁止再引入第二套原生菜单。
 
 ---
 
@@ -331,6 +448,10 @@ button:hover:not(:disabled) {
 (文件类型图标的字形与图标色)同属内容标识,保留固定值;
 `--dsw-static-*` 中**当表面/文字使用**的条目已全部改走主题 token。
 
+> 说明:`mask-image` 里的 `#000` 只作为 alpha 遮罩,不是界面颜色;
+> `ModelMenu` 的提供商色点 `hsl(var(--h) ...)` 是模型身份色,属于内容标识。
+> 这两类不参与 6 色派生,也不算硬编码 UI 色。
+
 ---
 
 ## 七、性能红线
@@ -344,8 +465,12 @@ button:hover:not(:disabled) {
 
 ## 八、验收清单(新组件合并前自查)
 
+> 先跑 `npm run check:design`。它会机械校验未定义 token、`backdrop-filter`、`text-shadow`、
+> 外发光、纯黑遮罩和裸圆角;剩下的对比度 / 层级 / 视觉判断仍按下面清单人工过一遍。
+
 - [ ] 没有任何硬编码色值,颜色全部来自 CSS 变量
-- [ ] 按钮形状统一:6px 圆角 + `--line` 描边(仅 3 处结构件例外)
+- [ ] 没有未定义 token(`--bg` / `--bg-elev` 等);`var()` 的变量都在 `styles.scss` 或 `themes.ts` 有定义
+- [ ] 按钮形状统一:6px 圆角 + `--line` 描边(标签 chip 按 5.5,另有 3 处结构件例外)
 - [ ] 悬浮/按下用半透明 scrim,且与静止态底色差值 ΔRGB ≥ 12(不能"悬浮等于没有")
 - [ ] 列表行的悬停底色挂在**行容器**上;行内主区与次要操作 `background: transparent` 且盒模型一致(同高、同为 6px 圆角)
 - [ ] 对话框 / 设置面板本体抬到浮层档,且内部阶梯已**整体跟着上移**(不能只改本体底色)
@@ -357,7 +482,12 @@ button:hover:not(:disabled) {
 - [ ] 强调色只出现一次:同一元素不同时叠「accent 填充 + accent 文字 + accent 描边」
 - [ ] 语义色当文字用时取 `--red / --green`(已按方向校准),不是品牌原色 `-raw`
 - [ ] 没有 `backdrop-filter` / 内高光(`--glass-hi`) / 外发光(`0 0 Npx`)/ `text-shadow` 光晕
-- [ ] 圆角取自 `--r-sm / --r-md / --r-lg / --r-pill`
+- [ ] 表面底色没有可见的多段渐变;gradient 仅用于 mask / 单色叠加 / 1px 状态线 / 加载扫光 / 品牌字标
+- [ ] 圆角取自 `--r-sm / --r-md / --r-lg / --r-pill`;除 1–5px 微圆角(行内 code / keycap / 进度条 / 选区 / ≤24px 图标盒)、50% 圆点 / 头像、非按钮 chip 999px 外没有裸数值
+- [ ] 字号 / 间距优先取 `--fs-*` / `--space-*`;全局层 z-index 取 `--z-*`,组件内部局部层才允许 1–20 裸值
+- [ ] 标签条主 / 右栏一致:40px 行高、`6px 10px` 内边距、28px chip、溢出时滚轮可横移
+- [ ] tooltip 只有 `.tip-host` 一套皮肤,dsh Tooltip 与项目 tooltip 的 token / 几何一致
+- [ ] 桌面端右键只有自绘 `.ctxmenu`,WebView2 默认菜单已关闭
 - [ ] 投影只出现在浮层,且用 `--glass-shadow*`
 - [ ] hover / active / focus 三态齐全
 - [ ] 文字对比度 ≥ 4.5:1(终端与代码区除外)

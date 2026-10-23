@@ -3,25 +3,25 @@
    滚动容器内绝对定位子元素的包含块是滚动内容的 padding box,列表一滚动
    蒙版就跟着内容上移,可视区底部漏出没遮住的缺口(目录项多时尤其明显)。
    蒙版挂在这一层,以整个列表盒为基准,不入滚动、不留缝 */
-.dirlist-wrap { position: relative; margin-top: 8px; }
+.dirlist-wrap { position: relative; margin-top: var(--space-4); }
 .dirlist {
   max-height: 340px; min-height: 180px; overflow-y: auto; overflow-x: hidden;
   border: 1px solid var(--glass-border); border-radius: var(--r-sm);
-  padding: 6px; background: var(--glass-bg-inset);
+  padding: var(--space-3); background: var(--glass-bg-inset);
 }
-.dirlink { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; overflow: hidden; padding: 6px 9px; border-radius: var(--r-sm); cursor: pointer; transition: background .15s; }
+.dirlink { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); min-width: 0; overflow: hidden; padding: var(--space-3) 9px; border-radius: var(--r-sm); cursor: pointer; transition: background .15s; }
 .dirlink > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 弹窗列表行的行内图标(目录 = 文件夹 / 文件 = 文档,与工作区 chip 同一批 SVG):
    行内元素,靠基线微调与文字对齐(-0.5px 是实测值:图标中心与文字行中心重合,行高不变)。
    「上级 / 我的电脑 / 家目录」是按钮,走全局 button.icon-btn 的 flex 排版,不用这里 */
-.dirlink-ico { vertical-align: -0.5px; margin-right: 6px; }
+.dirlink-ico { vertical-align: -0.5px; margin-right: var(--space-3); }
 .dirlink:hover { background: var(--glass-bg-hover); }
 .dirlink.disabled { opacity: .6; cursor: default; }
 .spinner-inline { width: 12px; height: 12px; flex: none; border: 1.5px solid var(--accent); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 .dirlist-loading {
   position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 8px;
-  color: var(--muted); font-size: 12px;
+  align-items: center; justify-content: center; gap: var(--space-4);
+  color: var(--muted); font-size: var(--fs-sm);
   background: var(--code-bg-soft);
   border-radius: var(--r-sm);
 }

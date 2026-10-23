@@ -1,12 +1,12 @@
 .root {
-  margin: 4px 0;
+  margin: var(--space-2) 0;
 }
 
 .toggle {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
-  padding: 2px 6px;
+  padding: var(--space-1) var(--space-3);
   border: none;
   background: transparent;
   cursor: pointer;
@@ -18,15 +18,15 @@
 }
 
 .body {
-  margin: 4px 0 0;
-  padding: 8px;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-4);
   max-height: 200px;
   overflow: auto;
   background: var(--dsw-alias-markdown-code-block);
   border: 0.5px solid var(--dsw-alias-border-l1);
   border-radius: var(--dsw-radius-lg);
   font-family: var(--ds-font-family-code);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 16px;
   color: var(--dsw-alias-label-primary);
 }

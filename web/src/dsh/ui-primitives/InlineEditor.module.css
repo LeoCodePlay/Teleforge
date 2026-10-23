@@ -6,7 +6,7 @@
   /* Six 20px text lines plus padding and border, then the editor scrolls. */
   max-height: 127px;
   margin: 0;
-  padding: 3px 8px;
+  padding: 3px var(--space-4);
   border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: var(--dsw-radius-sm);
   outline: none;

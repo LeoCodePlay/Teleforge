@@ -2,19 +2,19 @@
 .confirm-overlay { z-index: 300; }
 .confirm-modal { width: 400px; max-width: 92vw; }
 .confirm-msg {
-  font-size: 13px; line-height: 1.7; color: var(--text);
+  font-size: var(--fs-md); line-height: 1.7; color: var(--text);
   white-space: pre-line; word-break: break-word;
 }
 .confirm-msg code {
   font-family: var(--mono); background: var(--code-bg);
-  padding: 1px 6px; border-radius: 5px; border: 1px solid var(--code-bor);
+  padding: 1px var(--space-3); border-radius: 5px; border: 1px solid var(--code-bor);
   color: var(--code-ink);
 }
 
 /* ---- 消息弹出提示(toast):顶部居中玻璃胶囊,自动消失 ---- */
 .toast-host {
   position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
-  z-index: 400; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  z-index: 400; display: flex; flex-direction: column; align-items: center; gap: var(--space-4);
   pointer-events: none;
 }
 .toast {
@@ -22,7 +22,7 @@
   display: flex; align-items: flex-start; gap: 9px;
   max-width: min(520px, 92vw);
   padding: 9px 15px; border-radius: var(--r-md);
-  font-size: 12.5px; line-height: 1.55; color: var(--text);
+  font-size: var(--fs-sm); line-height: 1.55; color: var(--text);
   background: var(--pop-bg);
   border: 1px solid var(--line);
   box-shadow: var(--glass-shadow);
@@ -33,7 +33,7 @@
   from { opacity: 0; transform: translateY(-8px); }
   to   { opacity: 1; transform: none; }
 }
-.toast-ico { flex: none; font-size: 13px; font-weight: 700; line-height: 1.55; }
+.toast-ico { flex: none; font-size: var(--fs-md); font-weight: 700; line-height: 1.55; }
 .toast.success { border-color: var(--ok-border); }
 .toast.success .toast-ico { color: var(--green); }
 .toast.error { border-color: var(--err-border); }

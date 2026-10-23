@@ -25,7 +25,7 @@ function CloseCircleGlyph() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <circle cx="8" cy="8" r="6.2" fill="currentColor" />
-      <path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2" stroke="var(--bg, #fff)" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2" stroke="var(--surface, #fff)" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }

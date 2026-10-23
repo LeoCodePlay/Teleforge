@@ -11,21 +11,21 @@
 }
 .settings-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 13px 16px; border-bottom: 1px solid var(--line); font-weight: 600;
+  padding: 13px var(--space-8); border-bottom: 1px solid var(--line); font-weight: 600;
 }
 .settings-body { flex: 1; min-height: 0; display: flex; }
 .settings-menu {
   width: 190px; flex: none; border-right: 1px solid var(--line-soft);
-  padding: 10px 8px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
+  padding: var(--space-5) var(--space-4); display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
   /* 左栏**不再用下沉底色**:之前它比弹窗本体还暗一档,在弹窗内部形成一个反方向的层,
      还和页面底撞色(看着像漏下去了)。导航列的分层交给右侧那条发丝线,足够了。 */
   background: transparent;
 }
 .settings-menu button {
-  display: flex; align-items: center; gap: 8px; text-align: left;
+  display: flex; align-items: center; gap: var(--space-4); text-align: left;
   background: transparent; border: 1px solid transparent;
-  border-radius: var(--r-sm); padding: 9px 12px;
-  font-size: 13px; color: var(--text); cursor: pointer;
+  border-radius: var(--r-sm); padding: 9px var(--space-6);
+  font-size: var(--fs-md); color: var(--text); cursor: pointer;
   box-shadow: none; transition: all .18s;
 }
 .settings-menu button:hover { background: var(--glass-bg-hover); transform: none; box-shadow: none; }
@@ -51,7 +51,7 @@
   color: var(--muted);
 }
 .settings-menu button.on span { color: inherit; }
-.settings-menu .menu-cat { font-size: 11px; color: var(--muted); padding: 10px 12px 2px; letter-spacing: .5px; }
+.settings-menu .menu-cat { font-size: var(--fs-xs); color: var(--muted); padding: var(--space-5) var(--space-6) var(--space-1); letter-spacing: .5px; }
 .settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px; }
 
 /* ---- 移动端(<768):设置全屏,左侧菜单变顶部横向滚动菜单 ---- */
@@ -64,7 +64,7 @@
   .settings-menu {
     width: 100%; flex-direction: row; align-items: center;
     border-right: none; border-bottom: 1px solid var(--line-soft);
-    overflow-x: auto; overflow-y: hidden; padding: 6px 8px; gap: 4px;
+    overflow-x: auto; overflow-y: hidden; padding: var(--space-3) var(--space-4); gap: var(--space-2);
     /* 显式声明横向平移手势:iOS Safari 对 overflow-x:auto/overflow-y:hidden
        的组合容器会把手势锁死在纵向轴,导致横滑完全失效;pan-x 解锁横向滑动 */
     touch-action: pan-x;
@@ -73,5 +73,5 @@
   }
   .settings-menu::-webkit-scrollbar { display: none; }
   .settings-menu button { flex: none; min-height: 44px; white-space: nowrap; -webkit-user-select: none; user-select: none; }
-  .settings-content { padding: 12px 14px; }
+  .settings-content { padding: var(--space-6) var(--space-7); }
 }
