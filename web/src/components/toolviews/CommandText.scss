@@ -6,7 +6,9 @@
   overflow-x: auto;
   white-space: pre;
   overflow-wrap: anywhere;
-  scrollbar-width: thin;
+  /* 不写 scrollbar-width: thin:原生细条会绕过全站的「原生条隐藏」约定,
+     和 scrollbar-ui 画出的 .ob-thumb 叠成两条滚动条。这里保持 none(全局 * 已设),
+     溢出时统一由覆盖式悬浮拇指接管。 */
 }
 .cmdtext:focus-visible {
   outline: 2px solid var(--accent);
