@@ -9,6 +9,7 @@ import { orderGroups } from '../../utils/sessionGroupOrder';
 import { usesRemoteWorkspace } from '../../utils/sessionLock';
 import { showsInTaskList } from '../../utils/sessionVisibility';
 import { scrollMovesPanel } from '../../utils/scrollClose';
+import { groupVisibleCount, revealScrollTop } from '../../utils/sessionReveal';
 import { writeClipboard } from '../../dsh/ui-primitives/clipboard.ts';
 import { useFeedback } from '../../context/feedback';
 import DirBrowser from '../DirBrowser/DirBrowser';
@@ -151,7 +152,7 @@ function SessionRow({ session: s, active, running, askWaiting, termRunning, onSw
   const dotTip = SESSION_DOT_TIP[dot];
   return (
     // 悬停整行 → 右侧宽气泡展示该会话的首条提问(气泡由全局 TooltipHost 统一渲染)
-    <div key={s.id} className={`session-item ${active ? 'active' : ''}`}
+    <div key={s.id} data-sid={s.id} className={`session-item ${active ? 'active' : ''}`}
       {...(tip ? { 'data-tip': tip, 'data-tip-side': 'right', 'data-tip-wide': 'true' } : {})}
       {...lp.bind}
       onClick={(ev) => { if (lp.wasLongPress()) return; onSwitch(s.id); }}>
@@ -206,7 +207,12 @@ function WorkspaceGroup({ label, icon, sessions, expanded, activeId, busyIds, as
   // 收起分组即复位,下次展开仍回到「首次展开」的样子,不残留上一轮的展开进度
   const [shownCount, setShownCount] = useState(GROUP_SHOW_FIRST);
   useEffect(() => { if (!expanded) setShownCount(GROUP_SHOW_FIRST); }, [expanded]);
-  const shown = sessions.slice(0, shownCount);
+  // 但「切片」不能把当前会话切掉:它若排在切片之外就根本不在渲染结果里,列表再怎么滚也够不着
+  // (点不到那条横条)。所以可见条数取「用户点开的条数」与「当前会话所在序号」的较大者 ——
+  // 与 harness 会话树抬高水位线是同一条口径(见 utils/sessionReveal)。
+  const focusIndex = activeId ? sessions.findIndex((s) => s.id === activeId) : -1;
+  const visibleCount = groupVisibleCount(shownCount, focusIndex);
+  const shown = sessions.slice(0, visibleCount);
   const restCount = sessions.length - shown.length;
   return (
     <div className={`s-group${sort.dragging ? ' dragging' : ''}`}
@@ -567,6 +573,38 @@ export default function SessionPanel({ sessions = [], activeId, busyIds = [], as
     if (!Object.hasOwn(collapsedMap, key)) saveCollapsed(key, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, sessions]);
+
+  // 当前会话行滚入可见区:上分栏高度固定,而「远程工作区 / 本地工作区」两个分区的分组叠起来
+  // 常比它长 —— 刚发过消息的会话(它所在的分组会按活跃度重排)可能整块落到可视区之外,
+  // 横条看得见才点得到。触发口径只有两个:切到别的会话,或当前会话的「用户最后发消息时间」
+  // 推进(自己刚发了一条);不跟着 sessions 的每次刷新走 —— AI 回复只推进 updatedAt,
+  // 不该把正在翻看列表的用户硬拽回来。判据本体在 utils/sessionReveal(已在区内则不动)。
+  const activeAnchor = (() => {
+    const a = sessions.find((s) => s.id === activeId);
+    return `${activeId ?? ''}@${a?.lastUserAt ?? ''}`;
+  })();
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || !activeId) return;
+    const reveal = () => {
+      const row = list.querySelector<HTMLElement>(`.session-item[data-sid="${CSS.escape(activeId)}"]`);
+      // 行在收起的分组里(grid-template-rows 0fr + visibility:hidden)时量到的是被裁掉的位置,
+      // 滚过去也没用;当前会话所在组由上面的 effect 负责展开,收尾那次复查自然就找得到它
+      if (!row || !row.closest('.s-group-body-wrap')?.classList.contains('open')) return;
+      const lr = list.getBoundingClientRect();
+      const rr = row.getBoundingClientRect();
+      const next = revealScrollTop(list.scrollTop, {
+        viewTop: lr.top, viewBottom: lr.bottom, rowTop: rr.top, rowBottom: rr.bottom,
+        // 分区工具行 sticky 在列表顶上,不把它让出来会「滚到了却被盖住」
+        stickyTop: list.querySelector<HTMLElement>('.s-sec-head')?.offsetHeight ?? 0
+      });
+      if (next !== null) list.scrollTop = next;
+    };
+    reveal();
+    // 分组展开是 0fr→1fr 的高度过渡(.24s),过渡途中量到的行位置还会变:等它收尾再校一次
+    const t = window.setTimeout(reveal, 300);
+    return () => window.clearTimeout(t);
+  }, [activeAnchor, activeId]);
 
   // 打开三点菜单:右对齐按钮、向下弹出;底部放不下时向上翻转,并夹取到视口内
   const openMenu = (e: React.MouseEvent, s: Session) => {

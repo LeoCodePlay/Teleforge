@@ -209,8 +209,14 @@ pub fn spawn_and_wait(handle: AppHandle) {
     let handle2 = handle.clone();
     let _ = handle.run_on_main_thread(move || {
         if let Some(w) = handle2.get_webview_window("main") {
-            if let Ok(u) = tauri::Url::parse(&target) {
-                let _ = w.navigate(u);
+            // 用 location.replace 而不是 navigate:后者会在历史里留下 loading 页,
+            // 桌面端按鼠标后退键就回到「正在启动后端服务…」并卡住。replace 直接顶掉
+            // 当前历史项,应用页成为唯一入口;前端另有一道侧键吞噬兜底。
+            let js = format!("window.location.replace({target:?})");
+            if w.eval(&js).is_err() {
+                if let Ok(u) = tauri::Url::parse(&target) {
+                    let _ = w.navigate(u);
+                }
             }
         }
     });

@@ -9,6 +9,19 @@ import { applyProcFoldTiming, readProcFoldTiming } from './utils/procFold';
 import { applyActiveTheme } from './theme/themes';
 import './styles.scss';
 
+// 桌面壳(WebView2)里鼠标侧键默认走浏览器前进/后退:启动时历史里还留着 loading 页,
+// 一按后退就回到「正在启动后端服务…」且卡住。这是桌面应用,不保留浏览器式 history 导航;
+// 在捕获阶段吞掉侧键(button 3/4),并配合 Rust 侧用 location.replace 进入应用页清掉 loading 历史。
+const swallowMouseSideButton = (e: MouseEvent | PointerEvent) => {
+  if (e.button === 3 || e.button === 4) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+};
+for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'auxclick'] as const) {
+  window.addEventListener(type, swallowMouseSideButton as EventListener, true);
+}
+
 // 渲染前应用持久化的激活主题,避免首帧闪回默认色板
 applyActiveTheme();
 // 对话字号同理:先写 CSS 变量再首帧,避免文字"跳一下"。快捷键是全局的,装一次即可。

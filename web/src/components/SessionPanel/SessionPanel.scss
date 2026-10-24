@@ -107,8 +107,11 @@
   animation: s-run-pulse 1.2s ease-in-out infinite;
 }
 .s-group-header .s-run { color: var(--green); width: 6px; height: 6px; }
-.s-group-header .s-group-count {
+/* 分组头里「有后台终端在运行」的蓝点:这行原先落在 .s-group-count 的声明块里,被 Sass 拼成
+   .s-group-header .s-group-count .s-group-header .s-run.term —— 永不匹配的选择器,
+   蓝点一直是绿的(与「有任务进行中」分不出来)。位置提到计数徽标规则之前 */
 .s-group-header .s-run.term { color: var(--running); }
+.s-group-header .s-group-count {
   flex: none; font-size: var(--fs-2xs); color: var(--muted); background: var(--glass-bg-hover);
   border: 1px solid var(--glass-border); border-radius: var(--r-sm); padding: 0 5px; line-height: 15px;
 }
